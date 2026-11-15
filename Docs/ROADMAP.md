@@ -85,8 +85,8 @@ Goal: The visual direction of fernjo is chosen by the owner from at least three 
 - [x] Owner picks a concept (or combines parts); iterate on the chosen direction
 - [x] Record the direction in `DESIGN.md` (principles, typography, colour, spacing, components, terminal colour scheme)
 - [x] Design tokens as CSS variables (light and dark) in `ui/`, applied to the empty shell
-- [ ] Decision entry in `Docs/DECISIONS.md` naming the chosen concept and why
-- [ ] App icon derived from the chosen direction (source SVG committed, icon set generated with `pnpm tauri icon`), replacing the M0 placeholder
+- [x] Decision entry in `Docs/DECISIONS.md` naming the chosen concept and why
+- [x] App icon derived from the chosen direction (source SVG committed, icon set generated with `pnpm tauri icon`), replacing the M0 placeholder
 
 **Acceptance criteria**
 - [ ] The artifact shows at least three concepts, switchable, each in light and dark
