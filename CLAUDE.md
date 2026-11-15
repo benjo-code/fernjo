@@ -15,13 +15,11 @@ Cross-platform (Windows, macOS, Linux) SSH & RDP connection manager in the spiri
 
 ## Project-specific
 
-> The commands above are introduced in M0. Until the workspace exists, only the roadmap tool works.
-
 **Architecture** (details in the spec, §4–5)
 - `crates/fernjo-core` (model, tree, inheritance, persistence), `crates/fernjo-vault`, `crates/fernjo-ssh`, `crates/fernjo-rdp`, `crates/fernjo-import`, `src-tauri/` (Tauri shell, commands, session manager), `ui/` (Svelte frontend). Each crate is created in the milestone that needs it, not earlier.
 - Protocol, vault and import crates never depend on Tauri; they are testable without the UI.
 - Frontend ↔ Rust: Tauri commands for requests, Tauri channels for streaming session data.
-- The Tauri crate embeds `ui/dist` at compile time, so on a fresh checkout run `pnpm install && pnpm ui:build` before `cargo build/clippy/test --workspace`.
+- Plain `cargo build/clippy/test --workspace` compiles Tauri as a dev build, which does not embed `ui/dist` (`devUrl` is set), so cargo needs no UI build first. Only `pnpm tauri build` embeds `ui/dist`, and it runs `pnpm ui:build` itself via `beforeBuildCommand`.
 - `deny.toml` carries the advisory ignore list with a reason per entry; run `cargo deny check` after dependency updates and drop ignores it reports as unused.
 
 **Rules that must not be broken**
