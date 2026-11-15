@@ -1,0 +1,21 @@
+{
+  "$schema": "../../../Docs/roadmap.schema.json",
+  "schemaVersion": 1,
+  "title": "Example",
+  "subprojects": [
+    {
+      "number": 1,
+      "name": "Foundation",
+      "milestones": [
+        {
+          "id": "0",
+          "title": "Repo scaffold",
+          "status": "open",
+          "goal": "An empty, set-up repo.",
+          "tasks": [],
+          "acceptance": []
+        }
+      ]
+    }
+  ]
+}

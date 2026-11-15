@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "title": "Invalid",
+  "subprojects": [
+    { "number": 1, "name": "Core", "milestones": [
+      { "id": "0", "title": "A B", "status": "open", "goal": "g", "tasks": [], "acceptance": [] }
+    ] }
+  ]
+}

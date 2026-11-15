@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "title": "Line endings",
+  "subprojects": [
+    { "number": 1, "name": "Core", "milestones": [
+      {
+        "id": "0", "title": "A", "status": "open", "goal": "Goal.",
+        "tasks": [
+          { "text": "one\r\ntwo", "done": false },
+          { "text": "a\rb", "done": false },
+          { "text": "c d", "done": true }
+        ],
+        "acceptance": []
+      }
+    ] }
+  ]
+}

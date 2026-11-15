@@ -1,0 +1,110 @@
+# <Project name>
+
+<1–2 sentences: What is the project, for whom, and with what goal?>
+
+- **Stack:** <e.g. .NET 10 / Unity 6 / Next.js 16>
+- **Language:** Docs, commits, code and comments in English · UI texts <…>
+- **Build:** `<command>` · **Test:** `<command>` · **Format/lint:** `<command>`
+- **Roadmap:** [Docs/ROADMAP.md](Docs/ROADMAP.md) (generated, source [Docs/roadmap.json](Docs/roadmap.json), see "Maintaining the roadmap")
+- **Decisions:** [Docs/DECISIONS.md](Docs/DECISIONS.md)
+- **Specs:** `Docs/superpowers/specs/` · **Plans:** `Docs/superpowers/plans/`
+
+## Project-specific
+
+<Architecture, conventions, peculiarities, pitfalls – grows with the project.>
+
+---
+
+## Maintaining the roadmap
+
+The source of truth is `Docs/roadmap.json` (schema: `Docs/roadmap.schema.json`). `Docs/ROADMAP.md` is generated from it and never edited by hand. The .NET 10 SDK is required, even if the project otherwise uses a different stack.
+
+1. Edit only `Docs/roadmap.json`: status, plan link, tick off tasks and criteria (`"done": true`, proof in `"evidence"`), scope changes, backlog. Omit optional fields, never set them to `null`.
+2. Then run `dotnet run tools/roadmap.cs -- generate` and commit both files. Errors name the path in the JSON (for example `subprojects[0].milestones[2].completedOn`).
+3. `dotnet run tools/roadmap.cs -- check` validates the schema, references and whether `ROADMAP.md` is up to date; CI (job `roadmap`) does the same.
+4. Rules: `status` is `open`, `planned`, `in-progress` or `done`; `done` requires `completedOn` (YYYY-MM-DD), from `planned` on `plan` is required (path relative to `Docs/`); milestone ids are unique strings (`"5.1"` is allowed); prerequisites and `afterMilestone` must exist; title, goal and name stay on one line; texts are Markdown; anything that fits nowhere else goes into an entry in `blocks` (`title`, `text`).
+5. A new milestone is an entry in `subprojects[].milestones`:
+
+```json
+{
+  "id": "1", "title": "<Title>", "status": "open",
+  "prerequisites": ["0"],
+  "goal": "<One sentence: What becomes possible after this milestone?>",
+  "tasks": [ { "text": "…", "done": false } ],
+  "acceptance": [ { "text": "… (verifiable: test, command or a concrete manual check)", "done": false } ]
+}
+```
+
+   A new subproject is an entry in `subprojects` (`number`, `name`, `spec` with `text` and/or `link`, `milestones`), a release is an entry in `releases` (`version`, `title`, `status`, `afterMilestone`, optionally `covers`, `date`, `intro`, `acceptance`, `blocks`).
+6. Ideas belong in `backlog` (`title`, `text`, optionally `idea`). The skill `/ideen` (from `benjo-code/Labjo`) enters adopted ideas there and regenerates `Docs/ROADMAP.md`.
+
+## Milestone workflow
+
+Every change "in the roadmap" (linking a plan, setting status, ticking off tasks, scope changes) is a change to `Docs/roadmap.json` plus a regenerated `Docs/ROADMAP.md`, see "Maintaining the roadmap".
+
+**"Plan milestone N":**
+1. Create branch `feature/mNN-<topic>` from the current `dev`. Plan, roadmap maintenance and implementation of the milestone all go through this branch.
+2. Read `Docs/ROADMAP.md`, the subproject's spec and the current state of the code.
+3. Review the project's open ideas with `/ideen` (skill from `benjo-code/Labjo`, installation: `bash tools/install-ideen-skill.sh` there): adopt, implement or discard them. Whatever belongs in the milestone flows into the plan. The roadmap change lives on the milestone branch (when asked, choose "current branch").
+4. If the milestone starts with "Create spec" or the subproject has no spec yet: first develop the spec through brainstorming with the user and store it under `Docs/superpowers/specs/`.
+5. Write the plan to `Docs/superpowers/plans/YYYY-MM-DD-milestone-NN-<topic>.md`. The plan covers exactly the milestone's tasks and acceptance criteria, nothing more.
+6. In the roadmap, link the plan and set the status to `🟡 planned` (overview table and milestone).
+
+**Implementation:**
+- Status `🔵 in progress`. Tick off every finished task in the roadmap immediately.
+- Tick off acceptance criteria only once they have actually been verified, and note the proof behind them (test name, command + result, or manual check).
+- At the end, status `✅ done` with date in table and milestone, then PR to `dev` (see "Git & branches").
+- Record scope changes in the roadmap under "Scope changes", not silently in the code.
+- Work only within the scope of the active milestone. Do not anticipate features, packages or architecture decisions of later milestones.
+
+## Git & branches
+
+- `main` holds only published states (releases). `dev` is the integration branch.
+- Always work on `feature/<topic>` or `fix/<topic>`, branched from the current `dev` (`git switch dev && git pull && git switch -c feature/<topic>`).
+- Before any work, check `git status` and the current branch. If on `main` or `dev`, create a feature branch first. Never commit directly to `main` or `dev`.
+- Feature and fix branches go to `dev` via PR. Claude merges these PRs itself once the work is done and all CI checks are green (squash merge allowed).
+- PRs to `main` exist only for releases and hotfixes, and only on the user's explicit instruction.
+- PRs between `main` and `dev` (release, hotfix, back-merge `main` → `dev`) are always merged with **"Create a merge commit"**, never squash or rebase. Otherwise `main` and `dev` lose their common history, and every release causes conflicts.
+- Hotfix: branch `hotfix/<topic>` from `main` → PR to `main` → release (see below) → then merge `main` into `dev` via PR.
+- Stage selectively (`git add <file>`). No `git add .` or `git add -A` when foreign changes that do not belong to the task are in the working tree. For files that were already modified beforehand, read `git diff <file>` first and use `git add -p` if needed.
+- After every commit, check `git show --stat HEAD` against the expected file list.
+- Commit messages follow Conventional Commits: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`, `ci:`, optionally with a scope (`feat(api): …`).
+- Forbidden without explicit instruction: force push, `git reset --hard`, deleting branches, rewriting history, bypassing hooks with `--no-verify`.
+- Always create new repos (including companion ones such as `-Releases` or `-Privacy`) in the `benjo-code` organization, always with the owner spelled out (`gh repo create benjo-code/<name> …`), never under the personal account. Then verify with `gh repo view benjo-code/<name>`.
+
+## Releases
+
+- Versioning according to SemVer (`vMAJOR.MINOR.PATCH`).
+- `CHANGELOG.md` → `[Unreleased]` is updated in every PR with a notable user-facing change (not for pure planning, roadmap or internal cleanup PRs).
+- Procedure (only on instruction):
+  1. Branch `release/vX.Y.Z` from `dev`, turn `[Unreleased]` in `CHANGELOG.md` into `[X.Y.Z] – YYYY-MM-DD` (naming the milestones it contains) and add a new, empty `[Unreleased]` above it.
+  2. PR `release/vX.Y.Z` → `main` (merge commit).
+  3. Tag and GitHub release in one step: `gh release create vX.Y.Z --target main --title "vX.Y.Z" --notes "<CHANGELOG section>"`.
+  4. Merge `main` back into `dev` via PR (merge commit) so the two do not diverge.
+
+## Project memory
+
+- Document anything important for the future in the repo without being asked:
+  - Architecture and technology decisions, fixed versions, rejected approaches → `Docs/DECISIONS.md`
+  - Scope changes → `Docs/ROADMAP.md`, section "Scope changes"
+  - Lasting project knowledge (architecture, conventions, workarounds, pitfalls) → this file, section "Project-specific"
+- Do not record guesses, intermediate states or temporary diagnoses as facts.
+- References name the file and the type, member or section name, never line numbers (they go stale).
+
+## Quality & proof
+
+- "Done" means build, test and format/lint (commands above) are demonstrably green. State the command and the result.
+- `dotnet run tools/roadmap.cs -- check` is part of "done": the roadmap is valid and `Docs/ROADMAP.md` is up to date.
+- Anything that could not be verified (e.g. because real hardware or credentials are missing) is explicitly marked as open, together with the command that verifies it.
+- Do not suppress warnings, skip tests or weaken checks just to get something green.
+
+## Security
+
+- No secrets (tokens, passwords, keys, real credentials) in files, commits, logs, PRs or replies.
+- Never quote or output values from `.env` or similar; name only variable names or placeholders.
+- Secrets come from env vars or a secret store. Maintain a placeholder in `.env.example` for every required variable. `.env` is in `.gitignore`.
+
+## Collaboration
+
+- When requirements are unclear, ask instead of guessing.
+- Destructive or outward-facing actions (merge to `main`, release, deleting branches, tags, releases or repos, changes to GitHub settings) only on explicit instruction. Feature branches deleted automatically after the merge are exempt.

@@ -1,0 +1,1 @@
+releases[1].version: The version “0.1.0” occurs more than once

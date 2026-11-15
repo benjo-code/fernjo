@@ -1,0 +1,89 @@
+{
+  "$schema": "../../../Docs/roadmap.schema.json",
+  "schemaVersion": 1,
+  "title": "Complete",
+  "scopeChanges": [
+    { "date": "2026-10-02", "context": "Planning M1", "text": "The PWA arrives in M1.\nSecond line of the entry." }
+  ],
+  "backlog": [
+    { "title": "Dark theme", "text": "Follows the system setting.", "idea": 12 },
+    { "title": "Export", "text": "As CSV." }
+  ],
+  "subprojects": [
+    {
+      "number": 1,
+      "name": "Foundation | Core",
+      "spec": { "link": "superpowers/specs/2026-10-02-design.md", "text": "(sections 1 to 6)" },
+      "milestones": [
+        {
+          "id": "0",
+          "title": "Scaffold & CI",
+          "status": "done",
+          "completedOn": "2026-10-02",
+          "plan": "superpowers/plans/2026-10-02-milestone-00-scaffold.md",
+          "goal": "A set-up repo.",
+          "tasks": [
+            { "text": "Create project scaffold", "done": true },
+            { "text": "Set up CI\nwith a second line", "done": true }
+          ],
+          "acceptance": [
+            { "text": "Build is green", "done": true, "evidence": "`dotnet build` exit 0" },
+            { "text": "No evidence needed", "done": true }
+          ]
+        },
+        {
+          "id": "5.1",
+          "title": "Reading without sign-in",
+          "status": "in-progress",
+          "plan": "superpowers/plans/2026-10-02-milestone-05-1-reading.md",
+          "spec": "superpowers/specs/2026-10-02-reading-design.md",
+          "prerequisites": ["0"],
+          "prerequisitesNote": "Release `v0.1.0`",
+          "goal": "Reading works without signing in.",
+          "tasks": [{ "text": "Create policy", "done": false }],
+          "acceptance": [{ "text": "Tests are green", "done": false }],
+          "blocks": [{ "title": "Open questions", "text": "Still to be clarified: page protection." }]
+        }
+      ]
+    },
+    {
+      "number": 2,
+      "name": "Hosts",
+      "milestones": [
+        {
+          "id": "6",
+          "title": "Agent",
+          "status": "planned",
+          "plan": "superpowers/plans/2026-10-03-milestone-06-agent.md",
+          "prerequisites": ["0", "5.1"],
+          "goal": "An agent sends metrics.",
+          "tasks": [{ "text": "Build agent", "done": false }],
+          "acceptance": []
+        }
+      ]
+    }
+  ],
+  "releases": [
+    {
+      "version": "0.1.0",
+      "title": "replaces the old one",
+      "status": "done",
+      "date": "2026-10-02",
+      "afterMilestone": "5.1",
+      "covers": ["0", "5.1"],
+      "intro": "Manual check by the user.",
+      "acceptance": [
+        { "text": "Runs in production", "done": false },
+        { "text": "Data migrated", "done": true, "evidence": "Report of 2026-10-03" }
+      ],
+      "blocks": [{ "title": "Known limits", "text": "Only one host tested." }]
+    },
+    {
+      "version": "0.2.0",
+      "title": "brings hosts",
+      "status": "open",
+      "afterMilestone": "6",
+      "covers": ["6"]
+    }
+  ]
+}

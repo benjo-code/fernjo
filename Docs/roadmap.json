@@ -1,0 +1,36 @@
+{
+  "$schema": "./roadmap.schema.json",
+  "schemaVersion": 1,
+  "title": "<Project name>",
+  "subprojects": [
+    {
+      "number": 1,
+      "name": "<Name>",
+      "spec": { "text": "not created yet (created in M0)" },
+      "milestones": [
+        {
+          "id": "0",
+          "title": "Repo scaffold & CI",
+          "status": "open",
+          "goal": "An empty but fully set-up repo that all further milestones build on.",
+          "tasks": [
+            { "text": "Create spec (brainstorming): goal, scope, stack, subprojects; link it here and enter the first milestones", "done": false },
+            { "text": "Repo setup per README done: `dev` as default branch, merge options, branch protection for `main` and `dev`", "done": false },
+            { "text": "Fill in the project header in `CLAUDE.md` and `README.md`, remove the template section from the README", "done": false },
+            { "text": "Stack-specific `.gitignore` (incl. `.env`) and `.gitattributes` additions (e.g. Unity: Git LFS for large assets)", "done": false },
+            { "text": "Project scaffold incl. test project", "done": false },
+            { "text": "`.env.example` with placeholders, if secrets are needed", "done": false },
+            { "text": "CI (GitHub Actions): build, test and format/lint on PRs to `dev` and `main`; the `roadmap` job from `.github/workflows/roadmap.yml` stays", "done": false },
+            { "text": "Add the CI jobs (`roadmap` and the job for build, test, lint) as required status checks in the branch protection of `main` and `dev`", "done": false },
+            { "text": "Dependabot for the package ecosystem and GitHub Actions", "done": false }
+          ],
+          "acceptance": [
+            { "text": "Build, test and format/lint run green locally (commands in `CLAUDE.md`)", "done": false },
+            { "text": "CI is green on a PR to `dev`", "done": false },
+            { "text": "Branch protection for `main` and `dev` is active: PR required, CI check required, no force push, no deletion", "done": false, "evidence": "`gh api repos/benjo-code/<name>/branches/<branch>/protection`" }
+          ]
+        }
+      ]
+    }
+  ]
+}
