@@ -23,12 +23,15 @@ Prerequisites: Rust (stable, version pinned in `rust-toolchain.toml`), Node.js L
 
 ```bash
 pnpm install
-pnpm tauri dev          # run the app
-cargo test --workspace  # Rust tests
-pnpm test               # UI tests
+pnpm ui:build                                          # first, on a fresh checkout: the Tauri crate embeds ui/dist
+pnpm tauri dev                                         # run the app
+cargo test --workspace                                 # Rust tests
+pnpm test                                              # UI tests
+pnpm lint                                              # ESLint, Prettier, svelte-check
+cargo fmt --all --check                                # Rust formatting
+cargo clippy --workspace --all-targets -- -D warnings  # Rust lints
+cargo deny check                                       # licences, advisories, sources
 ```
-
-> The workspace and these commands are being set up in milestone 0.
 
 ## Security
 

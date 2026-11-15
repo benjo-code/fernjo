@@ -15,6 +15,36 @@ Log of architecture and technology decisions. Newest entries on top.
 **Rejected alternatives:** <What else was considered and why not>
 -->
 
+## 2026-11-15 – CI toolchain: plain rustup, UI build first, hosted Ubuntu only, gitleaks CLI
+**Context:** `.github/workflows/ci.yml` must install the pinned Rust toolchain, build a Tauri crate that embeds the frontend, and the repo history should be scanned for secrets; the cargo-deny job runs with the default advisory scope.
+**Decision:** The pinned toolchain is installed with `rustup toolchain install` (rustup 1.28+ no longer installs on `rustup show`), not a third-party toolchain action. The CI UI build (`pnpm ui:build`) runs before any cargo command because the Tauri crate embeds `ui/dist`. CI runs on `ubuntu-latest` only; the Ubuntu 22.04 minimum is checked when packaging (M6). Secret scanning of the git history uses the gitleaks CLI, not `gitleaks-action` (it needs a licence for organisations). Known gap: cargo-deny's unsound/unmaintained checks default to workspace direct dependencies only, so `RUSTSEC-2024-0429` (`glib` 0.18.5 unsound, via Tauri's GTK3 stack) is only reported with `unsound = "all"`; revisit when Tauri leaves GTK3.
+**Rationale:** Fewer third-party actions to pin and trust; the build order is forced by the embedded `ui/dist`; hosted minutes are free for a public repo and one Linux job covers the code paths until packaging.
+**Rejected alternatives:** A third-party toolchain action (extra supply-chain surface); `gitleaks-action` (licence); an OS matrix in M0 (cost without a packaging step to test); enabling `unsound = "all"` now (would fail on a Tauri-internal advisory we cannot fix).
+
+## 2026-11-15 – Webview hardening from day one
+**Context:** The webview must never become an easy path to secrets, which stay in Rust.
+**Decision:** `src-tauri/tauri.conf.json` sets a non-null strict CSP (`default-src 'self'`, no `unsafe-eval`), and `src-tauri/capabilities/default.json` grants `core:default` only. `src-tauri/tests/tauri_conf.rs` guards both. Known follow-up: the CSP has no `connect-src` for Tauri IPC (`ipc:` / `http://ipc.localhost`) and the test forbids the substring `http:`. The milestone that adds the first Tauri command (M2) must add the `connect-src` entry, relax the test to forbid external origins and `*` instead of the substring `http:`, and verify there is no CSP warning in the webview console.
+**Rationale:** Tightening a CSP and capability set later is harder than starting strict; the tests keep them from drifting.
+**Rejected alternatives:** `csp: null` until needed; broad default capabilities.
+
+## 2026-11-15 – Project layout: one root pnpm package, Tauri identifier
+**Context:** The scaffold needs a frontend layout and an app identifier.
+**Decision:** A single root pnpm package (no pnpm workspace) with the frontend sources and Vite config in `ui/`. Tauri identifier `io.github.benjo-code.fernjo`; changing it later moves the app data paths. The icon is a placeholder, replaced in M1. `version` in `src-tauri/tauri.conf.json` duplicates the workspace version; follow-up: drop it if the release flow does not bump both.
+**Rationale:** There is only one JS package, so a workspace adds nothing; the identifier follows the GitHub namespace.
+**Rejected alternatives:** A pnpm workspace; a frontend directory outside `ui/`.
+
+## 2026-11-15 – TypeScript pinned to 6.0.x
+**Context:** `typescript-eslint` declares peer `typescript <6.1.0` and `svelte-check` declares `^5 || ^6`, so neither supports TypeScript 7.
+**Decision:** `package.json` pins `typescript` to `~6.0.3`; `.github/dependabot.yml` ignores TypeScript major bumps. Revisit when both tools support 7. Follow-up: `ui/vite.config.ts` is covered by ESLint and Prettier but not type-checked by `svelte-check` (`ui/tsconfig.json` only includes `src/**`); a `tsconfig.node.json` with `@types/node` would close the gap.
+**Rationale:** Keeps `pnpm lint` working without peer-dependency overrides.
+**Rejected alternatives:** TypeScript 7 now (breaks the peer ranges); overriding the peer ranges.
+
+## 2026-11-15 – Fixed versions of the scaffold
+**Context:** M0 fixes the toolchain and framework lines so later milestones build on a known base.
+**Decision:** Rust 1.100.0 (`rust-toolchain.toml`, not bumped by Dependabot); Tauri 2.12 line (`tauri` 2.12, `tauri-build` 2.7; 3.0 alphas exist and are deliberately not used); Svelte 5, Vite 8, Vitest 5, ESLint 10; pnpm 12.21.0 (`packageManager` in `package.json`); Node 24 in CI (`engines` `>=22.12.0`).
+**Rationale:** Current stable lines; the pinned toolchain makes local and CI builds identical.
+**Rejected alternatives:** Tauri 3.0 alphas (unstable); a floating `stable` toolchain (non-reproducible builds).
+
 ## 2026-11-15 – cargo-deny: licence allow-list and advisory ignores
 **Context:** M0 adds a `cargo-deny` CI job (advisories, bans, licences, sources) that must be green on the workspace including Tauri's dependency tree (cargo-deny 0.20.2, run with `--all-features`; the graph covers all platforms, so Linux-only crates are checked too).
 **Decision:** `deny.toml` allows only `MIT`, `Apache-2.0`, `Apache-2.0 WITH LLVM-exception`, `BSD-2-Clause`, `BSD-3-Clause`, `ISC`, `Zlib`, `Unicode-3.0`, `CC0-1.0`, `MPL-2.0`; no licence was added beyond this starting list (the first run reported no licence violations). Sources are crates.io only (unknown registry and git denied); duplicate versions only warn. One advisory is ignored: `RUSTSEC-2024-0370` (`proc-macro-error` unmaintained, pulled in by `glib-macros` through Tauri's Linux GTK3 stack; no safe upgrade exists). Remove the ignore when Tauri moves off GTK3 (or `glib-macros` drops `proc-macro-error`); `cargo deny check` will then report the entry as unused, as a *warning* (not an error), so look for it in the output after Tauri upgrades. Wildcard dependencies are not allowed (default `warn` is not loosened) and the licence confidence threshold stays at its default.

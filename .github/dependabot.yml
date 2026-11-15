@@ -5,6 +5,8 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
     # The Rust toolchain pin in rust-toolchain.toml is not managed by Dependabot; bump it by hand.
 
   - package-ecosystem: npm # also covers pnpm (pnpm-lock.yaml)
@@ -12,6 +14,8 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
     ignore:
       # TypeScript 7 is outside typescript-eslint's `<6.1.0` and svelte-check's `^5 || ^6` peer ranges.
       - dependency-name: typescript
@@ -22,3 +26,5 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"

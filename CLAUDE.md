@@ -22,6 +22,7 @@ Cross-platform (Windows, macOS, Linux) SSH & RDP connection manager in the spiri
 - Protocol, vault and import crates never depend on Tauri; they are testable without the UI.
 - Frontend ↔ Rust: Tauri commands for requests, Tauri channels for streaming session data.
 - The Tauri crate embeds `ui/dist` at compile time, so on a fresh checkout run `pnpm install && pnpm ui:build` before `cargo build/clippy/test --workspace`.
+- `deny.toml` carries the advisory ignore list with a reason per entry; run `cargo deny check` after dependency updates and drop ignores it reports as unused.
 
 **Rules that must not be broken**
 - **Secrets stay in Rust.** Passwords, private keys and passphrases are never sent to the webview (only IDs and names), never written to `connections.json`, logs or webview storage. The only exception is the explicit "reveal" action in the vault UI. Secrets in memory use `secrecy`/`zeroize`.
