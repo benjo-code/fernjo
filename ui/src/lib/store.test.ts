@@ -320,3 +320,13 @@ describe("TreeStore", () => {
     });
   });
 });
+
+describe("TreeStore.applySnapshot", () => {
+  test("adopts_an_externally_returned_snapshot", async () => {
+    const { store } = await started();
+    store.select("web-01");
+    await store.applySnapshot(snapshot([conn("other")]));
+    expect(store.children.map((n) => n.name)).toEqual(["other"]);
+    expect(store.selectedId).toBeNull();
+  });
+});

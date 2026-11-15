@@ -2,7 +2,20 @@
 // secrets). Every call goes through one queue so commands never overlap. Errors are returned to
 // the caller, which shows them inline; only `restart_required` also goes to the global error bar.
 import { toApiError } from "./api";
-import type { Api, ApiError, CredentialInfo, VaultStatus } from "./types";
+import type {
+  Api,
+  ApiError,
+  CredentialDraft,
+  CredentialInfo,
+  CredentialUpdate,
+  Mutation,
+  RevealedSecret,
+  UsageItem,
+  VaultStatus,
+} from "./types";
+
+/** The result of a call whose answer the caller needs: the value, or the error to show. */
+export type Outcome<T> = { value: T; error: null } | { value: null; error: ApiError };
 
 export class VaultStore {
   /** `null` until the first answer from Rust. */
@@ -69,6 +82,40 @@ export class VaultStore {
     });
   }
 
+  createCredential(draft: CredentialDraft) {
+    return this.#call(async () => {
+      const info = await this.#api.createCredential(draft);
+      await this.#loadCredentials();
+      return info;
+    });
+  }
+
+  updateCredential(id: string, update: CredentialUpdate) {
+    return this.#call(async () => {
+      const info = await this.#api.updateCredential(id, update);
+      await this.#loadCredentials();
+      return info;
+    });
+  }
+
+  credentialUsage(id: string): Promise<Outcome<UsageItem[]>> {
+    return this.#call(() => this.#api.credentialUsage(id));
+  }
+
+  /** Returns the tree snapshot: nodes that used the credential were reset to inherit. */
+  deleteCredential(id: string): Promise<Outcome<Mutation>> {
+    return this.#call(async () => {
+      const m = await this.#api.deleteCredential(id);
+      await this.#loadCredentials();
+      return m;
+    });
+  }
+
+  /** The only call that brings secret values into the UI; the caller hides them again. */
+  revealCredential(id: string): Promise<Outcome<RevealedSecret>> {
+    return this.#call(() => this.#api.revealCredential(id));
+  }
+
   refreshCredentials() {
     return this.#run(() => this.#loadCredentials());
   }
@@ -84,6 +131,14 @@ export class VaultStore {
       const err = toApiError(e);
       this.#onGlobalError(`Could not load the credentials: ${err.message}`);
     }
+  }
+
+  async #call<T>(job: () => Promise<T>): Promise<Outcome<T>> {
+    let value: T | undefined;
+    const error = await this.#run(async () => {
+      value = await job();
+    });
+    return error ? { value: null, error } : { value: value as T, error: null };
   }
 
   /** Runs `job` after every earlier job finished. Resolves to the error, or `null`. */

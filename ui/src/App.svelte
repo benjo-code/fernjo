@@ -3,6 +3,7 @@
   import { tauriApi } from "./lib/api";
   import PropertiesPanel from "./lib/components/PropertiesPanel.svelte";
   import Sidebar from "./lib/components/Sidebar.svelte";
+  import VaultManager from "./lib/components/VaultManager.svelte";
   import { TreeStore } from "./lib/store.svelte";
   import type { Api } from "./lib/types";
   import { VaultStore } from "./lib/vault.svelte";
@@ -34,11 +35,7 @@
   </Sidebar>
   <main class="main">
     {#if view === "vault"}
-      <!-- TEMPORARY: Task 10 replaces this placeholder with the credential manager -->
-      <div class="placeholder">
-        <p class="empty">Credentials</p>
-        <button type="button" class="btn" onclick={() => (view = "empty")}>Close</button>
-      </div>
+      <VaultManager {vault} tree={store} onclose={() => (view = "empty")} />
     {:else}
       <p class="empty">Open a connection from the tree</p>
     {/if}
@@ -58,13 +55,6 @@
     justify-content: center;
     min-width: 0;
     background: var(--color-bg);
-  }
-
-  .placeholder {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: var(--space-4);
   }
 
   .empty {

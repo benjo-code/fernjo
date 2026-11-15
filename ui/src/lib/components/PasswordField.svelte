@@ -6,6 +6,7 @@
     label,
     value = $bindable(""),
     error = null,
+    placeholder = "",
     onedit,
   }: {
     id: string;
@@ -14,6 +15,7 @@
     value?: string;
     /** Shown in the danger state under the field and announced to screen readers. */
     error?: string | null;
+    placeholder?: string;
     onedit?: () => void;
   } = $props();
 
@@ -33,6 +35,7 @@
       bind:this={input}
       {id}
       type={shown ? "text" : "password"}
+      {placeholder}
       autocomplete="off"
       spellcheck="false"
       aria-invalid={error !== null ? "true" : undefined}

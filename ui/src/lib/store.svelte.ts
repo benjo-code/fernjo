@@ -3,7 +3,7 @@
 import { SvelteSet } from "svelte/reactivity";
 import { toApiError } from "./api";
 import { collectIds, flattenRows, type Row } from "./rows";
-import type { Api, ApiError, NodePatch, Notice, ResolvedNode, TreeNode } from "./types";
+import type { Api, ApiError, NodePatch, Notice, ResolvedNode, Snapshot, TreeNode } from "./types";
 
 const STORAGE_KEY = "fernjo.expanded.v1";
 
@@ -154,6 +154,13 @@ export class TreeStore {
     return this.#run(async () => {
       const m = await this.#api.deleteNode(id);
       this.#apply(m.snapshot.children, m.snapshot.notices);
+    });
+  }
+
+  /** Adopts a snapshot that another command returned (for example deleting a credential). */
+  applySnapshot(snapshot: Snapshot) {
+    return this.#run(async () => {
+      this.#apply(snapshot.children, snapshot.notices);
     });
   }
 
