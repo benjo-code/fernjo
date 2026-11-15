@@ -24,7 +24,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 | # | Milestone | Subproject | Status | Plan | Done on |
 |---|---|---|---|---|---|
 | 0 | Repo scaffold & CI | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-15-milestone-00-repo-scaffold.md) | 2026-11-15 |
-| 1 | UI design direction | 1 – fernjo app | ⬜ open | – | – |
+| 1 | UI design direction | 1 – fernjo app | 🟡 planned | [Plan](superpowers/plans/2026-11-15-milestone-01-design-direction.md) | – |
 | 2 | Connection tree & data model | 1 – fernjo app | ⬜ open | – | – |
 | 3 | Credential vault | 1 – fernjo app | ⬜ open | – | – |
 | 4 | SSH sessions in tabs | 1 – fernjo app | ⬜ open | – | – |
@@ -36,7 +36,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 
 ## Scope changes
 
-_None yet._
+- **2026-11-15 (M1 planning):** M1 gains the task "App icon derived from the chosen direction". `Docs/DECISIONS.md` (entry "Project layout: one root pnpm package, Tauri identifier") already planned to replace the placeholder icon in M1, but the roadmap had no task for it; the owner chose M1 over M6 or the backlog.
 
 ---
 
@@ -74,7 +74,7 @@ Goal: An empty but fully set-up, public repo with a running Tauri shell and gree
 - [x] No workflow uses a self-hosted runner – `grep -rn self-hosted .github/workflows` returns nothing (also enforced by the workflow policy script); CI and Roadmap workflow runs of PR #2 ran on GitHub-hosted runners
 
 ## Milestone 1 – UI design direction
-**Status:** ⬜ open · **Plan:** – · **Prerequisites:** M0
+**Status:** 🟡 planned · **Plan:** [2026-11-15-milestone-01-design-direction.md](superpowers/plans/2026-11-15-milestone-01-design-direction.md) · **Prerequisites:** M0
 
 Goal: The visual direction of fernjo is chosen by the owner from at least three concepts and recorded, so every UI milestone builds on it.
 
@@ -86,6 +86,7 @@ Goal: The visual direction of fernjo is chosen by the owner from at least three 
 - [ ] Record the direction in `DESIGN.md` (principles, typography, colour, spacing, components, terminal colour scheme)
 - [ ] Design tokens as CSS variables (light and dark) in `ui/`, applied to the empty shell
 - [ ] Decision entry in `Docs/DECISIONS.md` naming the chosen concept and why
+- [ ] App icon derived from the chosen direction (source SVG committed, icon set generated with `pnpm tauri icon`), replacing the M0 placeholder
 
 **Acceptance criteria**
 - [ ] The artifact shows at least three concepts, switchable, each in light and dark

@@ -2,6 +2,13 @@
   "$schema": "./roadmap.schema.json",
   "schemaVersion": 1,
   "title": "fernjo",
+  "scopeChanges": [
+    {
+      "date": "2026-11-15",
+      "context": "M1 planning",
+      "text": "M1 gains the task \"App icon derived from the chosen direction\". `Docs/DECISIONS.md` (entry \"Project layout: one root pnpm package, Tauri identifier\") already planned to replace the placeholder icon in M1, but the roadmap had no task for it; the owner chose M1 over M6 or the backlog."
+    }
+  ],
   "subprojects": [
     {
       "number": 1,
@@ -43,7 +50,8 @@
         {
           "id": "1",
           "title": "UI design direction",
-          "status": "open",
+          "status": "planned",
+          "plan": "superpowers/plans/2026-11-15-milestone-01-design-direction.md",
           "prerequisites": ["0"],
           "goal": "The visual direction of fernjo is chosen by the owner from at least three concepts and recorded, so every UI milestone builds on it.",
           "tasks": [
@@ -53,7 +61,8 @@
             { "text": "Owner picks a concept (or combines parts); iterate on the chosen direction", "done": false },
             { "text": "Record the direction in `DESIGN.md` (principles, typography, colour, spacing, components, terminal colour scheme)", "done": false },
             { "text": "Design tokens as CSS variables (light and dark) in `ui/`, applied to the empty shell", "done": false },
-            { "text": "Decision entry in `Docs/DECISIONS.md` naming the chosen concept and why", "done": false }
+            { "text": "Decision entry in `Docs/DECISIONS.md` naming the chosen concept and why", "done": false },
+            { "text": "App icon derived from the chosen direction (source SVG committed, icon set generated with `pnpm tauri icon`), replacing the M0 placeholder", "done": false }
           ],
           "acceptance": [
             { "text": "The artifact shows at least three concepts, switchable, each in light and dark", "done": false },
