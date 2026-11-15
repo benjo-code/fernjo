@@ -99,7 +99,7 @@ Goal: The visual direction of fernjo is chosen by the owner from at least three 
 Goal: Connections can be organised in a persistent folder tree with mRemoteNG-style inheritance, without connecting anywhere yet.
 
 **Tasks**
-- [ ] `fernjo-core`: tree of folders and connections (UUIDs, manual order), inheritable settings, effective-value resolution with built-in defaults
+- [x] `fernjo-core`: tree of folders and connections (UUIDs, manual order), inheritable settings, effective-value resolution with built-in defaults
 - [ ] Persistence in `connections.json` (`schemaVersion`, atomic write, `.bak`) in the data folder from the OS config directory
 - [ ] Tauri commands for creating, editing, moving and deleting nodes
 - [ ] Sidebar: tree with filter (name, host, description), expand/collapse, drag and drop, context menu (new folder/connection, duplicate, rename, delete)
