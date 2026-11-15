@@ -1,5 +1,6 @@
 mod commands;
 mod state;
+mod vault_commands;
 
 use tauri::Manager;
 
@@ -32,6 +33,19 @@ pub fn run() {
             commands::handlers::move_node,
             commands::handlers::duplicate_node,
             commands::handlers::delete_node,
+            vault_commands::handlers::vault_status,
+            vault_commands::handlers::vault_create,
+            vault_commands::handlers::vault_unlock,
+            vault_commands::handlers::vault_lock,
+            vault_commands::handlers::vault_change_password,
+            vault_commands::handlers::vault_set_auto_unlock,
+            vault_commands::handlers::list_credentials,
+            vault_commands::handlers::get_credential,
+            vault_commands::handlers::create_credential,
+            vault_commands::handlers::update_credential,
+            vault_commands::handlers::credential_usage,
+            vault_commands::handlers::delete_credential,
+            vault_commands::handlers::reveal_credential,
         ])
         .run(tauri::generate_context!())
         .expect("error while running fernjo");

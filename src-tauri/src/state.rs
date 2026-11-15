@@ -58,6 +58,17 @@ pub struct AppState {
     pub restart_required: AtomicBool,
 }
 
+/// Debug output never includes the vault, the key store or the connection data.
+impl std::fmt::Debug for AppState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppState")
+            .field("data_dir", &self.data_dir)
+            .field("source", &self.source)
+            .field("settings_unusable", &self.settings_unusable)
+            .finish_non_exhaustive()
+    }
+}
+
 impl AppState {
     /// Test constructor: in-memory key store, test KDF, no settings file
     /// (`source` is `Default`).

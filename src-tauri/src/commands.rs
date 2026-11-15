@@ -62,7 +62,7 @@ impl From<TreeError> for CommandError {
     }
 }
 
-fn snapshot(store: &Store, notices: Vec<Notice>) -> Snapshot {
+pub(crate) fn snapshot(store: &Store, notices: Vec<Notice>) -> Snapshot {
     Snapshot {
         children: store.tree().children().to_vec(),
         notices,
@@ -81,7 +81,7 @@ pub fn ensure_writable(state: &AppState) -> Result<(), CommandError> {
 }
 
 /// Runs `f` on the store, or reports why there is none.
-fn with_store<T>(
+pub(crate) fn with_store<T>(
     state: &AppState,
     f: impl FnOnce(&mut Store) -> Result<T, CommandError>,
 ) -> Result<T, CommandError> {
