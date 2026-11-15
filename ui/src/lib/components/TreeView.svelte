@@ -1,5 +1,7 @@
 <script lang="ts">
   import { tick } from "svelte";
+  import { DragController, type DragTarget, type Hit } from "../drag";
+  import { dropPosition } from "../drop-target";
   import { countDescendants, type Row } from "../rows";
   import type { TreeStore } from "../store.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
@@ -17,6 +19,95 @@
     rows.find((r) => r.node.id === store.selectedId)?.node.id ?? rows[0]?.node.id ?? null,
   );
   const query = $derived(store.filter.trim());
+
+  // --- pointer-based drag and drop ---
+  const DRAG_THRESHOLD = 4;
+  const EDGE_SCROLL = 24;
+
+  let dragView = $state<{ dragId: string | null; target: DragTarget | null }>({
+    dragId: null,
+    target: null,
+  });
+  let justDragged = false;
+
+  const drag = new DragController({
+    threshold: DRAG_THRESHOLD,
+    rows: () => rows,
+    onMove: (id, parentId, index) => void store.move(id, parentId, index),
+  });
+
+  const dragEnabled = () => query === "" && store.renamingId === null;
+
+  function syncDrag() {
+    const active = drag.state === "dragging";
+    dragView = { dragId: active ? drag.dragId : null, target: active ? drag.target : null };
+  }
+
+  function hitAt(x: number, y: number): Hit | null {
+    const el = document.elementFromPoint?.(x, y) ?? null;
+    const rowEl = el?.closest<HTMLElement>("[data-node-id]");
+    if (!rowEl || !container?.contains(rowEl)) return null;
+    const row = rows.find((r) => r.node.id === rowEl.dataset.nodeId);
+    if (!row) return null;
+    return {
+      rowId: row.node.id,
+      position: dropPosition(y, rowEl.getBoundingClientRect(), row.node.type === "folder"),
+    };
+  }
+
+  function autoScroll(y: number) {
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    if (y < rect.top + EDGE_SCROLL) container.scrollTop -= 12;
+    else if (y > rect.bottom - EDGE_SCROLL) container.scrollTop += 12;
+  }
+
+  function onpointerdown(e: PointerEvent) {
+    if (e.button !== 0 || !dragEnabled()) return;
+    const target = e.target as HTMLElement;
+    if (target instanceof HTMLInputElement || target.closest(".chevron")) return;
+    const el = target.closest<HTMLElement>("[data-node-id]");
+    if (el) drag.pointerDown(el.dataset.nodeId!, e.clientX, e.clientY);
+  }
+
+  function onpointermove(e: PointerEvent) {
+    if (drag.state === "idle") return;
+    const wasPending = drag.state === "pending";
+    drag.pointerMove(e.clientX, e.clientY, hitAt(e.clientX, e.clientY));
+    if (wasPending && drag.state === "dragging") {
+      try {
+        container?.setPointerCapture(e.pointerId);
+      } catch {
+        // capture is a convenience (keeps events coming outside the tree)
+      }
+    }
+    if (drag.state === "dragging") autoScroll(e.clientY);
+    syncDrag();
+  }
+
+  function onpointerup(e: PointerEvent) {
+    const wasDrag = drag.pointerUp();
+    syncDrag();
+    try {
+      container?.releasePointerCapture(e.pointerId);
+    } catch {
+      // nothing was captured
+    }
+    if (wasDrag) {
+      // the click that follows a drag must not select anything
+      justDragged = true;
+      setTimeout(() => (justDragged = false), 0);
+    }
+  }
+
+  function cancelDrag() {
+    drag.cancel();
+    syncDrag();
+  }
+
+  function onwindowkeydown(e: KeyboardEvent) {
+    if (e.key === "Escape" && drag.state !== "idle") cancelDrag();
+  }
 
   function rowElement(id: string): HTMLElement | undefined {
     return [...(container?.querySelectorAll<HTMLElement>("[data-node-id]") ?? [])].find(
@@ -86,6 +177,10 @@
   }
 
   function onclick(e: MouseEvent) {
+    if (justDragged) {
+      justDragged = false;
+      return;
+    }
     const target = e.target as HTMLElement;
     const el = target.closest<HTMLElement>("[data-node-id]");
     if (!el || !container?.contains(el)) return;
@@ -159,6 +254,8 @@
   }
 </script>
 
+<svelte:window onkeydown={onwindowkeydown} />
+
 {#if store.loadError || !store.loaded}
   <!-- nothing to show yet, or the data could not be opened (the notice bar says why) -->
 {:else if store.children.length === 0}
@@ -179,12 +276,17 @@
   <div
     bind:this={container}
     class="tree"
+    class:dragging={dragView.dragId !== null}
     role="tree"
     aria-label="Connections"
     tabindex="-1"
     {onclick}
     {oncontextmenu}
     {onkeydown}
+    {onpointerdown}
+    {onpointermove}
+    {onpointerup}
+    onpointercancel={cancelDrag}
   >
     {#each rows as row (row.node.id)}
       <TreeRow
@@ -192,6 +294,8 @@
         selected={row.node.id === store.selectedId}
         tabbable={row.node.id === tabbableId}
         renaming={row.node.id === store.renamingId}
+        drop={dragView.target?.rowId === row.node.id ? dragView.target.position : null}
+        dragging={dragView.dragId === row.node.id}
         onrename={(value) => {
           if (value.trim() === row.node.name) store.stopRename();
           else void store.rename(row.node.id, value);
@@ -217,6 +321,10 @@
 {/if}
 
 <style>
+  .tree.dragging {
+    cursor: grabbing;
+  }
+
   .tree {
     flex: 1;
     min-height: 0;

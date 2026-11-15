@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { DropPosition } from "../drop-target";
   import type { Row } from "../rows";
   import Icon from "./Icon.svelte";
 
@@ -7,6 +8,8 @@
     selected,
     tabbable,
     renaming,
+    drop = null,
+    dragging = false,
     onrename,
     oncancel,
   }: {
@@ -14,6 +17,10 @@
     selected: boolean;
     tabbable: boolean;
     renaming: boolean;
+    /** Where the dragged node would land relative to this row, if it is the drop target. */
+    drop?: DropPosition | null;
+    /** This row is the one being dragged. */
+    dragging?: boolean;
     onrename: (value: string) => void;
     oncancel: () => void;
   } = $props();
@@ -58,6 +65,10 @@
   class="row"
   class:selected
   class:folder={row.node.type === "folder"}
+  class:dragging
+  class:drop-before={drop === "before"}
+  class:drop-after={drop === "after"}
+  class:drop-inside={drop === "inside"}
   role="treeitem"
   aria-level={row.depth + 1}
   aria-selected={selected}
@@ -123,6 +134,35 @@
     left: 0;
     width: 3px;
     background: var(--color-selection-bar);
+  }
+
+  .row.dragging {
+    opacity: 0.55;
+  }
+
+  .row.drop-before::after,
+  .row.drop-after::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--color-selection-bar);
+    pointer-events: none;
+  }
+
+  .row.drop-before::after {
+    top: 0;
+  }
+
+  .row.drop-after::after {
+    bottom: 0;
+  }
+
+  .row.drop-inside {
+    background: var(--color-hover);
+    outline: 1px solid var(--color-border-strong);
+    outline-offset: -1px;
   }
 
   .folder {
