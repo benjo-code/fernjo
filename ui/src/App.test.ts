@@ -45,6 +45,21 @@ test("clicking_the_locked_chip_focuses_the_password_field_in_the_lock_note", asy
   unmount(app);
 });
 
+test("the_sidebar_lets_the_tree_shrink_only_while_the_vault_form_is_open", async () => {
+  const { api } = mockApi([], { vaultStatus: async () => vaultStatus({ state: "locked" }) });
+  const app = mount(App, { target: document.body, props: { api } });
+  await settle();
+  const aside = document.querySelector("aside")!;
+  expect(aside.classList.contains("note-open")).toBe(false);
+  [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Unlock")!.click();
+  await settle();
+  expect(aside.classList.contains("note-open")).toBe(true);
+  [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Cancel")!.click();
+  await settle();
+  expect(aside.classList.contains("note-open")).toBe(false);
+  unmount(app);
+});
+
 test("a_restart_required_error_from_a_vault_call_shows_in_the_notice_bar", async () => {
   const { api } = mockApi([], {
     vaultStatus: async () => vaultStatus({ state: "locked" }),

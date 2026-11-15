@@ -30,14 +30,15 @@
   } = $props();
 
   let note: VaultNote | undefined = $state();
+  let noteOpen = $state(false);
 </script>
 
-<aside class="sidebar" aria-label="Connections">
+<aside class="sidebar" class:note-open={noteOpen} aria-label="Connections">
   <div class="head">
     <div class="filter"><FilterBox {store} /></div>
     <VaultChip {vault} onOpenManager={onOpenVault} onFocusUnlock={() => void note?.focusForm()} />
   </div>
-  <VaultNote bind:this={note} {vault} />
+  <VaultNote bind:this={note} bind:open={noteOpen} {vault} />
   <NoticeBar {store} {restartPending} {onRestart} />
   <div class="tree-slot"><TreeView {store} /></div>
   {@render children?.()}
@@ -107,5 +108,10 @@
     flex-direction: column;
     min-height: min(calc(var(--row-height-tree) * 23), calc(100vh - 120px));
     overflow-y: auto;
+  }
+
+  /* the vault form is open: it is taller than the compact note, so the tree may shrink */
+  .note-open .tree-slot {
+    min-height: calc(var(--row-height-tree) * 6);
   }
 </style>

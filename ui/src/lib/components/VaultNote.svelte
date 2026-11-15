@@ -4,7 +4,14 @@
   import Icon from "./Icon.svelte";
   import PasswordField from "./PasswordField.svelte";
 
-  let { vault }: { vault: VaultStore } = $props();
+  let {
+    vault,
+    open = $bindable(false),
+  }: {
+    vault: VaultStore;
+    /** True while the form is expanded, so the sidebar can give the tree some room back. */
+    open?: boolean;
+  } = $props();
 
   const WRONG_PASSWORD = "Wrong master password. Check Caps Lock and try again.";
 
@@ -94,6 +101,10 @@
     createError = null;
     confirmError = null;
   }
+
+  $effect(() => {
+    open = (phase === "locked" && unlocking) || (phase === "none" && creating);
+  });
 
   const backupPath = $derived(vault.status?.path ? `${vault.status.path}.bak` : null);
 </script>
