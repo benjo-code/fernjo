@@ -19,16 +19,18 @@ Design and scope: [Docs/superpowers/specs/2026-11-15-fernjo-design.md](Docs/supe
 
 ## Setup
 
-Prerequisites: Rust (stable, version pinned in `rust-toolchain.toml`), Node.js LTS with pnpm, the [Tauri 2 system prerequisites](https://tauri.app/start/prerequisites/) for your OS, and the .NET 10 SDK for the roadmap tool.
+Prerequisites: Rust (stable, version pinned in `rust-toolchain.toml`), Node.js LTS with pnpm, the [Tauri 2 system prerequisites](https://tauri.app/start/prerequisites/) for your OS, `cargo-deny` (`cargo install cargo-deny --locked`), and the .NET 10 SDK for the roadmap tool.
 
 ```bash
 pnpm install
-pnpm tauri dev          # run the app
-cargo test --workspace  # Rust tests
-pnpm test               # UI tests
+pnpm tauri dev                                         # run the app
+cargo test --workspace                                 # Rust tests
+pnpm test                                              # UI tests
+pnpm lint                                              # ESLint, Prettier, svelte-check
+cargo fmt --all --check                                # Rust formatting
+cargo clippy --workspace --all-targets -- -D warnings  # Rust lints
+cargo deny check                                       # licences, advisories, sources
 ```
-
-> The workspace and these commands are being set up in milestone 0.
 
 ## Security
 

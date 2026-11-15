@@ -1,0 +1,44 @@
+# Rust
+target/
+
+# Node / UI
+node_modules/
+ui/dist/
+
+# Tauri generated files
+src-tauri/gen/
+
+# Secrets and local data: never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+id_ecdsa
+id_ecdsa.pub
+vault.fernjo
+*.fernjo
+connections.json
+connections.json.bak
+connections.json.tmp
+*.fernjo.bak
+*.fernjo.tmp
+*.tmp
+*.ppk
+id_dsa*
+/settings.json
+/data/
+
+# Agent and editor scratch
+.superpowers/
+.claude/settings.local.json
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
