@@ -236,6 +236,7 @@
     { "title": "Vault auto-lock", "text": "Lock the vault after a configurable idle time." },
     { "title": "Pageant support", "text": "Use PuTTY's Pageant as SSH agent on Windows." },
     { "title": "More protocols", "text": "VNC, Telnet, serial." },
-    { "title": "Code signing, notarisation and auto-update", "text": "Signed installers for Windows and macOS, update channel." }
+    { "title": "Code signing, notarisation and auto-update", "text": "Signed installers for Windows and macOS, update channel." },
+    { "title": "connections.json lost update when a sync tool delivers a newer file", "text": "The app keeps the tree in memory and rewrites `connections.json` on every change, so a file that Syncthing, Nextcloud or Dropbox delivers while the app runs is overwritten and the other device's edits are lost. The vault already guards against this (M3: `Vault::save` re-reads the file and refuses with `changed_on_disk` unless it still starts with the header the handle last read or wrote). Apply the same check-then-write idea to the tree: remember a fingerprint (for example a hash or the length and modification time) of the last bytes read or written, compare it before saving, and refuse or offer to reload when the file changed. It stays a check, not a lock, so a sync tool can still win the race between check and rename." }
   ]
 }
