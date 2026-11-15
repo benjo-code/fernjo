@@ -12,6 +12,8 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    // Never inline assets as data: URIs: the CSP (src-tauri/tauri.conf.json) only allows fonts from 'self'.
+    assetsInlineLimit: 0,
     target: process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome105" : "safari13",
     minify: process.env.TAURI_ENV_DEBUG === "true" ? false : "oxc",
     sourcemap: process.env.TAURI_ENV_DEBUG === "true",
@@ -20,5 +22,7 @@ export default defineConfig({
   resolve: process.env.VITEST ? { conditions: ["browser"] } : undefined,
   test: {
     environment: "jsdom",
+    // Vitest replaces CSS with an empty string by default; tokens.test.ts reads the token files via ?raw.
+    css: true,
   },
 });
