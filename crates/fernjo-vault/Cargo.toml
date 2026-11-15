@@ -19,6 +19,7 @@ secrecy.workspace = true
 zeroize.workspace = true
 unicode-normalization.workspace = true
 getrandom.workspace = true
+keyring = "4.2"
 
 [dev-dependencies]
 tempfile.workspace = true

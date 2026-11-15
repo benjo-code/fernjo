@@ -118,6 +118,12 @@ Follow-up closed in: IPC content security policy (M2).
 **Rationale:** Changing the master password only re-wraps the data key, so keychain entries on other synced devices stay valid; no home-made crypto.
 **Rejected alternatives:** Storing the password-derived key in the keychain (invalidated on every password change); OS keychain as the only store (does not sync across OSes, no portable backup).
 
+## 2026-11-15 – Vault: keychain behaviour
+**Context:** "Unlock automatically on this device" needs the data key in the OS keychain, without a system C library on Linux.
+**Decision:** `keyring` 4.2.0 (with `keyring-core` 1.0.1) with its default `v1` feature, which selects per OS: `windows-native-keyring-store` 1.1.0 (Credential Manager), `apple-native-keyring-store` (macOS Keychain) and `zbus-secret-service-keyring-store` 1.0.1 (Secret Service over `zbus`, no libdbus; `cargo tree -p fernjo-vault --target x86_64-unknown-linux-gnu` shows no `dbus` crate). Item: service `fernjo`, user = vault id, secret = the 32 raw key bytes (`DataKey`, wiped after use). Auto-unlock (`try_auto_unlock`) never prompts: a missing item gives `NoKey`, a keychain error `Unavailable`, a key that fails authentication (`tampered`) deletes the item (`StaleKeyRemoved`); the vault stays locked in all of these and the UI falls back to the master password. A master password change keeps the data key, so stored keys stay valid.
+**Threat model:** With auto-unlock on, the data key is readable by anything running as the same OS user, so such a process can open the vault. Auto-unlock is therefore an explicit opt-in per device; the master password protects the vault file when it is copied or synced elsewhere.
+**Rejected alternatives:** `dbus-secret-service` / `linux-keyutils` stores (libdbus or kernel keyring without persistence); storing the password-derived key (see above).
+
 ## 2026-11-15 – SSH via russh, RDP via IronRDP
 **Context:** The core must be Rust; SSH is used more than RDP.
 **Decision:** russh (tokio) for SSH; IronRDP for RDP, rendered through a framebuffer streamed to a canvas. The RDP milestone starts with a measured spike; a native render surface is the fallback (its own milestone if needed).
