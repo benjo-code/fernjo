@@ -125,4 +125,51 @@ describe("VaultStore", () => {
     await Promise.all([store.lock(), store.unlock("x", false)]);
     expect(order).toEqual(["lock:start", "lock:end", "unlock"]);
   });
+
+  test("init_failure_shows_a_notice_and_marks_the_vault_unavailable", async () => {
+    const { api } = mockApi([], {
+      vaultStatus: async () => {
+        throw apiError("internal", "boom");
+      },
+    });
+    const shown: string[] = [];
+    const store = new VaultStore(api, (m) => shown.push(m));
+    await store.init();
+    expect(shown).toEqual(["Vault unavailable: boom"]);
+    expect(store.status).toBeNull();
+    expect(store.unavailable).toBe(true);
+    expect(store.error).toBe("boom");
+  });
+
+  test("list_failure_after_unlock_shows_a_notice_and_leaves_the_vault_unlocked", async () => {
+    const { api } = mockApi([], {
+      vaultStatus: async () => locked(),
+      vaultUnlock: async () => unlocked(),
+      listCredentials: async () => {
+        throw apiError("internal", "list broke");
+      },
+    });
+    const shown: string[] = [];
+    const store = new VaultStore(api, (m) => shown.push(m));
+    await store.init();
+    expect(await store.unlock("pw", false)).toBeNull();
+    expect(store.status?.state).toBe("unlocked");
+    expect(store.credentials).toEqual([]);
+    expect(shown).toEqual(["Could not load the credentials: list broke"]);
+  });
+
+  test("list_failure_during_init_keeps_the_status_and_shows_a_notice", async () => {
+    const { api } = mockApi([], {
+      vaultStatus: async () => unlocked(),
+      listCredentials: async () => {
+        throw apiError("internal", "list broke");
+      },
+    });
+    const shown: string[] = [];
+    const store = new VaultStore(api, (m) => shown.push(m));
+    await store.init();
+    expect(store.status?.state).toBe("unlocked");
+    expect(store.unavailable).toBe(false);
+    expect(shown).toEqual(["Could not load the credentials: list broke"]);
+  });
 });

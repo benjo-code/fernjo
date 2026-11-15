@@ -1,6 +1,6 @@
 import { flushSync, mount, tick, unmount } from "svelte";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { mockApi, vaultStatus } from "../testing";
+import { apiError, mockApi, vaultStatus } from "../testing";
 import type { VaultStatus } from "../types";
 import { VaultStore } from "../vault.svelte";
 import VaultChip from "./VaultChip.svelte";
@@ -74,6 +74,23 @@ describe("VaultChip", () => {
       props: { vault, onOpenManager: () => {}, onFocusUnlock: () => {} },
     });
     await tick();
+    expect(document.querySelector("button")).toBeNull();
+  });
+
+  test("a_failed_init_shows_a_neutral_unavailable_chip_without_actions", async () => {
+    const { api } = mockApi([], {
+      vaultStatus: async () => {
+        throw apiError("internal", "boom");
+      },
+    });
+    const vault = new VaultStore(api);
+    await vault.init();
+    mounted = mount(VaultChip, {
+      target: document.body,
+      props: { vault, onOpenManager: () => {}, onFocusUnlock: () => {} },
+    });
+    await tick();
+    expect(document.body.textContent).toContain("Vault unavailable");
     expect(document.querySelector("button")).toBeNull();
   });
 });

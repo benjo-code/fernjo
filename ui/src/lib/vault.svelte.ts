@@ -9,8 +9,10 @@ export class VaultStore {
   status = $state<VaultStatus | null>(null);
   /** Empty unless the vault is unlocked. */
   credentials = $state<CredentialInfo[]>([]);
-  /** Set when the status or the list could not be loaded. */
+  /** Set when the first status could not be loaded. */
   error = $state<string | null>(null);
+  /** True when the first status could not be loaded: there is nothing to unlock or create. */
+  unavailable = $state(false);
 
   #api: Api;
   #onGlobalError: (message: string) => void;
@@ -27,6 +29,11 @@ export class VaultStore {
       await this.#loadCredentials();
     });
     this.error = err ? err.message : null;
+    this.unavailable = err !== null && this.status === null;
+    // restart_required was already reported by #run
+    if (this.unavailable && err && err.code !== "restart_required") {
+      this.#onGlobalError(`Vault unavailable: ${err.message}`);
+    }
   }
 
   create(password: string, remember: boolean) {
@@ -68,10 +75,14 @@ export class VaultStore {
 
   /** The list exists only while unlocked; any other state empties it. */
   async #loadCredentials(): Promise<void> {
-    if (this.status?.state === "unlocked") {
+    this.credentials = [];
+    if (this.status?.state !== "unlocked") return;
+    try {
       this.credentials = await this.#api.listCredentials();
-    } else {
-      this.credentials = [];
+    } catch (e) {
+      // the status change itself worked: keep it and tell the user about the list
+      const err = toApiError(e);
+      this.#onGlobalError(`Could not load the credentials: ${err.message}`);
     }
   }
 

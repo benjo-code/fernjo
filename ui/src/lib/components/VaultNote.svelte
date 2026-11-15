@@ -17,8 +17,10 @@
   // The master password lives only in these bound inputs and is cleared after a success.
   let password = $state("");
   let confirm = $state("");
-  // svelte-ignore state_referenced_locally
-  let remember = $state(vault.status?.autoUnlock ?? false);
+  // `null` until the user touches the checkbox; until then it follows what Rust reports
+  let choice = $state<boolean | null>(null);
+  const autoUnlock = $derived(vault.status?.autoUnlock ?? false);
+  const remember = $derived(choice ?? autoUnlock);
   let creating = $state(false);
   let busy = $state(false);
   let unlockError = $state<string | null>(null);
@@ -102,10 +104,14 @@
           onedit={() => (unlockError = null)}
         />
         <label class="check">
-          <input type="checkbox" bind:checked={remember} />
+          <input
+            type="checkbox"
+            checked={remember}
+            onchange={(e) => (choice = e.currentTarget.checked)}
+          />
           <span>Unlock automatically on this device</span>
         </label>
-        {#if remember}
+        {#if remember || autoUnlock}
           <p class="hint">Lock then lasts until the next start.</p>
         {/if}
         <div class="actions">
@@ -138,7 +144,11 @@
           />
           <p class="body">There is no way to recover a forgotten master password.</p>
           <label class="check">
-            <input type="checkbox" bind:checked={remember} />
+            <input
+              type="checkbox"
+              checked={remember}
+              onchange={(e) => (choice = e.currentTarget.checked)}
+            />
             <span>Unlock automatically on this device</span>
           </label>
           <div class="actions">

@@ -173,4 +173,36 @@ describe("VaultNote", () => {
     await setup(vaultStatus({ state: "unlocked" }));
     expect(document.querySelector('[role="region"]')).toBeNull();
   });
+
+  test("locked_with_auto_unlock_starts_checked_and_shows_the_hint", async () => {
+    await setup(vaultStatus({ state: "locked", autoUnlock: true }));
+    expect(document.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked).toBe(true);
+    expect(document.body.textContent).toContain("Lock then lasts until the next start.");
+  });
+
+  test("a_status_arriving_after_mount_updates_the_untouched_checkbox", async () => {
+    const { vault } = await setup(vaultStatus({ state: "locked" }), {
+      vaultUnlock: async () => vaultStatus({ state: "locked", autoUnlock: true }),
+    });
+    const box = document.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    expect(box.checked).toBe(false);
+    expect(document.body.textContent).not.toContain("Lock then lasts");
+    await vault.unlock("x", false);
+    await settle();
+    expect(box.checked).toBe(true);
+    expect(document.body.textContent).toContain("Lock then lasts until the next start.");
+  });
+
+  test("a_user_who_unchecked_the_box_keeps_the_choice_when_the_status_refreshes", async () => {
+    const { vault } = await setup(vaultStatus({ state: "locked", autoUnlock: true }), {
+      vaultUnlock: async () => vaultStatus({ state: "locked", autoUnlock: true }),
+    });
+    const box = document.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    box.click();
+    await settle();
+    expect(box.checked).toBe(false);
+    await vault.unlock("x", false);
+    await settle();
+    expect(box.checked).toBe(false);
+  });
 });

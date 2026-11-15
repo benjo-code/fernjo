@@ -40,7 +40,10 @@
   }
 </script>
 
-{#if phase !== null}
+{#if phase === null && vault.unavailable}
+  <span class="chip unavailable"><Icon name="alert" size={14} /><span>Vault unavailable</span></span
+  >
+{:else if phase !== null}
   <button type="button" class="chip" aria-label={label} {onclick}>
     <Icon
       name={phase === "unlocked" ? "unlock" : phase === "unusable" ? "alert" : "lock"}
@@ -67,7 +70,11 @@
     cursor: default;
   }
 
-  .chip:hover {
+  .unavailable {
+    color: var(--color-text-muted);
+  }
+
+  button.chip:hover {
     background: var(--color-hover);
   }
 </style>
