@@ -3,7 +3,7 @@
 use std::ffi::OsString;
 use std::fmt;
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use secrecy::{ExposeSecret, SecretString};
@@ -15,7 +15,7 @@ use zeroize::Zeroizing;
 use crate::crypto::{self, DataKey, NONCE_LEN, SALT_LEN};
 use crate::entry::{Entry, EntryId, EntrySummary, EntryUpdate, NewEntry, Secret, non_empty};
 use crate::error::VaultError;
-use crate::format::{Header, KdfParams, OFF_WRAPPED_KEY, WRAPPED_KEY_LEN};
+use crate::format::{HEADER_LEN, Header, KdfParams, OFF_WRAPPED_KEY, WRAPPED_KEY_LEN};
 
 /// Identifier of a vault, stored in its header; keys the OS keychain item (Task 3).
 pub type VaultId = Uuid;
@@ -39,6 +39,10 @@ struct Unlocked {
 pub struct Vault {
     path: PathBuf,
     header: Header,
+    /// The header bytes this handle last read from or wrote to the file. `save` refuses to
+    /// overwrite a file that no longer starts with them (see `check_unchanged_on_disk`).
+    /// It differs from `header.encode()` only while `change_password` saves.
+    disk_header: [u8; HEADER_LEN],
     unlocked: Option<Unlocked>,
 }
 
@@ -115,6 +119,7 @@ impl Vault {
             .map_err(|_| VaultError::SaveFailed("unexpected wrapped key size".to_owned()))?;
         let mut vault = Self {
             path: path.to_path_buf(),
+            disk_header: header.encode(),
             header,
             unlocked: Some(Unlocked {
                 key,
@@ -138,6 +143,7 @@ impl Vault {
         let (header, _) = Header::parse(&bytes)?;
         Ok(Some(Self {
             path: path.to_path_buf(),
+            disk_header: header.encode(),
             header,
             unlocked: None,
         }))
@@ -188,6 +194,7 @@ impl Vault {
             .map_err(|_| VaultError::Tampered)?;
         let key = DataKey::from_bytes(key_bytes);
         let body = open_body(&key, &header, &header_bytes, ciphertext)?;
+        self.disk_header = header.encode();
         self.header = header;
         self.unlocked = Some(Unlocked { key, body });
         Ok(())
@@ -209,6 +216,7 @@ impl Vault {
         }
         let header_bytes = header.encode();
         let body = open_body(key, &header, &header_bytes, ciphertext)?;
+        self.disk_header = header.encode();
         self.header = header;
         self.unlocked = Some(Unlocked {
             key: DataKey::from_bytes(*key.as_bytes()),
@@ -279,7 +287,7 @@ impl Vault {
     /// Adds an entry and saves.
     ///
     /// # Errors
-    /// `vault_locked`, `empty_name`, `save_failed` (memory unchanged).
+    /// `vault_locked`, `empty_name`, `changed_on_disk`, `save_failed` (memory unchanged).
     pub fn add(&mut self, new: NewEntry) -> Result<EntryId, VaultError> {
         let name = checked_name(&new.name)?;
         let id = Uuid::new_v4();
@@ -300,7 +308,7 @@ impl Vault {
     /// Applies a partial update and saves.
     ///
     /// # Errors
-    /// `vault_locked`, `not_found`, `empty_name`, `save_failed` (memory unchanged).
+    /// `vault_locked`, `not_found`, `empty_name`, `changed_on_disk`, `save_failed` (memory unchanged).
     pub fn update(&mut self, id: EntryId, update: EntryUpdate) -> Result<(), VaultError> {
         let name = update.name.as_deref().map(checked_name).transpose()?;
         self.mutate(|entries| {
@@ -330,7 +338,7 @@ impl Vault {
     /// Deletes an entry and saves.
     ///
     /// # Errors
-    /// `vault_locked`, `not_found`, `save_failed` (memory unchanged).
+    /// `vault_locked`, `not_found`, `changed_on_disk`, `save_failed` (memory unchanged).
     pub fn delete(&mut self, id: EntryId) -> Result<(), VaultError> {
         self.mutate(|entries| {
             let before = entries.len();
@@ -368,7 +376,7 @@ impl Vault {
     /// failure leaves the file and the header in memory as they were.
     ///
     /// # Errors
-    /// `vault_locked`, `wrong_password`, `weak_password`, `save_failed`.
+    /// `vault_locked`, `wrong_password`, `weak_password`, `changed_on_disk`, `save_failed`.
     pub fn change_password(
         &mut self,
         old: &SecretString,
@@ -406,10 +414,37 @@ impl Vault {
         result
     }
 
+    /// Lost-update guard: the file on disk must still start with the header this handle
+    /// last read or wrote (the body nonce changes on every save, so the header identifies
+    /// the version). A missing file is fine (the save recreates it). A file that cannot
+    /// be read as a vault, is a newer format, is shorter than a header or has another
+    /// header was written by someone else, and is never overwritten.
+    ///
+    /// This is a check, then a write, not a lock: a sync tool can still win the race in
+    /// the instant between the check and the rename.
+    fn check_unchanged_on_disk(&self) -> Result<(), VaultError> {
+        let file = match fs::File::open(&self.path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(VaultError::SaveFailed(e.to_string())),
+        };
+        let mut head = Vec::with_capacity(HEADER_LEN);
+        file.take(HEADER_LEN as u64)
+            .read_to_end(&mut head)
+            .map_err(|e| VaultError::SaveFailed(e.to_string()))?;
+        if head == self.disk_header {
+            Ok(())
+        } else {
+            Err(VaultError::ChangedOnDisk)
+        }
+    }
+
     /// Encrypts the body with a fresh nonce and writes the file atomically: temp file in
-    /// the same folder, `sync_all`, current file copied to `.bak`, rename.
+    /// the same folder, `sync_all`, current file copied to `.bak`, rename. Refuses with
+    /// `changed_on_disk` when the file was changed since this handle read or wrote it.
     pub(crate) fn save(&mut self) -> Result<(), VaultError> {
         let unlocked = self.unlocked.as_ref().ok_or(VaultError::VaultLocked)?;
+        self.check_unchanged_on_disk()?;
         let plain = Zeroizing::new(
             serde_json::to_vec(&unlocked.body)
                 .map_err(|e| VaultError::SaveFailed(e.to_string()))?,
@@ -427,6 +462,7 @@ impl Vault {
         file.extend_from_slice(&header_bytes);
         file.extend_from_slice(&ciphertext);
         write_atomic(&self.path, &file).map_err(|e| VaultError::SaveFailed(e.to_string()))?;
+        self.disk_header = header_bytes;
         self.header = header;
         Ok(())
     }

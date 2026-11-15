@@ -28,6 +28,10 @@ pub enum VaultError {
     EmptyName,
     #[error("the vault file could not be written: {0}")]
     SaveFailed(String),
+    #[error(
+        "The vault file was changed by another device or a sync tool. Lock and unlock the vault to load the changes, then repeat your change."
+    )]
+    ChangedOnDisk,
 }
 
 impl VaultError {
@@ -46,6 +50,7 @@ impl VaultError {
             Self::AlreadyExists => "already_exists",
             Self::EmptyName => "empty_name",
             Self::SaveFailed(_) => "save_failed",
+            Self::ChangedOnDisk => "changed_on_disk",
         }
     }
 }

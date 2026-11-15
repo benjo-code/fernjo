@@ -355,3 +355,137 @@ fn failed_save_during_change_password_keeps_the_old_password_working() {
     assert_eq!(password_of(&reopened.reveal(first).unwrap()), "pw-one");
     assert_eq!(password_of(&reopened.reveal(second).unwrap()), "pw-two");
 }
+
+// --- lost-update guard: a file changed on disk after unlock is never overwritten ---
+
+/// A second handle on the same file, unlocked: stands for another device or process.
+fn second_handle(path: &PathBuf) -> Vault {
+    let mut other = Vault::open(path).unwrap().unwrap();
+    other.unlock(&secret(PW)).unwrap();
+    other
+}
+
+#[test]
+fn a_save_after_another_writer_changed_the_file_is_refused() {
+    let dir = TempDir::new().unwrap();
+    let (mut vault, path) = new_vault(&dir);
+    let keep = vault.add(password_entry("keep", "pw-one")).unwrap();
+    let mut other = second_handle(&path);
+    other.add(password_entry("from-elsewhere", "pw-two")).unwrap();
+    let on_disk = fs::read(&path).unwrap();
+
+    assert_eq!(
+        code(vault.add(password_entry("late", "pw-three"))),
+        "changed_on_disk"
+    );
+    assert_eq!(code(vault.update(keep, rename("renamed"))), "changed_on_disk");
+    assert_eq!(code(vault.delete(keep)), "changed_on_disk");
+    assert_eq!(
+        code(vault.change_password(&secret(PW), &secret(NEW_PW))),
+        "changed_on_disk"
+    );
+    assert_eq!(fs::read(&path).unwrap(), on_disk, "file untouched");
+
+    // memory is restored, and locking and unlocking picks the other writer's state up
+    let list = vault.list().unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].name, "keep");
+    vault.lock();
+    vault.unlock(&secret(PW)).unwrap();
+    assert_eq!(vault.list().unwrap().len(), 2);
+    vault.add(password_entry("now fine", "pw-four")).unwrap();
+    assert_eq!(vault.list().unwrap().len(), 3);
+}
+
+#[test]
+fn a_save_after_a_password_change_on_another_copy_is_refused() {
+    let dir = TempDir::new().unwrap();
+    let (mut vault, path) = new_vault(&dir);
+    let mut other = second_handle(&path);
+    other.change_password(&secret(PW), &secret(NEW_PW)).unwrap();
+    let on_disk = fs::read(&path).unwrap();
+
+    assert_eq!(
+        code(vault.add(password_entry("late", "pw"))),
+        "changed_on_disk"
+    );
+    assert_eq!(fs::read(&path).unwrap(), on_disk);
+    let mut reopened = Vault::open(&path).unwrap().unwrap();
+    reopened.unlock(&secret(NEW_PW)).unwrap();
+    assert!(reopened.list().unwrap().is_empty());
+}
+
+#[test]
+fn a_newer_format_swapped_in_after_unlock_is_not_overwritten() {
+    use crate::format::OFF_VERSION;
+    let dir = TempDir::new().unwrap();
+    let (mut vault, path) = new_vault(&dir);
+    let mut bytes = fs::read(&path).unwrap();
+    bytes[OFF_VERSION..OFF_VERSION + 2].copy_from_slice(&999u16.to_be_bytes());
+    fs::write(&path, &bytes).unwrap();
+
+    assert_eq!(
+        code(vault.add(password_entry("late", "pw"))),
+        "changed_on_disk"
+    );
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+    assert!(!dir.path().join("vault.fernjo.bak").exists());
+}
+
+#[test]
+fn a_garbage_or_empty_file_swapped_in_after_unlock_is_not_overwritten() {
+    for garbage in [Vec::new(), b"not a vault".to_vec(), vec![0u8; 400]] {
+        let dir = TempDir::new().unwrap();
+        let (mut vault, path) = new_vault(&dir);
+        fs::write(&path, &garbage).unwrap();
+        assert_eq!(
+            code(vault.add(password_entry("late", "pw"))),
+            "changed_on_disk",
+            "len {}",
+            garbage.len()
+        );
+        assert_eq!(fs::read(&path).unwrap(), garbage);
+    }
+}
+
+#[test]
+fn a_header_only_file_is_not_overwritten() {
+    let dir = TempDir::new().unwrap();
+    let (mut vault, path) = new_vault(&dir);
+    let bytes = fs::read(&path).unwrap();
+    let short = bytes[..crate::format::HEADER_LEN - 1].to_vec();
+    fs::write(&path, &short).unwrap();
+    assert_eq!(
+        code(vault.add(password_entry("late", "pw"))),
+        "changed_on_disk"
+    );
+    assert_eq!(fs::read(&path).unwrap(), short);
+}
+
+#[test]
+fn a_vault_file_deleted_after_unlock_is_recreated_by_the_next_save() {
+    let dir = TempDir::new().unwrap();
+    let (mut vault, path) = new_vault(&dir);
+    vault.add(password_entry("one", "pw-one")).unwrap();
+    fs::remove_file(&path).unwrap();
+    let two = vault.add(password_entry("two", "pw-two")).unwrap();
+
+    let mut reopened = Vault::open(&path).unwrap().unwrap();
+    reopened.unlock(&secret(PW)).unwrap();
+    assert_eq!(reopened.list().unwrap().len(), 2);
+    assert_eq!(password_of(&reopened.reveal(two).unwrap()), "pw-two");
+}
+
+#[test]
+fn consecutive_saves_by_the_same_handle_are_not_refused() {
+    let dir = TempDir::new().unwrap();
+    let (mut vault, _) = new_vault(&dir);
+    let a = vault.add(password_entry("a", "pw")).unwrap();
+    vault.update(a, rename("b")).unwrap();
+    vault.change_password(&secret(PW), &secret(NEW_PW)).unwrap();
+    vault.delete(a).unwrap();
+    // a locked-and-unlocked handle follows the file
+    vault.lock();
+    vault.unlock(&secret(NEW_PW)).unwrap();
+    vault.add(password_entry("c", "pw")).unwrap();
+}
