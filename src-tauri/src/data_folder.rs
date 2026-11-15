@@ -503,11 +503,11 @@ mod tests {
 
     #[test]
     fn failed_settings_write_leaves_restart_required_unset() {
-        let [data, target] = dirs();
-        // the config "folder" lies inside a file, so settings.json cannot be written
-        let blocker = data.path().join("blocker");
-        fs::write(&blocker, b"x").unwrap();
-        let st = state(data.path(), &blocker.join("cfg"), DataDirSource::Default);
+        let [data, config, target] = dirs();
+        // settings.json is absent (so it still reads as "defaults"), but a directory sits where
+        // the atomic write wants its temp file, so the write fails on every OS
+        fs::create_dir(config.path().join("settings.json.tmp")).unwrap();
+        let st = state(data.path(), config.path(), DataDirSource::Default);
         fill(&st);
         let err = apply_data_folder(&st, target.path()).unwrap_err();
         assert_eq!(err.code, "settings_write_failed");
