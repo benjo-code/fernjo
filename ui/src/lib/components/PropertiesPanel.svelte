@@ -1,11 +1,12 @@
 <script lang="ts">
   import type { TreeStore } from "../store.svelte";
+  import type { VaultStore } from "../vault.svelte";
   import type { FieldInfo, NodePatch, Protocol } from "../types";
   import Icon from "./Icon.svelte";
   import PropertyRow from "./PropertyRow.svelte";
   import TextField from "./TextField.svelte";
 
-  let { store }: { store: TreeStore } = $props();
+  let { store, vault }: { store: TreeStore; vault: VaultStore } = $props();
 
   let open = $state(true);
   let errors = $state<Record<string, string | null>>({});
@@ -73,6 +74,30 @@
     }
     if (n === info.local) return true;
     return save(field, { [key]: n });
+  }
+
+  // The credential row: Rust reports the effective id and its source; the name comes from the
+  // unlocked list. Only a name is ever shown, never the id or a secret.
+  const vaultState = $derived(vault.status?.state ?? null);
+  const unlocked = $derived(vaultState === "unlocked");
+  const credentialId = $derived(detail?.credential.effective ?? null);
+  const credentialName = $derived(
+    credentialId === null
+      ? null
+      : (vault.credentials.find((c) => c.id === credentialId)?.name ?? null),
+  );
+
+  async function chooseCredential(select: HTMLSelectElement) {
+    if (!detail) return;
+    const chosen = select.value;
+    const ok =
+      chosen === ""
+        ? // "None" clears a local value (same as Inherit); with nothing local there is nothing to clear
+          detail.credential.local === null || (await save("credential", { credential: null }))
+        : chosen === detail.credential.local || (await save("credential", { credential: chosen }));
+    if (!ok || chosen === "" || chosen === detail.credential.local) {
+      select.value = detail.credential.effective ?? "";
+    }
   }
 
   const show = (n: number | null) => (n === null ? "" : String(n));
@@ -220,6 +245,37 @@
             {/snippet}
           </PropertyRow>
         {/if}
+
+        <PropertyRow
+          name="credential"
+          label="Credential"
+          source={detail.credential.source}
+          hasValue={detail.credential.effective !== null}
+          error={errors.credential}
+          onreset={unlocked ? () => void save("credential", { credential: null }) : undefined}
+        >
+          {#snippet children(id)}
+            {#if !unlocked}
+              <span {id} class="static"
+                >{vaultState === "locked" ? "Vault locked" : "No vault"}</span
+              >
+            {:else if credentialId !== null && credentialName === null}
+              <span {id} class="static">Missing credential</span>
+            {:else}
+              <select
+                {id}
+                aria-label="Credential"
+                value={credentialId ?? ""}
+                onchange={(e) => void chooseCredential(e.currentTarget)}
+              >
+                <option value="">None</option>
+                {#each vault.credentials as c (c.id)}
+                  <option value={c.id}>{c.name}</option>
+                {/each}
+              </select>
+            {/if}
+          {/snippet}
+        </PropertyRow>
       {/if}
     </div>
   {/if}
@@ -285,6 +341,14 @@
     margin: var(--space-2) 0;
     color: var(--color-text-muted);
     font-size: var(--text-sm);
+  }
+
+  .static {
+    display: block;
+    overflow: hidden;
+    color: var(--color-text-muted);
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   select {

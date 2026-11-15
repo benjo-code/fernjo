@@ -1,7 +1,8 @@
 import { flushSync, mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { TreeStore } from "../store.svelte";
-import { apiError, conn, folder, mockApi, resolved } from "../testing";
+import { VaultStore } from "../vault.svelte";
+import { apiError, conn, credential, folder, mockApi, resolved, vaultStatus } from "../testing";
 import type { Api, ResolvedNode, TreeNode } from "../types";
 import PropertiesPanel from "./PropertiesPanel.svelte";
 
@@ -36,6 +37,7 @@ async function setup(
   details: Record<string, ResolvedNode>,
   select: string | null = "web-01",
   impl: Partial<Api> = {},
+  vaultImpl: Partial<Api> = {},
 ) {
   const mock = mockApi(tree(), {
     getNode: async (id: string) => details[id],
@@ -43,14 +45,17 @@ async function setup(
   });
   const store = new TreeStore(mock.api);
   await store.init();
-  mounted = mount(PropertiesPanel, { target: document.body, props: { store } });
+  const vault = new VaultStore(mockApi([], vaultImpl).api);
+  await vault.init();
+  mounted = mount(PropertiesPanel, { target: document.body, props: { store, vault } });
   if (select) store.select(select);
   await settle();
-  return { store, ...mock };
+  return { store, vault, ...mock };
 }
 
 const field = (name: string) => document.querySelector<HTMLElement>(`[data-field="${name}"]`);
 const input = (name: string) => field(name)!.querySelector<HTMLInputElement>("input, select")!;
+const selectEl = (name: string) => field(name)!.querySelector<HTMLSelectElement>("select")!;
 const hasField = (name: string) => field(name) !== null;
 
 async function commit(name: string, text: string, how: "Enter" | "blur" = "Enter") {
@@ -347,5 +352,153 @@ describe("PropertiesPanel", () => {
     expect(document.querySelector(".header .title")!.textContent).toBe("<b>x</b>");
     expect(document.querySelector(".header b")).toBeNull();
     expect(input("name").value).toBe("<b>x</b>");
+  });
+});
+
+describe("PropertiesPanel credential row", () => {
+  const ID = "3f2b8c1e-aaaa-4bbb-8ccc-0123456789ab";
+  const OTHER = "9d1e7a00-bbbb-4ccc-8ddd-ba9876543210";
+  const unlocked: Partial<Api> = {
+    vaultStatus: async () => vaultStatus({ state: "unlocked" }),
+    listCredentials: async () => [
+      credential({ id: ID, name: "Prod root" }),
+      credential({ id: OTHER, name: "Lab admin" }),
+    ],
+  };
+  const localCred = { local: ID, effective: ID, source: { kind: "local" as const } };
+  const folderCred = {
+    local: null,
+    effective: ID,
+    source: { kind: "folder" as const, id: "Homelab", name: "Homelab" },
+  };
+  const node = (credentialField = resolved({ id: "web-01", name: "web-01" }).credential) => ({
+    "web-01": resolved({ id: "web-01", name: "web-01", credential: credentialField }),
+  });
+
+  test("credential_row_lists_entry_names_when_unlocked", async () => {
+    await setup(node(), "web-01", {}, unlocked);
+    const select = selectEl("credential");
+    expect([...select.options].map((o) => o.textContent)).toEqual([
+      "None",
+      "Prod root",
+      "Lab admin",
+    ]);
+    expect(select.value).toBe("");
+  });
+
+  test("credential_row_is_shown_for_folders_too", async () => {
+    await setup(
+      {
+        Homelab: resolved({
+          id: "Homelab",
+          name: "Homelab",
+          kind: "folder",
+          protocol: null,
+          host: null,
+        }),
+      },
+      "Homelab",
+      {},
+      unlocked,
+    );
+    expect(hasField("credential")).toBe(true);
+  });
+
+  test("choosing_an_entry_sends_a_credential_patch", async () => {
+    const { calls } = await setup(node(), "web-01", {}, unlocked);
+    await commit("credential", OTHER);
+    expect(calls.updateNode).toEqual([["web-01", { credential: OTHER }]]);
+  });
+
+  test("choosing_none_on_a_local_credential_resets_it_and_on_an_unset_one_does_nothing", async () => {
+    const { calls } = await setup(node(localCred), "web-01", {}, unlocked);
+    await commit("credential", "");
+    expect(calls.updateNode).toEqual([["web-01", { credential: null }]]);
+    unmount(mounted!);
+    document.body.innerHTML = "";
+    const again = await setup(node(), "web-01", {}, unlocked);
+    await commit("credential", "");
+    expect(again.calls.updateNode).toHaveLength(0);
+  });
+
+  test("inherited_credential_shows_from_folder_and_inherit_resets_it", async () => {
+    await setup(node(folderCred), "web-01", {}, unlocked);
+    expect(field("credential")!.textContent).toContain("from Homelab");
+    expect(field("credential")!.querySelector("button")).toBeNull();
+    expect(selectEl("credential").selectedOptions[0].textContent).toBe("Prod root");
+    // an inherited choice can be overridden; the local one then offers Inherit
+    unmount(mounted!);
+    document.body.innerHTML = "";
+    const { calls } = await setup(node(localCred), "web-01", {}, unlocked);
+    const reset = field("credential")!.querySelector("button")!;
+    expect(reset.textContent).toContain("Inherit");
+    reset.click();
+    await settle();
+    expect(calls.updateNode).toEqual([["web-01", { credential: null }]]);
+  });
+
+  test("locked_vault_shows_vault_locked_and_offers_no_choice", async () => {
+    const { calls } = await setup(
+      node(localCred),
+      "web-01",
+      {},
+      {
+        vaultStatus: async () => vaultStatus({ state: "locked" }),
+      },
+    );
+    expect(field("credential")!.textContent).toContain("Vault locked");
+    expect(field("credential")!.querySelector("select, input, button")).toBeNull();
+    expect(calls.updateNode).toHaveLength(0);
+  });
+
+  test("no_vault_reads_no_vault_and_is_read_only", async () => {
+    await setup(node(), "web-01", {}, { vaultStatus: async () => vaultStatus({ state: "none" }) });
+    expect(field("credential")!.textContent).toContain("No vault");
+    expect(field("credential")!.querySelector("select, input, button")).toBeNull();
+  });
+
+  test("unknown_credential_id_shows_missing_credential", async () => {
+    const { calls } = await setup(
+      node({ local: "ffff", effective: "ffff", source: { kind: "local" } }),
+      "web-01",
+      {},
+      unlocked,
+    );
+    expect(field("credential")!.textContent).toContain("Missing credential");
+    expect(field("credential")!.querySelector("select")).toBeNull();
+    // a dangling local reference can still be cleared
+    field("credential")!.querySelector("button")!.click();
+    await settle();
+    expect(calls.updateNode).toEqual([["web-01", { credential: null }]]);
+  });
+
+  test("no_secret_or_id_text_is_shown_for_the_credential_value", async () => {
+    await setup(
+      node(localCred),
+      "web-01",
+      {},
+      {
+        ...unlocked,
+        listCredentials: async () => [
+          credential({
+            id: ID,
+            name: "Prod root",
+            username: "SECRET-SENTINEL-USER",
+            notes: "SECRET-SENTINEL",
+          }),
+        ],
+      },
+    );
+    // option `value` attributes carry the id (that is how the select addresses an entry); only
+    // visible text and accessible names must not
+    const row = field("credential")!;
+    expect(row.textContent).toContain("Prod root");
+    expect(row.textContent).not.toContain(ID);
+    expect(row.textContent).not.toContain("SECRET-SENTINEL");
+    for (const el of row.querySelectorAll("[aria-label], [title]")) {
+      expect(el.getAttribute("aria-label") ?? "").not.toContain(ID);
+      expect(el.getAttribute("title") ?? "").not.toContain(ID);
+    }
+    expect(selectEl("credential").selectedOptions[0].textContent).toBe("Prod root");
   });
 });

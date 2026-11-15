@@ -9,6 +9,7 @@ export interface Settings {
   username?: string;
   port?: number;
   keepaliveSecs?: number;
+  credential?: string;
 }
 
 interface NodeBase {
@@ -50,6 +51,8 @@ export interface ResolvedNode {
   username: FieldInfo<string>;
   port: FieldInfo<number>;
   keepaliveSecs: FieldInfo<number>;
+  /** A vault entry id; the name is looked up in the unlocked credential list. */
+  credential: FieldInfo<string>;
 }
 
 /** Partial update: a key left out keeps the value, `null` resets to inherit. */
@@ -61,6 +64,8 @@ export interface NodePatch {
   username?: string | null;
   port?: number | null;
   keepaliveSecs?: number | null;
+  /** A vault entry id sets it; `null` resets to inherit. */
+  credential?: string | null;
 }
 
 export type Notice =

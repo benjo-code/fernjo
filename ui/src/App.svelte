@@ -31,7 +31,7 @@
 
 <div class="shell">
   <Sidebar {store} {vault} onOpenVault={() => (view = "vault")}>
-    <PropertiesPanel {store} />
+    <PropertiesPanel {store} {vault} />
   </Sidebar>
   <main class="main">
     {#if view === "vault"}

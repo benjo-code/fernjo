@@ -238,6 +238,7 @@ export function resolved(partial: Partial<ResolvedNode> & { id: string; name: st
     username: none,
     port: { local: null, effective: 22, source: { kind: "default" } },
     keepaliveSecs: { local: null, effective: 30, source: { kind: "default" } },
+    credential: none,
     ...partial,
   };
   return node;
