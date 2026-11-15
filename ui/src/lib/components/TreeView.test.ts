@@ -1,6 +1,7 @@
 import { flushSync, mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { TreeStore } from "../store.svelte";
+import { VaultStore } from "../vault.svelte";
 import { apiError, conn, folder, mockApi } from "../testing";
 import type { Api, TreeNode } from "../types";
 import Sidebar from "./Sidebar.svelte";
@@ -31,7 +32,11 @@ async function setup(
   const mock = mockApi(children, impl);
   const store = new TreeStore(mock.api);
   await store.init();
-  mounted = mount(component, { target: document.body, props: { store } });
+  const vault = new VaultStore(mock.api);
+  mounted = mount(component, {
+    target: document.body,
+    props: { store, vault, onOpenVault: () => {} },
+  });
   flushSync();
   return { store, ...mock };
 }
@@ -242,7 +247,11 @@ describe("TreeView", () => {
     const mock = mockApi([], {
       listTree: async () => ({
         children: [conn("a")],
-        notice: { kind: "restoredFromBackup", badFile: "C:\\data\\connections.json.corrupt-17" },
+        notices: [
+          { kind: "restoredFromBackup", badFile: "C:\\data\\connections.json.corrupt-17" },
+          { kind: "syncConflicts", files: ["connections (conflicted copy).json", "vault (1).fjv"] },
+          { kind: "settingsUnreadable", message: "could not read settings.json" },
+        ],
       }),
       updateNode: async () => {
         throw apiError("save_failed", "could not write the file");
@@ -250,10 +259,18 @@ describe("TreeView", () => {
     });
     const store = new TreeStore(mock.api);
     await store.init();
-    mounted = mount(Sidebar, { target: document.body, props: { store } });
+    const vault = new VaultStore(mock.api);
+    mounted = mount(Sidebar, {
+      target: document.body,
+      props: { store, vault, onOpenVault: () => {} },
+    });
     flushSync();
     expect(document.body.textContent).toContain("backup was restored");
     expect(document.body.textContent).toContain("connections.json.corrupt-17");
+    expect(document.body.textContent).toContain("Sync conflicts found next to your data");
+    expect(document.body.textContent).toContain("connections (conflicted copy).json");
+    expect(document.body.textContent).toContain("vault (1).fjv");
+    expect(document.body.textContent).toContain("could not read settings.json");
     await store.update("a", { name: "b" });
     flushSync();
     const alert = document.querySelector('[role="alert"]')!;

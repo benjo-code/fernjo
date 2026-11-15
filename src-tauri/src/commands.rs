@@ -7,15 +7,17 @@ use fernjo_core::{
     Node, NodeId, NodePatch, Notice, Protocol, ResolvedNode, Store, StoreError, TreeError,
 };
 use serde::Serialize;
+use std::sync::atomic::Ordering;
 
 use crate::state::AppState;
 
-/// The whole tree plus, once after startup, a notice such as "restored from backup".
+/// The whole tree plus, once after startup, the notices (restored from backup, sync
+/// conflicts, unreadable settings).
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
     pub children: Vec<Node>,
-    pub notice: Option<Notice>,
+    pub notices: Vec<Notice>,
 }
 
 /// Result of a mutation: the affected id (if any) and the new tree.
@@ -34,7 +36,7 @@ pub struct CommandError {
 }
 
 impl CommandError {
-    fn internal() -> CommandError {
+    pub(crate) fn internal() -> CommandError {
         CommandError {
             code: "internal".to_string(),
             message: "the connection data is unavailable after an internal error".to_string(),
@@ -60,15 +62,26 @@ impl From<TreeError> for CommandError {
     }
 }
 
-fn snapshot(store: &Store, notice: Option<Notice>) -> Snapshot {
+pub(crate) fn snapshot(store: &Store, notices: Vec<Notice>) -> Snapshot {
     Snapshot {
         children: store.tree().children().to_vec(),
-        notice,
+        notices,
     }
 }
 
+/// Refuses mutations while a change (such as a moved data folder) waits for a restart.
+pub fn ensure_writable(state: &AppState) -> Result<(), CommandError> {
+    if state.restart_required.load(Ordering::SeqCst) {
+        return Err(CommandError {
+            code: "restart_required".to_string(),
+            message: "restart fernjo to apply the changed data folder before editing".to_string(),
+        });
+    }
+    Ok(())
+}
+
 /// Runs `f` on the store, or reports why there is none.
-fn with_store<T>(
+pub(crate) fn with_store<T>(
     state: &AppState,
     f: impl FnOnce(&mut Store) -> Result<T, CommandError>,
 ) -> Result<T, CommandError> {
@@ -86,23 +99,21 @@ fn mutate(
     state: &AppState,
     f: impl FnOnce(&mut Store) -> Result<Option<NodeId>, StoreError>,
 ) -> Result<Mutation, CommandError> {
+    ensure_writable(state)?;
     with_store(state, |store| {
         let id = f(store)?;
         Ok(Mutation {
             id,
-            snapshot: snapshot(store, None),
+            snapshot: snapshot(store, Vec::new()),
         })
     })
 }
 
 pub fn list_tree(state: &AppState) -> Result<Snapshot, CommandError> {
     with_store(state, |store| {
-        let notice = state
-            .notice
-            .lock()
-            .map_err(|_| CommandError::internal())?
-            .take();
-        Ok(snapshot(store, notice))
+        let notices =
+            std::mem::take(&mut *state.notices.lock().map_err(|_| CommandError::internal())?);
+        Ok(snapshot(store, notices))
     })
 }
 
@@ -235,6 +246,7 @@ pub mod handlers {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::VaultStatus;
     use fernjo_core::{FILE_NAME, Notice, Protocol, Store};
     use serde_json::json;
     use std::fs;
@@ -249,7 +261,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let snapshot = list_tree(&state(dir.path())).unwrap();
         assert!(snapshot.children.is_empty());
-        assert!(snapshot.notice.is_none());
+        assert!(snapshot.notices.is_empty());
     }
 
     #[test]
@@ -336,11 +348,11 @@ mod tests {
         let st = state(dir.path());
         let first = list_tree(&st).unwrap();
         assert!(matches!(
-            first.notice,
-            Some(Notice::RestoredFromBackup { bad_file: Some(_) })
+            first.notices.as_slice(),
+            [Notice::RestoredFromBackup { bad_file: Some(_) }]
         ));
         assert_eq!(first.children.len(), 1);
-        assert!(list_tree(&st).unwrap().notice.is_none());
+        assert!(list_tree(&st).unwrap().notices.is_empty());
     }
 
     #[test]
@@ -354,8 +366,156 @@ mod tests {
         fs::write(dir.path().join(FILE_NAME), "garbage").unwrap();
         let st = state(dir.path());
         let m = create_folder(&st, None, None, "x".into()).unwrap();
-        assert!(m.snapshot.notice.is_none());
-        assert!(list_tree(&st).unwrap().notice.is_some());
+        assert!(m.snapshot.notices.is_empty());
+        assert_eq!(list_tree(&st).unwrap().notices.len(), 1);
+    }
+
+    #[test]
+    fn startup_with_conflict_files_delivers_a_sync_conflicts_notice_once() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path()
+                .join("connections (conflicted copy 2026-11-15).json"),
+            "{}",
+        )
+        .unwrap();
+        let st = state(dir.path());
+        let first = list_tree(&st).unwrap();
+        match first.notices.as_slice() {
+            [Notice::SyncConflicts { files }] => {
+                assert_eq!(files, &["connections (conflicted copy 2026-11-15).json"]);
+            }
+            other => panic!("unexpected notices: {other:?}"),
+        }
+        assert!(list_tree(&st).unwrap().notices.is_empty());
+    }
+
+    #[test]
+    fn restored_from_backup_notice_still_arrives_in_the_notices_list() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let mut store = Store::open(dir.path()).unwrap().store;
+            store.create_folder(None, None, "one").unwrap();
+            store.create_folder(None, None, "two").unwrap();
+        }
+        fs::write(dir.path().join(FILE_NAME), "garbage").unwrap();
+        fs::write(
+            dir.path()
+                .join("connections (conflicted copy 2026-11-15).json"),
+            "{}",
+        )
+        .unwrap();
+        let st = state(dir.path());
+        let notices = list_tree(&st).unwrap().notices;
+        assert!(
+            notices
+                .iter()
+                .any(|n| matches!(n, Notice::RestoredFromBackup { .. }))
+        );
+        assert!(
+            notices
+                .iter()
+                .any(|n| matches!(n, Notice::SyncConflicts { .. }))
+        );
+        let json = serde_json::to_value(&notices).unwrap();
+        assert_eq!(json[0]["kind"], "restoredFromBackup");
+    }
+
+    #[test]
+    fn vault_missing_is_none_and_zero_length_file_is_unusable_with_path() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(state(dir.path()).vault_status().unwrap(), VaultStatus::None);
+        let path = dir.path().join(fernjo_vault::FILE_NAME);
+        fs::write(&path, b"").unwrap();
+        match state(dir.path()).vault_status().unwrap() {
+            VaultStatus::Unusable { reason, path: p } => {
+                assert_eq!(p, path);
+                assert!(!reason.is_empty());
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        fs::write(&path, b"FJVT-truncated").unwrap();
+        assert!(matches!(
+            state(dir.path()).vault_status().unwrap(),
+            VaultStatus::Unusable { .. }
+        ));
+        assert_eq!(fs::read(&path).unwrap(), b"FJVT-truncated");
+    }
+
+    #[test]
+    fn unusable_vault_does_not_break_list_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(fernjo_vault::FILE_NAME), b"").unwrap();
+        let st = state(dir.path());
+        create_folder(&st, None, None, "kept".into()).unwrap();
+        assert_eq!(list_tree(&st).unwrap().children.len(), 1);
+    }
+
+    #[test]
+    fn startup_auto_unlocks_when_the_key_store_has_the_key() {
+        use fernjo_vault::{KeyStore, MemoryKeyStore, Vault};
+        use secrecy::SecretString;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(fernjo_vault::FILE_NAME);
+        let vault = Vault::create_with(
+            &path,
+            &SecretString::from("correct horse battery"),
+            fernjo_vault::KdfParams::TEST,
+        )
+        .unwrap();
+        let keys = MemoryKeyStore::default();
+        keys.set(vault.id(), &vault.data_key().unwrap()).unwrap();
+        let locked = AppState::open_with_keystore(
+            dir.path().to_path_buf(),
+            Box::new(MemoryKeyStore::default()),
+        );
+        assert_eq!(locked.vault_status().unwrap(), VaultStatus::Locked);
+        let st = AppState::open_with_keystore(dir.path().to_path_buf(), Box::new(keys));
+        assert_eq!(st.vault_status().unwrap(), VaultStatus::Unlocked);
+    }
+
+    #[test]
+    fn settings_error_becomes_a_notice() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = AppState::open_for_app(Some(fernjo_core::Location {
+            data_dir: dir.path().to_path_buf(),
+            config_dir: dir.path().to_path_buf(),
+            source: fernjo_core::DataDirSource::Default,
+            settings_error: Some(fernjo_core::LoadError::Unreadable {
+                path: dir.path().join("settings.json"),
+                reason: "bad".into(),
+            }),
+        }));
+        assert!(st.settings_unusable);
+        let notices = list_tree(&st).unwrap().notices;
+        assert!(matches!(
+            notices.as_slice(),
+            [Notice::SettingsUnreadable { .. }]
+        ));
+    }
+
+    #[test]
+    fn mutating_commands_return_restart_required_when_flagged_and_reads_still_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = state(dir.path());
+        let id = create_folder(&st, None, None, "a".into())
+            .unwrap()
+            .id
+            .unwrap();
+        st.set_restart_required(true);
+        let errors = [
+            create_folder(&st, None, None, "x".into()).map(|_| ()),
+            create_connection(&st, None, None, "x".into(), Protocol::Ssh, "h".into()).map(|_| ()),
+            update_node(&st, id, Default::default()).map(|_| ()),
+            move_node(&st, id, None, 0).map(|_| ()),
+            duplicate_node(&st, id).map(|_| ()),
+            delete_node(&st, id).map(|_| ()),
+        ];
+        for result in errors {
+            assert_eq!(result.unwrap_err().code, "restart_required");
+        }
+        assert_eq!(list_tree(&st).unwrap().children.len(), 1);
+        assert!(get_node(&st, id).is_ok());
     }
 
     #[test]

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { TreeStore } from "./store.svelte";
 import { apiError, conn, deferred, folder, mockApi, resolved, snapshot } from "./testing";
-import type { Mutation, ResolvedNode } from "./types";
+import type { Mutation, Notice, ResolvedNode } from "./types";
 
 const KEY = "fernjo.expanded.v1";
 
@@ -23,15 +23,22 @@ async function started(initial = tree(), impl = {}) {
 }
 
 describe("TreeStore", () => {
-  test("init_loads_snapshot_and_notice", async () => {
-    const notice = { kind: "restoredFromBackup", badFile: "x" } as const;
-    const mock = mockApi([], { listTree: async () => snapshot(tree(), notice) });
+  test("notices_from_the_snapshot_are_kept_and_dismissed_by_index", async () => {
+    const notices: Notice[] = [
+      { kind: "restoredFromBackup", badFile: "x" },
+      { kind: "syncConflicts", files: ["a (conflict).json"] },
+    ];
+    const mock = mockApi([], { listTree: async () => snapshot(tree(), notices) });
     const store = new TreeStore(mock.api);
     await store.init();
     expect(store.children.map((n) => n.name)).toEqual(["Homelab", "web-01"]);
-    expect(store.notice).toEqual(notice);
-    store.dismissNotice();
-    expect(store.notice).toBeNull();
+    expect(store.notices).toEqual(notices);
+    store.dismissNotice(0);
+    expect(store.notices).toEqual([notices[1]]);
+    store.dismissNotice(5);
+    expect(store.notices).toHaveLength(1);
+    store.dismissNotice(0);
+    expect(store.notices).toEqual([]);
     expect(store.loadError).toBeNull();
   });
 
@@ -107,6 +114,16 @@ describe("TreeStore", () => {
     const err = await store.update("web-01", { port: 0 }, { silent: true });
     expect(err?.message).toBe("The port must be between 1 and 65535");
     expect(store.error).toBeNull();
+  });
+
+  test("restart_required_is_shown_globally_even_for_silent_calls", async () => {
+    const { store } = await started(tree(), {
+      updateNode: async () => {
+        throw apiError("restart_required", "Restart fernjo first");
+      },
+    });
+    await store.update("web-01", { port: 5 }, { silent: true });
+    expect(store.error).toBe("Restart fernjo first");
   });
 
   test("load_failed_error_sets_load_error", async () => {
@@ -301,5 +318,15 @@ describe("TreeStore", () => {
       expect(store.selectedId).toBeNull();
       expect(store.detail).toBeNull();
     });
+  });
+});
+
+describe("TreeStore.applySnapshot", () => {
+  test("adopts_an_externally_returned_snapshot", async () => {
+    const { store } = await started();
+    store.select("web-01");
+    await store.applySnapshot(snapshot([conn("other")]));
+    expect(store.children.map((n) => n.name)).toEqual(["other"]);
+    expect(store.selectedId).toBeNull();
   });
 });

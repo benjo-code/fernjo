@@ -1,22 +1,46 @@
 <script lang="ts">
   import type { TreeStore } from "../store.svelte";
+  import type { Notice } from "../types";
   import Icon from "./Icon.svelte";
 
-  let { store }: { store: TreeStore } = $props();
+  let {
+    store,
+    restartPending = false,
+    onRestart,
+  }: {
+    store: TreeStore;
+    /** A new data folder was chosen; the bar stays until the app restarts. */
+    restartPending?: boolean;
+    onRestart?: () => void;
+  } = $props();
 
   const baseName = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
-  const noticeText = $derived(
-    store.notice?.badFile
-      ? `The connections file could not be read, so the backup was restored. The damaged file was kept as ${baseName(store.notice.badFile)}.`
-      : "The connections file was missing, so the backup was restored.",
-  );
+  function noticeText(notice: Notice): string {
+    switch (notice.kind) {
+      case "restoredFromBackup":
+        return notice.badFile
+          ? `The connections file could not be read, so the backup was restored. The damaged file was kept as ${baseName(notice.badFile)}.`
+          : "The connections file was missing, so the backup was restored.";
+      case "syncConflicts":
+        return `Sync conflicts found next to your data: ${notice.files.join(", ")}. Resolve them in your sync tool; fernjo does not merge them.`;
+      case "settingsUnreadable":
+        return `The settings file could not be used, so the default data folder is in effect. ${notice.message}`;
+    }
+  }
 </script>
 
 {#if store.loadError}
   <div class="bar error" role="alert">
     <Icon name="alert" size={14} />
     <span class="text">{store.loadError}</span>
+  </div>
+{/if}
+
+{#if restartPending}
+  <div class="bar restart" role="status">
+    <span class="text">Restart fernjo to use the new data folder.</span>
+    <button type="button" class="dismiss" onclick={() => onRestart?.()}>Restart now</button>
   </div>
 {/if}
 
@@ -28,12 +52,13 @@
   </div>
 {/if}
 
-{#if store.notice}
+{#each store.notices as notice, index (index)}
   <div class="bar" role="status">
-    <span class="text">{noticeText}</span>
-    <button type="button" class="dismiss" onclick={() => store.dismissNotice()}>Dismiss</button>
+    <span class="text">{noticeText(notice)}</span>
+    <button type="button" class="dismiss" onclick={() => store.dismissNotice(index)}>Dismiss</button
+    >
   </div>
-{/if}
+{/each}
 
 <style>
   .bar {

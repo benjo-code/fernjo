@@ -26,7 +26,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 | 0 | Repo scaffold & CI | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-15-milestone-00-repo-scaffold.md) | 2026-11-15 |
 | 1 | UI design direction | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-15-milestone-01-design-direction.md) | 2026-11-15 |
 | 2 | Connection tree & data model | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-15-milestone-02-connection-tree.md) | 2026-11-15 |
-| 3 | Credential vault | 1 – fernjo app | ⬜ open | – | – |
+| 3 | Credential vault | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-15-milestone-03-credential-vault.md) | 2026-11-15 |
 | 4 | SSH sessions in tabs | 1 – fernjo app | ⬜ open | – | – |
 | 5 | mRemoteNG import & export | 1 – fernjo app | ⬜ open | – | – |
 | 6 | Packaging & app settings | 1 – fernjo app | ⬜ open | – | – |
@@ -55,6 +55,13 @@ Postponed by the owner on 2026-11-15 until a macOS and a Linux machine are at ha
 
 - The same M0 to M2 checks as above on a current macOS (WKWebView). The data folder default is `~/Library/Application Support/fernjo`.
 - Pointer drag and drop and the context menu with a trackpad and with a mouse (right-click and Ctrl-click).
+
+**M3 (credential vault), still open on every OS that was not Windows:**
+
+- Linux: `cargo test -p fernjo-vault os_keystore_round_trip -- --ignored` against the Secret Service (GNOME Keyring or KWallet running), then in the app tick "Unlock automatically on this device", close and start again (vault opens unlocked), untick (restart keeps it locked); also the behaviour without a Secret Service (the checkbox should report the keychain error and the vault stays usable with the master password).
+- macOS: the same keychain round trip against the Keychain; note whether a second launch (single instance) triggers a keychain prompt, since it runs the auto-unlock attempt before exiting.
+- Linux and macOS: vault UI in light and dark (locked note, manager, credential row in the properties panel, data folder dialog) and the sidebar chip at 300 px; the focus behaviour of the data folder dialog (Escape, Tab trap) after clicking "Choose folder…".
+- All OSes: the native folder picker of "Choose folder…" (not drivable through the DevTools protocol; run once without `FERNJO_DATA_DIR`, with `APPDATA`, `HOME` or `XDG_CONFIG_HOME` pointed at a scratch folder: choose a folder, "Restart now", the data is there) and a sync-conflict copy next to the data in a real synced folder.
 
 **What was checked on Windows and how:** the real app was driven through the WebView's DevTools protocol (see `CLAUDE.md`, section "Project-specific"), so layout, pointer events, console output and the served CSP are real, but no OS-level mouse or physical trackpad was involved; the feel of dragging with a physical device is the one thing a person still has to judge on any platform.
 
@@ -133,24 +140,24 @@ Goal: Connections can be organised in a persistent folder tree with mRemoteNG-st
 - [x] Build, test and lint are green – 2026-11-15 on Windows, branch head after the review fixes: `pnpm install --frozen-lockfile`, `pnpm ui:build`, `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (core 69, app 10, tauri_conf 3 passed), `pnpm lint` (0 errors, 0 warnings), `pnpm test` (141 passed in 11 files), `cargo deny check` (ok), `dotnet run tools/roadmap.cs -- check` (valid) all green
 
 ## Milestone 3 – Credential vault
-**Status:** ⬜ open · **Plan:** – · **Prerequisites:** M2
+**Status:** ✅ done (2026-11-15) · **Plan:** [2026-11-15-milestone-03-credential-vault.md](superpowers/plans/2026-11-15-milestone-03-credential-vault.md) · **Prerequisites:** M2
 
 Goal: Passwords and SSH keys are stored encrypted, unlocked by a master password or the OS keychain, and attachable to connections and folders.
 
 **Tasks**
-- [ ] `fernjo-vault`: file format with wrapped random data key, Argon2id, XChaCha20-Poly1305, atomic writes; format documented
-- [ ] Entries (password, private key with optional passphrase, username, domain, notes) with `secrecy`/`zeroize`
-- [ ] Master password on first run, unlock dialog, lock action, change master password (re-wrap only)
-- [ ] "Unlock automatically on this device" via the OS keychain (`keyring`)
-- [ ] Credential reference as inheritable setting in the properties panel
-- [ ] Vault UI: list, create, edit, explicit reveal, delete with usage warning
-- [ ] Data folder selectable in settings; warning for sync-conflict copies
+- [x] `fernjo-vault`: file format with wrapped random data key, Argon2id, XChaCha20-Poly1305, atomic writes; format documented
+- [x] Entries (password, private key with optional passphrase, username, domain, notes) with `secrecy`/`zeroize`
+- [x] Master password on first run, unlock dialog, lock action, change master password (re-wraps the data key)
+- [x] "Unlock automatically on this device" via the OS keychain (`keyring`)
+- [x] Credential reference as inheritable setting in the properties panel
+- [x] Vault UI: list, create, edit, explicit reveal, delete with usage warning
+- [x] Data folder selectable in settings; warning for sync-conflict copies
 
 **Acceptance criteria**
-- [ ] Tests: round trip, wrong password rejected, tampered file rejected, master password change keeps entries and the keychain key valid
-- [ ] Test: serialised `connections.json` and IPC responses to the UI contain no secret values
-- [ ] Manual: auto-unlock via keychain works on Windows (macOS/Linux checked when available, otherwise marked open)
-- [ ] Build, test and lint are green
+- [x] Tests: round trip, wrong password rejected, tampered file rejected, master password change keeps entries and the keychain key valid – 2026-11-15, Windows: `cargo test -p fernjo-vault` 43 passed (+2 ignored); a vault file changed on disk since it was read is never overwritten (`changed_on_disk`, tests in `entry_tests`). Round trip (`vault::tests::create_lock_unlock_round_trip`), wrong password (`wrong_password_is_rejected_with_wrong_password_code`), tampered file (`flipping_any_byte_of_header_wrapped_key_or_body_is_rejected`), master password change keeps entries and the data key (`change_password_keeps_entries_and_data_key`, `change_password_with_wrong_old_password_changes_nothing`, `failed_save_during_change_password_keeps_the_old_password_working`) and keeps the keychain key valid (`keychain_key_stays_valid_after_change_password`). Format in `Docs/vault-format.md`.
+- [x] Test: serialised `connections.json` and IPC responses to the UI contain no secret values – 2026-11-15, Windows: `cargo test -p fernjo-app` 57 passed (after the final review fixes). `vault_commands::tests::no_response_contains_a_secret` and `command_table_covers_every_tauri_command` run every Tauri command (the table plus the two `AppHandle` commands as named exemptions, count checked against `generate_handler!`) on an unlocked and a locked vault with sentinel secrets and assert that no response, error, `Debug` output or `connections.json` contains one (reveal returns the secret by design, tested separately in `reveal_returns_the_secret_only_via_reveal`). Manual, real app: with sentinel secrets typed into the vault UI, `grep -r SENTINEL` over the data folder (including `vault.fernjo`, which is encrypted) found nothing, `connections.json` holds only the credential id, and neither the DevTools console nor the dev log contained a sentinel.
+- [x] Manual: auto-unlock via keychain works on Windows (macOS/Linux checked when available, otherwise marked open) – 2026-11-15, Windows 11: `cargo test -p fernjo-vault os_keystore_round_trip -- --ignored` passed against Credential Manager. In the real app (scratch data folder via `FERNJO_DATA_DIR`, debug build driven over the DevTools protocol): "Unlock automatically on this device" ticked, `cmdkey /list` showed the item `<vault id>.fernjo` (vault id taken from the file header), graceful close (`CloseMainWindow`) and start gave an unlocked vault; unticked, the item was gone and after another graceful restart the vault stayed locked. OPEN: macOS Keychain and Linux Secret Service (see "Open manual checks").
+- [x] Build, test and lint are green – 2026-11-15 on Windows, branch head after the final review fixes: `pnpm install --frozen-lockfile`, `pnpm ui:build`, `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (app 57, core 98, vault 43 + 2 ignored, tauri_conf 3 passed), `pnpm lint` (0 errors, 0 warnings), `pnpm test` (243 passed in 16 files), `cargo deny check` (ok), `dotnet run tools/roadmap.cs -- check` (valid) all green
 
 ## Milestone 4 – SSH sessions in tabs
 **Status:** ⬜ open · **Plan:** – · **Prerequisites:** M3
@@ -251,3 +258,4 @@ Deliberately not scheduled. Ideas that `/ideen` files here are listed; if needed
 - **Pageant support:** Use PuTTY's Pageant as SSH agent on Windows.
 - **More protocols:** VNC, Telnet, serial.
 - **Code signing, notarisation and auto-update:** Signed installers for Windows and macOS, update channel.
+- **connections.json lost update when a sync tool delivers a newer file:** The app keeps the tree in memory and rewrites `connections.json` on every change, so a file that Syncthing, Nextcloud or Dropbox delivers while the app runs is overwritten and the other device's edits are lost. The vault already guards against this (M3: `Vault::save` re-reads the file and refuses with `changed_on_disk` unless it still starts with the header the handle last read or wrote). Apply the same check-then-write idea to the tree: remember a fingerprint (for example a hash or the length and modification time) of the last bytes read or written, compare it before saving, and refuse or offer to reload when the file changed. It stays a check, not a lock, so a sync tool can still win the race between check and rename.

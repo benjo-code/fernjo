@@ -3,7 +3,7 @@
 import { SvelteSet } from "svelte/reactivity";
 import { toApiError } from "./api";
 import { collectIds, flattenRows, type Row } from "./rows";
-import type { Api, ApiError, NodePatch, Notice, ResolvedNode, TreeNode } from "./types";
+import type { Api, ApiError, NodePatch, Notice, ResolvedNode, Snapshot, TreeNode } from "./types";
 
 const STORAGE_KEY = "fernjo.expanded.v1";
 
@@ -32,7 +32,7 @@ interface RunOptions {
 
 export class TreeStore {
   children = $state<TreeNode[]>([]);
-  notice = $state<Notice | null>(null);
+  notices = $state<Notice[]>([]);
   selectedId = $state<string | null>(null);
   expanded = new SvelteSet<string>();
   filter = $state("");
@@ -58,7 +58,7 @@ export class TreeStore {
     for (const id of loadExpanded()) this.expanded.add(id);
     await this.#run(async () => {
       const snapshot = await this.#api.listTree();
-      this.#apply(snapshot.children, snapshot.notice);
+      this.#apply(snapshot.children, snapshot.notices);
     });
     this.loaded = true;
   }
@@ -92,18 +92,23 @@ export class TreeStore {
     this.renamingId = null;
   }
 
-  dismissNotice() {
-    this.notice = null;
+  dismissNotice(index: number) {
+    this.notices = this.notices.filter((_, i) => i !== index);
   }
 
   dismissError() {
     this.error = null;
   }
 
+  /** Shows a message in the global error bar (for errors other stores want surfaced). */
+  showError(message: string) {
+    this.error = message;
+  }
+
   createFolder(parentId: string | null, index: number | null) {
     return this.#run(async () => {
       const m = await this.#api.createFolder(parentId, index, "New folder");
-      this.#apply(m.snapshot.children, m.snapshot.notice);
+      this.#apply(m.snapshot.children, m.snapshot.notices);
       this.#afterCreate(parentId, m.id);
     });
   }
@@ -111,7 +116,7 @@ export class TreeStore {
   createConnection(parentId: string | null, index: number | null) {
     return this.#run(async () => {
       const m = await this.#api.createConnection(parentId, index, "New connection", "ssh", "");
-      this.#apply(m.snapshot.children, m.snapshot.notice);
+      this.#apply(m.snapshot.children, m.snapshot.notices);
       this.#afterCreate(parentId, m.id);
     });
   }
@@ -125,14 +130,14 @@ export class TreeStore {
   update(id: string, patch: NodePatch, options: RunOptions = {}) {
     return this.#run(async () => {
       const m = await this.#api.updateNode(id, patch);
-      this.#apply(m.snapshot.children, m.snapshot.notice);
+      this.#apply(m.snapshot.children, m.snapshot.notices);
     }, options);
   }
 
   move(id: string, parentId: string | null, index: number) {
     return this.#run(async () => {
       const m = await this.#api.moveNode(id, parentId, index);
-      this.#apply(m.snapshot.children, m.snapshot.notice);
+      this.#apply(m.snapshot.children, m.snapshot.notices);
       if (parentId) this.expand(parentId);
     });
   }
@@ -140,7 +145,7 @@ export class TreeStore {
   duplicate(id: string) {
     return this.#run(async () => {
       const m = await this.#api.duplicateNode(id);
-      this.#apply(m.snapshot.children, m.snapshot.notice);
+      this.#apply(m.snapshot.children, m.snapshot.notices);
       if (m.id) this.select(m.id);
     });
   }
@@ -148,7 +153,14 @@ export class TreeStore {
   remove(id: string) {
     return this.#run(async () => {
       const m = await this.#api.deleteNode(id);
-      this.#apply(m.snapshot.children, m.snapshot.notice);
+      this.#apply(m.snapshot.children, m.snapshot.notices);
+    });
+  }
+
+  /** Adopts a snapshot that another command returned (for example deleting a credential). */
+  applySnapshot(snapshot: Snapshot) {
+    return this.#run(async () => {
+      this.#apply(snapshot.children, snapshot.notices);
     });
   }
 
@@ -179,9 +191,9 @@ export class TreeStore {
   }
 
   /** Adopts a snapshot and drops view state that points at nodes that no longer exist. */
-  #apply(children: TreeNode[], notice: Notice | null) {
+  #apply(children: TreeNode[], notices: Notice[]) {
     this.children = children;
-    if (notice) this.notice = notice;
+    if (notices.length > 0) this.notices = [...this.notices, ...notices];
     const { all, folders } = collectIds(children);
     if (this.selectedId !== null && !all.has(this.selectedId)) this.selectedId = null;
     if (this.renamingId !== null && !all.has(this.renamingId)) this.renamingId = null;
@@ -205,7 +217,9 @@ export class TreeStore {
       } catch (e) {
         const err = toApiError(e);
         if (err.code === "load_failed") this.loadError = err.message;
-        else if (!options.silent) this.error = err.message;
+        // a pending data folder change blocks every write: always tell the user, even for
+        // callers that show their own errors
+        else if (!options.silent || err.code === "restart_required") this.error = err.message;
         return err;
       }
     });

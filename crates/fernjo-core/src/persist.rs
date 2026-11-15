@@ -15,7 +15,7 @@ use crate::model::{Node, NodeId, NodeKind};
 use crate::tree::Tree;
 
 /// File format version this build writes and understands.
-pub const CURRENT_VERSION: u32 = 1;
+pub const CURRENT_VERSION: u32 = 2;
 /// Name of the connections file inside the data folder.
 pub const FILE_NAME: &str = "connections.json";
 
@@ -29,6 +29,11 @@ pub const FILE_NAME: &str = "connections.json";
 pub enum Notice {
     /// The main file was missing or unreadable and the backup was used instead.
     RestoredFromBackup { bad_file: Option<PathBuf> },
+    /// The data folder holds copies made by a sync tool after a conflict (file names only).
+    SyncConflicts { files: Vec<String> },
+    /// `settings.json` could not be used; the default data folder is in effect and the file
+    /// is left untouched.
+    SettingsUnreadable { message: String },
 }
 
 /// Result of a successful load.
@@ -51,7 +56,7 @@ struct FileIn {
 }
 
 /// `<path>.<suffix>` (for example `connections.json.bak`).
-fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+pub(crate) fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     let mut name: OsString = path.as_os_str().to_owned();
     name.push(suffix);
     PathBuf::from(name)
@@ -60,6 +65,21 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
 /// Writes `tree` atomically: temp file in the same folder, flushed to disk, the current
 /// file copied to `.bak`, then the temp file renamed over the target.
 pub fn save(path: &Path, tree: &Tree) -> Result<(), SaveError> {
+    let json = serde_json::to_string_pretty(&FileOut {
+        schema_version: CURRENT_VERSION,
+        children: tree.children(),
+    })
+    .map_err(|e| SaveError {
+        path: path.to_path_buf(),
+        source: io::Error::other(e),
+    })?;
+    write_atomic(path, json.as_bytes())
+}
+
+/// Shared by every file in the data and config folders: creates the parent folder, writes a
+/// temp file next to `path`, flushes it to disk, copies the current file to `.bak`, then
+/// renames the temp file over `path`. `contents` gets a trailing newline.
+pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), SaveError> {
     let fail = |source: io::Error| SaveError {
         path: path.to_path_buf(),
         source,
@@ -68,16 +88,10 @@ pub fn save(path: &Path, tree: &Tree) -> Result<(), SaveError> {
     if let Some(dir) = dir {
         fs::create_dir_all(dir).map_err(fail)?;
     }
-    let json = serde_json::to_string_pretty(&FileOut {
-        schema_version: CURRENT_VERSION,
-        children: tree.children(),
-    })
-    .map_err(|e| fail(io::Error::other(e)))?;
-
     let tmp = with_suffix(path, ".tmp");
     let result = (|| -> io::Result<()> {
         let mut file = fs::File::create(&tmp)?;
-        file.write_all(json.as_bytes())?;
+        file.write_all(contents)?;
         file.write_all(b"\n")?;
         file.flush()?;
         file.sync_all()?;
@@ -94,6 +108,18 @@ pub fn save(path: &Path, tree: &Tree) -> Result<(), SaveError> {
     Ok(())
 }
 
+/// Renames an unreadable `path` to `<path>.corrupt-<unix seconds>` so a later save cannot
+/// overwrite the good `.bak` with it. Returns the new name.
+pub(crate) fn move_aside(path: &Path) -> io::Result<PathBuf> {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let target = with_suffix(path, &format!(".corrupt-{secs}"));
+    fs::rename(path, &target)?;
+    Ok(target)
+}
+
 /// Upgrades a parsed file from version `from` using `steps` (step `i` upgrades
 /// version `i + 1` to `i + 2`).
 pub fn migrate_with(value: Value, from: u32, steps: &[fn(Value) -> Value]) -> Value {
@@ -101,8 +127,18 @@ pub fn migrate_with(value: Value, from: u32, steps: &[fn(Value) -> Value]) -> Va
     steps.iter().skip(skip).fold(value, |v, step| step(v))
 }
 
+/// Upgrade steps; step `i` upgrades version `i + 1` to `i + 2`.
+const MIGRATIONS: [fn(Value) -> Value; 1] = [one_to_two];
+
+/// 1 -> 2: schema 2 adds the optional `credential` setting, so nothing is rewritten. The
+/// version still has to change: an older build would silently drop `credential` on its next
+/// save, so it must refuse the file as a newer schema instead.
+fn one_to_two(value: Value) -> Value {
+    value
+}
+
 fn migrate(value: Value, from: u32) -> Value {
-    migrate_with(value, from, &[])
+    migrate_with(value, from, &MIGRATIONS)
 }
 
 enum Read {
@@ -185,12 +221,7 @@ pub fn load(path: &Path) -> Result<Loaded, LoadError> {
     match read_file(&bak)? {
         Read::Parsed(tree) => {
             let bad_file = if reason.is_some() {
-                let secs = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                let target = with_suffix(path, &format!(".corrupt-{secs}"));
-                fs::rename(path, &target).map_err(|e| LoadError::Unreadable {
+                let target = move_aside(path).map_err(|e| LoadError::Unreadable {
                     path: path.to_path_buf(),
                     reason: format!("could not move the unreadable file aside: {e}"),
                 })?;
@@ -292,7 +323,7 @@ mod tests {
         save(&main_path(dir.path()), &sample_tree("dc01")).unwrap();
         let text = fs::read_to_string(main_path(dir.path())).unwrap();
         let v: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(v["schemaVersion"], 1);
+        assert_eq!(v["schemaVersion"], 2);
         assert_eq!(v["children"][0]["type"], "folder");
         assert_eq!(v["children"][0]["settings"]["port"], 2200);
         assert!(text.contains("\n  "));
@@ -353,7 +384,7 @@ mod tests {
                 found, supported, ..
             } => {
                 assert_eq!(found, 99);
-                assert_eq!(supported, 1);
+                assert_eq!(supported, 2);
             }
             other => panic!("expected NewerSchema, got {other:?}"),
         }
@@ -460,6 +491,90 @@ mod tests {
     }
 
     #[test]
+    fn version_one_file_loads_and_is_written_as_version_two() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = json!({ "schemaVersion": 1, "children": [{
+            "id": "11111111-1111-4111-8111-111111111111", "type": "connection",
+            "name": "x", "protocol": "ssh", "host": "h", "settings": { "port": 2200 }
+        }] })
+        .to_string();
+        fs::write(main_path(dir.path()), text).unwrap();
+        let loaded = load(&main_path(dir.path())).unwrap();
+        assert_eq!(loaded.notice, None);
+        assert_eq!(loaded.tree.children()[0].settings.port, Some(2200));
+        save(&main_path(dir.path()), &loaded.tree).unwrap();
+        let v: Value = serde_json::from_slice(&fs::read(main_path(dir.path())).unwrap()).unwrap();
+        assert_eq!(v["schemaVersion"], 2);
+        assert_eq!(v["children"][0]["settings"]["port"], 2200);
+        // the previous (version 1) bytes are kept as the backup
+        let bak: Value = serde_json::from_slice(&fs::read(bak_path(dir.path())).unwrap()).unwrap();
+        assert_eq!(bak["schemaVersion"], 1);
+    }
+
+    #[test]
+    fn credential_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let cred = crate::model::CredentialId::new_v4();
+        let mut tree = Tree::new();
+        let c = tree
+            .create_connection(None, None, "c", Protocol::Ssh, "h")
+            .unwrap();
+        tree.update(
+            c,
+            NodePatch {
+                credential: Patch::Set(cred),
+                ..NodePatch::default()
+            },
+        )
+        .unwrap();
+        save(&main_path(dir.path()), &tree).unwrap();
+        let v: Value = serde_json::from_slice(&fs::read(main_path(dir.path())).unwrap()).unwrap();
+        assert_eq!(v["children"][0]["settings"]["credential"], cred.to_string());
+        let loaded = load(&main_path(dir.path())).unwrap();
+        assert_eq!(loaded.tree, tree);
+        assert_eq!(loaded.tree.get(c).unwrap().settings.credential, Some(cred));
+        // an unset credential is not written at all
+        let mut plain = Tree::new();
+        plain
+            .create_connection(None, None, "p", Protocol::Ssh, "h")
+            .unwrap();
+        save(&main_path(dir.path()), &plain).unwrap();
+        let text = fs::read_to_string(main_path(dir.path())).unwrap();
+        assert!(!text.contains("credential"));
+    }
+
+    #[test]
+    fn version_three_file_is_refused_as_newer_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = json!({ "schemaVersion": 3, "children": [] }).to_string();
+        fs::write(main_path(dir.path()), &text).unwrap();
+        let before = files(dir.path());
+        let err = load(&main_path(dir.path())).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                LoadError::NewerSchema {
+                    found: 3,
+                    supported: 2,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+        assert_eq!(files(dir.path()), before);
+    }
+
+    #[test]
+    fn migration_chain_has_a_one_to_two_step() {
+        assert_eq!(MIGRATIONS.len(), CURRENT_VERSION as usize - 1);
+        let v1 = json!({ "schemaVersion": 1, "children": [{ "name": "a" }] });
+        // the 1 -> 2 step only exists to make older builds refuse the file: nothing is rewritten
+        assert_eq!(migrate_with(v1.clone(), 1, &MIGRATIONS), v1);
+        let v2 = json!({ "schemaVersion": 2, "children": [] });
+        assert_eq!(migrate_with(v2.clone(), 2, &MIGRATIONS), v2);
+    }
+
+    #[test]
     fn save_into_path_below_a_regular_file_fails() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("plain");
@@ -547,5 +662,26 @@ mod tests {
         })
         .unwrap();
         assert_eq!(v, json!({ "kind": "restoredFromBackup", "badFile": "x" }));
+    }
+
+    #[test]
+    fn sync_conflicts_notice_json_is_tagged_camel_case() {
+        let v = serde_json::to_value(Notice::SyncConflicts {
+            files: vec!["a (conflicted copy).json".into()],
+        })
+        .unwrap();
+        assert_eq!(
+            v,
+            json!({ "kind": "syncConflicts", "files": ["a (conflicted copy).json"] })
+        );
+    }
+
+    #[test]
+    fn settings_unreadable_notice_json_is_tagged_camel_case() {
+        let v = serde_json::to_value(Notice::SettingsUnreadable {
+            message: "bad".into(),
+        })
+        .unwrap();
+        assert_eq!(v, json!({ "kind": "settingsUnreadable", "message": "bad" }));
     }
 }

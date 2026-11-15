@@ -3,12 +3,15 @@ import type {
   Api,
   ApiError,
   ConnectionNode,
+  CredentialInfo,
+  DataFolderInfo,
   FolderNode,
   Mutation,
   Protocol,
   ResolvedNode,
   Snapshot,
   TreeNode,
+  VaultStatus,
 } from "./types";
 
 export function folder(name: string, children: TreeNode[] = [], extra: Partial<FolderNode> = {}) {
@@ -41,12 +44,39 @@ export function conn(
   };
 }
 
-export function snapshot(children: TreeNode[], notice: Snapshot["notice"] = null): Snapshot {
-  return { children, notice };
+export function snapshot(children: TreeNode[], notices: Snapshot["notices"] = []): Snapshot {
+  return { children, notices };
 }
 
 export function apiError(code: string, message = code): ApiError {
   return { code, message };
+}
+
+export function vaultStatus(partial: Partial<VaultStatus> = {}): VaultStatus {
+  return { state: "none", reason: null, path: null, autoUnlock: false, ...partial };
+}
+
+export function credential(partial: Partial<CredentialInfo> = {}): CredentialInfo {
+  return {
+    id: "cred",
+    name: "cred",
+    kind: "password",
+    username: null,
+    domain: null,
+    notes: "",
+    ...partial,
+  };
+}
+
+export function dataFolder(partial: Partial<DataFolderInfo> = {}): DataFolderInfo {
+  return {
+    path: "/data",
+    source: "default",
+    changeable: true,
+    restartRequired: false,
+    existingFiles: [],
+    ...partial,
+  };
 }
 
 type Calls = Record<keyof Api, unknown[][]>;
@@ -62,6 +92,22 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     moveNode: [],
     duplicateNode: [],
     deleteNode: [],
+    vaultStatus: [],
+    vaultCreate: [],
+    vaultUnlock: [],
+    vaultLock: [],
+    vaultChangePassword: [],
+    vaultSetAutoUnlock: [],
+    listCredentials: [],
+    getCredential: [],
+    createCredential: [],
+    updateCredential: [],
+    credentialUsage: [],
+    deleteCredential: [],
+    revealCredential: [],
+    getDataFolder: [],
+    chooseDataFolder: [],
+    restartApp: [],
   };
   let current = initial;
   const mutation = (id: string | null): Mutation => ({ id, snapshot: snapshot(current) });
@@ -99,6 +145,78 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
       calls.deleteNode.push(args);
       return impl.deleteNode ? impl.deleteNode(...args) : mutation(null);
     },
+    vaultStatus: async () => {
+      calls.vaultStatus.push([]);
+      return impl.vaultStatus ? impl.vaultStatus() : vaultStatus();
+    },
+    vaultCreate: async (...args) => {
+      calls.vaultCreate.push(args);
+      return impl.vaultCreate ? impl.vaultCreate(...args) : vaultStatus({ state: "unlocked" });
+    },
+    vaultUnlock: async (...args) => {
+      calls.vaultUnlock.push(args);
+      return impl.vaultUnlock ? impl.vaultUnlock(...args) : vaultStatus({ state: "unlocked" });
+    },
+    vaultLock: async () => {
+      calls.vaultLock.push([]);
+      return impl.vaultLock ? impl.vaultLock() : vaultStatus({ state: "locked" });
+    },
+    vaultChangePassword: async (...args) => {
+      calls.vaultChangePassword.push(args);
+      return impl.vaultChangePassword
+        ? impl.vaultChangePassword(...args)
+        : vaultStatus({ state: "unlocked" });
+    },
+    vaultSetAutoUnlock: async (...args) => {
+      calls.vaultSetAutoUnlock.push(args);
+      return impl.vaultSetAutoUnlock
+        ? impl.vaultSetAutoUnlock(...args)
+        : vaultStatus({ state: "unlocked" });
+    },
+    listCredentials: async () => {
+      calls.listCredentials.push([]);
+      return impl.listCredentials ? impl.listCredentials() : [];
+    },
+    getCredential: async (...args) => {
+      calls.getCredential.push(args);
+      if (impl.getCredential) return impl.getCredential(...args);
+      throw apiError("not_found");
+    },
+    createCredential: async (...args) => {
+      calls.createCredential.push(args);
+      if (impl.createCredential) return impl.createCredential(...args);
+      return credential({ name: args[0].name, kind: args[0].kind });
+    },
+    updateCredential: async (...args) => {
+      calls.updateCredential.push(args);
+      if (impl.updateCredential) return impl.updateCredential(...args);
+      throw apiError("not_found");
+    },
+    credentialUsage: async (...args) => {
+      calls.credentialUsage.push(args);
+      return impl.credentialUsage ? impl.credentialUsage(...args) : [];
+    },
+    deleteCredential: async (...args) => {
+      calls.deleteCredential.push(args);
+      return impl.deleteCredential ? impl.deleteCredential(...args) : mutation(null);
+    },
+    revealCredential: async (...args) => {
+      calls.revealCredential.push(args);
+      if (impl.revealCredential) return impl.revealCredential(...args);
+      throw apiError("not_found");
+    },
+    getDataFolder: async () => {
+      calls.getDataFolder.push([]);
+      return impl.getDataFolder ? impl.getDataFolder() : dataFolder();
+    },
+    chooseDataFolder: async () => {
+      calls.chooseDataFolder.push([]);
+      return impl.chooseDataFolder ? impl.chooseDataFolder() : null;
+    },
+    restartApp: async () => {
+      calls.restartApp.push([]);
+      if (impl.restartApp) await impl.restartApp();
+    },
   };
   return {
     api,
@@ -120,6 +238,7 @@ export function resolved(partial: Partial<ResolvedNode> & { id: string; name: st
     username: none,
     port: { local: null, effective: 22, source: { kind: "default" } },
     keepaliveSecs: { local: null, effective: 30, source: { kind: "default" } },
+    credential: none,
     ...partial,
   };
   return node;

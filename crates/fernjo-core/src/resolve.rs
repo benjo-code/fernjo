@@ -34,6 +34,7 @@ pub fn resolve(ancestors: &[&Node], node: &Node) -> ResolvedNode {
             |s| s.keepalive_secs,
             Some(DEFAULT_KEEPALIVE_SECS),
         ),
+        credential: field(ancestors, node, |s| s.credential, None),
     }
 }
 
@@ -184,6 +185,49 @@ mod tests {
                 name: "A".to_string()
             }
         );
+    }
+
+    fn cred(id: CredentialId) -> Settings {
+        Settings {
+            credential: Some(id),
+            ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn credential_inherits_from_grandparent_with_source() {
+        let id = CredentialId::new_v4();
+        let a = folder("A", cred(id), vec![]);
+        let b = folder("B", Settings::default(), vec![]);
+        let c = conn("c", Protocol::Ssh, Settings::default());
+        let r = resolve(&[&a, &b], &c);
+        assert_eq!(r.credential.effective, Some(id));
+        assert_eq!(r.credential.local, None);
+        assert_eq!(
+            r.credential.source,
+            Source::Folder {
+                id: a.id,
+                name: "A".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn local_credential_wins_over_folder() {
+        let (folder_id, local_id) = (CredentialId::new_v4(), CredentialId::new_v4());
+        let f = folder("F", cred(folder_id), vec![]);
+        let c = conn("c", Protocol::Ssh, cred(local_id));
+        let r = resolve(&[&f], &c);
+        assert_eq!(r.credential.effective, Some(local_id));
+        assert_eq!(r.credential.local, Some(local_id));
+        assert_eq!(r.credential.source, Source::Local);
+    }
+
+    #[test]
+    fn credential_has_no_default() {
+        let r = resolve(&[], &conn("a", Protocol::Ssh, Settings::default()));
+        assert_eq!(r.credential.effective, None);
+        assert_eq!(r.credential.source, Source::Default);
     }
 
     #[test]

@@ -100,7 +100,7 @@ Each crate is created in the milestone that needs it, not up front.
 - **Entries:** id, name, username, optional domain, secret (password, or private key in OpenSSH/PEM format with optional passphrase), notes. Connections and folders reference entries by id; several connections can share one entry.
 - **File:** `vault.fernjo`, whole-file authenticated encryption with a **wrapped data key**: a random 256-bit data key encrypts the entries; the header holds magic, format version, KDF parameters, salt and the data key wrapped by the key derived from the master password. KDF Argon2id, cipher XChaCha20-Poly1305 (for both wrapping and content), both from audited RustCrypto crates. No home-made crypto. Atomic writes as for connections. *(Builder call, from the review: keeps keychain entries on other devices valid when the master password changes on one synced device.)*
 - **Unlock:** master password at app start (created on first run). Option "Unlock automatically on this device" stores the **data key** in the OS keychain (`keyring` crate: Windows Credential Manager, macOS Keychain, Secret Service on Linux). Manual "Lock" action. Secrets in memory are wrapped in `secrecy`/`zeroize` types.
-- **Changing the master password** re-wraps the data key only; the content is not re-encrypted.
+- **Changing the master password** re-wraps the data key; the data key itself is not rotated, so the entries are unchanged (the file is re-saved, which re-seals the content under the same data key).
 - Without an unlocked vault, the tree is still browsable; connecting with a stored credential prompts for unlock.
 
 ### 5.3 SSH (`fernjo-ssh`)

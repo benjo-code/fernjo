@@ -1,5 +1,16 @@
 <script lang="ts">
-  type Name = "folder-chevron" | "ssh" | "rdp" | "search" | "alert" | "reset";
+  type Name =
+    | "folder-chevron"
+    | "ssh"
+    | "rdp"
+    | "search"
+    | "alert"
+    | "reset"
+    | "lock"
+    | "unlock"
+    | "eye"
+    | "eye-off"
+    | "gear";
 
   let { name, size = 16 }: { name: Name; size?: number } = $props();
 </script>
@@ -33,6 +44,23 @@
     <path d="M8 5v3.5M8 11h.01" />
   {:else if name === "reset"}
     <path d="M3.5 8a4.5 4.5 0 1 0 1.4-3.3M3 2.5v3h3" />
+  {:else if name === "lock"}
+    <rect x="3.5" y="7" width="9" height="6.5" rx="1.5" />
+    <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" />
+  {:else if name === "unlock"}
+    <rect x="3.5" y="7" width="9" height="6.5" rx="1.5" />
+    <path d="M5.5 7V5a2.5 2.5 0 0 1 4.9-.7" />
+  {:else if name === "eye"}
+    <path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8Z" />
+    <circle cx="8" cy="8" r="2" />
+  {:else if name === "eye-off"}
+    <path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8Z" />
+    <path d="M3 13 13 3" />
+  {:else if name === "gear"}
+    <circle cx="8" cy="8" r="2" />
+    <path
+      d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4"
+    />
   {/if}
 </svg>
 
