@@ -29,6 +29,8 @@ pub const FILE_NAME: &str = "connections.json";
 pub enum Notice {
     /// The main file was missing or unreadable and the backup was used instead.
     RestoredFromBackup { bad_file: Option<PathBuf> },
+    /// The data folder holds copies made by a sync tool after a conflict (file names only).
+    SyncConflicts { files: Vec<String> },
 }
 
 /// Result of a successful load.
@@ -51,7 +53,7 @@ struct FileIn {
 }
 
 /// `<path>.<suffix>` (for example `connections.json.bak`).
-fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+pub(crate) fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     let mut name: OsString = path.as_os_str().to_owned();
     name.push(suffix);
     PathBuf::from(name)
@@ -60,6 +62,21 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
 /// Writes `tree` atomically: temp file in the same folder, flushed to disk, the current
 /// file copied to `.bak`, then the temp file renamed over the target.
 pub fn save(path: &Path, tree: &Tree) -> Result<(), SaveError> {
+    let json = serde_json::to_string_pretty(&FileOut {
+        schema_version: CURRENT_VERSION,
+        children: tree.children(),
+    })
+    .map_err(|e| SaveError {
+        path: path.to_path_buf(),
+        source: io::Error::other(e),
+    })?;
+    write_atomic(path, json.as_bytes())
+}
+
+/// Shared by every file in the data and config folders: creates the parent folder, writes a
+/// temp file next to `path`, flushes it to disk, copies the current file to `.bak`, then
+/// renames the temp file over `path`. `contents` gets a trailing newline.
+pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), SaveError> {
     let fail = |source: io::Error| SaveError {
         path: path.to_path_buf(),
         source,
@@ -68,17 +85,14 @@ pub fn save(path: &Path, tree: &Tree) -> Result<(), SaveError> {
     if let Some(dir) = dir {
         fs::create_dir_all(dir).map_err(fail)?;
     }
-    let json = serde_json::to_string_pretty(&FileOut {
-        schema_version: CURRENT_VERSION,
-        children: tree.children(),
-    })
-    .map_err(|e| fail(io::Error::other(e)))?;
-
     let tmp = with_suffix(path, ".tmp");
     let result = (|| -> io::Result<()> {
         let mut file = fs::File::create(&tmp)?;
-        file.write_all(json.as_bytes())?;
-        file.write_all(b"\n")?;
+        file.write_all(contents)?;
+        file.write_all(
+            b"
+",
+        )?;
         file.flush()?;
         file.sync_all()?;
         drop(file);
@@ -92,6 +106,18 @@ pub fn save(path: &Path, tree: &Tree) -> Result<(), SaveError> {
         return Err(fail(source));
     }
     Ok(())
+}
+
+/// Renames an unreadable `path` to `<path>.corrupt-<unix seconds>` so a later save cannot
+/// overwrite the good `.bak` with it. Returns the new name.
+pub(crate) fn move_aside(path: &Path) -> io::Result<PathBuf> {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let target = with_suffix(path, &format!(".corrupt-{secs}"));
+    fs::rename(path, &target)?;
+    Ok(target)
 }
 
 /// Upgrades a parsed file from version `from` using `steps` (step `i` upgrades
@@ -195,12 +221,7 @@ pub fn load(path: &Path) -> Result<Loaded, LoadError> {
     match read_file(&bak)? {
         Read::Parsed(tree) => {
             let bad_file = if reason.is_some() {
-                let secs = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                let target = with_suffix(path, &format!(".corrupt-{secs}"));
-                fs::rename(path, &target).map_err(|e| LoadError::Unreadable {
+                let target = move_aside(path).map_err(|e| LoadError::Unreadable {
                     path: path.to_path_buf(),
                     reason: format!("could not move the unreadable file aside: {e}"),
                 })?;
@@ -641,5 +662,17 @@ mod tests {
         })
         .unwrap();
         assert_eq!(v, json!({ "kind": "restoredFromBackup", "badFile": "x" }));
+    }
+
+    #[test]
+    fn sync_conflicts_notice_json_is_tagged_camel_case() {
+        let v = serde_json::to_value(Notice::SyncConflicts {
+            files: vec!["a (conflicted copy).json".into()],
+        })
+        .unwrap();
+        assert_eq!(
+            v,
+            json!({ "kind": "syncConflicts", "files": ["a (conflicted copy).json"] })
+        );
     }
 }

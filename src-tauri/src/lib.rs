@@ -22,7 +22,7 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
-        .manage(AppState::open(fernjo_core::data_dir()))
+        .manage(AppState::open(fernjo_core::locate().map(|l| l.data_dir)))
         .invoke_handler(tauri::generate_handler![
             commands::handlers::list_tree,
             commands::handlers::get_node,

@@ -1,21 +1,25 @@
 //! Core model of fernjo: connection tree, inheritance and persistence.
 
+pub mod conflicts;
 pub mod error;
 pub mod model;
 pub mod paths;
 pub mod persist;
 pub mod resolve;
+pub mod settings;
 pub mod store;
 pub mod tree;
 
+pub use conflicts::find_conflicts;
 pub use error::{LoadError, SaveError, StoreError, TreeError};
 pub use model::{
     CredentialId, DEFAULT_KEEPALIVE_SECS, DEFAULT_RDP_PORT, DEFAULT_SSH_PORT, Field, Node, NodeId,
     NodeKind, NodeType, Protocol, ResolvedNode, Settings, Source,
 };
-pub use paths::{DATA_DIR_ENV, data_dir, data_dir_from};
+pub use paths::{DATA_DIR_ENV, DataDirSource, Location, locate, locate_from};
 pub use persist::{CURRENT_VERSION, FILE_NAME, Loaded, Notice, load, migrate_with, save};
 pub use resolve::resolve;
+pub use settings::AppSettings;
 pub use store::{Opened, Store};
 pub use tree::{NodePatch, Patch, Tree};
 
