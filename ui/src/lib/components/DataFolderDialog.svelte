@@ -58,6 +58,9 @@
     };
   });
 
+  // While busy the buttons use aria-disabled (handlers ignore the click) instead of disabled:
+  // WebView2 drops focus to <body> when the focused button becomes disabled, which would kill
+  // the Escape handler and the Tab trap on the dialog.
   async function choose() {
     if (busy) return;
     busy = true;
@@ -146,14 +149,15 @@
         type="button"
         class="btn"
         class:primary={!info?.restartRequired}
-        disabled={!info || !info.changeable || busy}
+        disabled={!info || !info.changeable}
+        aria-disabled={busy}
         onclick={() => void choose()}>Choose folder…</button
       >
       {#if info?.restartRequired}
         <button
           type="button"
           class="btn primary"
-          disabled={restarting}
+          aria-disabled={restarting}
           onclick={() => void restart()}>Restart now</button
         >
       {/if}
@@ -247,7 +251,8 @@
     background: var(--color-accent);
   }
 
-  .btn:disabled {
+  .btn:disabled,
+  .btn[aria-disabled="true"] {
     opacity: 0.6;
   }
 </style>

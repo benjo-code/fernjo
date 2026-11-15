@@ -54,6 +54,9 @@ test("a_restart_required_error_from_a_vault_call_shows_in_the_notice_bar", async
   });
   const app = mount(App, { target: document.body, props: { api } });
   await settle();
+  // the note is compact until asked: expand the form first
+  [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Unlock")!.click();
+  await settle();
   const field = document.querySelector<HTMLInputElement>("#vault-unlock-password")!;
   field.value = "pw";
   field.dispatchEvent(new Event("input", { bubbles: true }));

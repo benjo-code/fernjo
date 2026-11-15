@@ -181,7 +181,34 @@ describe("DataFolderDialog", () => {
     button("Restart now").click();
     await settle();
     expect(calls.restartApp).toHaveLength(1);
-    expect((button("Restart now") as HTMLButtonElement).disabled).toBe(true);
+    // aria-disabled, not disabled: a focused button that becomes disabled drops focus to <body>
+    expect(button("Restart now").getAttribute("aria-disabled")).toBe("true");
+    expect((button("Restart now") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  test("while_choosing_focus_stays_in_the_dialog_and_escape_still_closes", async () => {
+    const pending = deferred<DataFolderInfo | null>();
+    const { calls, onclose } = await setup({ chooseDataFolder: () => pending.promise });
+    const choose = button("Choose folder…") as HTMLButtonElement;
+    choose.focus();
+    choose.click();
+    await settle();
+    const dialog = document.querySelector("[role=dialog]")!;
+    expect(choose.getAttribute("aria-disabled")).toBe("true");
+    expect(choose.disabled).toBe(false);
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    // a second click while busy does nothing
+    choose.click();
+    await settle();
+    expect(calls.chooseDataFolder).toHaveLength(1);
+    // Escape from the focused element still reaches the dialog and closes it
+    document.activeElement!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    expect(onclose).toHaveBeenCalledTimes(1);
+    pending.resolve(null);
+    await settle();
+    expect(choose.getAttribute("aria-disabled")).not.toBe("true");
   });
 
   test("escape_closes_the_dialog", async () => {

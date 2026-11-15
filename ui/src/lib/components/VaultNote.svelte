@@ -13,6 +13,7 @@
   let region: HTMLElement | undefined = $state();
   let unlockField: PasswordField | undefined = $state();
   let createField: PasswordField | undefined = $state();
+  let confirmField: PasswordField | undefined = $state();
 
   // The master password lives only in these bound inputs and is cleared after a success.
   let password = $state("");
@@ -21,15 +22,19 @@
   let choice = $state<boolean | null>(null);
   const autoUnlock = $derived(vault.status?.autoUnlock ?? false);
   const remember = $derived(choice ?? autoUnlock);
+  // The note is compact (state text and one button) until the user asks for the form, so it
+  // does not squeeze the tree and the properties panel in the common locked / no-vault states.
+  let unlocking = $state(false);
   let creating = $state(false);
   let busy = $state(false);
   let unlockError = $state<string | null>(null);
   let createError = $state<string | null>(null);
   let confirmError = $state<string | null>(null);
 
-  /** Brings the form to the user: the chip calls this. */
+  /** Expands the form and focuses the password field. The chip and the note's button call this. */
   export async function focusForm() {
     if (phase === "none") creating = true;
+    else if (phase === "locked") unlocking = true;
     await tick();
     if (phase === "locked") unlockField?.focus();
     else if (phase === "none") createField?.focus();
@@ -44,8 +49,12 @@
     busy = false;
     if (!err) {
       password = "";
+      unlocking = false;
     } else {
       unlockError = err.code === "wrong_password" ? WRONG_PASSWORD : err.message;
+      // keep focus inside the form (a clicked submit button must not strand it on <body>)
+      await tick();
+      unlockField?.focus();
     }
   }
 
@@ -54,6 +63,8 @@
     if (busy) return;
     if (password !== confirm) {
       confirmError = "The passwords do not match.";
+      await tick();
+      confirmField?.focus();
       return;
     }
     busy = true;
@@ -65,7 +76,15 @@
       creating = false;
     } else {
       createError = err.message;
+      await tick();
+      createField?.focus();
     }
+  }
+
+  function cancelUnlock() {
+    unlocking = false;
+    password = "";
+    unlockError = null;
   }
 
   function cancelCreate() {
@@ -75,6 +94,8 @@
     createError = null;
     confirmError = null;
   }
+
+  const backupPath = $derived(vault.status?.path ? `${vault.status.path}.bak` : null);
 </script>
 
 {#if phase !== null && phase !== "unlocked"}
@@ -90,34 +111,44 @@
       <h2 id="vault-note-title">
         {phase === "none" ? "No vault yet" : phase === "locked" ? "Vault locked" : "Vault unusable"}
       </h2>
+      {#if phase === "locked" && !unlocking}
+        <button type="button" class="btn small" onclick={() => void focusForm()}>Unlock</button>
+      {:else if phase === "none" && !creating}
+        <button type="button" class="btn small" onclick={() => void focusForm()}>
+          Create vault
+        </button>
+      {/if}
     </div>
 
     {#if phase === "locked"}
       <p class="body">Connections with stored credentials ask for it.</p>
-      <form onsubmit={submitUnlock}>
-        <PasswordField
-          bind:this={unlockField}
-          id="vault-unlock-password"
-          label="Master password"
-          bind:value={password}
-          error={unlockError}
-          onedit={() => (unlockError = null)}
-        />
-        <label class="check">
-          <input
-            type="checkbox"
-            checked={remember}
-            onchange={(e) => (choice = e.currentTarget.checked)}
+      {#if unlocking}
+        <form onsubmit={submitUnlock}>
+          <PasswordField
+            bind:this={unlockField}
+            id="vault-unlock-password"
+            label="Master password"
+            bind:value={password}
+            error={unlockError}
+            onedit={() => (unlockError = null)}
           />
-          <span>Unlock automatically on this device</span>
-        </label>
-        {#if remember || autoUnlock}
-          <p class="hint">Lock then lasts until the next start.</p>
-        {/if}
-        <div class="actions">
-          <button type="submit" class="btn small" disabled={busy}>Unlock</button>
-        </div>
-      </form>
+          <label class="check">
+            <input
+              type="checkbox"
+              checked={remember}
+              onchange={(e) => (choice = e.currentTarget.checked)}
+            />
+            <span>Unlock automatically on this device</span>
+          </label>
+          {#if remember || autoUnlock}
+            <p class="hint">Lock then lasts until the next start.</p>
+          {/if}
+          <div class="actions">
+            <button type="submit" class="btn small" aria-disabled={busy}>Unlock</button>
+            <button type="button" class="btn small" onclick={cancelUnlock}>Cancel</button>
+          </div>
+        </form>
+      {/if}
     {:else if phase === "none"}
       <p class="body">
         Credentials are stored in an encrypted vault protected by a master password.
@@ -136,6 +167,7 @@
             }}
           />
           <PasswordField
+            bind:this={confirmField}
             id="vault-create-confirm"
             label="Repeat master password"
             bind:value={confirm}
@@ -152,23 +184,25 @@
             <span>Unlock automatically on this device</span>
           </label>
           <div class="actions">
-            <button type="submit" class="btn small primary" disabled={busy}>Create vault</button>
+            <button type="submit" class="btn small primary" aria-disabled={busy}>
+              Create vault
+            </button>
             <button type="button" class="btn small" onclick={cancelCreate}>Cancel</button>
           </div>
         </form>
-      {:else}
-        <div class="actions">
-          <button type="button" class="btn small" onclick={() => void focusForm()}>
-            Create vault
-          </button>
-        </div>
       {/if}
     {:else}
-      <p class="body">The vault file cannot be used: {vault.status?.reason ?? "unknown reason"}.</p>
+      <p class="body">{vault.status?.reason ?? "The vault file cannot be used."}</p>
       {#if vault.status?.path}
         <p class="path">{vault.status.path}</p>
       {/if}
-      <p class="body">The file is left untouched.</p>
+      <p class="body">
+        The file is left untouched. To restore an earlier version, close fernjo and copy
+        vault.fernjo.bak over vault.fernjo.
+      </p>
+      {#if backupPath}
+        <p class="path">{backupPath}</p>
+      {/if}
     {/if}
   </div>
 {/if}
@@ -177,9 +211,9 @@
   .note {
     display: flex;
     flex-direction: column;
-    gap: var(--space-3);
+    gap: var(--space-2);
     margin: 0 var(--space-3) var(--space-3);
-    padding: var(--space-4);
+    padding: var(--space-3) var(--space-4);
     background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-sm);
@@ -197,6 +231,8 @@
   }
 
   h2 {
+    flex: 1;
+    min-width: 0;
     margin: 0;
     font-size: var(--text-md);
     font-weight: var(--weight-strong);
@@ -257,7 +293,7 @@
     background: var(--color-accent);
   }
 
-  .btn:disabled {
+  .btn[aria-disabled="true"] {
     opacity: 0.6;
   }
 </style>

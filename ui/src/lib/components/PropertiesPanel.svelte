@@ -263,7 +263,7 @@
                 >{vaultState === "locked" ? "Vault locked" : "No vault"}</span
               >
             {:else if vault.credentialsState === "loading"}
-              <span {id} class="static">Loading…</span>
+              <span {id} class="static">Loadingâ€¦</span>
             {:else if vault.credentialsState === "failed"}
               <span {id} class="static">Credentials unavailable</span>
             {:else if credentialId !== null && credentialName === null}

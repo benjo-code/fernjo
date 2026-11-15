@@ -33,6 +33,12 @@ const button = (text: string) => buttons().find((b) => b.textContent?.trim() ===
 const fields = () =>
   [...document.querySelectorAll<HTMLInputElement>("input")].filter((i) => i.type !== "checkbox");
 
+/** The note is compact until the button is clicked; the form then replaces that button. */
+async function expand(label = "Unlock") {
+  button(label)!.click();
+  await settle();
+}
+
 async function type(el: HTMLInputElement, text: string) {
   el.value = text;
   el.dispatchEvent(new Event("input", { bubbles: true }));
@@ -95,6 +101,7 @@ describe("VaultNote", () => {
         throw apiError("wrong_password", "wrong");
       },
     });
+    await expand();
     const field = fields()[0];
     await type(field, "guess");
     button("Unlock")!.click();
@@ -105,19 +112,26 @@ describe("VaultNote", () => {
     expect(field.getAttribute("aria-describedby")).toBe(alert.id);
     // the text stays so the user can fix it
     expect(field.value).toBe("guess");
+    // focus is back in the field, not stranded on the body
+    expect(document.activeElement).toBe(field);
   });
 
   test("remember_checkbox_value_is_passed_to_vault_unlock", async () => {
     const { calls } = await setup(vaultStatus({ state: "locked" }), {
       vaultUnlock: async () => vaultStatus({ state: "locked" }),
     });
+    await expand();
     const remember = document.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
     expect(document.body.textContent).toContain("Unlock automatically on this device");
     expect(remember.checked).toBe(false);
     await type(fields()[0], "pw one");
     button("Unlock")!.click();
     await settle();
-    remember.click();
+    // (the mock stays locked, so the form collapsed after the "success"; open it again)
+    await expand();
+    const again = document.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    expect(again.checked).toBe(false);
+    again.click();
     await settle();
     expect(document.body.textContent).toContain("Lock then lasts until the next start.");
     await type(fields()[0], "pw two");
@@ -134,14 +148,19 @@ describe("VaultNote", () => {
     await setup(vaultStatus({ state: "locked" }), {
       vaultUnlock: async () => vaultStatus({ state: "locked" }),
     });
+    await expand();
     await type(fields()[0], "secret one");
     button("Unlock")!.click();
     await settle();
+    // collapsed after the success (the mock stays locked); the reopened field is empty
+    expect(document.querySelector("input")).toBeNull();
+    await expand();
     expect(fields()[0].value).toBe("");
   });
 
   test("password_field_is_masked_with_a_pressed_toggle", async () => {
     await setup(vaultStatus({ state: "locked" }));
+    await expand();
     const field = fields()[0];
     expect(field.type).toBe("password");
     expect(field.getAttribute("autocomplete")).toBe("off");
@@ -154,19 +173,83 @@ describe("VaultNote", () => {
     expect(toggle.getAttribute("aria-pressed")).toBe("true");
   });
 
-  test("unusable_vault_shows_the_reason_and_path_and_no_create_button", async () => {
+  test("unusable_vault_shows_the_reason_path_and_how_to_restore_the_backup", async () => {
     await setup(
       vaultStatus({
         state: "unusable",
-        reason: "unsupported version 9",
+        reason: "the vault file cannot be read: file is too short",
         path: "D:\\data\\vault.fernjo",
       }),
     );
-    const text = document.body.textContent!;
-    expect(text).toContain("unsupported version 9");
+    const text = document.body.textContent!.replace(/\s+/g, " ");
+    // the reason is shown as Rust wrote it, once, without a repeated prefix
+    expect(text).toContain("the vault file cannot be read: file is too short");
+    expect(text).not.toContain("cannot be used: the vault file");
+    expect(text.match(/cannot be read/g)).toHaveLength(1);
     expect(text).toContain("D:\\data\\vault.fernjo");
+    expect(text).toContain(
+      "To restore an earlier version, close fernjo and copy vault.fernjo.bak over vault.fernjo.",
+    );
+    expect(text).toContain("D:\\data\\vault.fernjo.bak");
     expect(button("Create vault")).toBeUndefined();
     expect(button("Unlock")).toBeUndefined();
+  });
+
+  test("locked_and_no_vault_notes_are_compact_until_asked", async () => {
+    await setup(vaultStatus({ state: "locked" }));
+    expect(document.body.textContent).toContain("Vault locked");
+    expect(document.body.textContent).toContain("Connections with stored credentials ask for it.");
+    expect(button("Unlock")).toBeDefined();
+    expect(document.querySelector("input")).toBeNull();
+    expect(document.querySelector("form")).toBeNull();
+    unmount(mounted!);
+    mounted = null;
+    document.body.innerHTML = "";
+
+    await setup(vaultStatus({ state: "none" }));
+    expect(button("Create vault")).toBeDefined();
+    expect(document.querySelector("input")).toBeNull();
+  });
+
+  test("the_unlock_button_expands_the_form_with_the_field_focused_and_cancel_collapses_it", async () => {
+    await setup(vaultStatus({ state: "locked" }));
+    await expand();
+    expect(fields()).toHaveLength(1);
+    expect(document.activeElement).toBe(fields()[0]);
+    expect(document.querySelector('input[type="checkbox"]')).not.toBeNull();
+    // the compact button is replaced by the form's own submit button
+    expect(buttons().filter((b) => b.textContent?.trim() === "Unlock")).toHaveLength(1);
+    button("Cancel")!.click();
+    await settle();
+    expect(document.querySelector("input")).toBeNull();
+    expect(button("Unlock")).toBeDefined();
+  });
+
+  test("focus_form_expands_and_focuses_the_password_field", async () => {
+    const mock = mockApi([], { vaultStatus: async () => vaultStatus({ state: "locked" }) });
+    const vault = new VaultStore(mock.api);
+    await vault.init();
+    const instance = mount(VaultNote, { target: document.body, props: { vault } });
+    mounted = instance;
+    await settle();
+    expect(document.querySelector("input")).toBeNull();
+    await (instance as unknown as { focusForm: () => Promise<void> }).focusForm();
+    await settle();
+    expect(document.activeElement).toBe(fields()[0]);
+  });
+
+  test("a_create_error_returns_focus_to_the_password_field", async () => {
+    await setup(vaultStatus({ state: "none" }), {
+      vaultCreate: async () => {
+        throw apiError("weak_password", "The master password is too short.");
+      },
+    });
+    await expand("Create vault");
+    await type(fields()[0], "short");
+    await type(fields()[1], "short");
+    button("Create vault")!.click();
+    await settle();
+    expect(document.activeElement).toBe(fields()[0]);
   });
 
   test("an_unlocked_vault_shows_no_note", async () => {
@@ -176,6 +259,7 @@ describe("VaultNote", () => {
 
   test("locked_with_auto_unlock_starts_checked_and_shows_the_hint", async () => {
     await setup(vaultStatus({ state: "locked", autoUnlock: true }));
+    await expand();
     expect(document.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked).toBe(true);
     expect(document.body.textContent).toContain("Lock then lasts until the next start.");
   });
@@ -184,6 +268,7 @@ describe("VaultNote", () => {
     const { vault } = await setup(vaultStatus({ state: "locked" }), {
       vaultUnlock: async () => vaultStatus({ state: "locked", autoUnlock: true }),
     });
+    await expand();
     const box = document.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
     expect(box.checked).toBe(false);
     expect(document.body.textContent).not.toContain("Lock then lasts");
@@ -196,7 +281,9 @@ describe("VaultNote", () => {
   test("a_user_who_unchecked_the_box_keeps_the_choice_when_the_status_refreshes", async () => {
     const { vault } = await setup(vaultStatus({ state: "locked", autoUnlock: true }), {
       vaultUnlock: async () => vaultStatus({ state: "locked", autoUnlock: true }),
+      vaultSetAutoUnlock: async () => vaultStatus({ state: "locked", autoUnlock: false }),
     });
+    await expand();
     const box = document.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
     box.click();
     await settle();
