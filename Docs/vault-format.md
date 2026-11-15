@@ -7,7 +7,7 @@ Format version **1**. The vault is one binary file in the data folder (`vault.fe
 - **Key derivation:** Argon2id (version 0x13), 32-byte output, parameters and salt from the header.
 - **AEAD:** XChaCha20-Poly1305 (24-byte nonce, 16-byte tag appended to the ciphertext).
 - **Master password:** Unicode-normalised to NFC, then used as UTF-8 bytes exactly as typed (no trimming, no case folding). Minimum length 8 characters (after normalisation), checked when a vault is created or its password is changed, never when unlocking.
-- **Data key:** 32 random bytes generated once when the vault is created. It encrypts the body. The password-derived key only wraps the data key, so a password change re-wraps 32 bytes.
+- **Data key:** 32 random bytes generated once when the vault is created. It encrypts the body. The password-derived key only wraps the data key, so a password change never changes the data key or the entries. A password change picks a new salt and wrap nonce, re-wraps the unchanged data key and saves once; because the header changes and the whole header is the body's AAD, that save re-seals the body under the same data key with a fresh nonce.
 
 ## Layout
 
