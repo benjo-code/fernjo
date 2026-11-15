@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { TreeStore } from "./store.svelte";
-import { apiError, conn, deferred, folder, mockApi, snapshot } from "./testing";
-import type { Mutation } from "./types";
+import { apiError, conn, deferred, folder, mockApi, resolved, snapshot } from "./testing";
+import type { Mutation, ResolvedNode } from "./types";
 
 const KEY = "fernjo.expanded.v1";
 
@@ -224,5 +224,82 @@ describe("TreeStore", () => {
     store.setFilter("");
     store.expand("Homelab");
     expect(store.rows).toHaveLength(4);
+  });
+
+  describe("detail", () => {
+    const tick = () => new Promise((r) => setTimeout(r, 0));
+
+    test("detail_is_loaded_for_the_selection_and_cleared_with_it", async () => {
+      const { store, calls } = await started(tree(), {
+        getNode: async (id: string) => resolved({ id, name: id }),
+      });
+      expect(store.detail).toBeNull();
+      store.select("web-01");
+      await tick();
+      expect(store.detail?.id).toBe("web-01");
+      expect(calls.getNode).toEqual([["web-01"]]);
+      store.select(null);
+      expect(store.detail).toBeNull();
+    });
+
+    test("detail_is_refreshed_after_a_mutation_and_before_it_resolves", async () => {
+      let username = "ops";
+      const { store, calls } = await started(tree(), {
+        getNode: async (id: string) =>
+          resolved({
+            id,
+            name: id,
+            username: { local: username, effective: username, source: { kind: "local" } },
+          }),
+        updateNode: async (id: string) => {
+          username = "root";
+          return { id, snapshot: snapshot(tree()) };
+        },
+      });
+      store.select("web-01");
+      await tick();
+      expect(store.detail?.username.effective).toBe("ops");
+      await store.update("web-01", { username: "root" });
+      expect(store.detail?.username.effective).toBe("root");
+      expect(calls.getNode).toHaveLength(2);
+    });
+
+    test("a_stale_detail_response_is_ignored", async () => {
+      const slow = deferred<ResolvedNode>();
+      const { store } = await started(tree(), {
+        getNode: (id: string) =>
+          id === "web-01" ? slow.promise : Promise.resolve(resolved({ id, name: id })),
+      });
+      store.select("web-01");
+      store.select("Homelab");
+      await tick();
+      slow.resolve(resolved({ id: "web-01", name: "web-01" }));
+      await tick();
+      expect(store.detail?.id).toBe("Homelab");
+    });
+
+    test("a_failing_getNode_leaves_no_detail_and_no_error_bar", async () => {
+      const { store } = await started(tree(), {
+        getNode: async () => {
+          throw apiError("not_found", "gone");
+        },
+      });
+      store.select("web-01");
+      await tick();
+      expect(store.detail).toBeNull();
+      expect(store.error).toBeNull();
+    });
+
+    test("detail_disappears_when_the_selected_node_is_deleted", async () => {
+      const { store, setTree } = await started(tree(), {
+        getNode: async (id: string) => resolved({ id, name: id }),
+      });
+      store.select("web-01");
+      await tick();
+      setTree([folder("Homelab", [conn("pve-01"), conn("DC01", "rdp")])]);
+      await store.remove("web-01");
+      expect(store.selectedId).toBeNull();
+      expect(store.detail).toBeNull();
+    });
   });
 });

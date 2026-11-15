@@ -3,7 +3,7 @@
 import { SvelteSet } from "svelte/reactivity";
 import { toApiError } from "./api";
 import { collectIds, flattenRows, type Row } from "./rows";
-import type { Api, ApiError, NodePatch, Notice, TreeNode } from "./types";
+import type { Api, ApiError, NodePatch, Notice, ResolvedNode, TreeNode } from "./types";
 
 const STORAGE_KEY = "fernjo.expanded.v1";
 
@@ -39,12 +39,15 @@ export class TreeStore {
   renamingId = $state<string | null>(null);
   error = $state<string | null>(null);
   loadError = $state<string | null>(null);
+  /** The selected node with effective values and sources, as resolved by Rust. */
+  detail = $state<ResolvedNode | null>(null);
   /** True once the first load has finished, whether it worked or not. */
   loaded = $state(false);
   rows: Row[] = $derived(flattenRows(this.children, this.expanded, this.filter));
 
   #api: Api;
   #queue: Promise<unknown> = Promise.resolve();
+  #detailToken = 0;
 
   constructor(api: Api) {
     this.#api = api;
@@ -61,7 +64,9 @@ export class TreeStore {
   }
 
   select(id: string | null) {
+    const changed = id !== this.selectedId;
     this.selectedId = id;
+    if (changed) void this.#refreshDetail();
   }
 
   toggle(id: string) {
@@ -147,6 +152,23 @@ export class TreeStore {
     });
   }
 
+  /** Asks Rust for the selected node's effective values; late answers for an old selection are dropped. */
+  async #refreshDetail(): Promise<void> {
+    const token = ++this.#detailToken;
+    const id = this.selectedId;
+    if (id === null) {
+      this.detail = null;
+      return;
+    }
+    let detail: ResolvedNode | null = null;
+    try {
+      detail = await this.#api.getNode(id);
+    } catch {
+      // the node vanished or Rust is unavailable: show the empty state, not an error
+    }
+    if (token === this.#detailToken) this.detail = detail;
+  }
+
   #afterCreate(parentId: string | null, id: string | null) {
     this.filter = "";
     if (parentId) this.expand(parentId);
@@ -178,6 +200,7 @@ export class TreeStore {
     const result = this.#queue.then(async () => {
       try {
         await job();
+        await this.#refreshDetail();
         return null;
       } catch (e) {
         const err = toApiError(e);

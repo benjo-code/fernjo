@@ -1,5 +1,5 @@
 <script lang="ts">
-  type Name = "folder-chevron" | "ssh" | "rdp" | "search" | "alert";
+  type Name = "folder-chevron" | "ssh" | "rdp" | "search" | "alert" | "reset";
 
   let { name, size = 16 }: { name: Name; size?: number } = $props();
 </script>
@@ -31,6 +31,8 @@
   {:else if name === "alert"}
     <circle cx="8" cy="8" r="6" />
     <path d="M8 5v3.5M8 11h.01" />
+  {:else if name === "reset"}
+    <path d="M3.5 8a4.5 4.5 0 1 0 1.4-3.3M3 2.5v3h3" />
   {/if}
 </svg>
 

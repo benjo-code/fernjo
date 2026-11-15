@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { tauriApi } from "./lib/api";
+  import PropertiesPanel from "./lib/components/PropertiesPanel.svelte";
   import Sidebar from "./lib/components/Sidebar.svelte";
   import { TreeStore } from "./lib/store.svelte";
   import type { Api } from "./lib/types";
@@ -17,7 +18,9 @@
 </script>
 
 <div class="shell">
-  <Sidebar {store} />
+  <Sidebar {store}>
+    <PropertiesPanel {store} />
+  </Sidebar>
   <main class="main">
     <p class="empty">Open a connection from the tree</p>
   </main>

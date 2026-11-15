@@ -102,8 +102,8 @@ Goal: Connections can be organised in a persistent folder tree with mRemoteNG-st
 - [x] `fernjo-core`: tree of folders and connections (UUIDs, manual order), inheritable settings, effective-value resolution with built-in defaults
 - [x] Persistence in `connections.json` (`schemaVersion`, atomic write, `.bak`) in the data folder from the OS config directory
 - [x] Tauri commands for creating, editing, moving and deleting nodes
-- [ ] Sidebar: tree with filter (name, host, description), expand/collapse, drag and drop, context menu (new folder/connection, duplicate, rename, delete)
-- [ ] Properties panel: edit fields, show "inherited from <folder>", reset to inherit
+- [x] Sidebar: tree with filter (name, host, description), expand/collapse, drag and drop, context menu (new folder/connection, duplicate, rename, delete)
+- [x] Properties panel: edit fields, show "inherited from <folder>", reset to inherit
 - [x] Single instance: a second launch focuses the running window
 
 **Acceptance criteria**

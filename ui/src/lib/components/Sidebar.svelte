@@ -28,11 +28,12 @@
     padding: var(--space-3);
   }
 
+  /* 23 rows stay visible when the window allows it; the properties panel gives way first */
   .tree-slot {
     display: flex;
-    flex: 1;
+    flex: 1 1 0;
     flex-direction: column;
-    min-height: 0;
+    min-height: min(calc(var(--row-height-tree) * 23), calc(100vh - 120px));
     overflow-y: auto;
   }
 </style>
