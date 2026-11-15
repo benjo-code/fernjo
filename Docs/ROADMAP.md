@@ -60,18 +60,18 @@ Goal: An empty but fully set-up, public repo with a running Tauri shell and gree
 - [x] `.env.example` with placeholders, only if secrets are needed (none expected)
 - [x] CI on GitHub-hosted `ubuntu-latest`: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `cargo-deny`, UI lint/check/test and a Tauri build check (WebKitGTK installed in the job), on PRs to `dev` and `main`
 - [x] Move the `roadmap` job in `.github/workflows/roadmap.yml` from `[self-hosted, dotnet-linux]` to `ubuntu-latest`; no workflow uses a self-hosted runner
-- [ ] Add the CI jobs (`roadmap` and the build/test/lint jobs) as required status checks in the branch protection of `main` and `dev`
+- [x] Add the CI jobs (`roadmap` and the build/test/lint jobs) as required status checks in the branch protection of `main` and `dev`
 - [x] Dependabot for Cargo, npm (pnpm) and GitHub Actions
 - [ ] Scan the full git history for secrets (e.g. gitleaks), then make the repo public
 - [ ] Repo security on: secret scanning with push protection, Dependabot alerts and security updates, CodeQL for Rust and JavaScript/TypeScript, private vulnerability reporting with `SECURITY.md`, approval required for workflows from outside contributors
 
 **Acceptance criteria**
-- [ ] Build, test and format/lint run green locally (commands in `CLAUDE.md`)
+- [x] Build, test and format/lint run green locally (commands in `CLAUDE.md`) – 2026-11-15 on Windows, head aff35f0: `pnpm install --frozen-lockfile`, `pnpm ui:build`, `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (3 config tests + 1 core test pass), `pnpm lint` (0 errors, 0 warnings), `pnpm test` (1 test pass), `cargo deny --all-features check` (ok), `dotnet run tools/roadmap.cs -- check` (valid) all green
 - [ ] `pnpm tauri dev` opens the empty fernjo window (manual check on Windows; macOS/Linux checked when a machine is available, otherwise marked open)
-- [ ] CI is green on a PR to `dev`
-- [ ] Branch protection for `main` and `dev` is active: PR required, CI checks required, no force push, no deletion – `gh api repos/benjo-code/fernjo/branches/<branch>/protection`
+- [x] CI is green on a PR to `dev` – PR #2 to `dev`: workflow `CI` run https://github.com/benjo-code/fernjo/actions/runs/43725362775 (rust, ui, tauri-build, cargo-deny success) and workflow `Roadmap` run https://github.com/benjo-code/fernjo/actions/runs/43725362692 (roadmap success), all on GitHub-hosted runners
+- [x] Branch protection for `main` and `dev` is active: PR required, CI checks required, no force push, no deletion – 2026-11-15 `gh api repos/benjo-code/fernjo/branches/<branch>/protection --jq '[.required_status_checks.contexts, .allow_force_pushes.enabled, .allow_deletions.enabled, .required_pull_request_reviews != null]'` for `main` and `dev` returns `[["roadmap","rust","ui","tauri-build","cargo-deny"],false,false,true]`
 - [ ] Repo is public with secret scanning and push protection enabled, and CodeQL has a green run – `gh api repos/benjo-code/fernjo --jq '.visibility, .security_and_analysis'`
-- [ ] No workflow uses a self-hosted runner – `grep -rn self-hosted .github/workflows` returns nothing
+- [x] No workflow uses a self-hosted runner – `grep -rn self-hosted .github/workflows` returns nothing (also enforced by the workflow policy script); CI and Roadmap workflow runs of PR #2 ran on GitHub-hosted runners
 
 ## Milestone 1 – UI design direction
 **Status:** ⬜ open · **Plan:** – · **Prerequisites:** M0

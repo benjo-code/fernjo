@@ -25,18 +25,18 @@
             { "text": "`.env.example` with placeholders, only if secrets are needed (none expected)", "done": true },
             { "text": "CI on GitHub-hosted `ubuntu-latest`: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `cargo-deny`, UI lint/check/test and a Tauri build check (WebKitGTK installed in the job), on PRs to `dev` and `main`", "done": true },
             { "text": "Move the `roadmap` job in `.github/workflows/roadmap.yml` from `[self-hosted, dotnet-linux]` to `ubuntu-latest`; no workflow uses a self-hosted runner", "done": true },
-            { "text": "Add the CI jobs (`roadmap` and the build/test/lint jobs) as required status checks in the branch protection of `main` and `dev`", "done": false },
+            { "text": "Add the CI jobs (`roadmap` and the build/test/lint jobs) as required status checks in the branch protection of `main` and `dev`", "done": true },
             { "text": "Dependabot for Cargo, npm (pnpm) and GitHub Actions", "done": true },
             { "text": "Scan the full git history for secrets (e.g. gitleaks), then make the repo public", "done": false },
             { "text": "Repo security on: secret scanning with push protection, Dependabot alerts and security updates, CodeQL for Rust and JavaScript/TypeScript, private vulnerability reporting with `SECURITY.md`, approval required for workflows from outside contributors", "done": false }
           ],
           "acceptance": [
-            { "text": "Build, test and format/lint run green locally (commands in `CLAUDE.md`)", "done": false },
+            { "text": "Build, test and format/lint run green locally (commands in `CLAUDE.md`)", "done": true, "evidence": "2026-11-15 on Windows, head aff35f0: `pnpm install --frozen-lockfile`, `pnpm ui:build`, `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (3 config tests + 1 core test pass), `pnpm lint` (0 errors, 0 warnings), `pnpm test` (1 test pass), `cargo deny --all-features check` (ok), `dotnet run tools/roadmap.cs -- check` (valid) all green" },
             { "text": "`pnpm tauri dev` opens the empty fernjo window (manual check on Windows; macOS/Linux checked when a machine is available, otherwise marked open)", "done": false },
-            { "text": "CI is green on a PR to `dev`", "done": false },
-            { "text": "Branch protection for `main` and `dev` is active: PR required, CI checks required, no force push, no deletion", "done": false, "evidence": "`gh api repos/benjo-code/fernjo/branches/<branch>/protection`" },
+            { "text": "CI is green on a PR to `dev`", "done": true, "evidence": "PR #2 to `dev`: workflow `CI` run https://github.com/benjo-code/fernjo/actions/runs/43725362775 (rust, ui, tauri-build, cargo-deny success) and workflow `Roadmap` run https://github.com/benjo-code/fernjo/actions/runs/43725362692 (roadmap success), all on GitHub-hosted runners" },
+            { "text": "Branch protection for `main` and `dev` is active: PR required, CI checks required, no force push, no deletion", "done": true, "evidence": "2026-11-15 `gh api repos/benjo-code/fernjo/branches/<branch>/protection --jq '[.required_status_checks.contexts, .allow_force_pushes.enabled, .allow_deletions.enabled, .required_pull_request_reviews != null]'` for `main` and `dev` returns `[[\"roadmap\",\"rust\",\"ui\",\"tauri-build\",\"cargo-deny\"],false,false,true]`" },
             { "text": "Repo is public with secret scanning and push protection enabled, and CodeQL has a green run", "done": false, "evidence": "`gh api repos/benjo-code/fernjo --jq '.visibility, .security_and_analysis'`" },
-            { "text": "No workflow uses a self-hosted runner", "done": false, "evidence": "`grep -rn self-hosted .github/workflows` returns nothing" }
+            { "text": "No workflow uses a self-hosted runner", "done": true, "evidence": "`grep -rn self-hosted .github/workflows` returns nothing (also enforced by the workflow policy script); CI and Roadmap workflow runs of PR #2 ran on GitHub-hosted runners" }
           ]
         },
         {
