@@ -1,0 +1,189 @@
+// View state and the bridge to the Rust-owned tree. The snapshot from the last command is the
+// only source of the tree; every mutation goes through one queue so commands never overlap.
+import { SvelteSet } from "svelte/reactivity";
+import { toApiError } from "./api";
+import { collectIds, flattenRows, type Row } from "./rows";
+import type { Api, ApiError, NodePatch, Notice, TreeNode } from "./types";
+
+const STORAGE_KEY = "fernjo.expanded.v1";
+
+function loadExpanded(): string[] {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
+    if (Array.isArray(parsed)) return parsed.filter((v): v is string => typeof v === "string");
+  } catch {
+    // unreadable or blocked storage: start collapsed
+  }
+  return [];
+}
+
+function saveExpanded(ids: Iterable<string>) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([...ids]));
+  } catch {
+    // blocked storage: expansion just is not remembered
+  }
+}
+
+interface RunOptions {
+  /** Return the error to the caller without showing it in the global error bar. */
+  silent?: boolean;
+}
+
+export class TreeStore {
+  children = $state<TreeNode[]>([]);
+  notice = $state<Notice | null>(null);
+  selectedId = $state<string | null>(null);
+  expanded = new SvelteSet<string>();
+  filter = $state("");
+  renamingId = $state<string | null>(null);
+  error = $state<string | null>(null);
+  loadError = $state<string | null>(null);
+  rows: Row[] = $derived(flattenRows(this.children, this.expanded, this.filter));
+
+  #api: Api;
+  #queue: Promise<unknown> = Promise.resolve();
+
+  constructor(api: Api) {
+    this.#api = api;
+  }
+
+  /** Loads the tree and the persisted expansion state. */
+  async init(): Promise<void> {
+    for (const id of loadExpanded()) this.expanded.add(id);
+    await this.#run(async () => {
+      const snapshot = await this.#api.listTree();
+      this.#apply(snapshot.children, snapshot.notice);
+    });
+  }
+
+  select(id: string | null) {
+    this.selectedId = id;
+  }
+
+  toggle(id: string) {
+    if (!this.expanded.delete(id)) this.expanded.add(id);
+    saveExpanded(this.expanded);
+  }
+
+  expand(id: string) {
+    if (this.expanded.has(id)) return;
+    this.expanded.add(id);
+    saveExpanded(this.expanded);
+  }
+
+  setFilter(query: string) {
+    this.filter = query;
+  }
+
+  startRename(id: string) {
+    this.renamingId = id;
+  }
+
+  stopRename() {
+    this.renamingId = null;
+  }
+
+  dismissNotice() {
+    this.notice = null;
+  }
+
+  dismissError() {
+    this.error = null;
+  }
+
+  createFolder(parentId: string | null, index: number | null) {
+    return this.#run(async () => {
+      const m = await this.#api.createFolder(parentId, index, "New folder");
+      this.#apply(m.snapshot.children, m.snapshot.notice);
+      this.#afterCreate(parentId, m.id);
+    });
+  }
+
+  createConnection(parentId: string | null, index: number | null) {
+    return this.#run(async () => {
+      const m = await this.#api.createConnection(parentId, index, "New connection", "ssh", "");
+      this.#apply(m.snapshot.children, m.snapshot.notice);
+      this.#afterCreate(parentId, m.id);
+    });
+  }
+
+  /** Closes the inline editor at once; the name only changes if Rust accepts it. */
+  rename(id: string, name: string) {
+    this.stopRename();
+    return this.update(id, { name });
+  }
+
+  update(id: string, patch: NodePatch, options: RunOptions = {}) {
+    return this.#run(async () => {
+      const m = await this.#api.updateNode(id, patch);
+      this.#apply(m.snapshot.children, m.snapshot.notice);
+    }, options);
+  }
+
+  move(id: string, parentId: string | null, index: number) {
+    return this.#run(async () => {
+      const m = await this.#api.moveNode(id, parentId, index);
+      this.#apply(m.snapshot.children, m.snapshot.notice);
+      if (parentId) this.expand(parentId);
+    });
+  }
+
+  duplicate(id: string) {
+    return this.#run(async () => {
+      const m = await this.#api.duplicateNode(id);
+      this.#apply(m.snapshot.children, m.snapshot.notice);
+      if (m.id) this.select(m.id);
+    });
+  }
+
+  remove(id: string) {
+    return this.#run(async () => {
+      const m = await this.#api.deleteNode(id);
+      this.#apply(m.snapshot.children, m.snapshot.notice);
+    });
+  }
+
+  #afterCreate(parentId: string | null, id: string | null) {
+    this.filter = "";
+    if (parentId) this.expand(parentId);
+    if (id) {
+      this.select(id);
+      this.startRename(id);
+    }
+  }
+
+  /** Adopts a snapshot and drops view state that points at nodes that no longer exist. */
+  #apply(children: TreeNode[], notice: Notice | null) {
+    this.children = children;
+    if (notice) this.notice = notice;
+    const { all, folders } = collectIds(children);
+    if (this.selectedId !== null && !all.has(this.selectedId)) this.selectedId = null;
+    if (this.renamingId !== null && !all.has(this.renamingId)) this.renamingId = null;
+    let pruned = false;
+    for (const id of [...this.expanded]) {
+      if (!folders.has(id)) {
+        this.expanded.delete(id);
+        pruned = true;
+      }
+    }
+    if (pruned) saveExpanded(this.expanded);
+  }
+
+  /** Runs `job` after every earlier job finished. Resolves to the error, or `null`. */
+  #run(job: () => Promise<void>, options: RunOptions = {}): Promise<ApiError | null> {
+    const result = this.#queue.then(async () => {
+      try {
+        await job();
+        return null;
+      } catch (e) {
+        const err = toApiError(e);
+        if (err.code === "load_failed") this.loadError = err.message;
+        else if (!options.silent) this.error = err.message;
+        return err;
+      }
+    });
+    this.#queue = result;
+    return result;
+  }
+}

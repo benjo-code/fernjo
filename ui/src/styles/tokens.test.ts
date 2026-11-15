@@ -72,6 +72,7 @@ const unthemed = [
   "--radius-sm",
   "--radius-md",
   "--row-height-tree",
+  "--tree-indent",
   "--shadow-raised",
   "--duration-fast",
   "--duration-normal",
