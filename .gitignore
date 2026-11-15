@@ -43,7 +43,8 @@ id_dsa*
 .DS_Store
 Thumbs.db
 
-# impeccable: mocks, reviews and live sessions are local; config and design.json are committed
+# impeccable: mocks, reviews and live sessions are local; config, design.json and surface briefs are committed
 .impeccable/*
 !.impeccable/config.json
 !.impeccable/design.json
+!.impeccable/surfaces/

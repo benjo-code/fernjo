@@ -79,7 +79,7 @@ Goal: An empty but fully set-up, public repo with a running Tauri shell and gree
 Goal: The visual direction of fernjo is chosen by the owner from at least three concepts and recorded, so every UI milestone builds on it.
 
 **Tasks**
-- [ ] Design brief from spec §3: one-window layout, tree density for hundreds of connections, light and dark
+- [x] Design brief from spec §3: one-window layout, tree density for hundreds of connections, light and dark
 - [ ] Create at least three distinct design concepts with the `impeccable` skill, each showing the main window (tree with folders, tabs, an SSH terminal, properties panel) and the vault unlock dialog, in light and dark
 - [ ] Publish all concepts together as one Claude artifact with a switcher between them
 - [ ] Owner picks a concept (or combines parts); iterate on the chosen direction
