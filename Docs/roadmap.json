@@ -23,10 +23,10 @@
             { "text": "Tauri 2 app in `src-tauri/` with Svelte 5 + TypeScript frontend in `ui/` (Vite, pnpm) showing an empty fernjo window; ESLint, Prettier, `svelte-check` and Vitest set up", "done": true },
             { "text": "`LICENSE-MIT` and `LICENSE-APACHE` added", "done": true },
             { "text": "`.env.example` with placeholders, only if secrets are needed (none expected)", "done": true },
-            { "text": "CI on GitHub-hosted `ubuntu-latest`: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `cargo-deny`, UI lint/check/test and a Tauri build check (WebKitGTK installed in the job), on PRs to `dev` and `main`", "done": false },
-            { "text": "Move the `roadmap` job in `.github/workflows/roadmap.yml` from `[self-hosted, dotnet-linux]` to `ubuntu-latest`; no workflow uses a self-hosted runner", "done": false },
+            { "text": "CI on GitHub-hosted `ubuntu-latest`: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `cargo-deny`, UI lint/check/test and a Tauri build check (WebKitGTK installed in the job), on PRs to `dev` and `main`", "done": true },
+            { "text": "Move the `roadmap` job in `.github/workflows/roadmap.yml` from `[self-hosted, dotnet-linux]` to `ubuntu-latest`; no workflow uses a self-hosted runner", "done": true },
             { "text": "Add the CI jobs (`roadmap` and the build/test/lint jobs) as required status checks in the branch protection of `main` and `dev`", "done": false },
-            { "text": "Dependabot for Cargo, npm (pnpm) and GitHub Actions", "done": false },
+            { "text": "Dependabot for Cargo, npm (pnpm) and GitHub Actions", "done": true },
             { "text": "Scan the full git history for secrets (e.g. gitleaks), then make the repo public", "done": false },
             { "text": "Repo security on: secret scanning with push protection, Dependabot alerts and security updates, CodeQL for Rust and JavaScript/TypeScript, private vulnerability reporting with `SECURITY.md`, approval required for workflows from outside contributors", "done": false }
           ],
