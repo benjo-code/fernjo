@@ -51,7 +51,6 @@ pub fn run() {
             vault_commands::handlers::delete_credential,
             vault_commands::handlers::reveal_credential,
             data_folder::handlers::get_data_folder,
-            data_folder::handlers::apply_data_folder,
             data_folder::handlers::choose_data_folder,
             data_folder::handlers::restart_app,
         ])

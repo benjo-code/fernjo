@@ -501,7 +501,9 @@ pub fn reveal_credential(
 }
 
 /// The `#[tauri::command]` wrappers registered in `run()`. Secrets arrive as `String` and
-/// become `SecretString` immediately.
+/// become `SecretString` immediately. The commands that run an Argon2 derivation (create,
+/// unlock, change password; about half a second) use `#[tauri::command(async)]` so they run
+/// on a worker thread instead of blocking the main thread.
 pub mod handlers {
     use super::*;
     use tauri::State;
@@ -511,7 +513,7 @@ pub mod handlers {
         super::vault_status(&state)
     }
 
-    #[tauri::command]
+    #[tauri::command(async)]
     pub fn vault_create(
         state: State<'_, AppState>,
         password: String,
@@ -520,7 +522,7 @@ pub mod handlers {
         super::vault_create(&state, SecretString::from(password), remember)
     }
 
-    #[tauri::command]
+    #[tauri::command(async)]
     pub fn vault_unlock(
         state: State<'_, AppState>,
         password: String,
@@ -534,7 +536,7 @@ pub mod handlers {
         super::vault_lock(&state)
     }
 
-    #[tauri::command]
+    #[tauri::command(async)]
     pub fn vault_change_password(
         state: State<'_, AppState>,
         old: String,
@@ -1322,8 +1324,9 @@ mod tests {
                 j(crate::data_folder::get_data_folder(&w.st))
             }),
             entry("apply_data_folder", |w| {
-                // the state has no config folder, so this is refused; the response and error
-                // must be free of secrets either way
+                // not an IPC command (see `NOT_A_COMMAND`), but called here as a plain
+                // function: the state has no config folder, so this is refused; the response
+                // and error must be free of secrets either way
                 j(crate::data_folder::apply_data_folder(&w.st, w._dir.path()))
             }),
         ]
@@ -1386,6 +1389,11 @@ mod tests {
         ("restart_app", "takes an AppHandle; returns nothing"),
     ];
 
+    /// Plain functions that `table()` calls but that are deliberately not IPC commands:
+    /// `apply_data_folder` takes a path, so exposing it would let the webview point the data
+    /// folder anywhere. Only the native picker (`choose_data_folder`) may reach it.
+    const NOT_A_COMMAND: [&str; 1] = ["apply_data_folder"];
+
     #[test]
     fn command_table_covers_every_tauri_command() {
         // The attribute is split so this test's own source does not count as an occurrence.
@@ -1401,7 +1409,11 @@ mod tests {
             .iter()
             .map(|s| s.lines().filter(|l| l.trim().starts_with(ATTR)).count())
             .sum();
-        let names: Vec<&str> = table().iter().map(|(n, _)| *n).collect();
+        let names: Vec<&str> = table()
+            .iter()
+            .map(|(n, _)| *n)
+            .filter(|n| !NOT_A_COMMAND.contains(n))
+            .collect();
         let exempt: Vec<&str> = APP_HANDLE_EXEMPT.iter().map(|(n, _)| *n).collect();
         let covered: Vec<&str> = names.iter().chain(&exempt).copied().collect();
         assert_eq!(
@@ -1411,6 +1423,20 @@ mod tests {
         );
         // every covered name is a real wrapper and is registered in run()
         let lib = include_str!("lib.rs");
+        for name in NOT_A_COMMAND {
+            assert!(
+                !lib.contains(name),
+                "{name} must not be registered as an IPC command"
+            );
+            assert!(
+                !sources.iter().any(|s| {
+                    s.lines().zip(s.lines().skip(1)).any(|(a, b)| {
+                        a.trim().starts_with(ATTR) && b.contains(&format!("fn {name}("))
+                    })
+                }),
+                "{name} must not carry the command attribute"
+            );
+        }
         for name in &covered {
             // exempt commands only exist as handlers; the others also as a plain function
             let wrapper = format!("fn {name}(");

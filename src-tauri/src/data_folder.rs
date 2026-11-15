@@ -234,14 +234,6 @@ pub mod handlers {
         super::get_data_folder(&state)
     }
 
-    #[tauri::command]
-    pub fn apply_data_folder(
-        state: State<'_, AppState>,
-        path: String,
-    ) -> Result<DataFolderInfo, CommandError> {
-        super::apply_data_folder(&state, Path::new(&path))
-    }
-
     /// Opens the native folder picker (on a worker thread, never on the UI thread or the async
     /// runtime) and applies the choice. `None` when the picker was cancelled.
     #[tauri::command]
