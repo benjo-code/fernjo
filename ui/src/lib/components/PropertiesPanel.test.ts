@@ -472,6 +472,54 @@ describe("PropertiesPanel credential row", () => {
     expect(calls.updateNode).toEqual([["web-01", { credential: null }]]);
   });
 
+  test("credential_list_failed_to_load_reads_unavailable_and_offers_no_inherit", async () => {
+    const { calls } = await setup(
+      node(localCred),
+      "web-01",
+      {},
+      {
+        vaultStatus: async () => vaultStatus({ state: "unlocked" }),
+        listCredentials: async () => {
+          throw apiError("internal", "list broke");
+        },
+      },
+    );
+    const text = field("credential")!.textContent;
+    expect(text).toContain("Credentials unavailable");
+    expect(text).not.toContain("Missing credential");
+    expect(field("credential")!.querySelector("select, input, button")).toBeNull();
+    expect(calls.updateNode).toHaveLength(0);
+  });
+
+  test("credential_list_still_loading_reads_loading_and_offers_no_inherit", async () => {
+    const mock = mockApi(tree(), {
+      getNode: async (id: string) => node(localCred)[id as "web-01"],
+    });
+    const store = new TreeStore(mock.api);
+    await store.init();
+    const vault = new VaultStore(
+      mockApi([], {
+        vaultStatus: async () => vaultStatus({ state: "unlocked" }),
+        listCredentials: () => new Promise(() => {}),
+      }).api,
+    );
+    void vault.init(); // never finishes: the list stays "loading"
+    mounted = mount(PropertiesPanel, { target: document.body, props: { store, vault } });
+    store.select("web-01");
+    await settle();
+    expect(vault.status?.state).toBe("unlocked");
+    const text = field("credential")!.textContent;
+    expect(text).toContain("Loading");
+    expect(text).not.toContain("Missing credential");
+    expect(field("credential")!.querySelector("select, input, button")).toBeNull();
+  });
+
+  test("loaded_credential_list_shows_the_select_and_inherit", async () => {
+    await setup(node(localCred), "web-01", {}, unlocked);
+    expect(selectEl("credential")).not.toBeNull();
+    expect(field("credential")!.querySelector("button")).not.toBeNull();
+  });
+
   test("no_secret_or_id_text_is_shown_for_the_credential_value", async () => {
     await setup(
       node(localCred),

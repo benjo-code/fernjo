@@ -172,4 +172,107 @@ describe("VaultStore", () => {
     expect(store.unavailable).toBe(false);
     expect(shown).toEqual(["Could not load the credentials: list broke"]);
   });
+
+  test("credentials_state_is_loading_then_loaded_or_failed", async () => {
+    let release: (v: ReturnType<typeof credential>[]) => void = () => {};
+    const pending = new Promise<ReturnType<typeof credential>[]>((r) => (release = r));
+    const { api } = mockApi([], {
+      vaultStatus: async () => locked(),
+      vaultUnlock: async () => unlocked(),
+      vaultLock: async () => locked(),
+      listCredentials: () => pending,
+    });
+    const store = new VaultStore(api);
+    await store.init();
+    expect(store.credentialsState).toBe("loading");
+    const done = store.unlock("pw", false);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(store.status?.state).toBe("unlocked");
+    expect(store.credentialsState).toBe("loading");
+    release([credential({ id: "c1" })]);
+    await done;
+    expect(store.credentialsState).toBe("loaded");
+    // a refresh while loaded keeps the list and the state
+    await store.refreshCredentials();
+    expect(store.credentialsState).toBe("loaded");
+    expect(store.credentials).toHaveLength(1);
+    await store.lock();
+    expect(store.credentialsState).toBe("loading");
+    expect(store.credentials).toEqual([]);
+
+    const failing = mockApi([], {
+      vaultStatus: async () => unlocked(),
+      listCredentials: async () => {
+        throw apiError("internal", "list broke");
+      },
+    });
+    const bad = new VaultStore(failing.api);
+    await bad.init();
+    expect(bad.credentialsState).toBe("failed");
+    expect(bad.credentials).toEqual([]);
+  });
+
+  test("unticking_auto_unlock_on_a_successful_unlock_turns_it_off", async () => {
+    const { api, calls } = mockApi([], {
+      vaultStatus: async () => ({ ...locked(), autoUnlock: true }),
+      vaultUnlock: async () => ({ ...unlocked(), autoUnlock: true }),
+      vaultSetAutoUnlock: async () => ({ ...unlocked(), autoUnlock: false }),
+    });
+    const store = new VaultStore(api);
+    await store.init();
+    expect(await store.unlock("pw", false)).toBeNull();
+    expect(calls.vaultUnlock).toEqual([["pw", false]]);
+    expect(calls.vaultSetAutoUnlock).toEqual([[false]]);
+    expect(store.status?.state).toBe("unlocked");
+    expect(store.status?.autoUnlock).toBe(false);
+  });
+
+  test("keeping_auto_unlock_or_never_having_it_does_not_call_set_auto_unlock", async () => {
+    const kept = mockApi([], {
+      vaultStatus: async () => ({ ...locked(), autoUnlock: true }),
+      vaultUnlock: async () => ({ ...unlocked(), autoUnlock: true }),
+    });
+    const a = new VaultStore(kept.api);
+    await a.init();
+    await a.unlock("pw", true);
+    expect(kept.calls.vaultSetAutoUnlock).toHaveLength(0);
+
+    const never = mockApi([], {
+      vaultStatus: async () => locked(),
+      vaultUnlock: async () => unlocked(),
+    });
+    const b = new VaultStore(never.api);
+    await b.init();
+    await b.unlock("pw", false);
+    expect(never.calls.vaultSetAutoUnlock).toHaveLength(0);
+  });
+
+  test("a_failing_auto_unlock_reset_shows_its_message_and_the_unlock_stands", async () => {
+    const { api } = mockApi([], {
+      vaultStatus: async () => ({ ...locked(), autoUnlock: true }),
+      vaultUnlock: async () => ({ ...unlocked(), autoUnlock: true }),
+      vaultSetAutoUnlock: async () => {
+        throw apiError("keychain_unavailable", "the keychain is not available");
+      },
+    });
+    const shown: string[] = [];
+    const store = new VaultStore(api, (m) => shown.push(m));
+    await store.init();
+    expect(await store.unlock("pw", false)).toBeNull();
+    expect(store.status?.state).toBe("unlocked");
+    expect(shown).toEqual(["the keychain is not available"]);
+  });
+
+  test("a_failed_unlock_never_touches_auto_unlock", async () => {
+    const { api, calls } = mockApi([], {
+      vaultStatus: async () => ({ ...locked(), autoUnlock: true }),
+      vaultUnlock: async () => {
+        throw apiError("wrong_password", "wrong password");
+      },
+    });
+    const store = new VaultStore(api);
+    await store.init();
+    expect((await store.unlock("pw", false))?.code).toBe("wrong_password");
+    expect(calls.vaultSetAutoUnlock).toHaveLength(0);
+  });
 });

@@ -80,6 +80,9 @@
   // unlocked list. Only a name is ever shown, never the id or a secret.
   const vaultState = $derived(vault.status?.state ?? null);
   const unlocked = $derived(vaultState === "unlocked");
+  // Only a loaded list says anything about missing entries; while it loads or after it failed
+  // the row is read-only, so a valid reference can never be reset on the strength of an empty list.
+  const listReady = $derived(unlocked && vault.credentialsState === "loaded");
   const credentialId = $derived(detail?.credential.effective ?? null);
   const credentialName = $derived(
     credentialId === null
@@ -252,13 +255,17 @@
           source={detail.credential.source}
           hasValue={detail.credential.effective !== null}
           error={errors.credential}
-          onreset={unlocked ? () => void save("credential", { credential: null }) : undefined}
+          onreset={listReady ? () => void save("credential", { credential: null }) : undefined}
         >
           {#snippet children(id)}
             {#if !unlocked}
               <span {id} class="static"
                 >{vaultState === "locked" ? "Vault locked" : "No vault"}</span
               >
+            {:else if vault.credentialsState === "loading"}
+              <span {id} class="static">Loading…</span>
+            {:else if vault.credentialsState === "failed"}
+              <span {id} class="static">Credentials unavailable</span>
             {:else if credentialId !== null && credentialName === null}
               <span {id} class="static">Missing credential</span>
             {:else}

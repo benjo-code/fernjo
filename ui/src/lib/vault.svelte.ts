@@ -20,8 +20,14 @@ export type Outcome<T> = { value: T; error: null } | { value: null; error: ApiEr
 export class VaultStore {
   /** `null` until the first answer from Rust. */
   status = $state<VaultStatus | null>(null);
-  /** Empty unless the vault is unlocked. */
+  /** Empty unless the vault is unlocked and the list is loaded. */
   credentials = $state<CredentialInfo[]>([]);
+  /**
+   * Whether `credentials` can be trusted: `loading` until the list of an unlocked vault
+   * arrived (also while locked), `failed` when listing it failed. An empty list means
+   * "no credentials" only in `loaded`.
+   */
+  credentialsState = $state<"loading" | "loaded" | "failed">("loading");
   /** Set when the first status could not be loaded. */
   error = $state<string | null>(null);
   /** True when the first status could not be loaded: there is nothing to unlock or create. */
@@ -56,10 +62,23 @@ export class VaultStore {
     });
   }
 
+  /**
+   * Unlocks. Rust keeps the key-store item when `remember` is false, so a user who unticked
+   * "Unlock automatically" while it was on gets it turned off here after the unlock worked;
+   * a failure of that second call is shown, the unlock stands.
+   */
   unlock(password: string, remember: boolean) {
     return this.#run(async () => {
+      const hadAutoUnlock = this.status?.autoUnlock === true;
       this.status = await this.#api.vaultUnlock(password, remember);
       await this.#loadCredentials();
+      if (!remember && hadAutoUnlock && this.status.autoUnlock) {
+        try {
+          this.status = await this.#api.vaultSetAutoUnlock(false);
+        } catch (e) {
+          this.#onGlobalError(toApiError(e).message);
+        }
+      }
     });
   }
 
@@ -120,14 +139,24 @@ export class VaultStore {
     return this.#run(() => this.#loadCredentials());
   }
 
-  /** The list exists only while unlocked; any other state empties it. */
+  /**
+   * The list exists only while unlocked; any other state empties it. A refresh of an
+   * already loaded list keeps showing the old one until the new one arrives.
+   */
   async #loadCredentials(): Promise<void> {
-    this.credentials = [];
-    if (this.status?.state !== "unlocked") return;
+    if (this.status?.state !== "unlocked") {
+      this.credentials = [];
+      this.credentialsState = "loading";
+      return;
+    }
+    if (this.credentialsState === "failed") this.credentialsState = "loading";
     try {
       this.credentials = await this.#api.listCredentials();
+      this.credentialsState = "loaded";
     } catch (e) {
       // the status change itself worked: keep it and tell the user about the list
+      this.credentials = [];
+      this.credentialsState = "failed";
       const err = toApiError(e);
       this.#onGlobalError(`Could not load the credentials: ${err.message}`);
     }
