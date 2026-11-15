@@ -17,9 +17,9 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     ignore:
-      # TypeScript 7 is outside typescript-eslint's `<6.1.0` and svelte-check's `^5 || ^6` peer ranges.
+      # typescript-eslint's peer range is `<6.1.0`: TypeScript stays on 6.0.x, so only patch updates are allowed.
       - dependency-name: typescript
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
   - package-ecosystem: github-actions
     directory: /
