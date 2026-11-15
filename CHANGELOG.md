@@ -17,6 +17,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 - Credential reference (M3): a connection or folder can reference a vault entry in the properties panel; the reference is inherited like username and port ("from <folder>"). `connections.json` stores only the entry's id (schema version 2; builds from before M3 refuse the file instead of dropping the reference).
 - Data folder (M3): the data folder can be changed from the gear button in the sidebar; the data is copied to the chosen folder and the change applies after a restart. `FERNJO_DATA_DIR` still overrides it.
 - Sync-conflict warning (M3): copies such as `connections.sync-conflict-…json` left by Syncthing, Nextcloud or Dropbox in the data folder are reported in a notice.
+- Vault safety (M3): the vault refuses to overwrite a `vault.fernjo` that a sync tool or another device changed after it was unlocked ("Lock and unlock the vault to load the changes"); replacing a private key keeps its passphrase unless you tick "Remove stored passphrase"; unticking "Unlock automatically on this device" while unlocking turns it off; the lock note is compact until you ask for the password form; an unusable vault names `vault.fernjo.bak` for a manual restore. Changing the master password does not change older copies of the vault file (backups, sync history): they keep opening with the previous password.
 
 ### Changed
 

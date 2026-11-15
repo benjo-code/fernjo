@@ -9,6 +9,8 @@ Format version **1**. The vault is one binary file in the data folder (`vault.fe
 - **Master password:** Unicode-normalised to NFC, then used as UTF-8 bytes exactly as typed (no trimming, no case folding). Minimum length 8 characters (after normalisation), checked when a vault is created or its password is changed, never when unlocking.
 - **Data key:** 32 random bytes generated once when the vault is created. It encrypts the body. The password-derived key only wraps the data key, so a password change never changes the data key or the entries. A password change picks a new salt and wrap nonce, re-wraps the unchanged data key and saves once; because the header changes and the whole header is the body's AAD, that save re-seals the body under the same data key with a fresh nonce.
 
+- **Old copies keep the old password.** The data key never changes (so keychain items on other devices stay valid), and changing the master password does not re-encrypt or delete existing copies of the file. `vault.fernjo.bak` from just before the change, backups and the version history of a sync tool still open with the **previous** password, and the data key they yield also decrypts every later version of the vault. A leaked old password therefore protects older copies only as long as those copies exist. Real re-keying (a new data key, re-encrypting everything, invalidating keychain items) is not part of this format version.
+
 ## Layout
 
 All integers are big endian.
@@ -62,6 +64,7 @@ UTF-8 JSON, `{ "entries": [ ... ] }`. A reader must ignore unknown fields. Secre
 - The file must be at least 150 + 16 bytes.
 - KDF parameters are bounded when read, **before** any derivation, so a hostile synced file cannot demand gigabytes or minutes: parallelism 1..16, iterations 1..20, memory from `8 * parallelism` KiB up to 1 GiB (1 048 576 KiB).
 - Writes are atomic: temporary file in the same folder, `sync_all`, copy of the current file to `.bak`, rename.
+- **Lost-update guard:** a handle remembers the header bytes (0..150) it last read or wrote. The body nonce changes on every save, so the header identifies the version of the file. Before a save the file on disk is read again: if it is missing the save recreates it; otherwise it must start with exactly those header bytes. A file that cannot be parsed, is empty or shorter than a header, is a newer format or has any other header was written by someone else (another device, a sync tool) and is **not** overwritten: the save fails with `changed_on_disk` and the in-memory entries stay as they were. Locking and unlocking re-reads the file and picks the other version up. This is a check followed by a write, not a lock: a sync tool can still win the race in the instant between the check and the rename.
 
 ## Reading the header by hand
 
