@@ -3,6 +3,7 @@
   import type { TreeStore } from "../store.svelte";
   import type { VaultStore } from "../vault.svelte";
   import FilterBox from "./FilterBox.svelte";
+  import Icon from "./Icon.svelte";
   import NoticeBar from "./NoticeBar.svelte";
   import TreeView from "./TreeView.svelte";
   import VaultChip from "./VaultChip.svelte";
@@ -12,12 +13,19 @@
     store,
     vault,
     onOpenVault,
+    onsettings,
+    restartPending = false,
+    onRestart,
     children,
   }: {
     store: TreeStore;
     vault: VaultStore;
     /** The chip was clicked while the vault is unlocked. */
     onOpenVault: () => void;
+    /** The settings (data folder) button was clicked. */
+    onsettings?: () => void;
+    restartPending?: boolean;
+    onRestart?: () => void;
     children?: Snippet;
   } = $props();
 
@@ -30,9 +38,20 @@
     <VaultChip {vault} onOpenManager={onOpenVault} onFocusUnlock={() => void note?.focusForm()} />
   </div>
   <VaultNote bind:this={note} {vault} />
-  <NoticeBar {store} />
+  <NoticeBar {store} {restartPending} {onRestart} />
   <div class="tree-slot"><TreeView {store} /></div>
   {@render children?.()}
+  <div class="foot">
+    <button
+      type="button"
+      class="gear"
+      aria-label="Settings: data folder"
+      title="Settings: data folder"
+      onclick={onsettings}
+    >
+      <Icon name="gear" />
+    </button>
+  </div>
 </aside>
 
 <style>
@@ -53,6 +72,32 @@
   .filter {
     flex: 1;
     min-width: 0;
+  }
+
+  .foot {
+    display: flex;
+    flex: none;
+    padding: var(--space-2) var(--space-3);
+    border-top: 1px solid var(--color-border);
+  }
+
+  .gear {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: default;
+  }
+
+  .gear:hover {
+    background: var(--color-hover);
+    color: var(--color-text);
   }
 
   /* 23 rows stay visible when the window allows it; the properties panel gives way first */

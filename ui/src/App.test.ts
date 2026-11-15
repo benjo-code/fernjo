@@ -1,7 +1,7 @@
 import { mount, unmount } from "svelte";
 import { afterEach, expect, test } from "vitest";
 import App from "./App.svelte";
-import { apiError, conn, folder, mockApi, vaultStatus } from "./lib/testing";
+import { apiError, conn, dataFolder, folder, mockApi, vaultStatus } from "./lib/testing";
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -62,5 +62,57 @@ test("a_restart_required_error_from_a_vault_call_shows_in_the_notice_bar", async
   await settle();
   const bar = document.querySelector(".bar.error");
   expect(bar?.textContent).toContain("Restart fernjo to use the new data folder.");
+  unmount(app);
+});
+
+test("the_gear_button_opens_the_data_folder_dialog_and_escape_closes_it", async () => {
+  const { api, calls } = mockApi();
+  const app = mount(App, { target: document.body, props: { api } });
+  await settle();
+  const gear = document.querySelector<HTMLButtonElement>(
+    "button[aria-label='Settings: data folder']",
+  )!;
+  gear.click();
+  await settle();
+  expect(document.querySelector("[role=dialog]")?.textContent).toContain("Data folder");
+  expect(calls.getDataFolder.length).toBeGreaterThan(0);
+  document
+    .querySelector("[role=dialog]")!
+    .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await settle();
+  expect(document.querySelector("[role=dialog]")).toBeNull();
+  unmount(app);
+});
+
+test("a_pending_restart_shows_a_persistent_bar_at_start_without_using_the_error_slot", async () => {
+  const { api, calls } = mockApi([], {
+    getDataFolder: async () => dataFolder({ restartRequired: true }),
+  });
+  const app = mount(App, { target: document.body, props: { api } });
+  await settle();
+  const bar = document.querySelector(".bar.restart")!;
+  expect(bar.textContent).toContain("Restart fernjo to use the new data folder.");
+  expect(bar.textContent).not.toContain("Dismiss");
+  expect(document.querySelector(".bar.error")).toBeNull();
+  [...bar.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Restart now")!.click();
+  await settle();
+  expect(calls.restartApp).toHaveLength(1);
+  unmount(app);
+});
+
+test("choosing_a_folder_in_the_dialog_raises_the_persistent_restart_bar", async () => {
+  const { api } = mockApi([], {
+    chooseDataFolder: async () => dataFolder({ path: "/new", restartRequired: true }),
+  });
+  const app = mount(App, { target: document.body, props: { api } });
+  await settle();
+  expect(document.querySelector(".bar.restart")).toBeNull();
+  document.querySelector<HTMLButtonElement>("button[aria-label='Settings: data folder']")!.click();
+  await settle();
+  [...document.querySelectorAll("[role=dialog] button")]
+    .find((b) => b.textContent?.trim() === "Choose folder…")!
+    .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  await settle();
+  expect(document.querySelector(".bar.restart")).not.toBeNull();
   unmount(app);
 });

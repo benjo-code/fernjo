@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { tauriApi } from "./lib/api";
+  import { tauriApi, toApiError } from "./lib/api";
+  import DataFolderDialog from "./lib/components/DataFolderDialog.svelte";
   import PropertiesPanel from "./lib/components/PropertiesPanel.svelte";
   import Sidebar from "./lib/components/Sidebar.svelte";
   import VaultManager from "./lib/components/VaultManager.svelte";
@@ -16,6 +17,25 @@
   // svelte-ignore state_referenced_locally
   const vault = new VaultStore(api, (message) => store.showError(message));
 
+  let folderOpen = $state(false);
+  let restartPending = $state(false);
+
+  async function refreshRestart() {
+    try {
+      restartPending = (await api.getDataFolder()).restartRequired;
+    } catch {
+      // the dialog reports data folder problems itself
+    }
+  }
+
+  async function restart() {
+    try {
+      await api.restartApp();
+    } catch (e) {
+      store.showError(toApiError(e).message);
+    }
+  }
+
   let view = $state<"empty" | "vault">("empty");
 
   // the manager only exists while the vault is unlocked
@@ -26,11 +46,19 @@
   onMount(() => {
     void store.init();
     void vault.init();
+    void refreshRestart();
   });
 </script>
 
 <div class="shell">
-  <Sidebar {store} {vault} onOpenVault={() => (view = "vault")}>
+  <Sidebar
+    {store}
+    {vault}
+    onOpenVault={() => (view = "vault")}
+    onsettings={() => (folderOpen = true)}
+    {restartPending}
+    onRestart={() => void restart()}
+  >
     <PropertiesPanel {store} {vault} />
   </Sidebar>
   <main class="main">
@@ -41,6 +69,14 @@
     {/if}
   </main>
 </div>
+
+{#if folderOpen}
+  <DataFolderDialog
+    {api}
+    onclose={() => (folderOpen = false)}
+    onchange={(info) => (restartPending = info.restartRequired)}
+  />
+{/if}
 
 <style>
   .shell {

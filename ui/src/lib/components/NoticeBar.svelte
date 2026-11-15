@@ -3,7 +3,16 @@
   import type { Notice } from "../types";
   import Icon from "./Icon.svelte";
 
-  let { store }: { store: TreeStore } = $props();
+  let {
+    store,
+    restartPending = false,
+    onRestart,
+  }: {
+    store: TreeStore;
+    /** A new data folder was chosen; the bar stays until the app restarts. */
+    restartPending?: boolean;
+    onRestart?: () => void;
+  } = $props();
 
   const baseName = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
@@ -25,6 +34,13 @@
   <div class="bar error" role="alert">
     <Icon name="alert" size={14} />
     <span class="text">{store.loadError}</span>
+  </div>
+{/if}
+
+{#if restartPending}
+  <div class="bar restart" role="status">
+    <span class="text">Restart fernjo to use the new data folder.</span>
+    <button type="button" class="dismiss" onclick={() => onRestart?.()}>Restart now</button>
   </div>
 {/if}
 
