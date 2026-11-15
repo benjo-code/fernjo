@@ -334,16 +334,24 @@ fn change_password_with_wrong_old_password_changes_nothing() {
 fn failed_save_during_change_password_keeps_the_old_password_working() {
     let dir = TempDir::new().unwrap();
     let (mut vault, sub, path) = vault_with_broken_target(&dir);
+    let first = vault.add(password_entry("first", "pw-one")).unwrap();
     let bytes = fs::read(&path).unwrap();
     break_target(&sub);
     assert_eq!(
         code(vault.change_password(&secret(PW), &secret(NEW_PW))),
         "save_failed"
     );
-    // memory header is unchanged: restoring the file makes the old password work
+    // make saving work again, then save from the SAME unlocked vault: that uses the
+    // in-memory header, which must still be the old one
     fs::remove_file(&sub).unwrap();
     fs::create_dir(&sub).unwrap();
     fs::write(&path, &bytes).unwrap();
-    vault.lock();
-    vault.unlock(&secret(PW)).unwrap();
+    let second = vault.add(password_entry("second", "pw-two")).unwrap();
+    drop(vault);
+
+    let mut reopened = Vault::open(&path).unwrap().unwrap();
+    assert_eq!(code(reopened.unlock(&secret(NEW_PW))), "wrong_password");
+    reopened.unlock(&secret(PW)).unwrap();
+    assert_eq!(password_of(&reopened.reveal(first).unwrap()), "pw-one");
+    assert_eq!(password_of(&reopened.reveal(second).unwrap()), "pw-two");
 }
