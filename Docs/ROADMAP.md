@@ -24,7 +24,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 | # | Milestone | Subproject | Status | Plan | Done on |
 |---|---|---|---|---|---|
 | 0 | Repo scaffold & CI | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-15-milestone-00-repo-scaffold.md) | 2026-11-15 |
-| 1 | UI design direction | 1 – fernjo app | ⬜ open | – | – |
+| 1 | UI design direction | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-15-milestone-01-design-direction.md) | 2026-11-15 |
 | 2 | Connection tree & data model | 1 – fernjo app | ⬜ open | – | – |
 | 3 | Credential vault | 1 – fernjo app | ⬜ open | – | – |
 | 4 | SSH sessions in tabs | 1 – fernjo app | ⬜ open | – | – |
@@ -36,7 +36,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 
 ## Scope changes
 
-_None yet._
+- **2026-11-15 (M1 planning):** M1 gains the task "App icon derived from the chosen direction". `Docs/DECISIONS.md` (entry "Project layout: one root pnpm package, Tauri identifier") already planned to replace the placeholder icon in M1, but the roadmap had no task for it; the owner chose M1 over M6 or the backlog.
 
 ---
 
@@ -74,23 +74,24 @@ Goal: An empty but fully set-up, public repo with a running Tauri shell and gree
 - [x] No workflow uses a self-hosted runner – `grep -rn self-hosted .github/workflows` returns nothing (also enforced by the workflow policy script); CI and Roadmap workflow runs of PR #2 ran on GitHub-hosted runners
 
 ## Milestone 1 – UI design direction
-**Status:** ⬜ open · **Plan:** – · **Prerequisites:** M0
+**Status:** ✅ done (2026-11-15) · **Plan:** [2026-11-15-milestone-01-design-direction.md](superpowers/plans/2026-11-15-milestone-01-design-direction.md) · **Prerequisites:** M0
 
 Goal: The visual direction of fernjo is chosen by the owner from at least three concepts and recorded, so every UI milestone builds on it.
 
 **Tasks**
-- [ ] Design brief from spec §3: one-window layout, tree density for hundreds of connections, light and dark
-- [ ] Create at least three distinct design concepts with the `impeccable` skill, each showing the main window (tree with folders, tabs, an SSH terminal, properties panel) and the vault unlock dialog, in light and dark
-- [ ] Publish all concepts together as one Claude artifact with a switcher between them
-- [ ] Owner picks a concept (or combines parts); iterate on the chosen direction
-- [ ] Record the direction in `DESIGN.md` (principles, typography, colour, spacing, components, terminal colour scheme)
-- [ ] Design tokens as CSS variables (light and dark) in `ui/`, applied to the empty shell
-- [ ] Decision entry in `Docs/DECISIONS.md` naming the chosen concept and why
+- [x] Design brief from spec §3: one-window layout, tree density for hundreds of connections, light and dark
+- [x] Create at least three distinct design concepts with the `impeccable` skill, each showing the main window (tree with folders, tabs, an SSH terminal, properties panel) and the vault unlock dialog, in light and dark
+- [x] Publish all concepts together as one Claude artifact with a switcher between them
+- [x] Owner picks a concept (or combines parts); iterate on the chosen direction
+- [x] Record the direction in `DESIGN.md` (principles, typography, colour, spacing, components, terminal colour scheme)
+- [x] Design tokens as CSS variables (light and dark) in `ui/`, applied to the empty shell
+- [x] Decision entry in `Docs/DECISIONS.md` naming the chosen concept and why
+- [x] App icon derived from the chosen direction (source SVG committed, icon set generated with `pnpm tauri icon`), replacing the M0 placeholder
 
 **Acceptance criteria**
-- [ ] The artifact shows at least three concepts, switchable, each in light and dark
-- [ ] Owner has approved the direction (recorded in `Docs/DECISIONS.md`)
-- [ ] `DESIGN.md` exists and the shell uses the token file; build, test and lint are green
+- [x] The artifact shows at least three concepts, switchable, each in light and dark – https://claude.ai/artifact/9BhGCKAfNbHvbsUUQQwhas (private to the owner; source `Docs/design/m01-concepts.html`) shows Fernverkehr, Ulm, Gate and Workbench plus Ulm, revised, switchable by concept, Light/Dark and Main window/Unlock/Unlock error (plus an App icon view). Every combination rendered with headless Edge during Task 4 and the revisions, palettes pass the WCAG contrast script in both themes; the owner worked with it for the feedback round on 2026-11-15
+- [x] Owner has approved the direction (recorded in `Docs/DECISIONS.md`) – `Docs/DECISIONS.md` entry "Visual direction: "Ulm, revised"": owner approval on 2026-11-15 ("ulm revised is approved") after one feedback round; contract in `.impeccable/surfaces/ui-src-app-svelte.md`
+- [x] `DESIGN.md` exists and the shell uses the token file; build, test and lint are green – `DESIGN.md` and `.impeccable/design.json` written by impeccable's documenter after the finish review (fix batch, all 8 findings resolved). `ui/src/main.ts` imports `styles/tokens.css` and `styles/base.css`; the built `ui/dist/assets/index-*.css` contains `--color-bg`; owner checked `pnpm tauri dev` on Windows 11 in light and dark mode, DevTools console without CSP or font errors. Gate 2026-11-15 on Windows: `pnpm install --frozen-lockfile`, `pnpm ui:build`, `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (3 config tests + 1 core test), `pnpm lint` (0 errors, 0 warnings), `pnpm test` (8 tests), `cargo deny check` (ok), `dotnet run tools/roadmap.cs -- check` (valid) all green. OPEN: visual check of the shell and icon on macOS and Linux (`pnpm tauri dev`), no machine available yet
 
 ## Milestone 2 – Connection tree & data model
 **Status:** ⬜ open · **Plan:** – · **Prerequisites:** M1

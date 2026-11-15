@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- macOS variant of icon-source.svg: same artwork scaled to Apple's 824 px icon grid (100 px inset); only icon.icns is generated from it. -->
+  <g transform="translate(512 512) scale(0.8879) translate(-512 -512)">
+    <rect x="48" y="48" width="928" height="928" rx="208" fill="#1e1e1c"/>
+    <rect x="52" y="52" width="920" height="920" rx="204" fill="none" stroke="#3a3935" stroke-width="8"/>
+    <path d="M403 621 L566 458" stroke="#eceae4" stroke-width="64" stroke-linecap="round"/>
+    <circle cx="318" cy="706" r="112" fill="none" stroke="#eceae4" stroke-width="64"/>
+    <circle cx="676" cy="348" r="172" fill="#f0b400"/>
+  </g>
+</svg>

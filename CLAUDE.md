@@ -20,6 +20,9 @@ Cross-platform (Windows, macOS, Linux) SSH & RDP connection manager in the spiri
 - Protocol, vault and import crates never depend on Tauri; they are testable without the UI.
 - Frontend ↔ Rust: Tauri commands for requests, Tauri channels for streaming session data.
 - Plain `cargo build/clippy/test --workspace` compiles Tauri as a dev build, which does not embed `ui/dist` (`devUrl` is set), so cargo needs no UI build first. Only `pnpm tauri build` embeds `ui/dist`, and it runs `pnpm ui:build` itself via `beforeBuildCommand`.
+- UI styling uses only the tokens in `ui/src/styles/tokens.css` and follows `DESIGN.md`. Shipped CSS stays hex-only and free of `oklch()`, `color-mix()`, `light-dark()`, nesting, `@layer`, `:has()` and container queries (WebKitGTK 4.1 / `safari13` target); `ui/src/styles/tokens.test.ts` guards this and the contrast pairs. A new colour token goes into the light block and both dark blocks.
+- Vite must not inline assets (`assetsInlineLimit: 0` in `ui/vite.config.ts`): the CSP only allows fonts from `'self'`, so an inlined `data:` font would be blocked.
+- On Windows, stopping a background `pnpm tauri dev` can leave the Vite server (port 1420) and `fernjo.exe` running; the next `pnpm tauri dev` then fails with "Port 1420 is already in use". Check with `Get-NetTCPConnection -LocalPort 1420 -State Listen` and `Get-Process fernjo`, and stop the leftovers.
 - `deny.toml` carries the advisory ignore list with a reason per entry; run `cargo deny check` after dependency updates and drop ignores it reports as unused.
 
 **Rules that must not be broken**

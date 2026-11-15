@@ -1,0 +1,736 @@
+<title>fernjo Design Concepts</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..700&family=Fira+Code:wght@400;600&family=Fira+Sans:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Red+Hat+Mono:wght@400;600&family=Source+Code+Pro:wght@400;600&display=swap">
+<style>
+/* Viewer page: a quiet frame around 1280x800 window mockups. The page has its own light/dark;
+   each mockup carries its concept's theme independently (switcher), so the viewer's OS theme never decides it. */
+:root {
+  --pg-bg: #f4f4f2; --pg-card: #ffffff; --pg-fg: #1a1b1e; --pg-muted: #5a5d66; --pg-line: #dcdcd8;
+  --pg-accent: #1a1b1e; --pg-accent-fg: #ffffff; --pg-chip: #ebebe7;
+  --pg-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --pg-bg: #141517; --pg-card: #1c1d20; --pg-fg: #e9e9e6; --pg-muted: #a2a49c; --pg-line: #2e2f33;
+  --pg-accent: #e9e9e6; --pg-accent-fg: #141517; --pg-chip: #26272b; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --pg-bg: #141517; --pg-card: #1c1d20; --pg-fg: #e9e9e6; --pg-muted: #a2a49c; --pg-line: #2e2f33;
+  --pg-accent: #e9e9e6; --pg-accent-fg: #141517; --pg-chip: #26272b; color-scheme: dark }
+
+body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--pg-font); font-size: 15px; line-height: 1.5; }
+.page { max-width: 1360px; margin: 0 auto; padding-block: 28px 56px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 20px; }
+.page h1 { font-size: 26px; line-height: 1.2; margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+.page h2 { font-size: 19px; margin: 0; text-wrap: balance; }
+.lede { margin: 6px 0 0; color: var(--pg-muted); max-width: 70ch; }
+.controls { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; }
+.seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--pg-line); border-radius: 8px; overflow: hidden; background: var(--pg-card); }
+.seg button { font: inherit; font-size: 14px; border: 0; background: transparent; color: var(--pg-fg); padding: 7px 14px; cursor: pointer; border-right: 1px solid var(--pg-line); }
+.seg button:last-child { border-right: 0; }
+.seg button[aria-pressed="true"] { background: var(--pg-accent); color: var(--pg-accent-fg); }
+.seg button:focus-visible { outline: 2px solid var(--pg-fg); outline-offset: -4px; }
+.seg-label { font-size: 13px; color: var(--pg-muted); margin-right: 8px; }
+.ctl { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.ctl[hidden] { display: none !important; }
+.page > * { min-width: 0; }
+.stage { width: 100%; max-width: 100%; min-width: 0; overflow: hidden; }
+.frame { width: 1280px; height: 800px; transform-origin: 0 0; }
+.stage-wrap { position: relative; overflow: hidden; border-radius: 10px; box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 12px 32px -8px rgba(0,0,0,.25); }
+.caption { background: var(--pg-card); border: 1px solid var(--pg-line); border-radius: 10px; padding: 18px 20px; display: grid; gap: 14px; }
+.caption[hidden] { display: none !important; }
+.cap-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
+.cap-kind { font-size: 13px; color: var(--pg-muted); }
+.thesis { margin: 0; max-width: 75ch; }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px 24px; margin: 0; }
+.facts div { min-width: 0; }
+.facts dt { font-size: 13px; color: var(--pg-muted); }
+.facts dd { margin: 2px 0 0; }
+.raises { margin: 0; padding-left: 18px; display: grid; gap: 4px; max-width: 90ch; }
+.declined { border-top: 1px solid var(--pg-line); padding-top: 12px; display: grid; gap: 6px; font-size: 13px; color: var(--pg-muted); }
+.declined ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
+.iconpanel { display: grid; gap: 14px; }
+.iconpanel[hidden] { display: none !important; }
+.ic-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 20px; padding: 20px; border-radius: 10px; overflow-x: auto; }
+.ic-row svg { flex: none; }
+.ic-light { background: #f3f3f3; color: #1a1a1a; }
+.ic-dark { background: #202020; color: #e6e6e6; }
+.ic-label { font-size: 13px; width: 100%; }
+.note { font-size: 13px; color: var(--pg-muted); max-width: 90ch; margin: 0; }
+::selection { background: var(--pg-accent); color: var(--pg-accent-fg); }
+
+/* ===================== The mockup (1280 x 800 window content) ===================== */
+.app { position: relative; width: 1280px; height: 800px; overflow: hidden; display: grid; grid-template-columns: 300px 1fr;
+  font-family: var(--f-ui); font-size: var(--fs); line-height: 1.35; color: var(--c-text); background: var(--c-bg);
+  font-variant-numeric: tabular-nums; -webkit-font-smoothing: antialiased; }
+.app * { box-sizing: border-box; }
+.app svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+:where(.app) button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: default; }
+
+/* Sidebar */
+.side { background: var(--c-side); color: var(--c-side-fg); display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; grid-template-columns: minmax(0, 1fr); min-height: 0; min-width: 0; overflow: hidden; border-right: 1px solid var(--c-side-line); }
+.side-head { grid-row: 1; display: flex; gap: 6px; align-items: center; padding: 8px 8px 6px; }
+.filter { flex: 1; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border-radius: var(--r-sm); background: var(--c-input); border: 1px solid var(--c-input-line); color: var(--c-side-muted); }
+.filter span { color: var(--c-side-muted); }
+.vault { height: 28px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; border-radius: var(--r-sm); color: var(--c-side-fg); border: 1px solid var(--c-side-line); font-size: calc(var(--fs) - 1px); }
+.tree { grid-row: 3; position: relative; overflow: hidden; padding: 2px 0 0; min-height: 0; }
+.row { height: var(--row); display: flex; align-items: center; gap: 5px; padding-left: calc(8px + var(--d) * var(--indent)); padding-right: 10px; white-space: nowrap; position: relative; }
+.row:hover { background: var(--c-hover); }
+.row .chev { width: 14px; height: 14px; color: var(--c-side-muted); }
+.row .chev.closed { transform: rotate(-90deg); }
+.row .fold { color: var(--c-side-muted); }
+.row.folder .name { font-weight: var(--w-folder); }
+.row.conn { padding-left: calc(8px + 19px + var(--d) * var(--indent)); }
+.row .name { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.row .host { margin-left: auto; color: var(--c-side-muted); font-size: calc(var(--fs) - 1px); display: none; }
+.row.sel { background: var(--c-sel); color: var(--c-sel-fg); }
+.row.sel .host, .row.sel .chev, .row.sel .fold { color: var(--c-sel-fg); }
+.row.focus { box-shadow: inset 0 0 0 2px var(--c-focus); }
+.scroll { position: absolute; right: 2px; top: 6px; width: 4px; height: 62%; border-radius: 2px; background: var(--c-side-muted); opacity: .45; }
+
+/* protocol marks: icon (default) or code (Fernverkehr) or pictogram square (Gate) */
+.proto { display: inline-flex; align-items: center; color: var(--c-side-muted); }
+.proto .pc { display: none; }
+.row.sel .proto { color: var(--c-sel-fg); }
+/* open-session marks: shape carries the state, colour only supports it */
+.ind { display: inline-flex; width: 10px; justify-content: center; }
+.ind svg { width: 10px; height: 10px; }
+.ind.live { color: var(--c-mark-live); } .ind.conn { color: var(--c-mark-conn); } .ind.drop { color: var(--c-mark-drop); }
+.row.conn .ind { margin-left: -15px; margin-right: 0; }
+.row.conn .ind.none { visibility: hidden; }
+.lamp { display: none; }
+
+/* Properties panel (stacked under the tree) */
+.props { grid-row: 4; border-top: 1px solid var(--c-side-line); padding: 8px 10px 10px; display: grid; gap: 2px; }
+.props-head { display: flex; align-items: center; gap: 6px; height: 26px; }
+.props-head .pn { font-weight: 600; }
+.props-head .pk { color: var(--c-side-muted); margin-left: auto; font-size: calc(var(--fs) - 1px); }
+.pathband { display: none; }
+.prop { display: grid; grid-template-columns: 84px minmax(0, 1fr) auto; align-items: center; min-height: 24px; gap: 8px; }
+.prop .k { color: var(--c-side-muted); }
+.prop .v { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prop .inh { color: var(--c-side-muted); font-size: calc(var(--fs) - 1px); white-space: nowrap; }
+.prop .fn { display: none; }
+.prop .reset { display: inline-flex; align-items: center; gap: 3px; color: var(--c-side-fg); font-size: calc(var(--fs) - 1px); border: 1px solid var(--c-side-line); border-radius: var(--r-sm); padding: 1px 6px; }
+.prop .reset svg { width: 12px; height: 12px; }
+.prop .local { color: var(--c-side-muted); font-size: calc(var(--fs) - 1px); }
+.legend { display: none; }
+
+/* Main: tabs + session */
+.main { display: grid; grid-template-rows: auto 1fr; min-width: 0; min-height: 0; }
+.tabs { display: flex; align-items: stretch; height: 36px; background: var(--c-tabbar); border-bottom: 1px solid var(--c-tab-line); }
+.tab { display: flex; align-items: center; gap: 7px; padding: 0 8px 0 12px; min-width: 150px; max-width: 260px; color: var(--c-tab-fg); border-right: 1px solid var(--c-tab-line); position: relative; white-space: nowrap; }
+.tab .t { overflow: hidden; text-overflow: ellipsis; }
+.tab .st { font-size: calc(var(--fs) - 2px); color: var(--c-tab-fg); opacity: .85; }
+.tab .x { margin-left: auto; display: inline-flex; padding: 3px; border-radius: var(--r-sm); }
+.tab .x svg { width: 12px; height: 12px; }
+.tab.act { background: var(--c-tab-act); color: var(--c-tab-act-fg); }
+.tab.act .st { color: var(--c-tab-act-fg); }
+.tab .ind.live { color: var(--c-tab-ok, var(--c-ok)); } .tab .ind.conn { color: var(--c-tab-warn, var(--c-warn)); } .tab .ind.drop { color: var(--c-tab-danger, var(--c-danger)); }
+.tab.act .ind.live { color: var(--c-tab-act-ok, var(--c-ok)); }
+.tab .proto { color: inherit; }
+.recon { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: var(--r-sm); border: 1px solid currentColor; font-size: calc(var(--fs) - 2px); }
+.recon svg { width: 12px; height: 12px; }
+.tabs-rest { flex: 1; }
+.term { background: var(--term-bg); color: var(--term-fg); font-family: var(--f-mono); font-size: 13px; line-height: 19px; padding: 10px 14px; white-space: pre; overflow: hidden; min-height: 0; }
+.term b { font-weight: 600; }
+.cur { background: var(--term-cur); color: var(--term-bg); }
+.selx { background: var(--term-sel); }
+.a0{color:var(--a0)}.a1{color:var(--a1)}.a2{color:var(--a2)}.a3{color:var(--a3)}.a4{color:var(--a4)}.a5{color:var(--a5)}.a6{color:var(--a6)}.a7{color:var(--a7)}
+.a8{color:var(--a8)}.a9{color:var(--a9)}.a10{color:var(--a10)}.a11{color:var(--a11)}.a12{color:var(--a12)}.a13{color:var(--a13)}.a14{color:var(--a14)}.a15{color:var(--a15)}
+.sw { display: inline-block; width: 30px; text-align: center; color: var(--term-bg); }
+.sw.lt { color: var(--term-fg); }
+
+/* Unlock dialog */
+.overlay { position: absolute; inset: 0; background: var(--c-overlay); display: grid; place-items: center; }
+.overlay[hidden] { display: none !important; }
+.dlg { width: 400px; background: var(--c-dialog); color: var(--c-text); border: 1px solid var(--c-dialog-line); border-radius: var(--r-md); box-shadow: 0 2px 6px var(--c-shadow), 0 24px 48px -12px var(--c-shadow); padding: 20px 20px 18px; display: grid; gap: 14px; }
+.dlg h3 { margin: 0; font-size: calc(var(--fs) + 4px); font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.dlg p { margin: 0; color: var(--c-muted); }
+.fld { display: grid; gap: 5px; }
+.fld label { font-weight: 500; }
+.pw { display: flex; align-items: center; height: 32px; border: 1px solid var(--c-dlg-input-line, var(--c-line)); border-radius: var(--r-sm); background: var(--c-dlg-input, var(--c-bg)); padding: 0 4px 0 10px; }
+.pw .dots { letter-spacing: 2px; flex: 1; font-size: 14px; }
+.pw .eye { display: inline-flex; padding: 5px; border-radius: var(--r-sm); color: var(--c-muted); }
+.pw.err { border-color: var(--c-danger); box-shadow: 0 0 0 1px var(--c-danger); }
+.errmsg { color: var(--c-danger); display: flex; gap: 6px; align-items: flex-start; }
+.errmsg svg { margin-top: 1px; }
+.chk { display: flex; align-items: center; gap: 8px; }
+.box { width: 16px; height: 16px; border: 1px solid var(--c-dlg-input-line, var(--c-line)); border-radius: 3px; background: var(--c-dlg-input, var(--c-bg)); display: inline-grid; place-items: center; }
+.dlg-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }
+.btn { height: 32px; padding: 0 14px; border-radius: var(--r-sm); display: inline-flex; align-items: center; gap: 6px; font-weight: 500; }
+.btn.sec { border: 1px solid var(--c-dialog-line); }
+.btn.pri { background: var(--c-key); color: var(--c-key-fg); }
+.hidden-err [data-err] { display: none; }
+
+/* ===== Concept: Fernverkehr ===== */
+.c-fv { --f-ui: "Archivo", "Arial Narrow", system-ui, sans-serif; --f-mono: "Source Code Pro", ui-monospace, Consolas, monospace;
+  --fs: 13px; --row: 22px; --indent: 13px; --w-folder: 600; --r-sm: 2px; --r-md: 3px; font-stretch: 88%; }
+.c-fv .row .host { display: inline; }
+.c-fv .proto .pi { display: none; }
+.c-fv .proto .pc { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .04em; line-height: 13px; padding: 0 3px; border-radius: 1px; border: 1px solid currentColor; font-stretch: 100%; }
+.c-fv .proto.ssh .pc { background: var(--c-side-fg); color: var(--c-side); border-color: var(--c-side-fg); }
+.c-fv .row.sel .proto.ssh .pc { background: var(--c-sel-fg); color: var(--c-sel); border-color: var(--c-sel-fg); }
+.c-fv .tab .proto.ssh .pc { background: var(--c-tab-fg); color: var(--c-tabbar); border-color: var(--c-tab-fg); }
+.c-fv .tab.act .proto.ssh .pc { background: var(--c-tab-act-fg); color: var(--c-tab-act); border-color: var(--c-tab-act-fg); }
+.c-fv .proto .pc i { font-style: normal; }
+.c-fv .prop .inh { display: none; }
+.c-fv .prop .fn { display: inline; font-size: 10px; font-weight: 700; vertical-align: super; margin-left: 2px; color: var(--c-side-muted); }
+.c-fv .prop .vwrap { display: flex; align-items: baseline; min-width: 0; }
+.c-fv .legend { display: flex; gap: 12px; white-space: nowrap; padding-top: 6px; margin-top: 4px; border-top: 1px solid var(--c-side-line); color: var(--c-side-muted); font-size: 11.5px; }
+.c-fv .legend b { font-size: 9px; vertical-align: super; margin-right: 3px; }
+.c-fv .tab.act { box-shadow: inset 0 2px 0 var(--c-tab-act-fg); }
+.c-fv .row.folder .name { text-transform: none; }
+.c-fv .props-head .pn { font-size: 14px; }
+
+/* ===== Concept: Ulm ===== */
+.c-ulm { --f-ui: "Hanken Grotesk", "Helvetica Neue", Arial, sans-serif; --f-mono: "Red Hat Mono", ui-monospace, Consolas, monospace;
+  --fs: 13px; --row: 24px; --indent: 14px; --w-folder: 600; --r-sm: 4px; --r-md: 6px; }
+.c-ulm .row.conn .ind { display: none; }
+.c-ulm .lamp { display: inline-block; margin-left: auto; width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--c-side-muted); opacity: .55; }
+.c-ulm .lamp.live { background: var(--c-mark-live); border-color: var(--c-mark-live); opacity: 1; }
+.c-ulm .lamp.conn { border-color: var(--c-mark-conn); opacity: 1; }
+.c-ulm .lamp.drop { border-color: var(--c-mark-drop); opacity: 1; background: linear-gradient(135deg, transparent 43%, var(--c-mark-drop) 43%, var(--c-mark-drop) 57%, transparent 57%); }
+.c-ulm .row.sel { box-shadow: inset 0 0 0 1px var(--c-side-line); }
+.c-ulm .recon { background: var(--c-key); color: var(--c-key-fg); border-color: var(--c-key); }
+.c-ulm .tab.act { box-shadow: inset 0 -2px 0 var(--c-tab-act-fg); }
+.c-ulm .props-head .pk { text-transform: uppercase; letter-spacing: .06em; font-size: 11px; }
+.c-ulm .k { text-transform: uppercase; letter-spacing: .05em; font-size: 10.5px; }
+
+/* ===== Concept: Gate ===== */
+.c-gate { --f-ui: "Fira Sans", "Segoe UI", Arial, sans-serif; --f-mono: "Fira Code", ui-monospace, Consolas, monospace;
+  --fs: 13px; --row: 24px; --indent: 14px; --w-folder: 600; --r-sm: 2px; --r-md: 2px; }
+.c-gate .proto .pi { width: 16px; height: 16px; padding: 2px; background: var(--c-pict); color: var(--c-pict-fg); border-radius: 1px; stroke-width: 1.8; }
+.c-gate .row.sel .proto .pi { background: var(--c-sel-fg); color: var(--c-sel); }
+.c-gate .tab .proto .pi { background: var(--c-tab-fg); color: var(--c-tabbar); }
+.c-gate .tab.act .proto .pi { background: var(--c-tab-act-fg); color: var(--c-tab-act); }
+.c-gate .row.sel { font-weight: 600; }
+.c-gate .props-head { display: none; }
+.c-gate .pathband { display: grid; gap: 1px; background: var(--c-band); color: var(--c-band-fg); margin: -8px -10px 6px; padding: 8px 12px 9px; }
+.c-gate .pathband .path { display: flex; align-items: center; gap: 4px; font-size: 12px; }
+.c-gate .pathband .path svg { width: 12px; height: 12px; }
+.c-gate .pathband .here { display: flex; align-items: center; gap: 8px; font-size: 20px; font-weight: 700; line-height: 1.15; }
+.c-gate .pathband .here .proto .pi { width: 20px; height: 20px; background: var(--c-band-fg); color: var(--c-band); }
+.c-gate .tab { font-weight: 500; }
+.c-gate .tab.act { font-weight: 700; }
+.c-gate .recon { background: var(--c-tab-fg); color: var(--c-tabbar); border-color: var(--c-tab-fg); }
+.c-gate .dlg { border-width: 2px; }
+.c-gate .dlg h3 { font-size: 20px; font-weight: 700; }
+.c-gate .pw, .c-gate .box { border-width: 2px; }
+
+/* ===== Concept: Workbench (category standard) ===== */
+.c-wb { --f-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; --f-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+  --fs: 13px; --row: 22px; --indent: 12px; --w-folder: 500; --r-sm: 4px; --r-md: 8px; }
+.c-wb .tab.act { box-shadow: inset 0 2px 0 var(--c-accent); }
+
+/* ===== Ulm, revised (owner feedback, round 1). Applied together with .c-ulm. ===== */
+.lockbar, .inline-unlock, .u2only, .pchev { display: none; }
+.lockbar { grid-row: 2; }
+@keyframes fj-pulse { 50% { opacity: .3; } }
+.c-ulm2 .lamp { margin-left: 8px; visibility: hidden; }
+.c-ulm2 .lamp.live, .c-ulm2 .lamp.conn, .c-ulm2 .lamp.drop, .c-ulm2 .lamp.u2drop { visibility: visible; }
+.c-ulm2 .lamp.u2drop { border-color: var(--c-mark-drop); opacity: 1; background: linear-gradient(135deg, transparent 43%, var(--c-mark-drop) 43%, var(--c-mark-drop) 57%, transparent 57%); }
+.c-ulm2.v-lock .lamp.u2wait { visibility: visible; border-color: var(--c-mark-conn); opacity: 1; animation: fj-pulse 1.6s ease-in-out infinite; }
+.c-ulm2 .lamp.conn, .c-ulm2 .tab .ind.conn { animation: fj-pulse 1.6s ease-in-out infinite; }
+.c-ulm2 .row .host { display: inline; margin-left: auto; }
+.c-ulm2.no-host .row .host { display: none; }
+.c-ulm2.no-host .lamp { margin-left: auto; }
+.c-ulm2 .row.sel { background: var(--c-sel2); color: var(--c-sel-fg); box-shadow: inset 3px 0 0 var(--c-sel-bar); font-weight: 600; }
+.c-ulm2 .row.focus { box-shadow: inset 0 0 0 1px var(--c-focus); }
+.c-ulm2 .k, .c-ulm2 .props-head .pk { text-transform: none; letter-spacing: 0; font-size: 12px; }
+.c-ulm2 .props-head { cursor: pointer; }
+.c-ulm2 .pchev { display: block; width: 14px; height: 14px; color: var(--c-side-muted); margin-left: -2px; }
+.c-ulm2.props-closed .pchev { transform: rotate(-90deg); }
+.c-ulm2.props-closed .prop, .c-ulm2.props-closed .legend { display: none; }
+.c-ulm2.props-closed .props { padding-bottom: 4px; }
+.c-ulm2.v-main .u2only.u2main, .c-ulm2.v-lock .u2only.u2lock { display: flex; }
+.c-ulm2.v-lock .lockbar { display: flex; gap: 8px; align-items: center; margin: 0 8px 6px; padding: 7px 8px 7px 10px; border-radius: var(--r-sm); background: var(--c-lock-bg); border: 1px solid var(--c-side-line); }
+.lockbar .lb-t { display: grid; gap: 1px; font-size: 12px; color: var(--c-side-muted); line-height: 1.3; }
+.lockbar .lb-t b { color: var(--c-side-fg); font-size: 13px; font-weight: 600; }
+.lockbar .lb-btn { margin-left: auto; height: 26px; padding: 0 10px; border: 1px solid var(--c-btn-line); border-radius: var(--r-sm); color: var(--c-side-fg); flex: none; }
+.c-ulm2.v-lock .term { display: none; }
+.c-ulm2.v-lock .inline-unlock { display: grid; place-items: start center; padding-top: 88px; background: var(--c-bg); min-height: 0; }
+.iu { width: 420px; display: grid; gap: 14px; }
+.iu h3 { margin: 0; font-size: 17px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.iu p { margin: 0; color: var(--c-muted); }
+.iu .dlg-actions { justify-content: flex-start; flex-direction: row-reverse; }
+.c-ulm2.m-light .term .a7, .c-ulm2.m-light .term .a15 { color: #73726d; }
+.c-ulm2.m-light .term .a10 { color: #448128; } .c-ulm2.m-light .term .a11 { color: #996a00; } .c-ulm2.m-light .term .a14 { color: #217f7b; }
+.c-ulm2.m-dark .term .a0 { color: #868583; } .c-ulm2.m-dark .term .a8 { color: #86847f; }
+@media (prefers-reduced-motion: reduce) { .c-ulm2 .lamp, .c-ulm2 .tab .ind { animation: none !important; } }
+
+/* ===== Palettes (concept x mode). All colours are hex; a translucent overlay/shadow is the only exception. ===== */
+.c-fv.m-light {
+  --c-bg:#ffffff; --c-text:#111a2b; --c-muted:#4f5b70; --c-line:#d5dbe5;
+  --c-side:#12284c; --c-side-fg:#f2f5fa; --c-side-muted:#a8b5cb; --c-side-line:#2a4570; --c-hover:#1a3460; --c-sel:#f2f5fa; --c-sel-fg:#12284c; --c-focus:#8fc1ff;
+  --c-input:#0c1d3a; --c-input-line:#33507f;
+  --c-tabbar:#e8ecf2; --c-tab-fg:#3d4a60; --c-tab-act:#ffffff; --c-tab-act-fg:#12284c; --c-tab-line:#c9d1de;
+  --c-accent:#12284c; --c-accent-fg:#ffffff; --c-key:#12284c; --c-key-fg:#ffffff;
+  --c-ok:#1d6b34; --c-warn:#8a5a00; --c-danger:#c50014;
+  --c-mark-live:#f2f5fa; --c-mark-conn:#a8b5cb; --c-mark-drop:#ff8f99;
+  --c-band:#f2f5fa; --c-band-fg:#12284c; --c-pict:#f2f5fa; --c-pict-fg:#12284c;
+  --c-overlay:rgba(11,21,40,.55); --c-dialog:#ffffff; --c-dialog-line:#c9d1de; --c-shadow:rgba(8,16,32,.35);
+  --term-bg:#fbfbfc; --term-fg:#1b2333; --term-cur:#12284c; --term-sel:#c9d6ec;
+  --a0:#1b2333; --a1:#c50014; --a2:#25722f; --a3:#865d00; --a4:#1f4fbf; --a5:#8e2d9e; --a6:#0d6f7a; --a7:#c8ced8;
+  --a8:#5b6576; --a9:#d9142c; --a10:#2f8338; --a11:#9a6c00; --a12:#2f63d0; --a13:#a43cb5; --a14:#0f7f8b; --a15:#ffffff; }
+.c-fv.m-dark {
+  --c-bg:#0a1222; --c-text:#e6ebf3; --c-muted:#93a0b6; --c-line:#22324f;
+  --c-side:#0d1b34; --c-side-fg:#e6ebf3; --c-side-muted:#8f9cb4; --c-side-line:#1f3155; --c-hover:#142645; --c-sel:#e6ebf3; --c-sel-fg:#0d1b34; --c-focus:#8fc1ff;
+  --c-input:#091428; --c-input-line:#2a3f66;
+  --c-tabbar:#0d1b34; --c-tab-fg:#9aa7bd; --c-tab-act:#0a1222; --c-tab-act-fg:#e6ebf3; --c-tab-line:#1f3155;
+  --c-accent:#e6ebf3; --c-accent-fg:#0d1b34; --c-key:#e6ebf3; --c-key-fg:#0d1b34;
+  --c-ok:#5fcf7a; --c-warn:#e8c25a; --c-danger:#ff6b76;
+  --c-mark-live:#e6ebf3; --c-mark-conn:#8f9cb4; --c-mark-drop:#ff8f99;
+  --c-band:#e6ebf3; --c-band-fg:#0d1b34; --c-pict:#e6ebf3; --c-pict-fg:#0d1b34;
+  --c-overlay:rgba(2,6,14,.62); --c-dialog:#101d35; --c-dialog-line:#2a3f66; --c-shadow:rgba(0,0,0,.55);
+  --c-dlg-input:#0a1222; --c-dlg-input-line:#2f4670;
+  --term-bg:#0a1222; --term-fg:#d7dee9; --term-cur:#e6ebf3; --term-sel:#24406e;
+  --a0:#2b3548; --a1:#ff5c6a; --a2:#5fcf6a; --a3:#e8c25a; --a4:#6b9cff; --a5:#d38bf0; --a6:#4fc8d3; --a7:#c3cbd8;
+  --a8:#5b6880; --a9:#ff7f8a; --a10:#84e08d; --a11:#f5d77e; --a12:#93b6ff; --a13:#e4a8f7; --a14:#7fdce4; --a15:#f4f6fa; }
+
+.c-ulm.m-light {
+  --c-bg:#f7f6f3; --c-text:#1e1e1c; --c-muted:#5c5a54; --c-line:#d4d1c9;
+  --c-side:#e6e4de; --c-side-fg:#1e1e1c; --c-side-muted:#5a5852; --c-side-line:#cfccc3; --c-hover:#eeece7; --c-sel:#fbfaf7; --c-sel-fg:#1e1e1c; --c-focus:#1e1e1c;
+  --c-input:#fbfaf7; --c-input-line:#7f7b73; --c-dlg-input-line:#7f7b73;
+  --c-tabbar:#e6e4de; --c-tab-fg:#55534d; --c-tab-act:#fbfaf7; --c-tab-act-fg:#1e1e1c; --c-tab-line:#cfccc3;
+  --c-accent:#1e1e1c; --c-accent-fg:#f7f6f3; --c-key:#f0b400; --c-key-fg:#1e1e1c;
+  --c-ok:#2f7d22; --c-warn:#9a5d00; --c-danger:#b3261e;
+  --c-mark-live:#2f7d22; --c-mark-conn:#9a5d00; --c-mark-drop:#b3261e;
+  --c-sel2:#d1cdc3; --c-sel-bar:#1e1e1c; --c-lock-bg:#fbfaf7; --c-btn-line:#77736b;
+  --c-band:#fbfaf7; --c-band-fg:#1e1e1c; --c-pict:#1e1e1c; --c-pict-fg:#f7f6f3;
+  --c-overlay:rgba(40,38,34,.42); --c-dialog:#fbfaf7; --c-dialog-line:#cfccc3; --c-shadow:rgba(30,28,24,.28);
+  --term-bg:#fbfaf7; --term-fg:#232320; --term-cur:#1e1e1c; --term-sel:#eadfb8;
+  --a0:#232320; --a1:#b3261e; --a2:#3d7a1f; --a3:#8a6000; --a4:#2d5c9a; --a5:#8a3f8f; --a6:#1d7270; --a7:#cfccc4;
+  --a8:#6b6962; --a9:#c9372c; --a10:#47862a; --a11:#9c6c00; --a12:#3a6cb0; --a13:#9f4ca4; --a14:#22827d; --a15:#ffffff; }
+.c-ulm.m-dark {
+  --c-bg:#1c1c1a; --c-text:#eceae4; --c-muted:#a3a097; --c-line:#33322e;
+  --c-side:#262624; --c-side-fg:#eceae4; --c-side-muted:#a3a097; --c-side-line:#363531; --c-hover:#2e2d2a; --c-sel:#3b3a36; --c-sel-fg:#f6f5f1; --c-focus:#eceae4;
+  --c-input:#1c1c1a; --c-input-line:#75736c;
+  --c-tabbar:#262624; --c-tab-fg:#a3a097; --c-tab-act:#1c1c1a; --c-tab-act-fg:#eceae4; --c-tab-line:#363531;
+  --c-accent:#eceae4; --c-accent-fg:#1c1c1a; --c-key:#f0b400; --c-key-fg:#1c1c1a;
+  --c-ok:#6cc04a; --c-warn:#e0a030; --c-danger:#ff7a70;
+  --c-mark-live:#6cc04a; --c-mark-conn:#e0a030; --c-mark-drop:#ff7a70;
+  --c-sel2:#4a4843; --c-sel-bar:#eceae4; --c-lock-bg:#1c1c1a; --c-btn-line:#77746d;
+  --c-band:#3b3a36; --c-band-fg:#f6f5f1; --c-pict:#eceae4; --c-pict-fg:#1c1c1a;
+  --c-overlay:rgba(0,0,0,.52); --c-dialog:#262624; --c-dialog-line:#3f3e3a; --c-shadow:rgba(0,0,0,.5);
+  --c-dlg-input:#1c1c1a; --c-dlg-input-line:#75736c;
+  --term-bg:#1c1c1a; --term-fg:#e2e0d9; --term-cur:#f0b400; --term-sel:#4a4535;
+  --a0:#3a3935; --a1:#f0625a; --a2:#8ccf5e; --a3:#f0c445; --a4:#7aa7e0; --a5:#d08ad4; --a6:#63c4bd; --a7:#cfccc4;
+  --a8:#6b6962; --a9:#ff8a80; --a10:#a8e07f; --a11:#ffd86b; --a12:#9cc1f0; --a13:#e5a8e8; --a14:#8fded7; --a15:#f7f6f2; }
+
+.c-gate.m-light {
+  --c-bg:#ffffff; --c-text:#0b0b0b; --c-muted:#545454; --c-line:#e0e0dc;
+  --c-side:#f5f5f2; --c-side-fg:#0b0b0b; --c-side-muted:#525252; --c-side-line:#e0e0dc; --c-hover:#ebebe7; --c-sel:#ffcc00; --c-sel-fg:#0b0b0b; --c-focus:#0b0b0b;
+  --c-input:#ffffff; --c-input-line:#0b0b0b;
+  --c-tabbar:#1a1a1a; --c-tab-fg:#d9d9d9; --c-tab-act:#ffcc00; --c-tab-act-fg:#0b0b0b; --c-tab-line:#333333;
+  --c-accent:#0b0b0b; --c-accent-fg:#ffffff; --c-key:#0b0b0b; --c-key-fg:#ffffff;
+  --c-ok:#1d7a3a; --c-warn:#8a6a00; --c-danger:#c4161c; --c-tab-ok:#57c27f; --c-tab-warn:#f0b03a; --c-tab-danger:#ff7070; --c-tab-act-ok:#0b0b0b;
+  --c-mark-live:#1d7a3a; --c-mark-conn:#8a6a00; --c-mark-drop:#c4161c;
+  --c-band:#ffcc00; --c-band-fg:#0b0b0b; --c-pict:#0b0b0b; --c-pict-fg:#ffffff;
+  --c-overlay:rgba(11,11,11,.5); --c-dialog:#ffffff; --c-dialog-line:#0b0b0b; --c-shadow:rgba(0,0,0,.3);
+  --c-dlg-input-line:#0b0b0b;
+  --term-bg:#ffffff; --term-fg:#111111; --term-cur:#0b0b0b; --term-sel:#ffe680;
+  --a0:#111111; --a1:#c4161c; --a2:#1d7a3a; --a3:#856600; --a4:#0050b3; --a5:#8b2f9c; --a6:#00707a; --a7:#cccccc;
+  --a8:#5c5c5c; --a9:#dc2630; --a10:#238c45; --a11:#9a7700; --a12:#1f63c6; --a13:#a23eb3; --a14:#00808c; --a15:#ffffff; }
+.c-gate.m-dark {
+  --c-bg:#121212; --c-text:#f2f2f2; --c-muted:#a8a8a8; --c-line:#2b2b2b;
+  --c-side:#181818; --c-side-fg:#f2f2f2; --c-side-muted:#a8a8a8; --c-side-line:#2b2b2b; --c-hover:#222222; --c-sel:#ffcc00; --c-sel-fg:#0b0b0b; --c-focus:#f2f2f2;
+  --c-input:#121212; --c-input-line:#f2f2f2;
+  --c-tabbar:#0b0b0b; --c-tab-fg:#bdbdbd; --c-tab-act:#ffcc00; --c-tab-act-fg:#0b0b0b; --c-tab-line:#2b2b2b;
+  --c-accent:#f2f2f2; --c-accent-fg:#0b0b0b; --c-key:#f2f2f2; --c-key-fg:#0b0b0b;
+  --c-ok:#4cc27a; --c-warn:#e0a030; --c-danger:#ff6b6b; --c-tab-act-ok:#0b0b0b;
+  --c-mark-live:#4cc27a; --c-mark-conn:#e0a030; --c-mark-drop:#ff6b6b;
+  --c-band:#ffcc00; --c-band-fg:#0b0b0b; --c-pict:#f2f2f2; --c-pict-fg:#0b0b0b;
+  --c-overlay:rgba(0,0,0,.62); --c-dialog:#1c1c1c; --c-dialog-line:#f2f2f2; --c-shadow:rgba(0,0,0,.6);
+  --c-dlg-input:#121212; --c-dlg-input-line:#f2f2f2;
+  --term-bg:#0e0e0e; --term-fg:#e8e8e8; --term-cur:#ffcc00; --term-sel:#5c4d00;
+  --a0:#2a2a2a; --a1:#ff6b6b; --a2:#4cc27a; --a3:#ffcc00; --a4:#66a3ff; --a5:#d68cf0; --a6:#4fd1d9; --a7:#cfcfcf;
+  --a8:#6b6b6b; --a9:#ff8f8f; --a10:#7ad99b; --a11:#ffe066; --a12:#8fbaff; --a13:#e6aef5; --a14:#80e0e6; --a15:#ffffff; }
+
+.c-wb.m-light {
+  --c-bg:#ffffff; --c-text:#1f2328; --c-muted:#59636e; --c-line:#d8dde3;
+  --c-side:#f3f4f6; --c-side-fg:#1f2328; --c-side-muted:#57606a; --c-side-line:#d8dde3; --c-hover:#e8eaee; --c-sel:#dbe7fb; --c-sel-fg:#0b2e66; --c-focus:#0969da;
+  --c-input:#ffffff; --c-input-line:#d0d7de;
+  --c-tabbar:#eef0f3; --c-tab-fg:#57606a; --c-tab-act:#ffffff; --c-tab-act-fg:#1f2328; --c-tab-line:#d8dde3;
+  --c-accent:#0969da; --c-accent-fg:#ffffff; --c-key:#0969da; --c-key-fg:#ffffff;
+  --c-ok:#1a7f37; --c-warn:#9a6700; --c-danger:#cf222e;
+  --c-mark-live:#1a7f37; --c-mark-conn:#9a6700; --c-mark-drop:#cf222e;
+  --c-band:#dbe7fb; --c-band-fg:#0b2e66; --c-pict:#1f2328; --c-pict-fg:#ffffff;
+  --c-overlay:rgba(31,35,40,.4); --c-dialog:#ffffff; --c-dialog-line:#d0d7de; --c-shadow:rgba(31,35,40,.25);
+  --term-bg:#ffffff; --term-fg:#1f2328; --term-cur:#0969da; --term-sel:#cfe0fb;
+  --a0:#24292f; --a1:#cf222e; --a2:#116329; --a3:#7d4e00; --a4:#0969da; --a5:#8250df; --a6:#1b7c83; --a7:#6e7781;
+  --a8:#57606a; --a9:#a40e26; --a10:#1a7f37; --a11:#633c01; --a12:#1f6feb; --a13:#8a4fe0; --a14:#18767d; --a15:#8c959f; }
+.c-wb.m-dark {
+  --c-bg:#1e2127; --c-text:#e6edf3; --c-muted:#9198a1; --c-line:#2d3139;
+  --c-side:#181a1f; --c-side-fg:#d4d7dd; --c-side-muted:#8b929c; --c-side-line:#2a2e35; --c-hover:#20232a; --c-sel:#233a5c; --c-sel-fg:#e6edf3; --c-focus:#4c8dff;
+  --c-input:#1e2127; --c-input-line:#363b44;
+  --c-tabbar:#15171b; --c-tab-fg:#8b929c; --c-tab-act:#1e2127; --c-tab-act-fg:#e6edf3; --c-tab-line:#2a2e35;
+  --c-accent:#2f6fe0; --c-accent-fg:#ffffff; --c-key:#2f6fe0; --c-key-fg:#ffffff;
+  --c-ok:#3fb950; --c-warn:#d29922; --c-danger:#ff6b63;
+  --c-mark-live:#3fb950; --c-mark-conn:#d29922; --c-mark-drop:#ff6b63;
+  --c-band:#233a5c; --c-band-fg:#e6edf3; --c-pict:#d4d7dd; --c-pict-fg:#181a1f;
+  --c-overlay:rgba(0,0,0,.55); --c-dialog:#24272e; --c-dialog-line:#363b44; --c-shadow:rgba(0,0,0,.5);
+  --c-dlg-input:#1e2127; --c-dlg-input-line:#40464f;
+  --term-bg:#1e2127; --term-fg:#d4d7dd; --term-cur:#4c8dff; --term-sel:#264f78;
+  --a0:#3a3f4b; --a1:#e06c75; --a2:#98c379; --a3:#e5c07b; --a4:#61afef; --a5:#c678dd; --a6:#56b6c2; --a7:#abb2bf;
+  --a8:#5c6370; --a9:#ef8189; --a10:#a9d18e; --a11:#f0cf8f; --a12:#7cc0f5; --a13:#d68fe8; --a14:#72c8d3; --a15:#e6e6e6; }
+.app ::selection { background: var(--term-sel); color: inherit; }
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-chev" viewBox="0 0 16 16"><path d="M4.5 6l3.5 3.5L11.5 6"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 16 16"><path d="M2 4.5h4l1.5 1.5H14v6.5H2z"/></symbol>
+  <symbol id="i-ssh" viewBox="0 0 16 16"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1"/><path d="M4.5 6.5l2 1.75-2 1.75M8.5 10.5h3"/></symbol>
+  <symbol id="i-rdp" viewBox="0 0 16 16"><rect x="1.75" y="2.75" width="12.5" height="8.5" rx="1"/><path d="M5.5 13.5h5M8 11.25v2.25"/></symbol>
+  <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.25"/><path d="M10.25 10.25L13.5 13.5"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 16 16"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5.25 7V5a2.75 2.75 0 015.5 0v2"/></symbol>
+  <symbol id="i-unlock" viewBox="0 0 16 16"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5.25 7V5a2.75 2.75 0 015.4-.7"/></symbol>
+  <symbol id="i-x" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></symbol>
+  <symbol id="i-recon" viewBox="0 0 16 16"><path d="M13 8a5 5 0 11-1.6-3.7M13 2.5v3h-3"/></symbol>
+  <symbol id="i-reset" viewBox="0 0 16 16"><path d="M3 8a5 5 0 105-5H5M5 1L3 3l2 2"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 16 16"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.25"/><path d="M8 4.75v3.75M8 11h.01"/></symbol>
+  <symbol id="i-check" viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></symbol>
+  <symbol id="i-next" viewBox="0 0 16 16"><path d="M6 3.5L10.5 8 6 12.5"/></symbol>
+  <symbol id="app-icon" viewBox="0 0 1024 1024"><rect x="48" y="48" width="928" height="928" rx="208" fill="#1e1e1c"/>
+  <rect x="52" y="52" width="920" height="920" rx="204" fill="none" stroke="#3a3935" stroke-width="8"/>
+  <path d="M403 621 L566 458" stroke="#eceae4" stroke-width="64" stroke-linecap="round"/>
+  <circle cx="318" cy="706" r="112" fill="none" stroke="#eceae4" stroke-width="64"/>
+  <circle cx="676" cy="348" r="172" fill="#f0b400"/></symbol>
+  <symbol id="m-live" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="m-conn" viewBox="0 0 10 10"><circle cx="5" cy="5" r="3.4" fill="none" stroke="currentColor" stroke-width="1.4"/></symbol>
+  <symbol id="m-drop" viewBox="0 0 10 10"><circle cx="5" cy="5" r="3.4" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M2 8L8 2" stroke="currentColor" stroke-width="1.4"/></symbol>
+</svg>
+
+<main class="page">
+  <header>
+    <h1>fernjo design concepts</h1>
+    <p class="lede">Milestone 1: four directions for the main window and the vault unlock dialog, each in light and dark, plus a first revision of Ulm from your feedback. Every mockup shows the same synthetic workspace at the design size of 1280 × 800, so only the design changes when you switch.</p>
+  </header>
+
+  <div class="controls" role="group" aria-label="Mockup controls">
+    <div class="ctl"><span class="seg-label" id="lbl-c">Concept</span>
+      <div class="seg" data-key="c" aria-labelledby="lbl-c">
+        <button type="button" id="c-fv" data-v="fv">Fernverkehr</button><button type="button" id="c-ulm2" data-v="ulm2">Ulm, revised</button><button type="button" id="c-ulm" data-v="ulm">Ulm</button><button type="button" id="c-gate" data-v="gate">Gate</button><button type="button" id="c-wb" data-v="wb">Workbench</button>
+      </div></div>
+    <div class="ctl"><span class="seg-label" id="lbl-m">Theme</span>
+      <div class="seg" data-key="m" aria-labelledby="lbl-m">
+        <button type="button" id="m-light" data-v="light">Light</button><button type="button" id="m-dark" data-v="dark">Dark</button>
+      </div></div>
+    <div class="ctl"><span class="seg-label" id="lbl-v">View</span>
+      <div class="seg" data-key="v" aria-labelledby="lbl-v">
+        <button type="button" id="v-main" data-v="main">Main window</button><button type="button" id="v-unlock" data-v="unlock">Unlock</button><button type="button" id="v-error" data-v="error">Unlock error</button><button type="button" id="v-icon" data-v="icon">App icon</button>
+      </div></div>
+    <div class="ctl" id="ctl-host"><span class="seg-label" id="lbl-h">Host column</span>
+      <div class="seg" data-key="h" aria-labelledby="lbl-h">
+        <button type="button" id="h-on" data-v="on">On</button><button type="button" id="h-off" data-v="off">Off</button>
+      </div></div>
+    <div class="ctl" id="ctl-props"><span class="seg-label" id="lbl-p">Properties</span>
+      <div class="seg" data-key="p" aria-labelledby="lbl-p">
+        <button type="button" id="p-open" data-v="open">Open</button><button type="button" id="p-closed" data-v="closed">Collapsed</button>
+      </div></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="stage-wrap" id="stage-wrap">
+      <div class="frame" id="frame">
+        <div class="app c-fv m-light" id="app">
+          <aside class="side">
+            <div class="side-head">
+              <div class="filter"><svg><use href="#i-search"/></svg><span>Filter connections</span></div>
+              <button class="vault" id="vault-btn"><svg><use href="#i-unlock"/></svg><span>Unlocked</span></button>
+            </div>
+            <div class="lockbar"><svg><use href="#i-lock"/></svg><div class="lb-t"><b>Vault locked</b><span>Connections with stored credentials ask for it.</span></div><button class="lb-btn">Unlock</button></div>
+            <div class="tree">
+              <div class="row folder" style="--d:0"><svg class="chev"><use href="#i-chev"/></svg><span class="name">Homelab</span></div>
+              <div class="row folder" style="--d:1"><svg class="chev"><use href="#i-chev"/></svg><span class="name">Proxmox</span></div>
+              <div class="row conn" style="--d:2"><span class="ind drop"><svg><use href="#m-drop"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="name">pve-01</span><span class="host">192.0.2.11</span><span class="lamp drop"></span></div>
+              <div class="row conn" style="--d:2"><span class="ind none"><svg><use href="#m-live"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="name">pve-02</span><span class="host">192.0.2.12</span><span class="lamp"></span></div>
+              <div class="row conn" style="--d:2"><span class="ind none"><svg><use href="#m-live"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="name">pve-03</span><span class="host">192.0.2.13</span><span class="lamp"></span></div>
+              <div class="row conn" style="--d:2"><span class="ind none"><svg><use href="#m-live"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="name">pbs-01</span><span class="host">192.0.2.20</span><span class="lamp"></span></div>
+              <div class="row folder" style="--d:1"><svg class="chev"><use href="#i-chev"/></svg><span class="name">Docker hosts</span></div>
+              <div class="row conn" style="--d:2"><span class="ind conn"><svg><use href="#m-conn"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="name">docker-01</span><span class="host">192.0.2.31</span><span class="lamp conn"></span></div>
+              <div class="row conn" style="--d:2"><span class="ind none"><svg><use href="#m-live"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="name">docker-02</span><span class="host">192.0.2.32</span><span class="lamp"></span></div>
+              <div class="row conn" style="--d:2"><span class="ind none"><svg><use href="#m-live"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="name">registry</span><span class="host">192.0.2.33</span><span class="lamp"></span></div>
+              <div class="row folder" style="--d:1"><svg class="chev closed"><use href="#i-chev"/></svg><span class="name">Network</span></div>
+              <div class="row folder" style="--d:1"><svg class="chev"><use href="#i-chev"/></svg><span class="name">Storage</span></div>
+              <div class="row conn" style="--d:2"><span class="ind none"><svg><use href="#m-live"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="name">nas-01</span><span class="host">192.0.2.40</span><span class="lamp"></span></div>
+              <div class="row conn" style="--d:2"><span class="ind none"><svg><use href="#m-live"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="name">backup-nas</span><span class="host">192.0.2.41</span><span class="lamp u2drop"></span></div>
+              <div class="row folder" style="--d:1"><svg class="chev closed"><use href="#i-chev"/></svg><span class="name">IoT</span></div>
+              <div class="row folder" style="--d:0"><svg class="chev"><use href="#i-chev"/></svg><span class="name">Work</span></div>
+              <div class="row folder" style="--d:1"><svg class="chev"><use href="#i-chev"/></svg><span class="name">Nordwerk</span></div>
+              <div class="row folder" style="--d:2"><svg class="chev"><use href="#i-chev"/></svg><span class="name">Web</span></div>
+              <div class="row conn sel" style="--d:3"><span class="ind live"><svg><use href="#m-live"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="name">web-01</span><span class="host">198.51.100.21</span><span class="lamp live"></span></div>
+              <div class="row conn" style="--d:3"><span class="ind none"><svg><use href="#m-live"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="name">web-02</span><span class="host">198.51.100.22</span><span class="lamp u2wait"></span></div>
+              <div class="row conn" style="--d:3"><span class="ind none"><svg><use href="#m-live"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="name">lb-01</span><span class="host">198.51.100.10</span><span class="lamp"></span></div>
+              <div class="row folder" style="--d:2"><svg class="chev"><use href="#i-chev"/></svg><span class="name">Database</span></div>
+              <div class="row conn" style="--d:3"><span class="ind none"><svg><use href="#m-live"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="name">db-01</span><span class="host">198.51.100.31</span><span class="lamp"></span></div>
+              <div class="row conn focus" style="--d:3"><span class="ind none"><svg><use href="#m-live"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="name">db-02</span><span class="host">198.51.100.32</span><span class="lamp"></span></div>
+              <div class="row folder" style="--d:2"><svg class="chev closed"><use href="#i-chev"/></svg><span class="name">Monitoring</span></div>
+              <div class="row folder" style="--d:1"><svg class="chev"><use href="#i-chev"/></svg><span class="name">Windows servers</span></div>
+              <div class="row conn" style="--d:2"><span class="ind live"><svg><use href="#m-live"/></svg></span><span class="proto rdp"><svg class="pi"><use href="#i-rdp"/></svg><b class="pc"><i>RDP</i></b></span><span class="name">dc01</span><span class="host">203.0.113.10</span><span class="lamp live"></span></div>
+              <div class="row conn" style="--d:2"><span class="ind none"><svg><use href="#m-live"/></svg></span><span class="proto rdp"><svg class="pi"><use href="#i-rdp"/></svg><b class="pc"><i>RDP</i></b></span><span class="name">dc02</span><span class="host">203.0.113.11</span><span class="lamp"></span></div>
+              <div class="row conn" style="--d:2"><span class="ind none"><svg><use href="#m-live"/></svg></span><span class="proto rdp"><svg class="pi"><use href="#i-rdp"/></svg><b class="pc"><i>RDP</i></b></span><span class="name">fs01</span><span class="host">203.0.113.20</span><span class="lamp"></span></div>
+              <div class="row conn" style="--d:2"><span class="ind none"><svg><use href="#m-live"/></svg></span><span class="proto rdp"><svg class="pi"><use href="#i-rdp"/></svg><b class="pc"><i>RDP</i></b></span><span class="name">sql01</span><span class="host">203.0.113.30</span><span class="lamp"></span></div>
+              <div class="row folder" style="--d:1"><svg class="chev closed"><use href="#i-chev"/></svg><span class="name">Halde</span></div>
+              <div class="row folder" style="--d:0"><svg class="chev closed"><use href="#i-chev"/></svg><span class="name">Lab &amp; test</span></div>
+              <div class="scroll"></div>
+            </div>
+            <div class="props">
+              <div class="pathband">
+                <div class="path">Work <svg><use href="#i-next"/></svg> Nordwerk <svg><use href="#i-next"/></svg> Web</div>
+                <div class="here"><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg></span>web-01</div>
+              </div>
+              <div class="props-head" id="props-head"><svg class="pchev"><use href="#i-chev"/></svg><span class="pn">web-01</span><span class="pk">SSH connection</span></div>
+              <div class="prop"><span class="k">Host</span><span class="vwrap"><span class="v">198.51.100.21</span></span><span></span></div>
+              <div class="prop"><span class="k">Port</span><span class="vwrap"><span class="v">22</span><sup class="fn">a</sup></span><span class="inh">from Work</span></div>
+              <div class="prop"><span class="k">Username</span><span class="vwrap"><span class="v">deploy</span><sup class="fn">b</sup></span><span class="inh">from Nordwerk</span></div>
+              <div class="prop"><span class="k">Credential</span><span class="vwrap"><span class="v">deploy key</span><sup class="fn">b</sup></span><span class="inh">from Nordwerk</span></div>
+              <div class="prop"><span class="k">Keepalive</span><span class="vwrap"><span class="v">30 s</span></span><button class="reset"><svg><use href="#i-reset"/></svg>Inherit</button></div>
+              <div class="legend"><span><b>a</b>from Work</span><span><b>b</b>from Nordwerk</span><span>no mark: set here</span></div>
+            </div>
+          </aside>
+
+          <section class="main">
+            <div class="tabs">
+              <div class="tab act" id="tab-web01"><span class="ind live"><svg><use href="#m-live"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="t">web-01</span><button class="x" aria-label="Close web-01"><svg><use href="#i-x"/></svg></button></div>
+              <div class="tab act u2only u2lock"><span class="ind conn"><svg><use href="#m-conn"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg></span><span class="t">web-02</span><span class="st">Needs vault</span><button class="x" aria-label="Close web-02"><svg><use href="#i-x"/></svg></button></div>
+              <div class="tab"><span class="ind conn"><svg><use href="#m-conn"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="t">docker-01</span><span class="st">Connecting…</span><button class="x" aria-label="Close docker-01"><svg><use href="#i-x"/></svg></button></div>
+              <div class="tab"><span class="ind drop"><svg><use href="#m-drop"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="t">pve-01</span><button class="recon"><svg><use href="#i-recon"/></svg>Reconnect</button><button class="x" aria-label="Close pve-01"><svg><use href="#i-x"/></svg></button></div>
+              <div class="tab u2only u2main"><span class="ind drop"><svg><use href="#m-drop"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg></span><span class="t">backup-nas</span><button class="recon"><svg><use href="#i-recon"/></svg>Reconnect</button><button class="x" aria-label="Close backup-nas"><svg><use href="#i-x"/></svg></button></div>
+              <div class="tab"><span class="ind live"><svg><use href="#m-live"/></svg></span><span class="proto rdp"><svg class="pi"><use href="#i-rdp"/></svg><b class="pc"><i>RDP</i></b></span><span class="t">dc01</span><button class="x" aria-label="Close dc01"><svg><use href="#i-x"/></svg></button></div>
+              <div class="tabs-rest"></div>
+            </div>
+<div class="term" aria-label="Terminal session web-01"><span class="a8">Last login: Sun Nov 15 08:12:44 2026 from 192.0.2.5</span>
+<b class="a2">deploy@web-01</b>:<b class="a4">~</b>$ ls --color
+<b class="a4">app</b>  <b class="a4">backups</b>  <b class="a2">deploy.sh</b>  <b class="a4">logs</b>  nginx.conf  README.md  <b class="a4">releases</b>  <span class="a6">current</span> -&gt; <b class="a4">releases/2026-11-14</b>
+<b class="a2">deploy@web-01</b>:<b class="a4">~</b>$ systemctl status nginx --no-pager | head -3
+<b class="a2">●</b> nginx.service - A high performance web server and a reverse proxy server
+     Loaded: loaded (/lib/systemd/system/nginx.service; <b class="a2">enabled</b>; preset: <b class="a2">enabled</b>)
+     Active: <b class="a2">active (running)</b> since Sat 2026-11-14 22:03:10 CET; 10h ago
+<b class="a2">deploy@web-01</b>:<b class="a4">~</b>$ git -C app status -sb
+<b class="a2">## main</b>...<span class="a1">origin/main</span> [ahead 1]
+ <span class="a1">M</span> src/config.ts
+<span class="a1">??</span> notes.txt
+<b class="a2">deploy@web-01</b>:<b class="a4">~</b>$ tail -n 4 logs/app.log
+2026-11-15 08:14:02 <span class="a6">INFO </span> request GET /health 200 <span class="a8">3 ms</span>
+2026-11-15 08:14:05 <span class="a3">WARN </span> slow query on orders (412 ms)
+2026-11-15 08:14:09 <span class="a1">ERROR</span> upstream timed out: 198.51.100.31:5432
+2026-11-15 08:14:12 <span class="a6">INFO </span> request GET /health 200 <span class="a8">2 ms</span>
+<b class="a2">deploy@web-01</b>:<b class="a4">~</b>$ <span class="selx">./colors.sh</span>
+<span class="sw lt" style="background:var(--a0)"> 0</span><span class="sw" style="background:var(--a1)"> 1</span><span class="sw" style="background:var(--a2)"> 2</span><span class="sw" style="background:var(--a3)"> 3</span><span class="sw" style="background:var(--a4)"> 4</span><span class="sw" style="background:var(--a5)"> 5</span><span class="sw" style="background:var(--a6)"> 6</span><span class="sw" style="background:var(--a7)"> 7</span>
+<span class="sw lt" style="background:var(--a8)"> 8</span><span class="sw" style="background:var(--a9)"> 9</span><span class="sw" style="background:var(--a10)">10</span><span class="sw" style="background:var(--a11)">11</span><span class="sw" style="background:var(--a12)">12</span><span class="sw" style="background:var(--a13)">13</span><span class="sw" style="background:var(--a14)">14</span><span class="sw" style="background:var(--a15)">15</span>
+<span class="a0">black</span> <span class="a1">red</span> <span class="a2">green</span> <span class="a3">yellow</span> <span class="a4">blue</span> <span class="a5">magenta</span> <span class="a6">cyan</span> <span class="a7">white</span>
+<span class="a8">black</span> <span class="a9">red</span> <span class="a10">green</span> <span class="a11">yellow</span> <span class="a12">blue</span> <span class="a13">magenta</span> <span class="a14">cyan</span> <span class="a15">white</span>
+<b class="a2">deploy@web-01</b>:<b class="a4">~</b>$ <span class="cur"> </span></div>
+            <div class="inline-unlock">
+              <div class="iu">
+                <h3><svg><use href="#i-lock"/></svg>web-02 needs the vault</h3>
+                <p>Its credential "deploy key" is stored in the vault. Enter the master password to connect. Other tabs keep running.</p>
+                <div class="fld">
+                  <label for="mpw2">Master password</label>
+                  <div class="pw"><span class="dots" id="mpw2">••••••••••••••</span><button class="eye" aria-label="Show password"><svg><use href="#i-eye"/></svg></button></div>
+                  <div class="errmsg" data-err><svg><use href="#i-alert"/></svg><span>Wrong master password. Check Caps Lock and try again.</span></div>
+                </div>
+                <div class="chk"><span class="box"></span><span>Unlock automatically on this device</span></div>
+                <div class="dlg-actions"><button class="btn pri"><svg><use href="#i-unlock"/></svg>Unlock and connect</button><button class="btn sec">Cancel</button></div>
+              </div>
+            </div>
+          </section>
+
+          <div class="overlay" id="overlay" hidden>
+            <div class="dlg" role="dialog" aria-labelledby="dlg-title">
+              <h3 id="dlg-title"><svg><use href="#i-lock"/></svg>Unlock vault</h3>
+              <p>Enter your master password to use stored credentials. The connection tree stays browsable while the vault is locked.</p>
+              <div class="fld">
+                <label for="mpw">Master password</label>
+                <div class="pw" id="pw"><span class="dots" id="mpw">••••••••••••••</span><button class="eye" aria-label="Show password"><svg><use href="#i-eye"/></svg></button></div>
+                <div class="errmsg" data-err><svg><use href="#i-alert"/></svg><span>Wrong master password. Check Caps Lock and try again.</span></div>
+              </div>
+              <div class="chk"><span class="box"></span><span>Unlock automatically on this device</span></div>
+              <div class="dlg-actions"><button class="btn sec">Cancel</button><button class="btn pri"><svg><use href="#i-unlock"/></svg>Unlock</button></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <section class="caption" data-for="fv">
+    <div class="cap-head"><h2>Fernverkehr</h2><span class="cap-kind">The name taken literally: fernjo as the long-distance timetable of your machines</span></div>
+    <p class="thesis">The connection tree reads like a timetable: every connection is a line with its category code (SSH, RDP) and its host in a fixed column, set in a semi-condensed grotesque with tabular figures. The sidebar is the platform display, deep blue with white type; the session area stays calm and light. Inheritance uses the timetable's own device: footnote marks.</p>
+    <dl class="facts">
+      <div><dt>Signature move</dt><dd>Inherited values carry a footnote letter; the legend under the properties names the folder (a = from Work). No mark means "set here".</dd></div>
+      <div><dt>Type</dt><dd>Archivo semi-condensed (UI), Source Code Pro (terminal)</dd></div>
+      <div><dt>Density</dt><dd>22 px rows, host column always visible</dd></div>
+      <div><dt>Colour</dt><dd>Committed: blue shell, white work area; red only where something needs attention</dd></div>
+      <div><dt>Differs from the others in</dt><dd>coloured shell, condensed type, host column, footnote inheritance</dd></div>
+      <div><dt>Honest risk</dt><dd>The big blue sidebar is a strong colour to look at all day; the condensed face needs good hinting at 125 % scaling on Windows.</dd></div>
+    </dl>
+    <div><strong>Disciplines borrowed from directions that were weighed and declined</strong>
+      <ul class="raises">
+        <li>From the spectrogram plate: session state is carried by mark form (filled = live, hollow = connecting, struck = dropped), never by hue alone.</li>
+        <li>From the pocket airline timetable: rank by weight and reversal at two sizes; the selected row is the one reversed plate on the screen.</li>
+        <li>From the reference-edition page: every rule is one pixel, and the palette stays at three values plus one signal colour.</li>
+        <li>From the convention catalog: density courage, with codes and hosts packed into a 22 px line.</li>
+        <li>From the Metro tiles: no decorative borders; areas are separated by ground colour.</li>
+      </ul></div>
+  </section>
+
+  <section class="iconpanel" id="iconpanel" hidden>
+    <div class="cap-head"><h2>App icon</h2><span class="cap-kind">From Ulm, revised: the charcoal housing, a local ring joined to the lit yellow key at the remote end</span></div>
+    <div class="ic-row ic-light"><span class="ic-label">Light taskbar</span>
+      <svg width="16" height="16"><use href="#app-icon"/></svg><svg width="24" height="24"><use href="#app-icon"/></svg><svg width="32" height="32"><use href="#app-icon"/></svg><svg width="48" height="48"><use href="#app-icon"/></svg><svg width="128" height="128"><use href="#app-icon"/></svg><svg width="256" height="256"><use href="#app-icon"/></svg></div>
+    <div class="ic-row ic-dark"><span class="ic-label">Dark taskbar</span>
+      <svg width="16" height="16"><use href="#app-icon"/></svg><svg width="24" height="24"><use href="#app-icon"/></svg><svg width="32" height="32"><use href="#app-icon"/></svg><svg width="48" height="48"><use href="#app-icon"/></svg><svg width="128" height="128"><use href="#app-icon"/></svg><svg width="256" height="256"><use href="#app-icon"/></svg></div>
+    <p class="note">Sizes 16, 24, 32, 48, 128 and 256 px. Windows, Linux and the window use the set generated from <code>src-tauri/icons/icon-source.svg</code> with <code>pnpm tauri icon</code>; macOS uses <code>icon.icns</code> from <code>icon-source-macos.svg</code>, the same artwork on Apple's 824 px icon grid.</p>
+  </section>
+
+  <section class="caption" data-for="ulm2" hidden>
+    <div class="cap-head"><h2>Ulm, revised</h2><span class="cap-kind">Round 1 with your feedback; the original Ulm stays in the switcher for comparison</span></div>
+    <ul class="raises">
+      <li>Lamps only where something runs: no session = no lamp, connecting = pulsing ring, live = filled, dropped = struck. State is told by shape; colour only supports it.</li>
+      <li>Selection is a darker row with a bar on the left and semibold text; keyboard focus is a 1 px outline.</li>
+      <li>A locked vault is not modal: a note at the top of the sidebar, the tree stays usable, and the password is asked inside the tab of the connection that needs it (views "Unlock" and "Unlock error").</li>
+      <li>Host column as an option (switch above): greyed address on the right, the lamp in the last column.</li>
+      <li>The properties panel collapses (click its header or use the switch above), so the whole tree fits.</li>
+      <li>Property labels in normal case, 12 px, grey.</li>
+      <li>Reconnect is yellow on every dropped tab (pve-01, backup-nas), so dropped sessions stand out in the tab bar. Everywhere else yellow stays reserved for the one action that matters (Unlock and connect).</li>
+      <li>Terminal minimum contrast 4.5 : 1, on by default (xterm.js <code>minimumContrastRatio</code>): the palette stays, foreground colours that are too faint are darkened or lightened when drawn. Here: ANSI white on light, ANSI black and bright black on dark, and three colours just under 4.5.</li>
+    </ul>
+    <dl class="facts">
+      <div><dt>Type</dt><dd>Hanken Grotesk (UI), Red Hat Mono (terminal)</dd></div>
+      <div><dt>Density</dt><dd>24 px rows</dd></div>
+      <div><dt>Colour</dt><dd>Warm neutrals, yellow as the only accent, green/amber/red only in lamps and marks</dd></div>
+    </dl>
+  </section>
+
+  <section class="caption" data-for="ulm" hidden>
+    <div class="cap-head"><h2>Ulm</h2><span class="cap-kind">Braun and the Ulm school of design: a well-made instrument that stays quiet</span></div>
+    <p class="thesis">Warm grey housing, off-white working surfaces, charcoal type and exactly one yellow key: the action that matters right now (Reconnect, Unlock), like the equals key on a Braun calculator. Session state lives in a column of small indicator lamps at the right edge of the tree.</p>
+    <dl class="facts">
+      <div><dt>Signature move</dt><dd>Indicator lamps (lit = live, ring = connecting, struck = dropped) in one fixed column; a single yellow key per screen.</dd></div>
+      <div><dt>Type</dt><dd>Hanken Grotesk (UI), Red Hat Mono (terminal); small uppercase labels in the properties</dd></div>
+      <div><dt>Density</dt><dd>24 px rows, the calmest of the four</dd></div>
+      <div><dt>Colour</dt><dd>Restrained: warm neutrals, yellow as the only accent, green/amber/red only in lamps</dd></div>
+      <div><dt>Differs from the others in</dt><dd>warm neutral palette, lamp column, single-key accent, roomier rows</dd></div>
+      <div><dt>Honest risk</dt><dd>Familiar: this is the most conventional of the three own directions and could slide toward the quiet grey tool if executed without precision.</dd></div>
+    </dl>
+  </section>
+
+  <section class="caption" data-for="gate" hidden>
+    <div class="cap-head"><h2>Gate</h2><span class="cap-kind">The airport sign system: you always know where you are and where you are going</span></div>
+    <p class="thesis">Black and white with yellow reserved for one job: showing where you are. The selected connection and the active tab are yellow; above the properties, a yellow sign band shows the path to the selection in large type. Protocols are white pictograms on black squares, readable from across the room.</p>
+    <dl class="facts">
+      <div><dt>Signature move</dt><dd>The "you are here" sign band: folder path and connection name at sign scale, in the same yellow as the active tab.</dd></div>
+      <div><dt>Type</dt><dd>Fira Sans (UI, humanist like airport signage), Fira Code (terminal)</dd></div>
+      <div><dt>Density</dt><dd>24 px rows</dd></div>
+      <div><dt>Colour</dt><dd>Committed: black tab strip, yellow strictly for position, state colours only in marks</dd></div>
+      <div><dt>Differs from the others in</dt><dd>black tab strip, pictogram squares, sign band, highest contrast</dd></div>
+      <div><dt>Honest risk</dt><dd>Yellow in a dark theme is bright over long sessions; its world is close to Fernverkehr's (both are travel signage).</dd></div>
+    </dl>
+  </section>
+
+  <section class="caption" data-for="wb" hidden>
+    <div class="cap-head"><h2>Workbench</h2><span class="cap-kind">The category standard, played straight</span></div>
+    <p class="thesis">What a careful team would ship in this category today: neutral greys, one blue accent, the system UI font and a familiar IDE-like structure. No world of its own; included so the familiar option is a real choice.</p>
+    <dl class="facts">
+      <div><dt>Type</dt><dd>System UI font (Segoe UI, SF Pro, Cantarell per OS), JetBrains Mono (terminal)</dd></div>
+      <div><dt>Density</dt><dd>22 px rows</dd></div>
+      <div><dt>Colour</dt><dd>Restrained: grey neutrals and one blue</dd></div>
+      <div><dt>Honest risk</dt><dd>Reads like many other tools; fernjo would have no look of its own.</dd></div>
+    </dl>
+  </section>
+
+  <div class="caption declined">
+    <strong>Also weighed and declined</strong> (their disciplines went into Fernverkehr above):
+    <ul>
+      <li>Spectrogram working plate: dark charcoal with hairline colour; too close to the hacker look you ruled out.</li>
+      <li>Pocket airline timetable on a light table: one type size and raked slides; the rake fights a working tree.</li>
+      <li>Wide-margin reference edition: bone paper and vermilion keys; a reading world, not an operating one.</li>
+      <li>Convention circle catalog: newsprint thumbnail grid; no fit for a connection tree.</li>
+      <li>Metro tiles: giant cropped lowercase; wastes the space the tree and terminal need.</li>
+    </ul>
+  </div>
+
+  <p class="note">All names, hosts and addresses are synthetic (example names, IP ranges reserved for documentation). The native window title bar is not drawn. Fonts load from Google Fonts here only; the app will bundle its fonts.</p>
+</main>
+
+<script>
+(function () {
+  var state = { c: "ulm2", m: "light", v: "main", h: "on", p: "open" };
+  var allowed = { c: ["fv", "ulm2", "ulm", "gate", "wb"], m: ["light", "dark"], v: ["main", "unlock", "error", "icon"] };
+  var app = document.getElementById("app");
+  var overlay = document.getElementById("overlay");
+  var vaultBtn = document.getElementById("vault-btn");
+  var tabWeb01 = document.getElementById("tab-web01");
+
+  function apply() {
+    var isIcon = state.v === "icon";
+    document.getElementById("stage").hidden = isIcon;
+    document.getElementById("iconpanel").hidden = !isIcon;
+    var rev = state.c === "ulm2";
+    app.className = "app " + (rev ? "c-ulm c-ulm2" : "c-" + state.c) + " m-" + state.m +
+      " v-" + (state.v === "main" ? "main" : "lock") + (state.v === "error" ? "" : " hidden-err") +
+      (state.h === "off" ? " no-host" : "") + (state.p === "closed" ? " props-closed" : "");
+    overlay.hidden = state.v === "main" || rev;
+    document.querySelectorAll(".pw").forEach(function (el) { el.classList.toggle("err", state.v === "error"); });
+    tabWeb01.classList.toggle("act", !(rev && state.v !== "main"));
+    document.getElementById("ctl-host").hidden = !rev;
+    document.getElementById("ctl-props").hidden = !rev;
+    vaultBtn.innerHTML = state.v === "main"
+      ? '<svg><use href="#i-unlock"/></svg><span>Unlocked</span>'
+      : '<svg><use href="#i-lock"/></svg><span>Locked</span>';
+    document.querySelectorAll(".seg").forEach(function (seg) {
+      var key = seg.getAttribute("data-key");
+      seg.querySelectorAll("button").forEach(function (b) {
+        b.setAttribute("aria-pressed", String(b.getAttribute("data-v") === state[key]));
+      });
+    });
+    document.querySelectorAll(".caption[data-for]").forEach(function (s) {
+      s.hidden = s.getAttribute("data-for") !== state.c;
+    });
+    var h = "#" + state.c + "-" + state.m + "-" + state.v;
+    if (location.hash !== h) { try { history.replaceState(null, "", h); } catch (e) { /* ignore */ } }
+  }
+
+  function fromHash() {
+    var parts = (location.hash || "").replace("#", "").split("-");
+    if (parts.length === 3 && allowed.c.indexOf(parts[0]) >= 0 && allowed.m.indexOf(parts[1]) >= 0 && allowed.v.indexOf(parts[2]) >= 0) {
+      state.c = parts[0]; state.m = parts[1]; state.v = parts[2];
+    }
+  }
+
+  document.querySelectorAll(".seg").forEach(function (seg) {
+    seg.addEventListener("click", function (e) {
+      var b = e.target.closest("button");
+      if (!b) return;
+      state[seg.getAttribute("data-key")] = b.getAttribute("data-v");
+      apply();
+    });
+  });
+  window.addEventListener("hashchange", function () { fromHash(); apply(); });
+  document.getElementById("props-head").addEventListener("click", function () {
+    if (state.c !== "ulm2") return;
+    state.p = state.p === "open" ? "closed" : "open";
+    apply();
+  });
+
+  var wrap = document.getElementById("stage-wrap");
+  var frame = document.getElementById("frame");
+  function fit() {
+    var w = document.getElementById("stage").clientWidth;
+    var s = Math.min(1, w / 1280);
+    frame.style.transform = "scale(" + s + ")";
+    wrap.style.height = Math.round(800 * s) + "px";
+    wrap.style.width = Math.round(1280 * s) + "px";
+  }
+  if (window.ResizeObserver) { new ResizeObserver(fit).observe(document.getElementById("stage")); }
+  window.addEventListener("resize", fit);
+
+  fromHash();
+  apply();
+  fit();
+})();
+</script>
