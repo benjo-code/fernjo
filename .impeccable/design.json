@@ -1,0 +1,1268 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-15T17:02:14.054Z",
+  "title": "Design System: fernjo",
+  "extensions": {
+    "colorMeta": {
+      "bg": {
+        "role": "neutral",
+        "displayName": "Window Paper",
+        "canonical": "#f7f6f3",
+        "cssToken": "--color-bg",
+        "theme": "light",
+        "tonalRamp": [
+          "#2b2921",
+          "#504a3a",
+          "#756c52",
+          "#9b8e69",
+          "#b1a990",
+          "#c9c4b5",
+          "#e0ded6",
+          "#f4f3f1"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Working Surface",
+        "canonical": "#fbfaf7",
+        "cssToken": "--color-surface",
+        "theme": "light",
+        "tonalRamp": [
+          "#2f2b1e",
+          "#574e33",
+          "#817246",
+          "#ab9759",
+          "#bcaf85",
+          "#d0c7af",
+          "#e3dfd3",
+          "#f5f4f0"
+        ]
+      },
+      "surface-raised": {
+        "role": "neutral",
+        "displayName": "Surface Raised",
+        "canonical": "#fdfcfa",
+        "cssToken": "--color-surface-raised",
+        "theme": "light",
+        "tonalRamp": [
+          "#312a1b",
+          "#5c4d2d",
+          "#8a703d",
+          "#b7944d",
+          "#c4ad7d",
+          "#d4c6aa",
+          "#e6dfd1",
+          "#f6f3ef"
+        ]
+      },
+      "sidebar": {
+        "role": "neutral",
+        "displayName": "Housing Grey",
+        "canonical": "#e6e4de",
+        "cssToken": "--color-sidebar",
+        "theme": "light",
+        "tonalRamp": [
+          "#2a2823",
+          "#4c493d",
+          "#706a57",
+          "#938b71",
+          "#aca695",
+          "#c6c3b8",
+          "#dfddd8",
+          "#f3f3f1"
+        ]
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "Border",
+        "canonical": "#cfccc3",
+        "cssToken": "--color-border",
+        "theme": "light",
+        "tonalRamp": [
+          "#292823",
+          "#4b483f",
+          "#6d6859",
+          "#908974",
+          "#aaa597",
+          "#c5c2ba",
+          "#deddd9",
+          "#f3f3f1"
+        ]
+      },
+      "border-strong": {
+        "role": "neutral",
+        "displayName": "Border Strong",
+        "canonical": "#77736b",
+        "cssToken": "--color-border-strong",
+        "theme": "light",
+        "tonalRamp": [
+          "#282725",
+          "#484642",
+          "#68655f",
+          "#89847b",
+          "#a5a29c",
+          "#c2c0bd",
+          "#dddcda",
+          "#f3f2f2"
+        ]
+      },
+      "border-input": {
+        "role": "neutral",
+        "displayName": "Border Input",
+        "canonical": "#7f7b73",
+        "cssToken": "--color-border-input",
+        "theme": "light",
+        "tonalRamp": [
+          "#282725",
+          "#484642",
+          "#68655f",
+          "#88847c",
+          "#a5a29d",
+          "#c2c0bd",
+          "#dcdcda",
+          "#f3f2f2"
+        ]
+      },
+      "tab-text": {
+        "role": "neutral",
+        "displayName": "Tab Text",
+        "canonical": "#55534d",
+        "cssToken": "--color-tab-text",
+        "theme": "light",
+        "tonalRamp": [
+          "#282725",
+          "#484642",
+          "#68665f",
+          "#88857c",
+          "#a5a39d",
+          "#c2c0bd",
+          "#dcdcda",
+          "#f3f2f2"
+        ]
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Charcoal Ink",
+        "canonical": "#1e1e1c",
+        "cssToken": "--color-text",
+        "theme": "light",
+        "tonalRamp": [
+          "#272725",
+          "#474743",
+          "#676760",
+          "#86867e",
+          "#a4a49e",
+          "#c1c1be",
+          "#dcdcda",
+          "#f3f3f2"
+        ]
+      },
+      "text-muted": {
+        "role": "neutral",
+        "displayName": "Text Muted",
+        "canonical": "#5a5852",
+        "cssToken": "--color-text-muted",
+        "theme": "light",
+        "tonalRamp": [
+          "#272725",
+          "#474642",
+          "#68665f",
+          "#88857c",
+          "#a5a39d",
+          "#c2c0bd",
+          "#dcdcda",
+          "#f3f2f2"
+        ]
+      },
+      "accent": {
+        "role": "primary",
+        "displayName": "Key Yellow",
+        "canonical": "#f0b400",
+        "cssToken": "--color-accent",
+        "theme": "light",
+        "tonalRamp": [
+          "#40330c",
+          "#7b600e",
+          "#bd900a",
+          "#fec006",
+          "#f4ca4d",
+          "#f1d88e",
+          "#f3e7c3",
+          "#faf6eb"
+        ]
+      },
+      "accent-text": {
+        "role": "primary",
+        "displayName": "Key Ink",
+        "canonical": "#1e1e1c",
+        "cssToken": "--color-accent-text",
+        "theme": "light",
+        "tonalRamp": [
+          "#272725",
+          "#474743",
+          "#676760",
+          "#86867e",
+          "#a4a49e",
+          "#c1c1be",
+          "#dcdcda",
+          "#f3f3f2"
+        ]
+      },
+      "selection": {
+        "role": "neutral",
+        "displayName": "Selected Row",
+        "canonical": "#d1cdc3",
+        "cssToken": "--color-selection",
+        "theme": "light",
+        "tonalRamp": [
+          "#2a2823",
+          "#4c483e",
+          "#6f6958",
+          "#928972",
+          "#aca596",
+          "#c6c2b9",
+          "#deddd8",
+          "#f3f3f1"
+        ]
+      },
+      "selection-bar": {
+        "role": "neutral",
+        "displayName": "Selection Bar",
+        "canonical": "#1e1e1c",
+        "cssToken": "--color-selection-bar",
+        "theme": "light",
+        "tonalRamp": [
+          "#272725",
+          "#474743",
+          "#676760",
+          "#86867e",
+          "#a4a49e",
+          "#c1c1be",
+          "#dcdcda",
+          "#f3f3f2"
+        ]
+      },
+      "hover": {
+        "role": "neutral",
+        "displayName": "Hover",
+        "canonical": "#eeece7",
+        "cssToken": "--color-hover",
+        "theme": "light",
+        "tonalRamp": [
+          "#2b2822",
+          "#4e493c",
+          "#736a54",
+          "#978b6d",
+          "#afa792",
+          "#c8c3b7",
+          "#dfddd7",
+          "#f4f3f1"
+        ]
+      },
+      "focus": {
+        "role": "neutral",
+        "displayName": "Focus",
+        "canonical": "#1e1e1c",
+        "cssToken": "--color-focus",
+        "theme": "light",
+        "tonalRamp": [
+          "#272725",
+          "#474743",
+          "#676760",
+          "#86867e",
+          "#a4a49e",
+          "#c1c1be",
+          "#dcdcda",
+          "#f3f3f2"
+        ]
+      },
+      "success": {
+        "role": "state",
+        "displayName": "Success",
+        "canonical": "#2f7d22",
+        "cssToken": "--color-success",
+        "theme": "light",
+        "tonalRamp": [
+          "#1c3517",
+          "#2f6426",
+          "#3f9730",
+          "#4fc93b",
+          "#7fd071",
+          "#abdca3",
+          "#d1e9cd",
+          "#eff7ee"
+        ]
+      },
+      "warning": {
+        "role": "state",
+        "displayName": "Warning",
+        "canonical": "#9a5d00",
+        "cssToken": "--color-warning",
+        "theme": "light",
+        "tonalRamp": [
+          "#402c0c",
+          "#7b500e",
+          "#bd760a",
+          "#fe9c06",
+          "#f4b24d",
+          "#f1ca8e",
+          "#f3e0c3",
+          "#faf4eb"
+        ]
+      },
+      "danger": {
+        "role": "state",
+        "displayName": "Danger",
+        "canonical": "#b3261e",
+        "cssToken": "--color-danger",
+        "theme": "light",
+        "tonalRamp": [
+          "#391614",
+          "#6c221e",
+          "#a32a24",
+          "#da332a",
+          "#dc6c65",
+          "#e2a09c",
+          "#edccca",
+          "#f8eded"
+        ]
+      },
+      "lamp-live": {
+        "role": "state",
+        "displayName": "Lamp Live",
+        "canonical": "#2f7d22",
+        "cssToken": "--color-lamp-live",
+        "theme": "light",
+        "tonalRamp": [
+          "#1c3517",
+          "#2f6426",
+          "#3f9730",
+          "#4fc93b",
+          "#7fd071",
+          "#abdca3",
+          "#d1e9cd",
+          "#eff7ee"
+        ]
+      },
+      "lamp-connecting": {
+        "role": "state",
+        "displayName": "Lamp Connecting",
+        "canonical": "#9a5d00",
+        "cssToken": "--color-lamp-connecting",
+        "theme": "light",
+        "tonalRamp": [
+          "#402c0c",
+          "#7b500e",
+          "#bd760a",
+          "#fe9c06",
+          "#f4b24d",
+          "#f1ca8e",
+          "#f3e0c3",
+          "#faf4eb"
+        ]
+      },
+      "lamp-dropped": {
+        "role": "state",
+        "displayName": "Lamp Dropped",
+        "canonical": "#b3261e",
+        "cssToken": "--color-lamp-dropped",
+        "theme": "light",
+        "tonalRamp": [
+          "#391614",
+          "#6c221e",
+          "#a32a24",
+          "#da332a",
+          "#dc6c65",
+          "#e2a09c",
+          "#edccca",
+          "#f8eded"
+        ]
+      },
+      "ssh": {
+        "role": "neutral",
+        "displayName": "Ssh",
+        "canonical": "#5a5852",
+        "cssToken": "--color-ssh",
+        "theme": "light",
+        "tonalRamp": [
+          "#272725",
+          "#474642",
+          "#68665f",
+          "#88857c",
+          "#a5a39d",
+          "#c2c0bd",
+          "#dcdcda",
+          "#f3f2f2"
+        ]
+      },
+      "rdp": {
+        "role": "neutral",
+        "displayName": "Rdp",
+        "canonical": "#5a5852",
+        "cssToken": "--color-rdp",
+        "theme": "light",
+        "tonalRamp": [
+          "#272725",
+          "#474642",
+          "#68665f",
+          "#88857c",
+          "#a5a39d",
+          "#c2c0bd",
+          "#dcdcda",
+          "#f3f2f2"
+        ]
+      },
+      "overlay": {
+        "role": "neutral",
+        "displayName": "Overlay",
+        "canonical": "#2826226b",
+        "cssToken": "--color-overlay",
+        "theme": "light",
+        "tonalRamp": [
+          "#282724",
+          "#494640",
+          "#6b665c",
+          "#8c8578",
+          "#a7a39a",
+          "#c3c1bb",
+          "#dddcd9",
+          "#f3f2f2"
+        ]
+      },
+      "shadow": {
+        "role": "neutral",
+        "displayName": "Shadow",
+        "canonical": "#1e1c1847",
+        "cssToken": "--color-shadow",
+        "theme": "light",
+        "tonalRamp": [
+          "#292723",
+          "#4b473f",
+          "#6d6759",
+          "#908774",
+          "#aaa497",
+          "#c5c1ba",
+          "#dedcd9",
+          "#f3f3f1"
+        ]
+      },
+      "term-bg": {
+        "role": "terminal",
+        "displayName": "Term Bg",
+        "canonical": "#fbfaf7",
+        "cssToken": "--term-bg",
+        "theme": "light",
+        "tonalRamp": [
+          "#2f2b1e",
+          "#574e33",
+          "#817246",
+          "#ab9759",
+          "#bcaf85",
+          "#d0c7af",
+          "#e3dfd3",
+          "#f5f4f0"
+        ]
+      },
+      "term-fg": {
+        "role": "terminal",
+        "displayName": "Term Fg",
+        "canonical": "#232320",
+        "cssToken": "--term-fg",
+        "theme": "light",
+        "tonalRamp": [
+          "#272725",
+          "#474742",
+          "#67675f",
+          "#88887d",
+          "#a4a49d",
+          "#c1c1bd",
+          "#dcdcda",
+          "#f3f3f2"
+        ]
+      },
+      "term-cursor": {
+        "role": "terminal",
+        "displayName": "Term Cursor",
+        "canonical": "#1e1e1c",
+        "cssToken": "--term-cursor",
+        "theme": "light",
+        "tonalRamp": [
+          "#272725",
+          "#474743",
+          "#676760",
+          "#86867e",
+          "#a4a49e",
+          "#c1c1be",
+          "#dcdcda",
+          "#f3f3f2"
+        ]
+      },
+      "term-selection": {
+        "role": "terminal",
+        "displayName": "Term Selection",
+        "canonical": "#eadfb8",
+        "cssToken": "--term-selection",
+        "theme": "light",
+        "tonalRamp": [
+          "#342e18",
+          "#635527",
+          "#947f33",
+          "#c5a83f",
+          "#ceba73",
+          "#dacea4",
+          "#e8e3ce",
+          "#f6f5ee"
+        ]
+      },
+      "bg-dark": {
+        "role": "neutral",
+        "displayName": "Window Paper (dark)",
+        "canonical": "#1c1c1a",
+        "cssToken": "--color-bg",
+        "theme": "dark",
+        "tonalRamp": [
+          "#272725",
+          "#474743",
+          "#676760",
+          "#87877d",
+          "#a4a49e",
+          "#c1c1bd",
+          "#dcdcda",
+          "#f3f3f2"
+        ]
+      },
+      "surface-dark": {
+        "role": "neutral",
+        "displayName": "Working Surface (dark)",
+        "canonical": "#222220",
+        "cssToken": "--color-surface",
+        "theme": "dark",
+        "tonalRamp": [
+          "#272725",
+          "#474743",
+          "#666661",
+          "#86867e",
+          "#a3a39e",
+          "#c1c1be",
+          "#dcdcdb",
+          "#f2f2f2"
+        ]
+      },
+      "surface-raised-dark": {
+        "role": "neutral",
+        "displayName": "Surface Raised (dark)",
+        "canonical": "#2a2a27",
+        "cssToken": "--color-surface-raised",
+        "theme": "dark",
+        "tonalRamp": [
+          "#272725",
+          "#474743",
+          "#676760",
+          "#87877d",
+          "#a4a49e",
+          "#c1c1bd",
+          "#dcdcda",
+          "#f3f3f2"
+        ]
+      },
+      "sidebar-dark": {
+        "role": "neutral",
+        "displayName": "Housing Grey (dark)",
+        "canonical": "#262624",
+        "cssToken": "--color-sidebar",
+        "theme": "dark",
+        "tonalRamp": [
+          "#272726",
+          "#464643",
+          "#666661",
+          "#85857f",
+          "#a3a39e",
+          "#c1c1be",
+          "#dcdcdb",
+          "#f2f2f2"
+        ]
+      },
+      "border-dark": {
+        "role": "neutral",
+        "displayName": "Border (dark)",
+        "canonical": "#363531",
+        "cssToken": "--color-border",
+        "theme": "dark",
+        "tonalRamp": [
+          "#282725",
+          "#484642",
+          "#68665f",
+          "#88867c",
+          "#a5a39d",
+          "#c2c1bd",
+          "#dcdcda",
+          "#f3f2f2"
+        ]
+      },
+      "border-strong-dark": {
+        "role": "neutral",
+        "displayName": "Border Strong (dark)",
+        "canonical": "#77746d",
+        "cssToken": "--color-border-strong",
+        "theme": "dark",
+        "tonalRamp": [
+          "#272725",
+          "#474642",
+          "#676560",
+          "#87847d",
+          "#a4a29d",
+          "#c1c0bd",
+          "#dcdcda",
+          "#f3f2f2"
+        ]
+      },
+      "border-input-dark": {
+        "role": "neutral",
+        "displayName": "Border Input (dark)",
+        "canonical": "#75736c",
+        "cssToken": "--color-border-input",
+        "theme": "dark",
+        "tonalRamp": [
+          "#272725",
+          "#474643",
+          "#676560",
+          "#87857d",
+          "#a4a39d",
+          "#c1c0bd",
+          "#dcdcda",
+          "#f3f2f2"
+        ]
+      },
+      "tab-text-dark": {
+        "role": "neutral",
+        "displayName": "Tab Text (dark)",
+        "canonical": "#a3a097",
+        "cssToken": "--color-tab-text",
+        "theme": "dark",
+        "tonalRamp": [
+          "#282725",
+          "#484742",
+          "#69665e",
+          "#8a867a",
+          "#a6a39c",
+          "#c2c1bc",
+          "#dddcda",
+          "#f3f2f2"
+        ]
+      },
+      "text-dark": {
+        "role": "neutral",
+        "displayName": "Charcoal Ink (dark)",
+        "canonical": "#eceae4",
+        "cssToken": "--color-text",
+        "theme": "dark",
+        "tonalRamp": [
+          "#2b2922",
+          "#4e4a3b",
+          "#736b54",
+          "#988d6d",
+          "#afa892",
+          "#c8c4b7",
+          "#dfddd7",
+          "#f4f3f1"
+        ]
+      },
+      "text-muted-dark": {
+        "role": "neutral",
+        "displayName": "Text Muted (dark)",
+        "canonical": "#a3a097",
+        "cssToken": "--color-text-muted",
+        "theme": "dark",
+        "tonalRamp": [
+          "#282725",
+          "#484742",
+          "#69665e",
+          "#8a867a",
+          "#a6a39c",
+          "#c2c1bc",
+          "#dddcda",
+          "#f3f2f2"
+        ]
+      },
+      "accent-dark": {
+        "role": "primary",
+        "displayName": "Key Yellow (dark)",
+        "canonical": "#f0b400",
+        "cssToken": "--color-accent",
+        "theme": "dark",
+        "tonalRamp": [
+          "#40330c",
+          "#7b600e",
+          "#bd900a",
+          "#fec006",
+          "#f4ca4d",
+          "#f1d88e",
+          "#f3e7c3",
+          "#faf6eb"
+        ]
+      },
+      "accent-text-dark": {
+        "role": "primary",
+        "displayName": "Key Ink (dark)",
+        "canonical": "#1c1c1a",
+        "cssToken": "--color-accent-text",
+        "theme": "dark",
+        "tonalRamp": [
+          "#272725",
+          "#474743",
+          "#676760",
+          "#87877d",
+          "#a4a49e",
+          "#c1c1bd",
+          "#dcdcda",
+          "#f3f3f2"
+        ]
+      },
+      "selection-dark": {
+        "role": "neutral",
+        "displayName": "Selected Row (dark)",
+        "canonical": "#4a4843",
+        "cssToken": "--color-selection",
+        "theme": "dark",
+        "tonalRamp": [
+          "#282725",
+          "#484642",
+          "#68655f",
+          "#88857c",
+          "#a5a29d",
+          "#c2c0bd",
+          "#dcdcda",
+          "#f3f2f2"
+        ]
+      },
+      "selection-bar-dark": {
+        "role": "neutral",
+        "displayName": "Selection Bar (dark)",
+        "canonical": "#eceae4",
+        "cssToken": "--color-selection-bar",
+        "theme": "dark",
+        "tonalRamp": [
+          "#2b2922",
+          "#4e4a3b",
+          "#736b54",
+          "#988d6d",
+          "#afa892",
+          "#c8c4b7",
+          "#dfddd7",
+          "#f4f3f1"
+        ]
+      },
+      "hover-dark": {
+        "role": "neutral",
+        "displayName": "Hover (dark)",
+        "canonical": "#2e2d2a",
+        "cssToken": "--color-hover",
+        "theme": "dark",
+        "tonalRamp": [
+          "#272725",
+          "#474642",
+          "#68655f",
+          "#88857c",
+          "#a4a39d",
+          "#c1c0bd",
+          "#dcdcda",
+          "#f3f2f2"
+        ]
+      },
+      "focus-dark": {
+        "role": "neutral",
+        "displayName": "Focus (dark)",
+        "canonical": "#eceae4",
+        "cssToken": "--color-focus",
+        "theme": "dark",
+        "tonalRamp": [
+          "#2b2922",
+          "#4e4a3b",
+          "#736b54",
+          "#988d6d",
+          "#afa892",
+          "#c8c4b7",
+          "#dfddd7",
+          "#f4f3f1"
+        ]
+      },
+      "success-dark": {
+        "role": "state",
+        "displayName": "Success (dark)",
+        "canonical": "#6cc04a",
+        "cssToken": "--color-success",
+        "theme": "dark",
+        "tonalRamp": [
+          "#21331a",
+          "#3a5f2a",
+          "#518f38",
+          "#69be46",
+          "#90c978",
+          "#b5d7a7",
+          "#d6e7d0",
+          "#f1f6ef"
+        ]
+      },
+      "warning-dark": {
+        "role": "state",
+        "displayName": "Warning (dark)",
+        "canonical": "#e0a030",
+        "cssToken": "--color-warning",
+        "theme": "dark",
+        "tonalRamp": [
+          "#3a2c13",
+          "#6d501c",
+          "#a67621",
+          "#de9b26",
+          "#deb163",
+          "#e4c99b",
+          "#ede0c9",
+          "#f8f4ed"
+        ]
+      },
+      "danger-dark": {
+        "role": "state",
+        "displayName": "Danger (dark)",
+        "canonical": "#ff7a70",
+        "cssToken": "--color-danger",
+        "theme": "dark",
+        "tonalRamp": [
+          "#40100c",
+          "#7b160e",
+          "#bd160a",
+          "#fe1806",
+          "#f4594d",
+          "#f1958e",
+          "#f3c7c3",
+          "#faeceb"
+        ]
+      },
+      "lamp-live-dark": {
+        "role": "state",
+        "displayName": "Lamp Live (dark)",
+        "canonical": "#6cc04a",
+        "cssToken": "--color-lamp-live",
+        "theme": "dark",
+        "tonalRamp": [
+          "#21331a",
+          "#3a5f2a",
+          "#518f38",
+          "#69be46",
+          "#90c978",
+          "#b5d7a7",
+          "#d6e7d0",
+          "#f1f6ef"
+        ]
+      },
+      "lamp-connecting-dark": {
+        "role": "state",
+        "displayName": "Lamp Connecting (dark)",
+        "canonical": "#e0a030",
+        "cssToken": "--color-lamp-connecting",
+        "theme": "dark",
+        "tonalRamp": [
+          "#3a2c13",
+          "#6d501c",
+          "#a67621",
+          "#de9b26",
+          "#deb163",
+          "#e4c99b",
+          "#ede0c9",
+          "#f8f4ed"
+        ]
+      },
+      "lamp-dropped-dark": {
+        "role": "state",
+        "displayName": "Lamp Dropped (dark)",
+        "canonical": "#ff7a70",
+        "cssToken": "--color-lamp-dropped",
+        "theme": "dark",
+        "tonalRamp": [
+          "#40100c",
+          "#7b160e",
+          "#bd160a",
+          "#fe1806",
+          "#f4594d",
+          "#f1958e",
+          "#f3c7c3",
+          "#faeceb"
+        ]
+      },
+      "ssh-dark": {
+        "role": "neutral",
+        "displayName": "Ssh (dark)",
+        "canonical": "#a3a097",
+        "cssToken": "--color-ssh",
+        "theme": "dark",
+        "tonalRamp": [
+          "#282725",
+          "#484742",
+          "#69665e",
+          "#8a867a",
+          "#a6a39c",
+          "#c2c1bc",
+          "#dddcda",
+          "#f3f2f2"
+        ]
+      },
+      "rdp-dark": {
+        "role": "neutral",
+        "displayName": "Rdp (dark)",
+        "canonical": "#a3a097",
+        "cssToken": "--color-rdp",
+        "theme": "dark",
+        "tonalRamp": [
+          "#282725",
+          "#484742",
+          "#69665e",
+          "#8a867a",
+          "#a6a39c",
+          "#c2c1bc",
+          "#dddcda",
+          "#f3f2f2"
+        ]
+      },
+      "overlay-dark": {
+        "role": "neutral",
+        "displayName": "Overlay (dark)",
+        "canonical": "#00000085",
+        "cssToken": "--color-overlay",
+        "theme": "dark",
+        "tonalRamp": [
+          "#262626",
+          "#454545",
+          "#636363",
+          "#828282",
+          "#a1a1a1",
+          "#bfbfbf",
+          "#dbdbdb",
+          "#f2f2f2"
+        ]
+      },
+      "shadow-dark": {
+        "role": "neutral",
+        "displayName": "Shadow (dark)",
+        "canonical": "#00000080",
+        "cssToken": "--color-shadow",
+        "theme": "dark",
+        "tonalRamp": [
+          "#262626",
+          "#454545",
+          "#636363",
+          "#828282",
+          "#a1a1a1",
+          "#bfbfbf",
+          "#dbdbdb",
+          "#f2f2f2"
+        ]
+      },
+      "term-bg-dark": {
+        "role": "terminal",
+        "displayName": "Term Bg (dark)",
+        "canonical": "#1c1c1a",
+        "cssToken": "--term-bg",
+        "theme": "dark",
+        "tonalRamp": [
+          "#272725",
+          "#474743",
+          "#676760",
+          "#87877d",
+          "#a4a49e",
+          "#c1c1bd",
+          "#dcdcda",
+          "#f3f3f2"
+        ]
+      },
+      "term-fg-dark": {
+        "role": "terminal",
+        "displayName": "Term Fg (dark)",
+        "canonical": "#e2e0d9",
+        "cssToken": "--term-fg",
+        "theme": "dark",
+        "tonalRamp": [
+          "#2a2823",
+          "#4c493e",
+          "#6f6a57",
+          "#938b71",
+          "#aca795",
+          "#c6c3b9",
+          "#dfddd8",
+          "#f3f3f1"
+        ]
+      },
+      "term-cursor-dark": {
+        "role": "terminal",
+        "displayName": "Term Cursor (dark)",
+        "canonical": "#f0b400",
+        "cssToken": "--term-cursor",
+        "theme": "dark",
+        "tonalRamp": [
+          "#40330c",
+          "#7b600e",
+          "#bd900a",
+          "#fec006",
+          "#f4ca4d",
+          "#f1d88e",
+          "#f3e7c3",
+          "#faf6eb"
+        ]
+      },
+      "term-selection-dark": {
+        "role": "terminal",
+        "displayName": "Term Selection (dark)",
+        "canonical": "#4a4535",
+        "cssToken": "--term-selection",
+        "theme": "dark",
+        "tonalRamp": [
+          "#2b2922",
+          "#4e4a3c",
+          "#726b55",
+          "#978d6e",
+          "#aea893",
+          "#c7c4b7",
+          "#dfddd7",
+          "#f4f3f1"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "title": {
+        "displayName": "Title",
+        "purpose": "Unlock prompt and dialog headings, shell h1 (--text-lg, --weight-strong)."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Tree rows, tab titles, values, prompt copy (--text-md)."
+      },
+      "body-strong": {
+        "displayName": "Body strong",
+        "purpose": "Folders, selected row, panel header name, vault note title (--weight-strong)."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Normal-case 12 px muted labels, from-folder marks, host column (--text-sm)."
+      },
+      "caption": {
+        "displayName": "Caption",
+        "purpose": "Tab status and Reconnect (--text-xs)."
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "Terminal (Red Hat Mono default, user-configurable in M6)."
+      }
+    },
+    "shadows": [
+      {
+        "name": "raised",
+        "value": "0 2px 6px var(--color-shadow), 0 24px 48px -12px var(--color-shadow)",
+        "purpose": "Dialogs and popovers only (--shadow-raised)."
+      }
+    ],
+    "motion": [
+      {
+        "name": "duration-fast",
+        "value": "120ms",
+        "purpose": "Hover and small state changes; 0ms under reduced motion."
+      },
+      {
+        "name": "duration-normal",
+        "value": "200ms",
+        "purpose": "Larger transitions such as panel collapse; 0ms under reduced motion."
+      },
+      {
+        "name": "duration-pulse",
+        "value": "1600ms",
+        "purpose": "Connecting lamp and tab mark pulse; 0ms under reduced motion."
+      },
+      {
+        "name": "easing-pulse",
+        "value": "cubic-bezier(0.45, 0, 0.55, 1)",
+        "purpose": "Easing of the connecting pulse."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "minimum-window",
+        "value": "900px"
+      },
+      {
+        "name": "design-size",
+        "value": "1280px"
+      }
+    ],
+    "layout": {
+      "sidebarWidth": "300px",
+      "rowHeightTree": "24px",
+      "lampSize": "9px",
+      "treeIndent": "14px (artifact value, no token)",
+      "tabStripHeight": "36px",
+      "minVisibleTreeRowsAt1280x800": 23
+    },
+    "terminal": {
+      "minimumContrastRatio": 4.5,
+      "minimumContrastToken": "--terminal-min-contrast",
+      "ansi": {
+        "light": {
+          "0": "#232320",
+          "1": "#b3261e",
+          "2": "#3d7a1f",
+          "3": "#8a6000",
+          "4": "#2d5c9a",
+          "5": "#8a3f8f",
+          "6": "#1d7270",
+          "7": "#cfccc4",
+          "8": "#6b6962",
+          "9": "#c9372c",
+          "10": "#47862a",
+          "11": "#9c6c00",
+          "12": "#3a6cb0",
+          "13": "#9f4ca4",
+          "14": "#22827d",
+          "15": "#ffffff"
+        },
+        "dark": {
+          "0": "#3a3935",
+          "1": "#f0625a",
+          "2": "#8ccf5e",
+          "3": "#f0c445",
+          "4": "#7aa7e0",
+          "5": "#d08ad4",
+          "6": "#63c4bd",
+          "7": "#cfccc4",
+          "8": "#6b6962",
+          "9": "#ff8a80",
+          "10": "#a8e07f",
+          "11": "#ffd86b",
+          "12": "#9cc1f0",
+          "13": "#e5a8e8",
+          "14": "#8fded7",
+          "15": "#f7f6f2"
+        }
+      }
+    }
+  },
+  "components": [
+    {
+      "name": "Primary Button (yellow key)",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one action that matters in the current context, e.g. Unlock and connect.",
+      "html": "<button class=\"ds-btn ds-btn-primary\"><svg viewBox=\"0 0 16 16\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect x=\"3\" y=\"7\" width=\"10\" height=\"7\" rx=\"1\"/><path d=\"M5.25 7V5a2.75 2.75 0 015.4-.7\"/></svg>Unlock and connect</button>",
+      "css": ".ds-btn { font-family: var(--font-ui); font-size: var(--text-md); font-variant-numeric: tabular-nums; height: 32px; padding: 0 14px; border-radius: var(--radius-sm); display: inline-flex; align-items: center; gap: 6px; font-weight: var(--weight-medium); cursor: pointer; transition: background var(--duration-fast), border-color var(--duration-fast); } .ds-btn:focus-visible { outline: 1px solid var(--color-focus); outline-offset: -1px; } .ds-btn-primary { background: var(--color-accent); color: var(--color-accent-text); border: 1px solid var(--color-accent); }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Every other action: transparent with a strong 1 px outline.",
+      "html": "<button class=\"ds-btn ds-btn-secondary\">Cancel</button>",
+      "css": ".ds-btn { font-family: var(--font-ui); font-size: var(--text-md); font-variant-numeric: tabular-nums; height: 32px; padding: 0 14px; border-radius: var(--radius-sm); display: inline-flex; align-items: center; gap: 6px; font-weight: var(--weight-medium); cursor: pointer; transition: background var(--duration-fast), border-color var(--duration-fast); } .ds-btn:focus-visible { outline: 1px solid var(--color-focus); outline-offset: -1px; } .ds-btn-secondary { background: transparent; color: var(--color-text); border: 1px solid var(--color-border-strong); } .ds-btn-secondary:hover { background: var(--color-hover); }"
+    },
+    {
+      "name": "Password field and checkbox",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Masked master password with a show toggle; the error state turns border and ring to danger.",
+      "html": "<div class=\"ds-field\"><label class=\"ds-label\" for=\"ds-pw\">Master password</label><div class=\"ds-pw\"><input id=\"ds-pw\" type=\"password\" value=\"example-only\"><button class=\"ds-eye\" aria-label=\"Show password\"><svg viewBox=\"0 0 16 16\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z\"/><circle cx=\"8\" cy=\"8\" r=\"2\"/></svg></button></div></div><div class=\"ds-field\"><div class=\"ds-pw ds-err\"><input type=\"password\" value=\"example\" aria-invalid=\"true\" aria-label=\"Master password\"><button class=\"ds-eye\" aria-label=\"Show password\"><svg viewBox=\"0 0 16 16\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z\"/><circle cx=\"8\" cy=\"8\" r=\"2\"/></svg></button></div><div class=\"ds-errmsg\"><svg viewBox=\"0 0 16 16\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><circle cx=\"8\" cy=\"8\" r=\"6.25\"/><path d=\"M8 4.75v3.75M8 11h.01\"/></svg><span>Wrong master password. Check Caps Lock and try again.</span></div></div><label class=\"ds-chk\"><input type=\"checkbox\"><span>Unlock automatically on this device</span></label>",
+      "css": ".ds-field { font-family: var(--font-ui); font-size: var(--text-md); font-variant-numeric: tabular-nums; display: grid; gap: 5px; width: 360px; margin-bottom: 12px; color: var(--color-text); } .ds-label { font-weight: var(--weight-medium); } .ds-pw { display: flex; align-items: center; height: 32px; border: 1px solid var(--color-border-input); border-radius: var(--radius-sm); background: var(--color-surface); padding: 0 4px 0 10px; } .ds-pw:focus-within { outline: 1px solid var(--color-focus); outline-offset: -1px; } .ds-pw input { flex: 1; border: 0; background: transparent; color: var(--color-text); font: inherit; letter-spacing: 2px; outline: none; } .ds-eye { display: inline-flex; padding: 5px; border: 0; background: none; border-radius: var(--radius-sm); color: var(--color-text-muted); } .ds-pw.ds-err { border-color: var(--color-danger); box-shadow: 0 0 0 1px var(--color-danger); } .ds-errmsg { display: flex; gap: 6px; color: var(--color-danger); } .ds-chk { font-family: var(--font-ui); font-size: var(--text-md); font-variant-numeric: tabular-nums; display: flex; align-items: center; gap: 8px; color: var(--color-text); } .ds-chk input { appearance: none; width: 16px; height: 16px; margin: 0; border: 1px solid var(--color-border-input); border-radius: 3px; background: var(--color-surface); } .ds-chk input:checked { background: var(--color-text); } .ds-chk input:focus-visible { outline: 1px solid var(--color-focus); outline-offset: -1px; }"
+    },
+    {
+      "name": "Connection tree",
+      "kind": "nav",
+      "refersTo": "tree-row",
+      "description": "Dense 24 px rows: folder, connections with host and lamp column, hover, selection (ink bar + semibold) and keyboard focus (1 px outline).",
+      "html": "<div class=\"ds-tree\"><div class=\"ds-row ds-folder\" style=\"--d:0\"><svg viewBox=\"0 0 16 16\" width=\"14\" height=\"14\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M4.5 6l3.5 3.5L11.5 6\"/></svg><span class=\"ds-name\">Web</span></div><div class=\"ds-row ds-conn ds-sel\" style=\"--d:1\"><span class=\"ds-proto\"><svg viewBox=\"0 0 16 16\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect x=\"1.75\" y=\"2.75\" width=\"12.5\" height=\"10.5\" rx=\"1\"/><path d=\"M4.5 6.5l2 1.75-2 1.75M8.5 10.5h3\"/></svg></span><span class=\"ds-name\">web-01</span><span class=\"ds-host\">198.51.100.21</span><span class=\"ds-lamp ds-live\"></span></div><div class=\"ds-row ds-conn\" style=\"--d:1\"><span class=\"ds-proto\"><svg viewBox=\"0 0 16 16\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect x=\"1.75\" y=\"2.75\" width=\"12.5\" height=\"10.5\" rx=\"1\"/><path d=\"M4.5 6.5l2 1.75-2 1.75M8.5 10.5h3\"/></svg></span><span class=\"ds-name\">web-02</span><span class=\"ds-host\">198.51.100.22</span><span class=\"ds-lamp ds-connecting\"></span></div><div class=\"ds-row ds-conn\" style=\"--d:1\"><span class=\"ds-proto\"><svg viewBox=\"0 0 16 16\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect x=\"1.75\" y=\"2.75\" width=\"12.5\" height=\"10.5\" rx=\"1\"/><path d=\"M4.5 6.5l2 1.75-2 1.75M8.5 10.5h3\"/></svg></span><span class=\"ds-name\">pve-01</span><span class=\"ds-host\">192.0.2.11</span><span class=\"ds-lamp ds-dropped\"></span></div><div class=\"ds-row ds-conn\" tabindex=\"0\" style=\"--d:1\"><span class=\"ds-proto\"><svg viewBox=\"0 0 16 16\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect x=\"1.75\" y=\"2.75\" width=\"12.5\" height=\"8.5\" rx=\"1\"/><path d=\"M5.5 13.5h5M8 11.25v2.25\"/></svg></span><span class=\"ds-name\">dc01</span><span class=\"ds-host\">192.0.2.50</span><span class=\"ds-lamp\"></span></div></div>",
+      "css": ".ds-tree { font-family: var(--font-ui); font-size: var(--text-md); font-variant-numeric: tabular-nums; width: 300px; background: var(--color-sidebar); color: var(--color-text); padding: 2px 0; } .ds-row { height: var(--row-height-tree); display: flex; align-items: center; gap: 5px; padding: 0 10px 0 calc(8px + var(--d) * 14px); white-space: nowrap; } .ds-row svg { flex: none; color: var(--color-text-muted); } .ds-row.ds-conn { padding-left: calc(27px + var(--d) * 14px); } .ds-folder .ds-name { font-weight: var(--weight-strong); } .ds-row:hover { background: var(--color-hover); } .ds-row:focus-visible { outline: 1px solid var(--color-focus); outline-offset: -1px; } .ds-row.ds-sel { background: var(--color-selection); box-shadow: inset 3px 0 0 var(--color-selection-bar); font-weight: var(--weight-strong); } .ds-row.ds-sel .ds-host, .ds-row.ds-sel svg { color: var(--color-text); } .ds-proto { display: inline-flex; color: var(--color-ssh); } .ds-host { margin-left: auto; color: var(--color-text-muted); font-size: var(--text-sm); } .ds-lamp { width: var(--lamp-size); height: var(--lamp-size); margin-left: 8px; border-radius: 50%; border: 1.5px solid transparent; flex: none; } .ds-lamp.ds-live { background: var(--color-lamp-live); border-color: var(--color-lamp-live); } .ds-lamp.ds-connecting { border-color: var(--color-lamp-connecting); animation: ds-pulse var(--duration-pulse) var(--easing-pulse) infinite; } .ds-lamp.ds-dropped { border-color: var(--color-lamp-dropped); background: linear-gradient(135deg, transparent 43%, var(--color-lamp-dropped) 43%, var(--color-lamp-dropped) 57%, transparent 57%); } @keyframes ds-pulse { 50% { opacity: 0.3; } } @media (prefers-reduced-motion: reduce) { .ds-lamp { animation: none; } }"
+    },
+    {
+      "name": "Tab strip",
+      "kind": "nav",
+      "refersTo": "tab",
+      "description": "Classic tabs on the housing: connected (active), connecting, dropped with the yellow Reconnect, RDP.",
+      "html": "<div class=\"ds-tabs\"><div class=\"ds-tab ds-act\"><span class=\"ds-mark ds-live\"><svg viewBox=\"0 0 10 10\" width=\"10\" height=\"10\" aria-hidden=\"true\"><circle cx=\"5\" cy=\"5\" r=\"4\" fill=\"currentColor\"/></svg></span><svg viewBox=\"0 0 16 16\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect x=\"1.75\" y=\"2.75\" width=\"12.5\" height=\"10.5\" rx=\"1\"/><path d=\"M4.5 6.5l2 1.75-2 1.75M8.5 10.5h3\"/></svg><span class=\"ds-t\">web-01</span><button class=\"ds-x\" aria-label=\"Close web-01\"><svg viewBox=\"0 0 16 16\" width=\"12\" height=\"12\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M4 4l8 8M12 4l-8 8\"/></svg></button></div><div class=\"ds-tab\"><span class=\"ds-mark ds-connecting\"><svg viewBox=\"0 0 10 10\" width=\"10\" height=\"10\" aria-hidden=\"true\"><circle cx=\"5\" cy=\"5\" r=\"3.4\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.4\"/></svg></span><svg viewBox=\"0 0 16 16\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect x=\"1.75\" y=\"2.75\" width=\"12.5\" height=\"10.5\" rx=\"1\"/><path d=\"M4.5 6.5l2 1.75-2 1.75M8.5 10.5h3\"/></svg><span class=\"ds-t\">docker-01</span><span class=\"ds-st\">Connecting…</span><button class=\"ds-x\" aria-label=\"Close docker-01\"><svg viewBox=\"0 0 16 16\" width=\"12\" height=\"12\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M4 4l8 8M12 4l-8 8\"/></svg></button></div><div class=\"ds-tab\"><span class=\"ds-mark ds-dropped\"><svg viewBox=\"0 0 10 10\" width=\"10\" height=\"10\" aria-hidden=\"true\"><circle cx=\"5\" cy=\"5\" r=\"3.4\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.4\"/><path d=\"M2 8L8 2\" stroke=\"currentColor\" stroke-width=\"1.4\"/></svg></span><svg viewBox=\"0 0 16 16\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect x=\"1.75\" y=\"2.75\" width=\"12.5\" height=\"10.5\" rx=\"1\"/><path d=\"M4.5 6.5l2 1.75-2 1.75M8.5 10.5h3\"/></svg><span class=\"ds-t\">pve-01</span><button class=\"ds-recon\"><svg viewBox=\"0 0 16 16\" width=\"12\" height=\"12\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M13 8a5 5 0 11-1.6-3.7M13 2.5v3h-3\"/></svg>Reconnect</button><button class=\"ds-x\" aria-label=\"Close pve-01\"><svg viewBox=\"0 0 16 16\" width=\"12\" height=\"12\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M4 4l8 8M12 4l-8 8\"/></svg></button></div><div class=\"ds-tab\"><span class=\"ds-mark ds-live\"><svg viewBox=\"0 0 10 10\" width=\"10\" height=\"10\" aria-hidden=\"true\"><circle cx=\"5\" cy=\"5\" r=\"4\" fill=\"currentColor\"/></svg></span><svg viewBox=\"0 0 16 16\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect x=\"1.75\" y=\"2.75\" width=\"12.5\" height=\"8.5\" rx=\"1\"/><path d=\"M5.5 13.5h5M8 11.25v2.25\"/></svg><span class=\"ds-t\">dc01</span><button class=\"ds-x\" aria-label=\"Close dc01\"><svg viewBox=\"0 0 16 16\" width=\"12\" height=\"12\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M4 4l8 8M12 4l-8 8\"/></svg></button></div></div>",
+      "css": ".ds-tabs { font-family: var(--font-ui); font-size: var(--text-md); font-variant-numeric: tabular-nums; display: flex; height: 36px; background: var(--color-sidebar); border-bottom: 1px solid var(--color-border); } .ds-tab { display: flex; align-items: center; gap: 7px; padding: 0 8px 0 12px; min-width: 150px; max-width: 260px; color: var(--color-tab-text); border-right: 1px solid var(--color-border); white-space: nowrap; } .ds-tab svg { flex: none; } .ds-tab.ds-act { background: var(--term-bg); color: var(--color-text); box-shadow: inset 0 -2px 0 var(--color-text); } .ds-st { font-size: var(--text-xs); } .ds-mark { display: inline-flex; } .ds-mark.ds-live { color: var(--color-lamp-live); } .ds-mark.ds-connecting { color: var(--color-lamp-connecting); animation: ds-tpulse var(--duration-pulse) var(--easing-pulse) infinite; } .ds-mark.ds-dropped { color: var(--color-lamp-dropped); } .ds-x { margin-left: auto; display: inline-flex; padding: 3px; border: 0; background: none; color: inherit; border-radius: var(--radius-sm); } .ds-x:hover { background: var(--color-hover); } .ds-recon { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: var(--radius-sm); border: 1px solid var(--color-accent); background: var(--color-accent); color: var(--color-accent-text); font: inherit; font-size: var(--text-xs); } .ds-recon:focus-visible, .ds-x:focus-visible { outline: 1px solid var(--color-focus); outline-offset: -1px; } @keyframes ds-tpulse { 50% { opacity: 0.3; } } @media (prefers-reduced-motion: reduce) { .ds-mark { animation: none; } }"
+    },
+    {
+      "name": "Filter box and vault lock note",
+      "kind": "custom",
+      "refersTo": "vault-note",
+      "description": "Sidebar head: filter, vault chip, and the non-modal lock note shown while the vault is locked.",
+      "html": "<div class=\"ds-side\"><div class=\"ds-head\"><div class=\"ds-filter\"><svg viewBox=\"0 0 16 16\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><circle cx=\"7\" cy=\"7\" r=\"4.25\"/><path d=\"M10.25 10.25L13.5 13.5\"/></svg><span>Filter connections</span></div><button class=\"ds-chip\"><svg viewBox=\"0 0 16 16\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect x=\"3\" y=\"7\" width=\"10\" height=\"7\" rx=\"1\"/><path d=\"M5.25 7V5a2.75 2.75 0 015.5 0v2\"/></svg><span>Locked</span></button></div><div class=\"ds-note\"><svg viewBox=\"0 0 16 16\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect x=\"3\" y=\"7\" width=\"10\" height=\"7\" rx=\"1\"/><path d=\"M5.25 7V5a2.75 2.75 0 015.5 0v2\"/></svg><div class=\"ds-note-t\"><b>Vault locked</b><span>Connections with stored credentials ask for it.</span></div><button class=\"ds-note-btn\">Unlock</button></div></div>",
+      "css": ".ds-side { font-family: var(--font-ui); font-size: var(--text-md); font-variant-numeric: tabular-nums; width: 300px; background: var(--color-sidebar); color: var(--color-text); padding-bottom: 6px; } .ds-head { display: flex; gap: 6px; align-items: center; padding: 8px 8px 6px; } .ds-filter { flex: 1; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border-radius: var(--radius-sm); background: var(--color-surface); border: 1px solid var(--color-border-input); color: var(--color-text-muted); } .ds-chip { height: 28px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; border-radius: var(--radius-sm); border: 1px solid var(--color-border); background: none; color: var(--color-text); font: inherit; font-size: var(--text-sm); } .ds-note { display: flex; gap: 8px; align-items: center; margin: 0 8px; padding: 7px 8px 7px 10px; border-radius: var(--radius-sm); background: var(--color-surface); border: 1px solid var(--color-border); } .ds-note svg { flex: none; } .ds-note-t { display: grid; gap: 1px; font-size: var(--text-sm); color: var(--color-text-muted); line-height: 1.3; } .ds-note-t b { color: var(--color-text); font-size: var(--text-md); font-weight: var(--weight-strong); } .ds-note-btn { margin-left: auto; height: 26px; padding: 0 10px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-sm); background: none; color: var(--color-text); font: inherit; flex: none; } .ds-chip:focus-visible, .ds-note-btn:focus-visible { outline: 1px solid var(--color-focus); outline-offset: -1px; }"
+    },
+    {
+      "name": "Properties panel",
+      "kind": "card",
+      "description": "Collapsible panel under the tree: inherited values marked from <folder>, a local value with the Inherit reset, credential by name only.",
+      "html": "<div class=\"ds-props\"><button class=\"ds-props-head\" aria-expanded=\"true\"><svg viewBox=\"0 0 16 16\" width=\"14\" height=\"14\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M4.5 6l3.5 3.5L11.5 6\"/></svg><span class=\"ds-pn\">web-01</span><span class=\"ds-pk\">SSH connection</span></button><div class=\"ds-prop\"><span class=\"ds-k\">Host</span><span class=\"ds-v\">198.51.100.21</span><span></span></div><div class=\"ds-prop\"><span class=\"ds-k\">Port</span><span class=\"ds-v\">22</span><span class=\"ds-inh\">from Work</span></div><div class=\"ds-prop\"><span class=\"ds-k\">Credential</span><span class=\"ds-v\">deploy key</span><span class=\"ds-inh\">from Nordwerk</span></div><div class=\"ds-prop\"><span class=\"ds-k\">Keepalive</span><span class=\"ds-v\">30 s</span><button class=\"ds-reset\"><svg viewBox=\"0 0 16 16\" width=\"12\" height=\"12\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M3 8a5 5 0 105-5H5M5 1L3 3l2 2\"/></svg>Inherit</button></div></div>",
+      "css": ".ds-props { font-family: var(--font-ui); font-size: var(--text-md); font-variant-numeric: tabular-nums; width: 300px; background: var(--color-sidebar); color: var(--color-text); border-top: 1px solid var(--color-border); padding: 8px 10px 10px; display: grid; gap: 2px; } .ds-props-head { display: flex; align-items: center; gap: 6px; height: 26px; border: 0; background: none; color: inherit; font: inherit; padding: 0; text-align: left; } .ds-props-head svg { color: var(--color-text-muted); } .ds-pn { font-weight: var(--weight-strong); } .ds-pk { margin-left: auto; color: var(--color-text-muted); font-size: var(--text-sm); } .ds-prop { display: grid; grid-template-columns: 84px minmax(0, 1fr) auto; align-items: center; min-height: 24px; gap: 8px; } .ds-k, .ds-inh { color: var(--color-text-muted); font-size: var(--text-sm); } .ds-v { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .ds-reset { display: inline-flex; align-items: center; gap: 3px; color: var(--color-text); background: none; font: inherit; font-size: var(--text-sm); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 1px 6px; } .ds-reset:focus-visible, .ds-props-head:focus-visible { outline: 1px solid var(--color-focus); outline-offset: -1px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Quiet Instrument",
+    "overview": "fernjo is a well-made Braun instrument in the HfG Ulm tradition: a warm grey housing (sidebar and tab strip), off-white working surfaces and charcoal ink in light; in dark, the ET66 body, with near-black warm greys and bone text. The housing stays silent. Only the state that matters lights up: a lamp beside a running session, and one yellow key for the one action the current context asks for.\n\nThe terminal wins. The owner works in sessions for hours, so nothing in the chrome competes with the session area: no decorative shadows, no gradients, no chrome colour beyond greys. The tree is dense and structural (24 px rows, folders by customer, site and role) because the day starts by browsing it, not by searching. Light and dark are both first-class and tuned for low glare over long sessions.\n\nThe world rejects the neon terminal costume (black with glowing green or cyan), the grey 2010 enterprise admin tool, and playful, rounded consumer styling. An IDE-like familiarity is allowed.\n\nThe tokens live in `ui/src/styles/tokens.css` (the shipped source of truth; `ui/src/styles/tokens.test.ts` guards them), base styles in `ui/src/styles/base.css`. The approved components and states are rendered in `Docs/design/m01-concepts.html`, concept \"Ulm, revised\" (classes `c-ulm c-ulm2`); the other concepts in that file are the declined comparison set and are not part of this system. Where the artifact and `tokens.css` differ, `tokens.css` wins.",
+    "keyCharacteristics": [
+      "Quiet housing: warm greys, 1 px rules, small radii (4 px / 6 px).",
+      "The terminal wins: the session surface is the largest, calmest area.",
+      "Only running state lights up: no session, no lamp.",
+      "One key colour: yellow (#f0b400) for the one action that matters.",
+      "State is told by shape first; colour only supports it.",
+      "Dense: at least 23 tree rows visible at 1280×800 with the properties panel open."
+    ],
+    "rules": [
+      {
+        "name": "The One Key Rule",
+        "body": "`--color-accent` fills only the one action that matters in the current context (for example \"Unlock and connect\") and Reconnect on every dropped tab (owner decision: every dropped tab, not only the active one). Never for chrome, active tabs, selection, links, focus or decoration. If two yellow actions compete in one context, one of them is wrong.",
+        "section": "colors"
+      },
+      {
+        "name": "The Lamps-Only Rule",
+        "body": "Green, amber and red appear only inside lamps and marks (tree lamp column, tab state mark) and in error text for a failed action. Every state colour is paired with a shape (filled dot, ring, struck ring, alert icon) so the state reads without colour.",
+        "section": "colors"
+      },
+      {
+        "name": "The Shape-Not-Colour Rule",
+        "body": "SSH and RDP icons share one grey (`--color-ssh` and `--color-rdp` hold the same value) and are told apart by shape: SSH is a terminal window with a prompt chevron, RDP is a monitor on a stand. The two tokens exist so a future change stays possible without renaming, not as an invitation to colour-code protocols.",
+        "section": "colors"
+      },
+      {
+        "name": "The Normal-Case Label Rule",
+        "body": "Labels are normal case, 12 px, muted. No uppercase, no tracking (the original Ulm's uppercase labels were rejected by the owner).",
+        "section": "typography"
+      },
+      {
+        "name": "The No-Decoration Rule",
+        "body": "No shadow on rows, tabs, buttons, inputs, the vault note or panels. If it is not floating above the window, it has no shadow.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Minimum-Contrast Rule",
+        "body": "`--terminal-min-contrast` (4.5) is applied through xterm.js `minimumContrastRatio`, on by default: faint foregrounds are lifted when drawn, the palette itself stays unchanged. ANSI 1–6 and 9–14 hold at least 3:1 on `--term-bg` in both themes (tested in `tokens.test.ts`); 0, 7, 8 and 15 are background-adjacent by design and rely on the minimum contrast.",
+        "section": "components"
+      }
+    ],
+    "dos": [
+      "**Do** use only tokens from `ui/src/styles/tokens.css` in shipped CSS; no literal colours, sizes or radii in components.",
+      "**Do** write colours as hex (`#rrggbb` or `#rrggbbaa`).",
+      "**Do** add every new colour token to the light block and to both dark blocks with identical dark values; `tokens.test.ts` enforces parity.",
+      "**Do** treat token names as an interface: add names, never rename or remove one without a `Docs/DECISIONS.md` entry.",
+      "**Do** pair every state colour with a shape (dot, ring, struck ring, alert icon).",
+      "**Do** give each context at most one yellow key, and give every dropped tab its yellow Reconnect.",
+      "**Do** keep keyboard focus as the 1 px inset outline, weaker than selection.",
+      "**Do** keep at least 23 tree rows visible at 1280×800 with the properties panel open.",
+      "**Do** ask for the master password inside the tab that needs it."
+    ],
+    "donts": [
+      "**Don't** use `oklch()`, `color-mix()`, `light-dark()`, CSS nesting, `@layer`, `:has()` or container queries: WebKitGTK 4.1 and the `safari13` build target cannot render them.",
+      "**Don't** use `data:` assets (fonts, images); the CSP blocks them, and Vite inlining stays off.",
+      "**Don't** load fonts or other assets from the network at runtime.",
+      "**Don't** use yellow for chrome, active tabs, selection, focus or decoration.",
+      "**Don't** use green, amber or red outside lamps, marks and error text, and don't colour-code SSH and RDP.",
+      "**Don't** show a lamp for a connection without a session.",
+      "**Don't** make the vault modal or block the tree while it is locked.",
+      "**Don't** put uppercase or tracked labels in the chrome.",
+      "**Don't** add shadows other than `--shadow-raised` on dialogs and popovers.",
+      "**Don't** send or render secrets in the UI; credentials appear by name only."
+    ]
+  }
+}
