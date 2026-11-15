@@ -40,7 +40,21 @@ A wrapped key that does not authenticate is reported as "wrong password" (it can
 
 ## Body (after decryption)
 
-UTF-8 JSON, `{ "entries": [ ... ] }`. Entry fields are described when entries land (milestone 3, task 2); a reader must ignore unknown fields.
+UTF-8 JSON, `{ "entries": [ ... ] }`. A reader must ignore unknown fields. Secrets are stored byte-exact (no trimming or normalisation, line endings preserved). One entry:
+
+```json
+{
+  "id": "5b0f6c1e-0c55-4d6e-9d57-3f1c1c0a7a10",
+  "name": "web server",
+  "username": "root",
+  "domain": "EXAMPLE",
+  "secret": { "type": "password", "password": "..." },
+  "notes": "free text"
+}
+```
+
+- `id` is a UUID string; `name` is non-empty. `username` and `domain` are omitted when not set. `notes` may be empty or missing (empty).
+- `secret` is tagged by `type`: `"password"` with `password`, or `"privateKey"` with `key` (the key text as stored, for example PEM with its original line endings) and an optional `passphrase` (omitted when there is none).
 
 ## Version and bounds rules
 
