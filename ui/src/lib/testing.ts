@@ -41,8 +41,8 @@ export function conn(
   };
 }
 
-export function snapshot(children: TreeNode[], notice: Snapshot["notice"] = null): Snapshot {
-  return { children, notice };
+export function snapshot(children: TreeNode[], notices: Snapshot["notices"] = []): Snapshot {
+  return { children, notices };
 }
 
 export function apiError(code: string, message = code): ApiError {

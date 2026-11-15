@@ -281,7 +281,7 @@ describe("PropertiesPanel", () => {
       {
         updateNode: async (_id, patch) => {
           if (patch.name === "") throw apiError("empty_name", "The name must not be empty");
-          return { id: "web-01", snapshot: { children: tree(), notice: null } };
+          return { id: "web-01", snapshot: { children: tree(), notices: [] } };
         },
       },
     );

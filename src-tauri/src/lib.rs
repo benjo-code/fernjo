@@ -13,7 +13,7 @@ pub use state::AppState;
 pub fn run() {
     tauri::Builder::default()
         // The single-instance plugin must stay the first plugin so a second launch is
-        // intercepted before any other plugin initialises. (`AppState::open` below runs
+        // intercepted before any other plugin initialises. (`AppState::open_for_app` below runs
         // while the builder is assembled, i.e. also in a second launch; it normally only reads.)
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
@@ -22,7 +22,7 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
-        .manage(AppState::open(fernjo_core::locate().map(|l| l.data_dir)))
+        .manage(AppState::open_for_app(fernjo_core::locate()))
         .invoke_handler(tauri::generate_handler![
             commands::handlers::list_tree,
             commands::handlers::get_node,

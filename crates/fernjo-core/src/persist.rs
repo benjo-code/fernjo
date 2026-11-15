@@ -31,6 +31,9 @@ pub enum Notice {
     RestoredFromBackup { bad_file: Option<PathBuf> },
     /// The data folder holds copies made by a sync tool after a conflict (file names only).
     SyncConflicts { files: Vec<String> },
+    /// `settings.json` could not be used; the default data folder is in effect and the file
+    /// is left untouched.
+    SettingsUnreadable { message: String },
 }
 
 /// Result of a successful load.
@@ -671,5 +674,14 @@ mod tests {
             v,
             json!({ "kind": "syncConflicts", "files": ["a (conflicted copy).json"] })
         );
+    }
+
+    #[test]
+    fn settings_unreadable_notice_json_is_tagged_camel_case() {
+        let v = serde_json::to_value(Notice::SettingsUnreadable {
+            message: "bad".into(),
+        })
+        .unwrap();
+        assert_eq!(v, json!({ "kind": "settingsUnreadable", "message": "bad" }));
     }
 }

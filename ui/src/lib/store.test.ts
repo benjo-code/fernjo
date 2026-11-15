@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { TreeStore } from "./store.svelte";
 import { apiError, conn, deferred, folder, mockApi, resolved, snapshot } from "./testing";
-import type { Mutation, ResolvedNode } from "./types";
+import type { Mutation, Notice, ResolvedNode } from "./types";
 
 const KEY = "fernjo.expanded.v1";
 
@@ -23,15 +23,22 @@ async function started(initial = tree(), impl = {}) {
 }
 
 describe("TreeStore", () => {
-  test("init_loads_snapshot_and_notice", async () => {
-    const notice = { kind: "restoredFromBackup", badFile: "x" } as const;
-    const mock = mockApi([], { listTree: async () => snapshot(tree(), notice) });
+  test("notices_from_the_snapshot_are_kept_and_dismissed_by_index", async () => {
+    const notices: Notice[] = [
+      { kind: "restoredFromBackup", badFile: "x" },
+      { kind: "syncConflicts", files: ["a (conflict).json"] },
+    ];
+    const mock = mockApi([], { listTree: async () => snapshot(tree(), notices) });
     const store = new TreeStore(mock.api);
     await store.init();
     expect(store.children.map((n) => n.name)).toEqual(["Homelab", "web-01"]);
-    expect(store.notice).toEqual(notice);
-    store.dismissNotice();
-    expect(store.notice).toBeNull();
+    expect(store.notices).toEqual(notices);
+    store.dismissNotice(0);
+    expect(store.notices).toEqual([notices[1]]);
+    store.dismissNotice(5);
+    expect(store.notices).toHaveLength(1);
+    store.dismissNotice(0);
+    expect(store.notices).toEqual([]);
     expect(store.loadError).toBeNull();
   });
 

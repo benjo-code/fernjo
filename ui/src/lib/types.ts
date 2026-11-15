@@ -63,11 +63,14 @@ export interface NodePatch {
   keepaliveSecs?: number | null;
 }
 
-export type Notice = { kind: "restoredFromBackup"; badFile: string | null };
+export type Notice =
+  | { kind: "restoredFromBackup"; badFile: string | null }
+  | { kind: "syncConflicts"; files: string[] }
+  | { kind: "settingsUnreadable"; message: string };
 
 export interface Snapshot {
   children: TreeNode[];
-  notice: Notice | null;
+  notices: Notice[];
 }
 
 export interface Mutation {

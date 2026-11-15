@@ -1161,6 +1161,8 @@ name = "fernjo-app"
 version = "0.0.0"
 dependencies = [
  "fernjo-core",
+ "fernjo-vault",
+ "secrecy",
  "serde",
  "serde_json",
  "tauri",
