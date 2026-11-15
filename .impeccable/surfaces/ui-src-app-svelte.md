@@ -43,6 +43,19 @@ Not a hacker/neon look (black with glowing green/cyan). Not grey 2010 enterprise
 - Fonts are bundled (OFL-1.1 or permissive), ≤ ~300 KB woff2 in total; no network at runtime.
 - The name means *Fernverbindung* (remote connection), not the plant.
 
+## Chosen direction
+**Ulm, revised**, approved by the owner on 2026-11-15 ("ulm revised is approved") after one feedback round. Artifact: https://claude.ai/artifact/9BhGCKAfNbHvbsUUQQwhas (private); source `Docs/design/m01-concepts.html`.
+
+## Direction contract
+- **THESIS:** fernjo as a well-made Braun instrument: quiet housing, precise type, and only the state that matters lights up. Refuses the grey IDE clone and the neon terminal costume.
+- **OWN-WORLD:** warm grey housing (sidebar, tab strip), off-white working surfaces, charcoal ink; in dark the ET66 body: near-black warm greys with bone text. Yellow (#f0b400) is the key colour, only for the action that matters and for Reconnect on dropped tabs. Green/amber/red appear only in lamps and marks. Hanken Grotesk, Red Hat Mono; small radii (4/6 px), 1 px rules.
+- **STORY:** the owner browses the tree by structure, sees at a glance which sessions run, opens one, works for hours; nothing competes with the terminal; a dropped session and a locked vault ask for exactly one action.
+- **FIRST VIEWPORT:** sidebar 300 px: filter + vault state, tree (24 px rows, optional grey host column, lamp column at the far right), collapsible properties panel below; tab strip over the terminal on the right. Signature move: the lamp column (no lamp = no session, pulsing ring = connecting, filled = live, struck = dropped) plus the yellow key.
+- **FORM:** Braun / HfG Ulm functionalism, position 1 on the ordered list (impeccable's pick), seed: seed:1c7386560d20e2dc
+- **FINISH:** unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
+
+## Owner adjustments (round 1, binding)
+Lamps only for running sessions; selection = darker row + left bar + semibold, focus = 1 px outline; non-modal vault (sidebar note, password asked in the tab of the connection that needs credentials); host column optional; properties panel collapsible; labels normal case 12 px grey; yellow Reconnect on every dropped tab; terminal minimum contrast 4.5:1 on by default (xterm.js `minimumContrastRatio`), palette unchanged.
+
 ## Unresolved decisions
-- The visual world (chosen in Task 5 of the M1 plan).
-- The default terminal font (named in DESIGN.md; user-configurable in M6).
+- The default terminal font is Red Hat Mono (from the direction); user-configurable in M6.
