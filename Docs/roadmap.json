@@ -81,10 +81,10 @@
           "tasks": [
             { "text": "`fernjo-core`: tree of folders and connections (UUIDs, manual order), inheritable settings, effective-value resolution with built-in defaults", "done": true },
             { "text": "Persistence in `connections.json` (`schemaVersion`, atomic write, `.bak`) in the data folder from the OS config directory", "done": true },
-            { "text": "Tauri commands for creating, editing, moving and deleting nodes", "done": false },
+            { "text": "Tauri commands for creating, editing, moving and deleting nodes", "done": true },
             { "text": "Sidebar: tree with filter (name, host, description), expand/collapse, drag and drop, context menu (new folder/connection, duplicate, rename, delete)", "done": false },
             { "text": "Properties panel: edit fields, show \"inherited from <folder>\", reset to inherit", "done": false },
-            { "text": "Single instance: a second launch focuses the running window", "done": false }
+            { "text": "Single instance: a second launch focuses the running window", "done": true }
           ],
           "acceptance": [
             { "text": "Unit tests for inheritance (multi-level, override, reset) and persistence (round trip, atomic write, `.bak`) are green", "done": false },
