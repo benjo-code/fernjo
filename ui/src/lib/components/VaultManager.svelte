@@ -68,7 +68,11 @@
   const autoUnlock = $derived(vault.status?.autoUnlock ?? false);
   const unlocked = $derived(vault.status?.state === "unlocked");
 
+  // bumped by every hide path: a reveal answer from an older generation is dropped
+  let revealGeneration = 0;
+
   function hideReveal() {
+    revealGeneration++;
     clearTimeout(revealTimer);
     revealTimer = undefined;
     revealed = null;
@@ -178,7 +182,10 @@
     hideReveal();
     revealError = null;
     const id = selected;
+    const generation = revealGeneration;
     const { value, error } = await vault.revealCredential(id);
+    // closed, locked, saved, selection changed or a newer reveal started while waiting
+    if (generation !== revealGeneration) return;
     if (error) {
       handleError(error);
       revealError = error.message;
@@ -187,6 +194,7 @@
     // the selection may have changed or the vault locked while the call was running
     if (selected !== id || !unlocked) return;
     revealed = value;
+    clearTimeout(revealTimer);
     revealTimer = setTimeout(hideReveal, revealMs);
   }
 

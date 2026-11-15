@@ -1,8 +1,8 @@
 import { flushSync, mount, tick, unmount } from "svelte";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { TreeStore } from "../store.svelte";
-import { apiError, conn, credential, mockApi, snapshot, vaultStatus } from "../testing";
-import type { Api, CredentialInfo } from "../types";
+import { apiError, conn, credential, deferred, mockApi, snapshot, vaultStatus } from "../testing";
+import type { Api, CredentialInfo, RevealedSecret } from "../types";
 import { VaultStore } from "../vault.svelte";
 import VaultManager from "./VaultManager.svelte";
 
@@ -261,6 +261,95 @@ describe("VaultManager", () => {
     await settle();
     expect(inputValues()).not.toContain(SENTINEL);
     expect(document.body.textContent).not.toContain(SENTINEL);
+  });
+
+  describe("late reveal responses", () => {
+    async function pending(fake = true) {
+      if (fake) vi.useFakeTimers();
+      const reveals: ReturnType<typeof deferred<RevealedSecret>>[] = [];
+      const ctx = await setup(
+        {
+          revealCredential: () => {
+            const d = deferred<RevealedSecret>();
+            reveals.push(d);
+            return d.promise;
+          },
+          updateCredential: async () => credential({ id: "c1", name: "web" }),
+        },
+        { fake },
+      );
+      pick(0);
+      await settleFake();
+      return { ...ctx, reveals };
+    }
+
+    test("reveal_resolving_after_close_and_unmount_renders_nothing_and_leaves_no_timer", async () => {
+      const { reveals, onclose } = await pending();
+      button("Reveal")!.click();
+      await settleFake();
+      button("Close")!.click();
+      await settleFake();
+      expect(onclose).toHaveBeenCalledOnce();
+      unmount(mounted!);
+      mounted = null;
+      reveals[0].resolve({ password: SENTINEL });
+      await settleFake();
+      expect(document.body.textContent).not.toContain(SENTINEL);
+      expect(inputValues()).not.toContain(SENTINEL);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    test("double_click_on_reveal_keeps_one_timer_and_the_second_reveal_lasts_full_length", async () => {
+      const { reveals } = await pending();
+      button("Reveal")!.click();
+      await settleFake();
+      await vi.advanceTimersByTimeAsync(5_000);
+      button("Reveal")!.click();
+      await settleFake();
+      reveals[0].resolve({ password: "FIRST-" + SENTINEL });
+      await settleFake();
+      expect(inputValues().join("|")).not.toContain("FIRST-");
+      reveals[1].resolve({ password: SENTINEL });
+      await settleFake();
+      expect(inputValues()).toContain(SENTINEL);
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(9_000);
+      flushSync();
+      expect(inputValues()).toContain(SENTINEL);
+      await vi.advanceTimersByTimeAsync(1_500);
+      flushSync();
+      expect(inputValues()).not.toContain(SENTINEL);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    test("reveal_resolving_after_save_is_not_shown", async () => {
+      const { reveals } = await pending();
+      button("Reveal")!.click();
+      await settleFake();
+      button("Save")!.click();
+      await settleFake();
+      reveals[0].resolve({ password: SENTINEL });
+      await settleFake();
+      expect(inputValues()).not.toContain(SENTINEL);
+      expect(document.body.textContent).not.toContain(SENTINEL);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    test("reveal_resolving_after_the_vault_locked_is_not_shown", async () => {
+      const { reveals, vault } = await pending();
+      button("Reveal")!.click();
+      await settleFake();
+      // the vault queue serialises calls: the lock runs once the reveal has answered
+      const locking = vault.lock();
+      reveals[0].resolve({ password: SENTINEL });
+      await locking;
+      await settleFake();
+      await vault.unlock("pw", false);
+      await settleFake();
+      await settleFake();
+      expect(inputValues()).not.toContain(SENTINEL);
+      expect(vi.getTimerCount()).toBe(0);
+    });
   });
 
   test("delete_dialog_lists_usage_and_cancel_has_focus", async () => {
