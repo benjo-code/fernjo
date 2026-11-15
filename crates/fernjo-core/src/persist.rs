@@ -15,7 +15,7 @@ use crate::model::{Node, NodeId, NodeKind};
 use crate::tree::Tree;
 
 /// File format version this build writes and understands.
-pub const CURRENT_VERSION: u32 = 1;
+pub const CURRENT_VERSION: u32 = 2;
 /// Name of the connections file inside the data folder.
 pub const FILE_NAME: &str = "connections.json";
 
@@ -101,8 +101,18 @@ pub fn migrate_with(value: Value, from: u32, steps: &[fn(Value) -> Value]) -> Va
     steps.iter().skip(skip).fold(value, |v, step| step(v))
 }
 
+/// Upgrade steps; step `i` upgrades version `i + 1` to `i + 2`.
+const MIGRATIONS: [fn(Value) -> Value; 1] = [one_to_two];
+
+/// 1 -> 2: schema 2 adds the optional `credential` setting, so nothing is rewritten. The
+/// version still has to change: an older build would silently drop `credential` on its next
+/// save, so it must refuse the file as a newer schema instead.
+fn one_to_two(value: Value) -> Value {
+    value
+}
+
 fn migrate(value: Value, from: u32) -> Value {
-    migrate_with(value, from, &[])
+    migrate_with(value, from, &MIGRATIONS)
 }
 
 enum Read {
@@ -292,7 +302,7 @@ mod tests {
         save(&main_path(dir.path()), &sample_tree("dc01")).unwrap();
         let text = fs::read_to_string(main_path(dir.path())).unwrap();
         let v: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(v["schemaVersion"], 1);
+        assert_eq!(v["schemaVersion"], 2);
         assert_eq!(v["children"][0]["type"], "folder");
         assert_eq!(v["children"][0]["settings"]["port"], 2200);
         assert!(text.contains("\n  "));
@@ -353,7 +363,7 @@ mod tests {
                 found, supported, ..
             } => {
                 assert_eq!(found, 99);
-                assert_eq!(supported, 1);
+                assert_eq!(supported, 2);
             }
             other => panic!("expected NewerSchema, got {other:?}"),
         }
@@ -457,6 +467,90 @@ mod tests {
         assert_eq!(out["trail"], "b");
         let out = migrate_with(json!({}), 3, &steps);
         assert!(out.get("trail").is_none());
+    }
+
+    #[test]
+    fn version_one_file_loads_and_is_written_as_version_two() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = json!({ "schemaVersion": 1, "children": [{
+            "id": "11111111-1111-4111-8111-111111111111", "type": "connection",
+            "name": "x", "protocol": "ssh", "host": "h", "settings": { "port": 2200 }
+        }] })
+        .to_string();
+        fs::write(main_path(dir.path()), text).unwrap();
+        let loaded = load(&main_path(dir.path())).unwrap();
+        assert_eq!(loaded.notice, None);
+        assert_eq!(loaded.tree.children()[0].settings.port, Some(2200));
+        save(&main_path(dir.path()), &loaded.tree).unwrap();
+        let v: Value = serde_json::from_slice(&fs::read(main_path(dir.path())).unwrap()).unwrap();
+        assert_eq!(v["schemaVersion"], 2);
+        assert_eq!(v["children"][0]["settings"]["port"], 2200);
+        // the previous (version 1) bytes are kept as the backup
+        let bak: Value = serde_json::from_slice(&fs::read(bak_path(dir.path())).unwrap()).unwrap();
+        assert_eq!(bak["schemaVersion"], 1);
+    }
+
+    #[test]
+    fn credential_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let cred = crate::model::CredentialId::new_v4();
+        let mut tree = Tree::new();
+        let c = tree
+            .create_connection(None, None, "c", Protocol::Ssh, "h")
+            .unwrap();
+        tree.update(
+            c,
+            NodePatch {
+                credential: Patch::Set(cred),
+                ..NodePatch::default()
+            },
+        )
+        .unwrap();
+        save(&main_path(dir.path()), &tree).unwrap();
+        let v: Value = serde_json::from_slice(&fs::read(main_path(dir.path())).unwrap()).unwrap();
+        assert_eq!(v["children"][0]["settings"]["credential"], cred.to_string());
+        let loaded = load(&main_path(dir.path())).unwrap();
+        assert_eq!(loaded.tree, tree);
+        assert_eq!(loaded.tree.get(c).unwrap().settings.credential, Some(cred));
+        // an unset credential is not written at all
+        let mut plain = Tree::new();
+        plain
+            .create_connection(None, None, "p", Protocol::Ssh, "h")
+            .unwrap();
+        save(&main_path(dir.path()), &plain).unwrap();
+        let text = fs::read_to_string(main_path(dir.path())).unwrap();
+        assert!(!text.contains("credential"));
+    }
+
+    #[test]
+    fn version_three_file_is_refused_as_newer_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = json!({ "schemaVersion": 3, "children": [] }).to_string();
+        fs::write(main_path(dir.path()), &text).unwrap();
+        let before = files(dir.path());
+        let err = load(&main_path(dir.path())).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                LoadError::NewerSchema {
+                    found: 3,
+                    supported: 2,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+        assert_eq!(files(dir.path()), before);
+    }
+
+    #[test]
+    fn migration_chain_has_a_one_to_two_step() {
+        assert_eq!(MIGRATIONS.len(), CURRENT_VERSION as usize - 1);
+        let v1 = json!({ "schemaVersion": 1, "children": [{ "name": "a" }] });
+        // the 1 -> 2 step only exists to make older builds refuse the file: nothing is rewritten
+        assert_eq!(migrate_with(v1.clone(), 1, &MIGRATIONS), v1);
+        let v2 = json!({ "schemaVersion": 2, "children": [] });
+        assert_eq!(migrate_with(v2.clone(), 2, &MIGRATIONS), v2);
     }
 
     #[test]

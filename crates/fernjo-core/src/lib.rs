@@ -10,8 +10,8 @@ pub mod tree;
 
 pub use error::{LoadError, SaveError, StoreError, TreeError};
 pub use model::{
-    DEFAULT_KEEPALIVE_SECS, DEFAULT_RDP_PORT, DEFAULT_SSH_PORT, Field, Node, NodeId, NodeKind,
-    NodeType, Protocol, ResolvedNode, Settings, Source,
+    CredentialId, DEFAULT_KEEPALIVE_SECS, DEFAULT_RDP_PORT, DEFAULT_SSH_PORT, Field, Node, NodeId,
+    NodeKind, NodeType, Protocol, ResolvedNode, Settings, Source,
 };
 pub use paths::{DATA_DIR_ENV, data_dir, data_dir_from};
 pub use persist::{CURRENT_VERSION, FILE_NAME, Loaded, Notice, load, migrate_with, save};

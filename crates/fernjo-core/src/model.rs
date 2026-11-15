@@ -5,6 +5,10 @@ use serde::{Deserialize, Serialize};
 /// Stable identity of a node (UUID v4).
 pub type NodeId = uuid::Uuid;
 
+/// Identity of a vault entry (UUID v4). The core only stores the reference; it never
+/// knows the vault, so the id may dangle.
+pub type CredentialId = uuid::Uuid;
+
 /// Built-in default for the SSH keepalive interval in seconds (`0` = off).
 pub const DEFAULT_KEEPALIVE_SECS: u32 = 30;
 /// Built-in default port for SSH connections.
@@ -30,6 +34,9 @@ pub struct Settings {
     pub port: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keepalive_secs: Option<u32>,
+    /// Reference to a vault entry (schema 2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<CredentialId>,
 }
 
 /// A node of the tree: a folder or a connection.
@@ -101,4 +108,5 @@ pub struct ResolvedNode {
     pub username: Field<String>,
     pub port: Field<u16>,
     pub keepalive_secs: Field<u32>,
+    pub credential: Field<CredentialId>,
 }

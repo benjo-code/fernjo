@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::{LoadError, StoreError, TreeError};
-use crate::model::{NodeId, Protocol};
+use crate::model::{CredentialId, NodeId, Protocol};
 use crate::persist::{self, FILE_NAME, Notice};
 use crate::tree::{NodePatch, Tree};
 
@@ -101,12 +101,24 @@ impl Store {
     pub fn delete(&mut self, id: NodeId) -> Result<usize, StoreError> {
         self.mutate(|t| t.delete(id))
     }
+
+    /// Removes every local reference to the vault entry `id`; returns how many nodes had
+    /// one. Saves only if something changed, so an unused entry costs no write and no `.bak`.
+    pub fn clear_credential(&mut self, id: CredentialId) -> Result<usize, StoreError> {
+        let mut next = self.tree.clone();
+        let cleared = next.clear_credential(id);
+        if cleared > 0 {
+            persist::save(&self.path, &next)?;
+            self.tree = next;
+        }
+        Ok(cleared)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Protocol;
+    use crate::model::{CredentialId, Protocol};
     use crate::persist::{self, FILE_NAME};
     use crate::tree::{NodePatch, Patch};
     use std::fs;
@@ -226,6 +238,49 @@ mod tests {
         let reloaded = persist::load(&main).unwrap();
         assert_eq!(&reloaded.tree, opened.store.tree());
         assert!(reloaded.notice.is_none());
+    }
+
+    #[test]
+    fn clear_credential_is_persisted() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = open(dir.path());
+        let cred = CredentialId::new_v4();
+        let a = store.create_folder(None, None, "a").unwrap();
+        let b = store
+            .create_connection(Some(a), None, "b", Protocol::Ssh, "h")
+            .unwrap();
+        for id in [a, b] {
+            store
+                .update(
+                    id,
+                    NodePatch {
+                        credential: Patch::Set(cred),
+                        ..NodePatch::default()
+                    },
+                )
+                .unwrap();
+        }
+        assert_eq!(store.clear_credential(cred).unwrap(), 2);
+        assert!(store.tree().nodes_using_credential(cred).is_empty());
+        let again = open(dir.path());
+        assert_eq!(again.tree(), store.tree());
+        assert!(again.tree().nodes_using_credential(cred).is_empty());
+    }
+
+    #[test]
+    fn clear_credential_with_no_users_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = open(dir.path());
+        store.create_folder(None, None, "a").unwrap();
+        store.create_folder(None, None, "b").unwrap();
+        let bak = dir.path().join(format!("{FILE_NAME}.bak"));
+        let main_before = fs::read(store.path()).unwrap();
+        let bak_before = fs::read(&bak).unwrap();
+        assert_ne!(main_before, bak_before);
+        assert_eq!(store.clear_credential(CredentialId::new_v4()).unwrap(), 0);
+        // a save would have copied the main file over the .bak
+        assert_eq!(fs::read(store.path()).unwrap(), main_before);
+        assert_eq!(fs::read(&bak).unwrap(), bak_before);
     }
 
     #[test]

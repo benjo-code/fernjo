@@ -3,7 +3,7 @@
 use serde::{Deserialize, Deserializer};
 
 use crate::error::TreeError;
-use crate::model::{Node, NodeId, NodeKind, Protocol, ResolvedNode, Settings};
+use crate::model::{CredentialId, Node, NodeId, NodeKind, Protocol, ResolvedNode, Settings};
 use crate::resolve::resolve;
 
 /// A change to one inheritable setting.
@@ -43,6 +43,8 @@ pub struct NodePatch {
     pub port: Patch<u32>,
     #[serde(deserialize_with = "patch_from_json")]
     pub keepalive_secs: Patch<u32>,
+    #[serde(deserialize_with = "patch_from_json")]
+    pub credential: Patch<CredentialId>,
 }
 
 /// The forest of top-level nodes. The root itself is implicit.
@@ -266,7 +268,44 @@ impl Tree {
         apply(&mut node.settings.username, patch.username);
         apply(&mut node.settings.port, port);
         apply(&mut node.settings.keepalive_secs, patch.keepalive_secs);
+        apply(&mut node.settings.credential, patch.credential);
         Ok(())
+    }
+
+    /// Nodes (folders and connections) that set `id` locally, depth-first, with their names.
+    /// Nodes that only inherit the credential are not listed.
+    pub fn nodes_using_credential(&self, id: CredentialId) -> Vec<(NodeId, String)> {
+        fn walk(nodes: &[Node], id: CredentialId, out: &mut Vec<(NodeId, String)>) {
+            for node in nodes {
+                if node.settings.credential == Some(id) {
+                    out.push((node.id, node.name.clone()));
+                }
+                if let NodeKind::Folder { children } = &node.kind {
+                    walk(children, id, out);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&self.children, id, &mut out);
+        out
+    }
+
+    /// Removes every local reference to `id` (those nodes inherit again); returns how many.
+    pub fn clear_credential(&mut self, id: CredentialId) -> usize {
+        fn walk(nodes: &mut [Node], id: CredentialId) -> usize {
+            let mut cleared = 0;
+            for node in nodes {
+                if node.settings.credential == Some(id) {
+                    node.settings.credential = None;
+                    cleared += 1;
+                }
+                if let NodeKind::Folder { children } = &mut node.kind {
+                    cleared += walk(children, id);
+                }
+            }
+            cleared
+        }
+        walk(&mut self.children, id)
     }
 
     /// Moves `id` below `new_parent`. `index` counts among the new parent's children
@@ -379,6 +418,112 @@ mod tests {
                 all_ids(children, out);
             }
         }
+    }
+
+    // ---- credential ---------------------------------------------------
+
+    fn set_credential(t: &mut Tree, id: NodeId, cred: CredentialId) {
+        t.update(
+            id,
+            NodePatch {
+                credential: Patch::Set(cred),
+                ..NodePatch::default()
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn patch_credential_set_then_inherit_clears_local_value() {
+        let mut t = Tree::new();
+        let c = ssh(&mut t, None, "c");
+        let cred = CredentialId::new_v4();
+        set_credential(&mut t, c, cred);
+        assert_eq!(t.get(c).unwrap().settings.credential, Some(cred));
+        t.update(
+            c,
+            NodePatch {
+                credential: Patch::Inherit,
+                ..NodePatch::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(t.get(c).unwrap().settings.credential, None);
+        let p: NodePatch = serde_json::from_str(&format!(r#"{{"credential":"{cred}"}}"#)).unwrap();
+        assert_eq!(p.credential, Patch::Set(cred));
+        let p: NodePatch = serde_json::from_str(r#"{"credential":null}"#).unwrap();
+        assert_eq!(p.credential, Patch::Inherit);
+        let p: NodePatch = serde_json::from_str("{}").unwrap();
+        assert_eq!(p.credential, Patch::Keep);
+    }
+
+    #[test]
+    fn duplicate_keeps_the_credential() {
+        let mut t = Tree::new();
+        let f = folder(&mut t, None, "f");
+        let c = ssh(&mut t, Some(f), "c");
+        let cred = CredentialId::new_v4();
+        set_credential(&mut t, f, cred);
+        set_credential(&mut t, c, cred);
+        let copy = t.duplicate(f).unwrap();
+        assert_eq!(t.get(copy).unwrap().settings.credential, Some(cred));
+        let child = &children_of(&t, copy)[0];
+        assert_eq!(child.settings.credential, Some(cred));
+    }
+
+    #[test]
+    fn nodes_using_credential_lists_local_users_only() {
+        let mut t = Tree::new();
+        let cred = CredentialId::new_v4();
+        let other = CredentialId::new_v4();
+        let f = folder(&mut t, None, "f");
+        let a = ssh(&mut t, Some(f), "a"); // inherits only
+        let b = ssh(&mut t, Some(f), "b");
+        let c = ssh(&mut t, None, "c");
+        let d = ssh(&mut t, None, "d");
+        set_credential(&mut t, f, cred);
+        set_credential(&mut t, b, cred);
+        set_credential(&mut t, c, cred);
+        set_credential(&mut t, d, other);
+        let users = t.nodes_using_credential(cred);
+        assert_eq!(
+            users,
+            vec![
+                (f, "f".to_string()),
+                (b, "b".to_string()),
+                (c, "c".to_string())
+            ]
+        );
+        assert!(!users.iter().any(|(id, _)| *id == a));
+        assert!(t.nodes_using_credential(CredentialId::new_v4()).is_empty());
+    }
+
+    #[test]
+    fn clear_credential_removes_every_local_reference_and_counts_them() {
+        let mut t = Tree::new();
+        let cred = CredentialId::new_v4();
+        let other = CredentialId::new_v4();
+        let f = folder(&mut t, None, "f");
+        let a = ssh(&mut t, Some(f), "a");
+        let b = ssh(&mut t, None, "b");
+        set_credential(&mut t, f, cred);
+        set_credential(&mut t, a, cred);
+        set_credential(&mut t, b, other);
+        assert_eq!(t.clear_credential(cred), 2);
+        assert_eq!(t.get(f).unwrap().settings.credential, None);
+        assert_eq!(t.get(a).unwrap().settings.credential, None);
+        assert_eq!(t.get(b).unwrap().settings.credential, Some(other));
+        assert_eq!(t.clear_credential(cred), 0);
+    }
+
+    #[test]
+    fn dangling_credential_id_resolves_without_error() {
+        let mut t = Tree::new();
+        let c = ssh(&mut t, None, "c");
+        let cred = CredentialId::new_v4();
+        set_credential(&mut t, c, cred);
+        let r = t.resolve_node(c).unwrap();
+        assert_eq!(r.credential.effective, Some(cred));
     }
 
     // ---- create -------------------------------------------------------
