@@ -63,3 +63,22 @@ pub enum LoadError {
         reason: String,
     },
 }
+
+/// A store mutation failed; memory and disk are unchanged.
+#[derive(Debug, thiserror::Error)]
+pub enum StoreError {
+    #[error(transparent)]
+    Tree(#[from] TreeError),
+    #[error(transparent)]
+    Save(#[from] SaveError),
+}
+
+impl StoreError {
+    /// Stable code shown to the UI.
+    pub fn code(&self) -> &'static str {
+        match self {
+            StoreError::Tree(e) => e.code(),
+            StoreError::Save(_) => "save_failed",
+        }
+    }
+}
