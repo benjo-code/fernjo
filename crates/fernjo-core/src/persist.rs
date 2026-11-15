@@ -89,10 +89,7 @@ pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), SaveError
     let result = (|| -> io::Result<()> {
         let mut file = fs::File::create(&tmp)?;
         file.write_all(contents)?;
-        file.write_all(
-            b"
-",
-        )?;
+        file.write_all(b"\n")?;
         file.flush()?;
         file.sync_all()?;
         drop(file);

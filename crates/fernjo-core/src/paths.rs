@@ -92,8 +92,21 @@ mod tests {
     #[test]
     fn env_wins_over_settings_and_settings_is_not_read() {
         let base = tempfile::tempdir().unwrap();
-        // an unreadable settings file that stays byte-identical proves it is never opened
+        // A read would recover from the valid .bak and move the corrupt file aside, which is
+        // visible on disk; so an untouched folder proves settings.json is never opened.
         write_settings(base.path(), "{ not json");
+        let dir = base.path().join("fernjo");
+        let good = r#"{"schemaVersion":1,"dataDir":"/elsewhere"}"#;
+        fs::write(dir.join("settings.json.bak"), good).unwrap();
+        let listing = || {
+            let mut names: Vec<String> = fs::read_dir(&dir)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        };
+        let before = listing();
         let loc = locate_from(
             Some(OsString::from("/tmp/custom")),
             Some(base.path().to_path_buf()),
@@ -103,8 +116,8 @@ mod tests {
         assert_eq!(loc.source, DataDirSource::Env);
         assert_eq!(loc.config_dir, base.path().join("fernjo"));
         assert!(loc.settings_error.is_none());
-        let dir = base.path().join("fernjo");
-        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        assert_eq!(listing(), before);
+        assert!(listing().iter().all(|n| !n.contains(".corrupt-")));
         assert_eq!(
             fs::read_to_string(dir.join(settings::FILE_NAME)).unwrap(),
             "{ not json"
