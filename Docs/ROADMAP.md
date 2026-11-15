@@ -26,7 +26,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 | 0 | Repo scaffold & CI | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-15-milestone-00-repo-scaffold.md) | 2026-11-15 |
 | 1 | UI design direction | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-15-milestone-01-design-direction.md) | 2026-11-15 |
 | 2 | Connection tree & data model | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-15-milestone-02-connection-tree.md) | 2026-11-15 |
-| 3 | Credential vault | 1 – fernjo app | ⬜ open | – | – |
+| 3 | Credential vault | 1 – fernjo app | 🟡 planned | [Plan](superpowers/plans/2026-11-15-milestone-03-credential-vault.md) | – |
 | 4 | SSH sessions in tabs | 1 – fernjo app | ⬜ open | – | – |
 | 5 | mRemoteNG import & export | 1 – fernjo app | ⬜ open | – | – |
 | 6 | Packaging & app settings | 1 – fernjo app | ⬜ open | – | – |
@@ -133,7 +133,7 @@ Goal: Connections can be organised in a persistent folder tree with mRemoteNG-st
 - [x] Build, test and lint are green – 2026-11-15 on Windows, branch head after the review fixes: `pnpm install --frozen-lockfile`, `pnpm ui:build`, `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (core 69, app 10, tauri_conf 3 passed), `pnpm lint` (0 errors, 0 warnings), `pnpm test` (141 passed in 11 files), `cargo deny check` (ok), `dotnet run tools/roadmap.cs -- check` (valid) all green
 
 ## Milestone 3 – Credential vault
-**Status:** ⬜ open · **Plan:** – · **Prerequisites:** M2
+**Status:** 🟡 planned · **Plan:** [2026-11-15-milestone-03-credential-vault.md](superpowers/plans/2026-11-15-milestone-03-credential-vault.md) · **Prerequisites:** M2
 
 Goal: Passwords and SSH keys are stored encrypted, unlocked by a master password or the OS keychain, and attachable to connections and folders.
 
