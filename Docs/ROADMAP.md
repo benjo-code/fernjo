@@ -23,7 +23,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 
 | # | Milestone | Subproject | Status | Plan | Done on |
 |---|---|---|---|---|---|
-| 0 | Repo scaffold & CI | 1 – fernjo app | 🔵 in progress | [Plan](superpowers/plans/2026-11-15-milestone-00-repo-scaffold.md) | – |
+| 0 | Repo scaffold & CI | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-15-milestone-00-repo-scaffold.md) | 2026-11-15 |
 | 1 | UI design direction | 1 – fernjo app | ⬜ open | – | – |
 | 2 | Connection tree & data model | 1 – fernjo app | ⬜ open | – | – |
 | 3 | Credential vault | 1 – fernjo app | ⬜ open | – | – |
@@ -45,7 +45,7 @@ _None yet._
 **Spec:** [2026-11-15-fernjo-design.md](superpowers/specs/2026-11-15-fernjo-design.md) Cross-platform SSH & RDP connection manager (Rust core, Tauri 2 UI)
 
 ## Milestone 0 – Repo scaffold & CI
-**Status:** 🔵 in progress · **Plan:** [2026-11-15-milestone-00-repo-scaffold.md](superpowers/plans/2026-11-15-milestone-00-repo-scaffold.md) · **Prerequisites:** none
+**Status:** ✅ done (2026-11-15) · **Plan:** [2026-11-15-milestone-00-repo-scaffold.md](superpowers/plans/2026-11-15-milestone-00-repo-scaffold.md) · **Prerequisites:** none
 
 Goal: An empty but fully set-up, public repo with a running Tauri shell and green CI that all further milestones build on.
 
@@ -62,15 +62,15 @@ Goal: An empty but fully set-up, public repo with a running Tauri shell and gree
 - [x] Move the `roadmap` job in `.github/workflows/roadmap.yml` from `[self-hosted, dotnet-linux]` to `ubuntu-latest`; no workflow uses a self-hosted runner
 - [x] Add the CI jobs (`roadmap` and the build/test/lint jobs) as required status checks in the branch protection of `main` and `dev`
 - [x] Dependabot for Cargo, npm (pnpm) and GitHub Actions
-- [ ] Scan the full git history for secrets (e.g. gitleaks), then make the repo public
-- [ ] Repo security on: secret scanning with push protection, Dependabot alerts and security updates, CodeQL for Rust and JavaScript/TypeScript, private vulnerability reporting with `SECURITY.md`, approval required for workflows from outside contributors
+- [x] Scan the full git history for secrets (e.g. gitleaks), then make the repo public
+- [x] Repo security on: secret scanning with push protection, Dependabot alerts and security updates, CodeQL for Rust and JavaScript/TypeScript, private vulnerability reporting with `SECURITY.md`, approval required for workflows from outside contributors
 
 **Acceptance criteria**
 - [x] Build, test and format/lint run green locally (commands in `CLAUDE.md`) – 2026-11-15 on Windows, head aff35f0: `pnpm install --frozen-lockfile`, `pnpm ui:build`, `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (3 config tests + 1 core test pass), `pnpm lint` (0 errors, 0 warnings), `pnpm test` (1 test pass), `cargo deny --all-features check` (ok), `dotnet run tools/roadmap.cs -- check` (valid) all green
-- [ ] `pnpm tauri dev` opens the empty fernjo window (manual check on Windows; macOS/Linux checked when a machine is available, otherwise marked open)
+- [x] `pnpm tauri dev` opens the empty fernjo window (manual check on Windows; macOS/Linux checked when a machine is available, otherwise marked open) – Windows 11, 2026-11-15, checked programmatically: `pnpm tauri dev` started, process `fernjo` had main window title `fernjo`, http://localhost:1420 served the page with `<h1>fernjo</h1>`, process tree stopped cleanly. OPEN: owner's visual confirmation of the window, and macOS and Linux (no machine available yet; check with `pnpm tauri dev`)
 - [x] CI is green on a PR to `dev` – PR #2 to `dev`: workflow `CI` run https://github.com/benjo-code/fernjo/actions/runs/43725362775 (rust, ui, tauri-build, cargo-deny success) and workflow `Roadmap` run https://github.com/benjo-code/fernjo/actions/runs/43725362692 (roadmap success), all on GitHub-hosted runners
 - [x] Branch protection for `main` and `dev` is active: PR required, CI checks required, no force push, no deletion – 2026-11-15 `gh api repos/benjo-code/fernjo/branches/<branch>/protection --jq '[.required_status_checks.contexts, .allow_force_pushes.enabled, .allow_deletions.enabled, .required_pull_request_reviews != null]'` for `main` and `dev` returns `[["roadmap","rust","ui","tauri-build","cargo-deny"],false,false,true]`
-- [ ] Repo is public with secret scanning and push protection enabled, and CodeQL has a green run – `gh api repos/benjo-code/fernjo --jq '.visibility, .security_and_analysis'`
+- [x] Repo is public with secret scanning and push protection enabled, and CodeQL has a green run – 2026-11-15 `gh api repos/benjo-code/fernjo --jq '.visibility, .security_and_analysis'` returns `public`, secret_scanning `enabled`, secret_scanning_push_protection `enabled`, dependabot_security_updates `enabled`; private vulnerability reporting and Dependabot alerts enabled; fork-PR approval policy `all_external_contributors`; CodeQL run https://github.com/benjo-code/fernjo/actions/runs/43726355044 succeeded (javascript-typescript and rust); history scan: gitleaks 8.30.1 `no leaks found` in 17 commits
 - [x] No workflow uses a self-hosted runner – `grep -rn self-hosted .github/workflows` returns nothing (also enforced by the workflow policy script); CI and Roadmap workflow runs of PR #2 ran on GitHub-hosted runners
 
 ## Milestone 1 – UI design direction

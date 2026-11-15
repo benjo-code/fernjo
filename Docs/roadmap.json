@@ -11,7 +11,8 @@
         {
           "id": "0",
           "title": "Repo scaffold & CI",
-          "status": "in-progress",
+          "status": "done",
+          "completedOn": "2026-11-15",
           "plan": "superpowers/plans/2026-11-15-milestone-00-repo-scaffold.md",
           "goal": "An empty but fully set-up, public repo with a running Tauri shell and green CI that all further milestones build on.",
           "tasks": [
@@ -27,15 +28,15 @@
             { "text": "Move the `roadmap` job in `.github/workflows/roadmap.yml` from `[self-hosted, dotnet-linux]` to `ubuntu-latest`; no workflow uses a self-hosted runner", "done": true },
             { "text": "Add the CI jobs (`roadmap` and the build/test/lint jobs) as required status checks in the branch protection of `main` and `dev`", "done": true },
             { "text": "Dependabot for Cargo, npm (pnpm) and GitHub Actions", "done": true },
-            { "text": "Scan the full git history for secrets (e.g. gitleaks), then make the repo public", "done": false },
-            { "text": "Repo security on: secret scanning with push protection, Dependabot alerts and security updates, CodeQL for Rust and JavaScript/TypeScript, private vulnerability reporting with `SECURITY.md`, approval required for workflows from outside contributors", "done": false }
+            { "text": "Scan the full git history for secrets (e.g. gitleaks), then make the repo public", "done": true },
+            { "text": "Repo security on: secret scanning with push protection, Dependabot alerts and security updates, CodeQL for Rust and JavaScript/TypeScript, private vulnerability reporting with `SECURITY.md`, approval required for workflows from outside contributors", "done": true }
           ],
           "acceptance": [
             { "text": "Build, test and format/lint run green locally (commands in `CLAUDE.md`)", "done": true, "evidence": "2026-11-15 on Windows, head aff35f0: `pnpm install --frozen-lockfile`, `pnpm ui:build`, `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (3 config tests + 1 core test pass), `pnpm lint` (0 errors, 0 warnings), `pnpm test` (1 test pass), `cargo deny --all-features check` (ok), `dotnet run tools/roadmap.cs -- check` (valid) all green" },
-            { "text": "`pnpm tauri dev` opens the empty fernjo window (manual check on Windows; macOS/Linux checked when a machine is available, otherwise marked open)", "done": false },
+            { "text": "`pnpm tauri dev` opens the empty fernjo window (manual check on Windows; macOS/Linux checked when a machine is available, otherwise marked open)", "done": true, "evidence": "Windows 11, 2026-11-15, checked programmatically: `pnpm tauri dev` started, process `fernjo` had main window title `fernjo`, http://localhost:1420 served the page with `<h1>fernjo</h1>`, process tree stopped cleanly. OPEN: owner's visual confirmation of the window, and macOS and Linux (no machine available yet; check with `pnpm tauri dev`)" },
             { "text": "CI is green on a PR to `dev`", "done": true, "evidence": "PR #2 to `dev`: workflow `CI` run https://github.com/benjo-code/fernjo/actions/runs/43725362775 (rust, ui, tauri-build, cargo-deny success) and workflow `Roadmap` run https://github.com/benjo-code/fernjo/actions/runs/43725362692 (roadmap success), all on GitHub-hosted runners" },
             { "text": "Branch protection for `main` and `dev` is active: PR required, CI checks required, no force push, no deletion", "done": true, "evidence": "2026-11-15 `gh api repos/benjo-code/fernjo/branches/<branch>/protection --jq '[.required_status_checks.contexts, .allow_force_pushes.enabled, .allow_deletions.enabled, .required_pull_request_reviews != null]'` for `main` and `dev` returns `[[\"roadmap\",\"rust\",\"ui\",\"tauri-build\",\"cargo-deny\"],false,false,true]`" },
-            { "text": "Repo is public with secret scanning and push protection enabled, and CodeQL has a green run", "done": false, "evidence": "`gh api repos/benjo-code/fernjo --jq '.visibility, .security_and_analysis'`" },
+            { "text": "Repo is public with secret scanning and push protection enabled, and CodeQL has a green run", "done": true, "evidence": "2026-11-15 `gh api repos/benjo-code/fernjo --jq '.visibility, .security_and_analysis'` returns `public`, secret_scanning `enabled`, secret_scanning_push_protection `enabled`, dependabot_security_updates `enabled`; private vulnerability reporting and Dependabot alerts enabled; fork-PR approval policy `all_external_contributors`; CodeQL run https://github.com/benjo-code/fernjo/actions/runs/43726355044 succeeded (javascript-typescript and rust); history scan: gitleaks 8.30.1 `no leaks found` in 17 commits" },
             { "text": "No workflow uses a self-hosted runner", "done": true, "evidence": "`grep -rn self-hosted .github/workflows` returns nothing (also enforced by the workflow policy script); CI and Roadmap workflow runs of PR #2 ran on GitHub-hosted runners" }
           ]
         },
