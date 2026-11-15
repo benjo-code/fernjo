@@ -57,8 +57,8 @@ pub struct AppState {
     pub settings_unusable: bool,
     pub restart_required: AtomicBool,
     /// The folder chosen by `apply_data_folder` while a restart is pending (shown by
-    /// `get_data_folder`); `None` otherwise.
-    pub pending_data_dir: Mutex<Option<PathBuf>>,
+    /// `get_data_folder`) with the data files that already existed there; `None` otherwise.
+    pub pending_data_dir: Mutex<Option<(PathBuf, Vec<String>)>>,
 }
 
 /// Debug output never includes the vault, the key store or the connection data.

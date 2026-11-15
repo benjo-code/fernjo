@@ -35,6 +35,10 @@ pub struct DataFolderInfo {
     /// there is no config folder to write it to.
     pub changeable: bool,
     pub restart_required: bool,
+    /// Data files (`connections.json`, `vault.fernjo`, in that order) that were already in the
+    /// chosen folder and were kept untouched, so the user sees what was adopted. Empty when
+    /// files were copied, the folder was empty or no change is pending.
+    pub existing_files: Vec<String>,
 }
 
 fn changeable(state: &AppState) -> bool {
@@ -42,18 +46,22 @@ fn changeable(state: &AppState) -> bool {
 }
 
 fn info(state: &AppState) -> Result<DataFolderInfo, CommandError> {
-    let pending = state
-        .pending_data_dir
-        .lock()
-        .map_err(|_| CommandError::internal())?
-        .clone();
     let restart_required = state.restart_required.load(Ordering::SeqCst);
-    let path = if restart_required { pending } else { None }
-        .or_else(|| state.data_dir.clone())
-        .map(|p| p.display().to_string())
-        .unwrap_or_default();
+    let pending = if restart_required {
+        state
+            .pending_data_dir
+            .lock()
+            .map_err(|_| CommandError::internal())?
+            .clone()
+    } else {
+        None
+    };
+    let (path, existing_files) = match pending {
+        Some((path, existing)) => (Some(path), existing),
+        None => (state.data_dir.clone(), Vec::new()),
+    };
     Ok(DataFolderInfo {
-        path,
+        path: path.map(|p| p.display().to_string()).unwrap_or_default(),
         source: match state.source {
             DataDirSource::Env => "env",
             DataDirSource::Settings => "settings",
@@ -61,6 +69,7 @@ fn info(state: &AppState) -> Result<DataFolderInfo, CommandError> {
         },
         changeable: changeable(state),
         restart_required,
+        existing_files,
     })
 }
 
@@ -101,12 +110,18 @@ fn copy_atomic(from: &Path, to: &Path) -> std::io::Result<()> {
 }
 
 /// Copies the data files of `from` into `target` when `target` has neither of them. A failure
-/// removes whatever this call already placed.
-fn copy_data_files(from: &Path, target: &Path) -> Result<(), CommandError> {
+/// removes whatever this call already placed. Returns the data files that already existed in
+/// `target` (kept untouched; empty when files were copied).
+fn copy_data_files(from: &Path, target: &Path) -> Result<Vec<String>, CommandError> {
     let present = |dir: &Path, name: &str| dir.join(name).try_exists().unwrap_or(true);
     let names = [CONNECTIONS_FILE, VAULT_FILE];
-    if names.iter().any(|n| present(target, n)) {
-        return Ok(());
+    let existing: Vec<String> = names
+        .iter()
+        .filter(|n| present(target, n))
+        .map(|n| (*n).to_string())
+        .collect();
+    if !existing.is_empty() {
+        return Ok(existing);
     }
     let mut placed: Vec<PathBuf> = Vec::new();
     for name in names {
@@ -126,7 +141,7 @@ fn copy_data_files(from: &Path, target: &Path) -> Result<(), CommandError> {
         }
         placed.push(dest);
     }
-    Ok(())
+    Ok(Vec::new())
 }
 
 /// Moves the data folder: copies the data files (only into a folder that has neither of them),
@@ -163,6 +178,7 @@ pub fn apply_data_folder(state: &AppState, target: &Path) -> Result<DataFolderIn
         .and_then(|d| fs::canonicalize(d).ok());
     let pending = state.restart_required.load(Ordering::SeqCst);
     let mut cancel_pending = false;
+    let mut existing_files = Vec::new();
     if let Some(current) = &current {
         if *current == canonical_target {
             if !pending {
@@ -176,7 +192,7 @@ pub fn apply_data_folder(state: &AppState, target: &Path) -> Result<DataFolderIn
             ));
         }
         if !cancel_pending {
-            copy_data_files(current, &canonical_target)?;
+            existing_files = copy_data_files(current, &canonical_target)?;
         }
     }
 
@@ -199,7 +215,8 @@ pub fn apply_data_folder(state: &AppState, target: &Path) -> Result<DataFolderIn
     *state
         .pending_data_dir
         .lock()
-        .map_err(|_| CommandError::internal())? = (!cancel_pending).then(|| target.to_path_buf());
+        .map_err(|_| CommandError::internal())? =
+        (!cancel_pending).then(|| (target.to_path_buf(), existing_files));
     state
         .restart_required
         .store(!cancel_pending, Ordering::SeqCst);
@@ -560,5 +577,84 @@ mod tests {
         assert_eq!(fs::read(settings_path(config.path())).unwrap(), newer);
         assert!(!restart_required(&st));
         assert_eq!(fs::read_dir(target.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn existing_files_in_the_target_are_reported() {
+        let [data, config] = dirs();
+        let st = state(data.path(), config.path(), DataDirSource::Default);
+        fill(&st);
+        let cases: [(&[&str], &[&str]); 3] = [
+            (&[VAULT_FILE], &[VAULT_FILE]),
+            (&[CONNECTIONS_FILE], &[CONNECTIONS_FILE]),
+            (
+                &[VAULT_FILE, CONNECTIONS_FILE],
+                &[CONNECTIONS_FILE, VAULT_FILE],
+            ),
+        ];
+        for (present, expected) in cases {
+            let target = tempfile::tempdir().unwrap();
+            for name in present {
+                fs::write(target.path().join(name), b"theirs").unwrap();
+            }
+            let got = apply_data_folder(&st, target.path()).unwrap();
+            assert_eq!(got.existing_files, expected, "{present:?}");
+            // a pending change keeps reporting it
+            assert_eq!(get_data_folder(&st).unwrap().existing_files, expected);
+            let json = serde_json::to_value(&got).unwrap();
+            assert_eq!(json["existingFiles"], serde_json::json!(expected));
+        }
+        // an empty target: files are copied, nothing is adopted
+        let empty = tempfile::tempdir().unwrap();
+        let got = apply_data_folder(&st, empty.path()).unwrap();
+        assert!(got.existing_files.is_empty());
+        assert!(get_data_folder(&st).unwrap().existing_files.is_empty());
+        // the same folder is a no-op and reports nothing; so does a cancelled change
+        let got = apply_data_folder(&st, data.path()).unwrap();
+        assert!(got.existing_files.is_empty());
+        assert!(get_data_folder(&st).unwrap().existing_files.is_empty());
+        let [fresh_data, fresh_config] = dirs();
+        let fresh = state(
+            fresh_data.path(),
+            fresh_config.path(),
+            DataDirSource::Default,
+        );
+        let got = apply_data_folder(&fresh, fresh_data.path()).unwrap();
+        assert!(got.existing_files.is_empty());
+    }
+
+    /// The second copy fails after the first succeeded: the first is rolled back, nothing else
+    /// in the target is touched, no settings are written and the restart flag stays unset.
+    #[test]
+    fn a_failing_copy_rolls_back_the_files_placed_earlier() {
+        let [data, config, target] = dirs();
+        let st = state(data.path(), config.path(), DataDirSource::Default);
+        fill(&st);
+        let before: Vec<Vec<u8>> = [CONNECTIONS_FILE, VAULT_FILE]
+            .iter()
+            .map(|n| fs::read(data.path().join(n)).unwrap())
+            .collect();
+        fs::write(target.path().join("notes.txt"), b"keep me").unwrap();
+        // a directory where the temp file of the vault copy goes makes that copy fail
+        let blocker = target.path().join(format!("{VAULT_FILE}.fernjo-copy.tmp"));
+        fs::create_dir(&blocker).unwrap();
+        let err = apply_data_folder(&st, target.path()).unwrap_err();
+        assert_eq!(err.code, "copy_failed");
+        assert!(!target.path().join(CONNECTIONS_FILE).exists());
+        assert!(!target.path().join(VAULT_FILE).exists());
+        assert_eq!(
+            fs::read(target.path().join("notes.txt")).unwrap(),
+            b"keep me"
+        );
+        assert!(blocker.is_dir());
+        assert_eq!(fs::read_dir(target.path()).unwrap().count(), 2);
+        assert!(!settings_path(config.path()).exists());
+        assert!(!restart_required(&st));
+        assert!(!get_data_folder(&st).unwrap().restart_required);
+        let after: Vec<Vec<u8>> = [CONNECTIONS_FILE, VAULT_FILE]
+            .iter()
+            .map(|n| fs::read(data.path().join(n)).unwrap())
+            .collect();
+        assert_eq!(before, after);
     }
 }
