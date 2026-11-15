@@ -114,12 +114,31 @@ describe("PropertiesPanel", () => {
     expect(calls.updateNode).toHaveLength(2);
   });
 
-  test("unchanged_value_makes_no_call", async () => {
+  test("leaving_a_field_unchanged_makes_no_call", async () => {
     const { calls } = await setup({
       "web-01": resolved({ id: "web-01", name: "web-01", username: inheritedUser }),
     });
-    await commit("username", "ops");
-    await commit("username", "ops", "blur");
+    await commit("username", "ops", "blur"); // tabbing through must not pin anything
+    await commit("name", "web-01");
+    await commit("host", "h.lab");
+    expect(calls.updateNode).toHaveLength(0);
+  });
+
+  test("enter_on_an_unchanged_inherited_value_pins_it_locally", async () => {
+    const { calls } = await setup({
+      "web-01": resolved({ id: "web-01", name: "web-01", username: inheritedUser }),
+    });
+    await commit("username", "ops"); // same text as the inherited value, but Enter
+    expect(calls.updateNode).toEqual([["web-01", { username: "ops" }]]);
+    await commit("port", "22");
+    expect(calls.updateNode[1]).toEqual(["web-01", { port: 22 }]);
+  });
+
+  test("enter_on_an_unchanged_local_value_makes_no_call", async () => {
+    const { calls } = await setup({
+      "web-01": resolved({ id: "web-01", name: "web-01", username: localUser }),
+    });
+    await commit("username", "root");
     expect(calls.updateNode).toHaveLength(0);
   });
 

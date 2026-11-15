@@ -305,4 +305,63 @@ describe("context menu", () => {
     await key(row("web-01"), "ContextMenu");
     expect(menuLabels()).toHaveLength(5);
   });
+
+  test("focus_returns_to_the_row_after_rename_commit_and_cancel", async () => {
+    await setup();
+    contextMenu(row("web-01"));
+    item("Rename").click();
+    await settle();
+    const input = document.querySelector<HTMLInputElement>("input.rename")!;
+    input.value = "web-02";
+    await key(input, "Enter");
+    expect(document.activeElement).toBe(row("web-01"));
+
+    contextMenu(row("web-01"));
+    item("Rename").click();
+    await settle();
+    await key(document.querySelector("input.rename")!, "Escape");
+    expect(document.activeElement).toBe(row("web-01"));
+  });
+
+  test("focus_is_not_stolen_when_a_rename_ends_because_the_user_clicked_elsewhere", async () => {
+    await setup();
+    const other = document.createElement("button");
+    document.body.append(other);
+    contextMenu(row("web-01"));
+    item("Rename").click();
+    await settle();
+    other.focus();
+    document.querySelector("input.rename")!.dispatchEvent(new FocusEvent("blur"));
+    await settle();
+    expect(document.activeElement).toBe(other);
+  });
+
+  test("after_deleting_the_neighbour_is_selected_and_focused", async () => {
+    const { store, setTree } = await setup();
+    // rows: Homelab, pve-01, DC01, Sub (collapsed), web-01
+    store.select("web-01");
+    flushSync();
+    setTree([
+      folder("Homelab", [conn("pve-01"), conn("DC01", "rdp"), folder("Sub", [conn("c1")])]),
+    ]);
+    await key(row("web-01"), "Delete");
+    button("Delete").click();
+    await settle();
+    await settle();
+    expect(store.selectedId).toBe("Sub");
+    expect(document.activeElement).toBe(row("Sub"));
+  });
+
+  test("deleting_a_folder_selects_the_next_row_after_its_subtree", async () => {
+    const { store, setTree } = await setup();
+    setTree([conn("web-01")]);
+    store.select("Homelab");
+    flushSync();
+    await key(row("Homelab"), "Delete");
+    button("Delete").click();
+    await settle();
+    await settle();
+    expect(store.selectedId).toBe("web-01");
+    expect(document.activeElement).toBe(row("web-01"));
+  });
 });

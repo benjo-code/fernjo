@@ -27,8 +27,9 @@
   let draft = $derived(value);
   let inflight = false;
 
-  async function commit() {
-    if (inflight || draft === value) return;
+  /** `force` (Enter) commits even an unchanged text: that is how an inherited value is pinned. */
+  async function commit(force: boolean) {
+    if (inflight || (!force && draft === value)) return;
     inflight = true;
     try {
       await onCommit(draft);
@@ -43,7 +44,7 @@
   function onkeydown(e: KeyboardEvent) {
     if (e.key === "Enter") {
       e.preventDefault();
-      void commit();
+      void commit(true);
     } else if (e.key === "Escape") {
       e.preventDefault();
       draft = value;
@@ -62,7 +63,7 @@
   spellcheck="false"
   bind:value={draft}
   oninput={() => onedit?.()}
-  onblur={() => void commit()}
+  onblur={() => void commit(false)}
   {onkeydown}
 />
 

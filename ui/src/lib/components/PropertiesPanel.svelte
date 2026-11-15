@@ -49,7 +49,7 @@
   ): Promise<boolean> {
     const value = text.trim();
     if (value === "") return info.local === null ? true : save(field, { [key]: null });
-    if (value === info.effective) return true;
+    if (value === info.local) return true;
     return save(field, { [key]: value });
   }
 
@@ -71,7 +71,7 @@
       setError(field, `${label} is too large`);
       return false;
     }
-    if (n === info.effective) return true;
+    if (n === info.local) return true;
     return save(field, { [key]: n });
   }
 
@@ -96,7 +96,8 @@
               {id}
               label="Name"
               value={detail.name}
-              onCommit={(text) => save("name", { name: text })}
+              onCommit={(text) =>
+                text === detail.name ? Promise.resolve(true) : save("name", { name: text })}
               onedit={() => setError("name", null)}
             />
           {/snippet}
@@ -108,7 +109,10 @@
               {id}
               label="Description"
               value={detail.description}
-              onCommit={(text) => save("description", { description: text })}
+              onCommit={(text) =>
+                text === detail.description
+                  ? Promise.resolve(true)
+                  : save("description", { description: text })}
               onedit={() => setError("description", null)}
             />
           {/snippet}
@@ -139,7 +143,8 @@
                 {id}
                 label="Host"
                 value={detail.host ?? ""}
-                onCommit={(text) => save("host", { host: text })}
+                onCommit={(text) =>
+                  text === detail.host ? Promise.resolve(true) : save("host", { host: text })}
                 onedit={() => setError("host", null)}
               />
             {/snippet}

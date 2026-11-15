@@ -63,7 +63,11 @@
   }
 
   function onpointerdown(e: PointerEvent) {
-    if (e.button !== 0 || !dragEnabled()) return;
+    if (e.button !== 0) {
+      cancelDrag();
+      return;
+    }
+    if (!dragEnabled()) return;
     const target = e.target as HTMLElement;
     if (target instanceof HTMLInputElement || target.closest(".chevron")) return;
     const el = target.closest<HTMLElement>("[data-node-id]");
@@ -72,6 +76,11 @@
 
   function onpointermove(e: PointerEvent) {
     if (drag.state === "idle") return;
+    if ((e.buttons & 1) === 0) {
+      // the release happened where we could not see it: do not follow a button that is up
+      cancelDrag();
+      return;
+    }
     const wasPending = drag.state === "pending";
     drag.pointerMove(e.clientX, e.clientY, hitAt(e.clientX, e.clientY));
     if (wasPending && drag.state === "dragging") {
@@ -86,6 +95,10 @@
   }
 
   function onpointerup(e: PointerEvent) {
+    if (e.button !== 0) {
+      cancelDrag();
+      return;
+    }
     const wasDrag = drag.pointerUp();
     syncDrag();
     try {
@@ -107,6 +120,29 @@
 
   function onwindowkeydown(e: KeyboardEvent) {
     if (e.key === "Escape" && drag.state !== "idle") cancelDrag();
+  }
+
+  /** A press that ends outside the tree must not stay armed for a later pointer move. */
+  function onwindowpointerup() {
+    if (drag.state === "pending") cancelDrag();
+  }
+
+  /** Gives the keyboard back to a row when its editor or dialog closed and left no focus anywhere. */
+  async function focusRowIfLost(id: string) {
+    // a macrotask: after Svelte removed the editor, and after a click elsewhere has moved focus
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const active = document.activeElement;
+    if (!active || active === document.body) rowElement(id)?.focus();
+  }
+
+  /** The row to continue from after deleting `row`: the next sibling, else the one above. */
+  function neighbourAfterDelete(row: Row): string | null {
+    const at = rows.indexOf(row);
+    if (at < 0) return null;
+    for (let i = at + 1; i < rows.length && rows[i].depth >= row.depth; i++) {
+      if (rows[i].depth === row.depth) return rows[i].node.id;
+    }
+    return at > 0 ? rows[at - 1].node.id : null;
   }
 
   function rowElement(id: string): HTMLElement | undefined {
@@ -152,11 +188,17 @@
     pendingDelete = { id: row.node.id, title: `Delete “${name}”${inside}?` };
   }
 
-  function confirmDelete() {
+  async function confirmDelete() {
     if (!pendingDelete) return;
     const { id } = pendingDelete;
     pendingDelete = null;
-    void store.remove(id);
+    const row = rows.find((r) => r.node.id === id);
+    const neighbour = row ? neighbourAfterDelete(row) : null;
+    await store.remove(id);
+    if (neighbour && store.selectedId === null && rowElement(neighbour) !== undefined) {
+      store.select(neighbour);
+    }
+    if (neighbour) void focusRowIfLost(neighbour);
   }
 
   function oncontextmenu(e: MouseEvent) {
@@ -254,7 +296,7 @@
   }
 </script>
 
-<svelte:window onkeydown={onwindowkeydown} />
+<svelte:window onkeydown={onwindowkeydown} onpointerup={onwindowpointerup} />
 
 {#if store.loadError || !store.loaded}
   <!-- nothing to show yet, or the data could not be opened (the notice bar says why) -->
@@ -299,8 +341,12 @@
         onrename={(value) => {
           if (value.trim() === row.node.name) store.stopRename();
           else void store.rename(row.node.id, value);
+          void focusRowIfLost(row.node.id);
         }}
-        oncancel={() => store.stopRename()}
+        oncancel={() => {
+          store.stopRename();
+          void focusRowIfLost(row.node.id);
+        }}
       />
     {/each}
   </div>

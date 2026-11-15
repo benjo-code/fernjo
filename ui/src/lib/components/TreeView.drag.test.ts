@@ -67,7 +67,15 @@ function layout(over: () => Element | null) {
 function pointer(type: string, el: Element, x: number, y: number, init: PointerEventInit = {}) {
   const Ctor = typeof PointerEvent === "function" ? PointerEvent : MouseEvent;
   el.dispatchEvent(
-    new Ctor(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, ...init }),
+    new Ctor(type, {
+      bubbles: true,
+      cancelable: true,
+      clientX: x,
+      clientY: y,
+      button: 0,
+      buttons: type === "pointermove" ? 1 : 0,
+      ...init,
+    }),
   );
   flushSync();
 }
@@ -214,5 +222,31 @@ describe("pointer drag and drop", () => {
     pointer("pointerup", tree(), 50, 12);
     await settle();
     expect(store.error).toBe("A folder cannot be moved into itself");
+  });
+
+  test("a_press_released_outside_the_tree_never_becomes_a_ghost_drag", async () => {
+    const { calls } = await setup();
+    layout(() => row("Homelab"));
+    pointer("pointerdown", row("web-01"), 50, 60);
+    pointer("pointerup", document.body, 600, 300); // released over the main area
+    pointer("pointermove", tree(), 50, 12, { buttons: 0 }); // hovering later, no button
+    pointer("pointerup", tree(), 50, 12);
+    pointer("pointerdown", row("pve-01"), 50, 36, { button: 2 });
+    pointer("pointerup", tree(), 50, 36, { button: 2 }); // a right-click
+    await settle();
+    expect(calls.moveNode).toHaveLength(0);
+  });
+
+  test("a_missed_release_cancels_the_drag_when_no_button_is_down_any_more", async () => {
+    const { calls } = await setup();
+    layout(() => row("Homelab"));
+    pointer("pointerdown", row("web-01"), 50, 60);
+    pointer("pointermove", tree(), 50, 12);
+    expect(row("Homelab").classList.contains("drop-inside")).toBe(true);
+    pointer("pointermove", tree(), 50, 14, { buttons: 0 });
+    expect(document.querySelector(".drop-inside")).toBeNull();
+    pointer("pointerup", tree(), 50, 14);
+    await settle();
+    expect(calls.moveNode).toHaveLength(0);
   });
 });
