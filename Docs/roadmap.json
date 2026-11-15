@@ -50,7 +50,7 @@
         {
           "id": "1",
           "title": "UI design direction",
-          "status": "planned",
+          "status": "in-progress",
           "plan": "superpowers/plans/2026-11-15-milestone-01-design-direction.md",
           "prerequisites": ["0"],
           "goal": "The visual direction of fernjo is chosen by the owner from at least three concepts and recorded, so every UI milestone builds on it.",

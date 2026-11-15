@@ -24,7 +24,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 | # | Milestone | Subproject | Status | Plan | Done on |
 |---|---|---|---|---|---|
 | 0 | Repo scaffold & CI | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-15-milestone-00-repo-scaffold.md) | 2026-11-15 |
-| 1 | UI design direction | 1 – fernjo app | 🟡 planned | [Plan](superpowers/plans/2026-11-15-milestone-01-design-direction.md) | – |
+| 1 | UI design direction | 1 – fernjo app | 🔵 in progress | [Plan](superpowers/plans/2026-11-15-milestone-01-design-direction.md) | – |
 | 2 | Connection tree & data model | 1 – fernjo app | ⬜ open | – | – |
 | 3 | Credential vault | 1 – fernjo app | ⬜ open | – | – |
 | 4 | SSH sessions in tabs | 1 – fernjo app | ⬜ open | – | – |
@@ -74,7 +74,7 @@ Goal: An empty but fully set-up, public repo with a running Tauri shell and gree
 - [x] No workflow uses a self-hosted runner – `grep -rn self-hosted .github/workflows` returns nothing (also enforced by the workflow policy script); CI and Roadmap workflow runs of PR #2 ran on GitHub-hosted runners
 
 ## Milestone 1 – UI design direction
-**Status:** 🟡 planned · **Plan:** [2026-11-15-milestone-01-design-direction.md](superpowers/plans/2026-11-15-milestone-01-design-direction.md) · **Prerequisites:** M0
+**Status:** 🔵 in progress · **Plan:** [2026-11-15-milestone-01-design-direction.md](superpowers/plans/2026-11-15-milestone-01-design-direction.md) · **Prerequisites:** M0
 
 Goal: The visual direction of fernjo is chosen by the owner from at least three concepts and recorded, so every UI milestone builds on it.
 
