@@ -40,6 +40,8 @@
   let password = $state("");
   let privateKey = $state("");
   let passphrase = $state("");
+  // edit only: remove the stored passphrase (ignored while a new passphrase is typed)
+  let clearPassphrase = $state(false);
 
   let busy = $state(false);
   let nameError = $state<string | null>(null);
@@ -100,6 +102,7 @@
     password = "";
     privateKey = "";
     passphrase = "";
+    clearPassphrase = false;
   }
 
   function clearErrors() {
@@ -168,6 +171,7 @@
       } else {
         if (privateKey) update.privateKey = privateKey;
         if (passphrase) update.passphrase = passphrase;
+        else if (clearPassphrase) update.clearPassphrase = true;
       }
       const { value, error } = await vault.updateCredential(selected, update);
       busy = false;
@@ -333,6 +337,10 @@
         error={repeatError}
         onedit={() => (repeatError = null)}
       />
+      <p class="hint">
+        Older copies of the vault file, such as backups and sync history, still open with your
+        previous password.
+      </p>
       {#if changeError}
         <p class="error" role="alert"><Icon name="alert" size={14} /><span>{changeError}</span></p>
       {/if}
@@ -449,7 +457,21 @@
               label="Passphrase"
               placeholder={editing ? "unchanged" : "optional"}
               bind:value={passphrase}
+              onedit={() => {
+                if (passphrase) clearPassphrase = false;
+              }}
             />
+            {#if editing}
+              <label class="check" for="cred-clear-passphrase">
+                <input
+                  id="cred-clear-passphrase"
+                  type="checkbox"
+                  bind:checked={clearPassphrase}
+                  disabled={passphrase !== ""}
+                />
+                <span>Remove stored passphrase</span>
+              </label>
+            {/if}
           {/if}
 
           <div class="field">

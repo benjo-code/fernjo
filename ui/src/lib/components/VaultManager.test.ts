@@ -133,6 +133,95 @@ describe("VaultManager", () => {
     expect(input("cred-password").value).toBe("");
   });
 
+  describe("private key passphrase on edit", () => {
+    const keyUpdate = () => ({
+      updateCredential: async () =>
+        credential({ id: "c2", name: "deploy key", kind: "privateKey" }),
+    });
+    const removeBox = () => document.getElementById("cred-clear-passphrase") as HTMLInputElement;
+
+    test("a_new_key_without_a_passphrase_sends_no_passphrase_field", async () => {
+      const { calls } = await setup(keyUpdate());
+      pick(1);
+      await settle();
+      expect(input("cred-passphrase").placeholder).toBe("unchanged");
+      expect(removeBox().checked).toBe(false);
+      await type(document.getElementById("cred-private-key") as HTMLTextAreaElement, "NEWKEY");
+      button("Save")!.click();
+      await settle();
+      expect(calls.updateCredential[0][1]).toEqual({
+        name: "deploy key",
+        username: "deploy",
+        domain: "",
+        notes: "",
+        privateKey: "NEWKEY",
+      });
+    });
+
+    test("ticking_remove_stored_passphrase_sends_clear_passphrase_only", async () => {
+      const { calls } = await setup(keyUpdate());
+      pick(1);
+      await settle();
+      removeBox().click();
+      await settle();
+      button("Save")!.click();
+      await settle();
+      const sent = calls.updateCredential[0][1] as Record<string, unknown>;
+      expect(sent.clearPassphrase).toBe(true);
+      expect("passphrase" in sent || "privateKey" in sent).toBe(false);
+    });
+
+    test("typing_a_passphrase_unticks_and_disables_the_checkbox", async () => {
+      const { calls } = await setup(keyUpdate());
+      pick(1);
+      await settle();
+      removeBox().click();
+      await settle();
+      expect(removeBox().checked).toBe(true);
+      await type(input("cred-passphrase"), "new-pass");
+      expect(removeBox().checked).toBe(false);
+      expect(removeBox().disabled).toBe(true);
+      button("Save")!.click();
+      await settle();
+      const sent = calls.updateCredential[0][1] as Record<string, unknown>;
+      expect(sent.passphrase).toBe("new-pass");
+      expect("clearPassphrase" in sent).toBe(false);
+    });
+
+    test("the_checkbox_is_only_offered_when_editing_a_private_key", async () => {
+      await setup();
+      pick(0);
+      await settle();
+      expect(removeBox()).toBeNull();
+      button("+ New")!.click();
+      await settle();
+      const kind = document.getElementById("cred-kind") as HTMLSelectElement;
+      kind.value = "privateKey";
+      kind.dispatchEvent(new Event("change", { bubbles: true }));
+      await settle();
+      expect(removeBox()).toBeNull();
+    });
+  });
+
+  test("a_changed_on_disk_error_is_shown_inline_and_keeps_the_vault_open", async () => {
+    const message = "The vault file was changed by another device or a sync tool.";
+    const { vault, onclose } = await setup({
+      createCredential: async () => {
+        throw apiError("changed_on_disk", message);
+      },
+    });
+    button("+ New")!.click();
+    await settle();
+    await type(input("cred-name"), "late");
+    await type(input("cred-password"), "pw-value-1");
+    button("Save")!.click();
+    await settle();
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(message);
+    expect(vault.status?.state).toBe("unlocked");
+    expect(onclose).not.toHaveBeenCalled();
+    expect(input("cred-name").value).toBe("late");
+  });
+
   test("creating_a_private_key_entry_sends_key_and_passphrase_once", async () => {
     const { calls } = await setup({
       createCredential: async (d) => credential({ id: "c9", name: d.name, kind: d.kind }),
@@ -443,6 +532,15 @@ describe("VaultManager", () => {
       "Wrong master password",
     );
     expect(document.getElementById("vault-change-old")).not.toBeNull();
+  });
+
+  test("change_password_form_warns_that_older_copies_keep_the_old_password", async () => {
+    await setup();
+    button("Change password")!.click();
+    await settle();
+    expect(document.querySelector("form.change")?.textContent?.replace(/\s+/g, " ")).toContain(
+      "Older copies of the vault file, such as backups and sync history, still open with your previous password.",
+    );
   });
 
   test("change_password_mismatch_blocks_the_call", async () => {

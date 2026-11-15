@@ -128,7 +128,10 @@ export interface CredentialUpdate {
   notes?: string;
   password?: string;
   privateKey?: string;
+  /** Sets or replaces the passphrase; a new `privateKey` without it keeps the stored one. */
   passphrase?: string;
+  /** Removes the stored passphrase (never sent together with `passphrase`). */
+  clearPassphrase?: boolean;
 }
 
 /** A node that references a credential. */
