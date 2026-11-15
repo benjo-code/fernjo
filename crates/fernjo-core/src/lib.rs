@@ -2,14 +2,16 @@
 
 pub mod error;
 pub mod model;
+pub mod persist;
 pub mod resolve;
 pub mod tree;
 
-pub use error::TreeError;
+pub use error::{LoadError, SaveError, TreeError};
 pub use model::{
     DEFAULT_KEEPALIVE_SECS, DEFAULT_RDP_PORT, DEFAULT_SSH_PORT, Field, Node, NodeId, NodeKind,
     NodeType, Protocol, ResolvedNode, Settings, Source,
 };
+pub use persist::{CURRENT_VERSION, FILE_NAME, Loaded, Notice, load, migrate_with, save};
 pub use resolve::resolve;
 pub use tree::{NodePatch, Patch, Tree};
 

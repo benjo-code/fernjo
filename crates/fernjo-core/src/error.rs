@@ -35,3 +35,31 @@ impl TreeError {
         }
     }
 }
+
+/// `connections.json` could not be written.
+#[derive(Debug, thiserror::Error)]
+#[error("could not write {}: {source}", path.display())]
+pub struct SaveError {
+    pub path: std::path::PathBuf,
+    #[source]
+    pub source: std::io::Error,
+}
+
+/// `connections.json` could not be loaded. Nothing has been overwritten in either case.
+#[derive(Debug, thiserror::Error)]
+pub enum LoadError {
+    #[error(
+        "{} was written by a newer version of fernjo (file format {found}, this version understands {supported})",
+        path.display()
+    )]
+    NewerSchema {
+        found: u32,
+        supported: u32,
+        path: std::path::PathBuf,
+    },
+    #[error("could not read {}: {reason}", path.display())]
+    Unreadable {
+        path: std::path::PathBuf,
+        reason: String,
+    },
+}
