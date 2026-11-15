@@ -24,7 +24,14 @@ vault.fernjo
 *.fernjo
 connections.json
 connections.json.bak
+connections.json.tmp
+*.fernjo.bak
+*.fernjo.tmp
+*.tmp
+*.ppk
+id_dsa*
 /settings.json
+/data/
 
 # Agent and editor scratch
 .superpowers/
