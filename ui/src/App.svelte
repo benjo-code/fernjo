@@ -5,24 +5,43 @@
   import Sidebar from "./lib/components/Sidebar.svelte";
   import { TreeStore } from "./lib/store.svelte";
   import type { Api } from "./lib/types";
+  import { VaultStore } from "./lib/vault.svelte";
 
   let { api = tauriApi }: { api?: Api } = $props();
 
-  // The store is created once; swapping the api prop afterwards is not supported.
+  // The stores are created once; swapping the api prop afterwards is not supported.
   // svelte-ignore state_referenced_locally
   const store = new TreeStore(api);
+  // svelte-ignore state_referenced_locally
+  const vault = new VaultStore(api, (message) => store.showError(message));
+
+  let view = $state<"empty" | "vault">("empty");
+
+  // the manager only exists while the vault is unlocked
+  $effect(() => {
+    if (view === "vault" && vault.status?.state !== "unlocked") view = "empty";
+  });
 
   onMount(() => {
     void store.init();
+    void vault.init();
   });
 </script>
 
 <div class="shell">
-  <Sidebar {store}>
+  <Sidebar {store} {vault} onOpenVault={() => (view = "vault")}>
     <PropertiesPanel {store} />
   </Sidebar>
   <main class="main">
-    <p class="empty">Open a connection from the tree</p>
+    {#if view === "vault"}
+      <!-- TEMPORARY: Task 10 replaces this placeholder with the credential manager -->
+      <div class="placeholder">
+        <p class="empty">Credentials</p>
+        <button type="button" class="btn" onclick={() => (view = "empty")}>Close</button>
+      </div>
+    {:else}
+      <p class="empty">Open a connection from the tree</p>
+    {/if}
   </main>
 </div>
 
@@ -39,6 +58,13 @@
     justify-content: center;
     min-width: 0;
     background: var(--color-bg);
+  }
+
+  .placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-4);
   }
 
   .empty {

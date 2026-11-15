@@ -100,6 +100,11 @@ export class TreeStore {
     this.error = null;
   }
 
+  /** Shows a message in the global error bar (for errors other stores want surfaced). */
+  showError(message: string) {
+    this.error = message;
+  }
+
   createFolder(parentId: string | null, index: number | null) {
     return this.#run(async () => {
       const m = await this.#api.createFolder(parentId, index, "New folder");
@@ -205,7 +210,9 @@ export class TreeStore {
       } catch (e) {
         const err = toApiError(e);
         if (err.code === "load_failed") this.loadError = err.message;
-        else if (!options.silent) this.error = err.message;
+        // a pending data folder change blocks every write: always tell the user, even for
+        // callers that show their own errors
+        else if (!options.silent || err.code === "restart_required") this.error = err.message;
         return err;
       }
     });

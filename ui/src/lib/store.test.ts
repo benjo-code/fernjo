@@ -116,6 +116,16 @@ describe("TreeStore", () => {
     expect(store.error).toBeNull();
   });
 
+  test("restart_required_is_shown_globally_even_for_silent_calls", async () => {
+    const { store } = await started(tree(), {
+      updateNode: async () => {
+        throw apiError("restart_required", "Restart fernjo first");
+      },
+    });
+    await store.update("web-01", { port: 5 }, { silent: true });
+    expect(store.error).toBe("Restart fernjo first");
+  });
+
   test("load_failed_error_sets_load_error", async () => {
     const mock = mockApi([], {
       listTree: async () => {

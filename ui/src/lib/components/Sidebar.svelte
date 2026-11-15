@@ -1,15 +1,35 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
   import type { TreeStore } from "../store.svelte";
+  import type { VaultStore } from "../vault.svelte";
   import FilterBox from "./FilterBox.svelte";
   import NoticeBar from "./NoticeBar.svelte";
   import TreeView from "./TreeView.svelte";
+  import VaultChip from "./VaultChip.svelte";
+  import VaultNote from "./VaultNote.svelte";
 
-  let { store, children }: { store: TreeStore; children?: Snippet } = $props();
+  let {
+    store,
+    vault,
+    onOpenVault,
+    children,
+  }: {
+    store: TreeStore;
+    vault: VaultStore;
+    /** The chip was clicked while the vault is unlocked. */
+    onOpenVault: () => void;
+    children?: Snippet;
+  } = $props();
+
+  let note: VaultNote | undefined = $state();
 </script>
 
 <aside class="sidebar" aria-label="Connections">
-  <div class="head"><FilterBox {store} /></div>
+  <div class="head">
+    <div class="filter"><FilterBox {store} /></div>
+    <VaultChip {vault} onOpenManager={onOpenVault} onFocusUnlock={() => void note?.focusForm()} />
+  </div>
+  <VaultNote bind:this={note} {vault} />
   <NoticeBar {store} />
   <div class="tree-slot"><TreeView {store} /></div>
   {@render children?.()}
@@ -25,7 +45,14 @@
   }
 
   .head {
+    display: flex;
+    gap: var(--space-3);
     padding: var(--space-3);
+  }
+
+  .filter {
+    flex: 1;
+    min-width: 0;
   }
 
   /* 23 rows stay visible when the window allows it; the properties panel gives way first */
