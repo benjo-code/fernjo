@@ -1,5 +1,6 @@
 //! `connections.json`: format, atomic write, backup and load fallback.
 
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Write};
@@ -10,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::{LoadError, SaveError};
-use crate::model::Node;
+use crate::model::{Node, NodeId, NodeKind};
 use crate::tree::Tree;
 
 /// File format version this build writes and understands.
@@ -121,7 +122,9 @@ fn read_file(path: &Path) -> Result<Read, LoadError> {
             });
         }
     };
-    let value: Value = match serde_json::from_slice(&bytes) {
+    // editors on Windows may add a UTF-8 byte order mark; that is not corruption
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
+    let value: Value = match serde_json::from_slice(bytes) {
         Ok(v) => v,
         Err(e) => return Ok(Read::Bad(e.to_string())),
     };
@@ -140,9 +143,30 @@ fn read_file(path: &Path) -> Result<Read, LoadError> {
         return Ok(Read::Bad("invalid schemaVersion 0".to_string()));
     }
     match serde_json::from_value::<FileIn>(migrate(value, version)) {
-        Ok(file) => Ok(Read::Parsed(Tree::from_children(file.children))),
+        Ok(mut file) => match sanitize(&mut file.children, &mut HashSet::new()) {
+            Ok(()) => Ok(Read::Parsed(Tree::from_children(file.children))),
+            Err(reason) => Ok(Read::Bad(reason)),
+        },
         Err(e) => Ok(Read::Bad(e.to_string())),
     }
+}
+
+/// Checks what hand-edited files can get wrong. A repeated id (a copied block) gets a fresh
+/// id so nothing is lost; a port of 0, which no operation can produce, makes the file unreadable.
+fn sanitize(nodes: &mut [Node], seen: &mut HashSet<NodeId>) -> Result<(), String> {
+    for node in nodes {
+        if !seen.insert(node.id) {
+            node.id = NodeId::new_v4();
+            seen.insert(node.id);
+        }
+        if node.settings.port == Some(0) {
+            return Err(format!("\"{}\" has the invalid port 0", node.name));
+        }
+        if let NodeKind::Folder { children } = &mut node.kind {
+            sanitize(children, seen)?;
+        }
+    }
+    Ok(())
 }
 
 /// Loads `path`, falling back to its `.bak` when the main file is missing or unreadable.
@@ -442,6 +466,78 @@ mod tests {
         fs::write(&file, "x").unwrap();
         let err = save(&file.join("sub").join(FILE_NAME), &Tree::new()).unwrap_err();
         assert!(err.to_string().contains("plain"), "{err}");
+    }
+
+    #[test]
+    fn duplicate_ids_in_a_hand_edited_file_are_made_unique() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = "11111111-1111-4111-8111-111111111111";
+        let node = |name: &str| json!({ "id": id, "type": "connection", "name": name, "protocol": "ssh", "host": "h" });
+        let text = json!({
+            "schemaVersion": 1,
+            "children": [
+                node("a"),
+                { "id": id, "type": "folder", "name": "f", "children": [node("b")] }
+            ]
+        })
+        .to_string();
+        fs::write(main_path(dir.path()), text).unwrap();
+
+        let loaded = load(&main_path(dir.path())).unwrap();
+        assert_eq!(loaded.notice, None);
+        let mut ids = Vec::new();
+        fn collect(nodes: &[crate::model::Node], ids: &mut Vec<crate::model::NodeId>) {
+            for n in nodes {
+                ids.push(n.id);
+                if let crate::model::NodeKind::Folder { children } = &n.kind {
+                    collect(children, ids);
+                }
+            }
+        }
+        collect(loaded.tree.children(), &mut ids);
+        assert_eq!(ids.len(), 3);
+        let unique: std::collections::HashSet<_> = ids.iter().collect();
+        assert_eq!(unique.len(), 3);
+        // the first occurrence keeps its id, every name survives
+        assert_eq!(loaded.tree.children()[0].id.to_string(), id);
+        assert_eq!(loaded.tree.children()[1].name, "f");
+    }
+
+    #[test]
+    fn port_0_in_the_file_is_unreadable_and_falls_back_to_bak() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = sample_tree("one");
+        save(&main_path(dir.path()), &first).unwrap();
+        save(&main_path(dir.path()), &sample_tree("two")).unwrap();
+        let text = json!({
+            "schemaVersion": 1,
+            "children": [{
+                "id": "11111111-1111-4111-8111-111111111111", "type": "connection",
+                "name": "x", "protocol": "ssh", "host": "h", "settings": { "port": 0 }
+            }]
+        })
+        .to_string();
+        fs::write(main_path(dir.path()), text).unwrap();
+        let loaded = load(&main_path(dir.path())).unwrap();
+        assert_eq!(loaded.tree, first);
+        assert!(matches!(
+            loaded.notice,
+            Some(Notice::RestoredFromBackup { bad_file: Some(_) })
+        ));
+    }
+
+    #[test]
+    fn a_utf8_bom_is_not_corruption() {
+        let dir = tempfile::tempdir().unwrap();
+        let tree = sample_tree("dc01");
+        save(&main_path(dir.path()), &tree).unwrap();
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend(fs::read(main_path(dir.path())).unwrap());
+        fs::write(main_path(dir.path()), bytes).unwrap();
+        let loaded = load(&main_path(dir.path())).unwrap();
+        assert_eq!(loaded.tree, tree);
+        assert_eq!(loaded.notice, None);
+        assert_eq!(files(dir.path()).len(), 1);
     }
 
     #[test]
