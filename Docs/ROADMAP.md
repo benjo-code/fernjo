@@ -83,7 +83,7 @@ Goal: The visual direction of fernjo is chosen by the owner from at least three 
 - [x] Create at least three distinct design concepts with the `impeccable` skill, each showing the main window (tree with folders, tabs, an SSH terminal, properties panel) and the vault unlock dialog, in light and dark
 - [x] Publish all concepts together as one Claude artifact with a switcher between them
 - [x] Owner picks a concept (or combines parts); iterate on the chosen direction
-- [ ] Record the direction in `DESIGN.md` (principles, typography, colour, spacing, components, terminal colour scheme)
+- [x] Record the direction in `DESIGN.md` (principles, typography, colour, spacing, components, terminal colour scheme)
 - [x] Design tokens as CSS variables (light and dark) in `ui/`, applied to the empty shell
 - [ ] Decision entry in `Docs/DECISIONS.md` naming the chosen concept and why
 - [ ] App icon derived from the chosen direction (source SVG committed, icon set generated with `pnpm tauri icon`), replacing the M0 placeholder

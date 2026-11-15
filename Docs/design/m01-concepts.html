@@ -49,6 +49,13 @@ body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--pg-font
 .raises { margin: 0; padding-left: 18px; display: grid; gap: 4px; max-width: 90ch; }
 .declined { border-top: 1px solid var(--pg-line); padding-top: 12px; display: grid; gap: 6px; font-size: 13px; color: var(--pg-muted); }
 .declined ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
+.iconpanel { display: grid; gap: 14px; }
+.iconpanel[hidden] { display: none !important; }
+.ic-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 20px; padding: 20px; border-radius: 10px; overflow-x: auto; }
+.ic-row svg { flex: none; }
+.ic-light { background: #f3f3f3; color: #1a1a1a; }
+.ic-dark { background: #202020; color: #e6e6e6; }
+.ic-label { font-size: 13px; width: 100%; }
 .note { font-size: 13px; color: var(--pg-muted); max-width: 90ch; margin: 0; }
 ::selection { background: var(--pg-accent); color: var(--pg-accent-fg); }
 
@@ -385,6 +392,11 @@ body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--pg-font
   <symbol id="i-alert" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.25"/><path d="M8 4.75v3.75M8 11h.01"/></symbol>
   <symbol id="i-check" viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></symbol>
   <symbol id="i-next" viewBox="0 0 16 16"><path d="M6 3.5L10.5 8 6 12.5"/></symbol>
+  <symbol id="app-icon" viewBox="0 0 1024 1024"><rect x="48" y="48" width="928" height="928" rx="208" fill="#1e1e1c"/>
+  <rect x="52" y="52" width="920" height="920" rx="204" fill="none" stroke="#3a3935" stroke-width="8"/>
+  <path d="M403 621 L566 458" stroke="#eceae4" stroke-width="64" stroke-linecap="round"/>
+  <circle cx="318" cy="706" r="112" fill="none" stroke="#eceae4" stroke-width="64"/>
+  <circle cx="676" cy="348" r="172" fill="#f0b400"/></symbol>
   <symbol id="m-live" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="currentColor" stroke="none"/></symbol>
   <symbol id="m-conn" viewBox="0 0 10 10"><circle cx="5" cy="5" r="3.4" fill="none" stroke="currentColor" stroke-width="1.4"/></symbol>
   <symbol id="m-drop" viewBox="0 0 10 10"><circle cx="5" cy="5" r="3.4" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M2 8L8 2" stroke="currentColor" stroke-width="1.4"/></symbol>
@@ -407,7 +419,7 @@ body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--pg-font
       </div></div>
     <div class="ctl"><span class="seg-label" id="lbl-v">View</span>
       <div class="seg" data-key="v" aria-labelledby="lbl-v">
-        <button type="button" id="v-main" data-v="main">Main window</button><button type="button" id="v-unlock" data-v="unlock">Unlock</button><button type="button" id="v-error" data-v="error">Unlock error</button>
+        <button type="button" id="v-main" data-v="main">Main window</button><button type="button" id="v-unlock" data-v="unlock">Unlock</button><button type="button" id="v-error" data-v="error">Unlock error</button><button type="button" id="v-icon" data-v="icon">App icon</button>
       </div></div>
     <div class="ctl" id="ctl-host"><span class="seg-label" id="lbl-h">Host column</span>
       <div class="seg" data-key="h" aria-labelledby="lbl-h">
@@ -565,6 +577,15 @@ body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--pg-font
       </ul></div>
   </section>
 
+  <section class="iconpanel" id="iconpanel" hidden>
+    <div class="cap-head"><h2>App icon</h2><span class="cap-kind">From Ulm, revised: the charcoal housing, a local ring joined to the lit yellow key at the remote end</span></div>
+    <div class="ic-row ic-light"><span class="ic-label">Light taskbar</span>
+      <svg width="16" height="16"><use href="#app-icon"/></svg><svg width="24" height="24"><use href="#app-icon"/></svg><svg width="32" height="32"><use href="#app-icon"/></svg><svg width="48" height="48"><use href="#app-icon"/></svg><svg width="128" height="128"><use href="#app-icon"/></svg><svg width="256" height="256"><use href="#app-icon"/></svg></div>
+    <div class="ic-row ic-dark"><span class="ic-label">Dark taskbar</span>
+      <svg width="16" height="16"><use href="#app-icon"/></svg><svg width="24" height="24"><use href="#app-icon"/></svg><svg width="32" height="32"><use href="#app-icon"/></svg><svg width="48" height="48"><use href="#app-icon"/></svg><svg width="128" height="128"><use href="#app-icon"/></svg><svg width="256" height="256"><use href="#app-icon"/></svg></div>
+    <p class="note">Sizes 16, 24, 32, 48, 128 and 256 px. The installers and the window use the set generated from this one source with <code>pnpm tauri icon</code>.</p>
+  </section>
+
   <section class="caption" data-for="ulm2" hidden>
     <div class="cap-head"><h2>Ulm, revised</h2><span class="cap-kind">Round 1 with your feedback; the original Ulm stays in the switcher for comparison</span></div>
     <ul class="raises">
@@ -638,13 +659,16 @@ body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--pg-font
 <script>
 (function () {
   var state = { c: "ulm2", m: "light", v: "main", h: "on", p: "open" };
-  var allowed = { c: ["fv", "ulm2", "ulm", "gate", "wb"], m: ["light", "dark"], v: ["main", "unlock", "error"] };
+  var allowed = { c: ["fv", "ulm2", "ulm", "gate", "wb"], m: ["light", "dark"], v: ["main", "unlock", "error", "icon"] };
   var app = document.getElementById("app");
   var overlay = document.getElementById("overlay");
   var vaultBtn = document.getElementById("vault-btn");
   var tabWeb01 = document.getElementById("tab-web01");
 
   function apply() {
+    var isIcon = state.v === "icon";
+    document.getElementById("stage").hidden = isIcon;
+    document.getElementById("iconpanel").hidden = !isIcon;
     var rev = state.c === "ulm2";
     app.className = "app " + (rev ? "c-ulm c-ulm2" : "c-" + state.c) + " m-" + state.m +
       " v-" + (state.v === "main" ? "main" : "lock") + (state.v === "error" ? "" : " hidden-err") +
