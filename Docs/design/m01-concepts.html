@@ -33,6 +33,7 @@ body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--pg-font
 .seg button:focus-visible { outline: 2px solid var(--pg-fg); outline-offset: -4px; }
 .seg-label { font-size: 13px; color: var(--pg-muted); margin-right: 8px; }
 .ctl { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.ctl[hidden] { display: none !important; }
 .stage { width: 100%; }
 .frame { width: 1280px; height: 800px; transform-origin: 0 0; }
 .stage-wrap { position: relative; overflow: hidden; border-radius: 10px; box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 12px 32px -8px rgba(0,0,0,.25); }
@@ -60,12 +61,12 @@ body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--pg-font
 :where(.app) button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: default; }
 
 /* Sidebar */
-.side { background: var(--c-side); color: var(--c-side-fg); display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: minmax(0, 1fr); min-height: 0; min-width: 0; overflow: hidden; border-right: 1px solid var(--c-side-line); }
-.side-head { display: flex; gap: 6px; align-items: center; padding: 8px 8px 6px; }
+.side { background: var(--c-side); color: var(--c-side-fg); display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; grid-template-columns: minmax(0, 1fr); min-height: 0; min-width: 0; overflow: hidden; border-right: 1px solid var(--c-side-line); }
+.side-head { grid-row: 1; display: flex; gap: 6px; align-items: center; padding: 8px 8px 6px; }
 .filter { flex: 1; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border-radius: var(--r-sm); background: var(--c-input); border: 1px solid var(--c-input-line); color: var(--c-side-muted); }
 .filter span { color: var(--c-side-muted); }
 .vault { height: 28px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; border-radius: var(--r-sm); color: var(--c-side-fg); border: 1px solid var(--c-side-line); font-size: calc(var(--fs) - 1px); }
-.tree { position: relative; overflow: hidden; padding: 2px 0 0; min-height: 0; }
+.tree { grid-row: 3; position: relative; overflow: hidden; padding: 2px 0 0; min-height: 0; }
 .row { height: var(--row); display: flex; align-items: center; gap: 5px; padding-left: calc(8px + var(--d) * var(--indent)); padding-right: 10px; white-space: nowrap; position: relative; }
 .row:hover { background: var(--c-hover); }
 .row .chev { width: 14px; height: 14px; color: var(--c-side-muted); }
@@ -93,7 +94,7 @@ body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--pg-font
 .lamp { display: none; }
 
 /* Properties panel (stacked under the tree) */
-.props { border-top: 1px solid var(--c-side-line); padding: 8px 10px 10px; display: grid; gap: 2px; }
+.props { grid-row: 4; border-top: 1px solid var(--c-side-line); padding: 8px 10px 10px; display: grid; gap: 2px; }
 .props-head { display: flex; align-items: center; gap: 6px; height: 26px; }
 .props-head .pn { font-weight: 600; }
 .props-head .pk { color: var(--c-side-muted); margin-left: auto; font-size: calc(var(--fs) - 1px); }
@@ -215,6 +216,43 @@ body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--pg-font
   --fs: 13px; --row: 22px; --indent: 12px; --w-folder: 500; --r-sm: 4px; --r-md: 8px; }
 .c-wb .tab.act { box-shadow: inset 0 2px 0 var(--c-accent); }
 
+/* ===== Ulm, revised (owner feedback, round 1). Applied together with .c-ulm. ===== */
+.lockbar, .inline-unlock, .u2only, .pchev { display: none; }
+.lockbar { grid-row: 2; }
+@keyframes fj-pulse { 50% { opacity: .3; } }
+.c-ulm2 .lamp { margin-left: 8px; visibility: hidden; }
+.c-ulm2 .lamp.live, .c-ulm2 .lamp.conn, .c-ulm2 .lamp.drop, .c-ulm2 .lamp.u2drop { visibility: visible; }
+.c-ulm2 .lamp.u2drop { border-color: var(--c-mark-drop); opacity: 1; background: linear-gradient(135deg, transparent 43%, var(--c-mark-drop) 43%, var(--c-mark-drop) 57%, transparent 57%); }
+.c-ulm2.v-lock .lamp.u2wait { visibility: visible; border-color: var(--c-mark-conn); opacity: 1; animation: fj-pulse 1.6s ease-in-out infinite; }
+.c-ulm2 .lamp.conn, .c-ulm2 .tab .ind.conn { animation: fj-pulse 1.6s ease-in-out infinite; }
+.c-ulm2 .row .host { display: inline; margin-left: auto; }
+.c-ulm2.no-host .row .host { display: none; }
+.c-ulm2.no-host .lamp { margin-left: auto; }
+.c-ulm2 .row.sel { background: var(--c-sel2); color: var(--c-sel-fg); box-shadow: inset 3px 0 0 var(--c-sel-bar); font-weight: 600; }
+.c-ulm2 .row.focus { box-shadow: inset 0 0 0 1px var(--c-focus); }
+.c-ulm2 .k, .c-ulm2 .props-head .pk { text-transform: none; letter-spacing: 0; font-size: 12px; }
+.c-ulm2 .props-head { cursor: pointer; }
+.c-ulm2 .pchev { display: block; width: 14px; height: 14px; color: var(--c-side-muted); margin-left: -2px; }
+.c-ulm2.props-closed .pchev { transform: rotate(-90deg); }
+.c-ulm2.props-closed .prop, .c-ulm2.props-closed .legend { display: none; }
+.c-ulm2.props-closed .props { padding-bottom: 4px; }
+.c-ulm2 .tab:not(.act) .recon { background: transparent; color: var(--c-tab-fg); border-color: var(--c-btn-line); }
+.c-ulm2.v-main .u2only.u2main, .c-ulm2.v-lock .u2only.u2lock { display: flex; }
+.c-ulm2.v-lock .lockbar { display: flex; gap: 8px; align-items: center; margin: 0 8px 6px; padding: 7px 8px 7px 10px; border-radius: var(--r-sm); background: var(--c-lock-bg); border: 1px solid var(--c-side-line); }
+.lockbar .lb-t { display: grid; gap: 1px; font-size: 12px; color: var(--c-side-muted); line-height: 1.3; }
+.lockbar .lb-t b { color: var(--c-side-fg); font-size: 13px; font-weight: 600; }
+.lockbar .lb-btn { margin-left: auto; height: 26px; padding: 0 10px; border: 1px solid var(--c-btn-line); border-radius: var(--r-sm); color: var(--c-side-fg); flex: none; }
+.c-ulm2.v-lock .term { display: none; }
+.c-ulm2.v-lock .inline-unlock { display: grid; place-items: start center; padding-top: 88px; background: var(--c-bg); min-height: 0; }
+.iu { width: 420px; display: grid; gap: 14px; }
+.iu h3 { margin: 0; font-size: 17px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.iu p { margin: 0; color: var(--c-muted); }
+.iu .dlg-actions { justify-content: flex-start; flex-direction: row-reverse; }
+.c-ulm2.m-light .term .a7, .c-ulm2.m-light .term .a15 { color: #73726d; }
+.c-ulm2.m-light .term .a10 { color: #448128; } .c-ulm2.m-light .term .a11 { color: #996a00; } .c-ulm2.m-light .term .a14 { color: #217f7b; }
+.c-ulm2.m-dark .term .a0 { color: #868583; } .c-ulm2.m-dark .term .a8 { color: #86847f; }
+@media (prefers-reduced-motion: reduce) { .c-ulm2 .lamp, .c-ulm2 .tab .ind { animation: none !important; } }
+
 /* ===== Palettes (concept x mode). All colours are hex; a translucent overlay/shadow is the only exception. ===== */
 .c-fv.m-light {
   --c-bg:#ffffff; --c-text:#111a2b; --c-muted:#4f5b70; --c-line:#d5dbe5;
@@ -252,6 +290,7 @@ body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--pg-font
   --c-accent:#1e1e1c; --c-accent-fg:#f7f6f3; --c-key:#f0b400; --c-key-fg:#1e1e1c;
   --c-ok:#2f7d22; --c-warn:#9a5d00; --c-danger:#b3261e;
   --c-mark-live:#2f8a22; --c-mark-conn:#a86400; --c-mark-drop:#b3261e; --c-lamp-halo:#2f8a2233;
+  --c-sel2:#d1cdc3; --c-sel-bar:#1e1e1c; --c-lock-bg:#fbfaf7; --c-btn-line:#77736b;
   --c-band:#fbfaf7; --c-band-fg:#1e1e1c; --c-pict:#1e1e1c; --c-pict-fg:#f7f6f3;
   --c-overlay:rgba(40,38,34,.42); --c-dialog:#fbfaf7; --c-dialog-line:#cfccc3; --c-shadow:rgba(30,28,24,.28);
   --term-bg:#fbfaf7; --term-fg:#232320; --term-cur:#1e1e1c; --term-sel:#eadfb8;
@@ -265,6 +304,7 @@ body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--pg-font
   --c-accent:#eceae4; --c-accent-fg:#1c1c1a; --c-key:#f0b400; --c-key-fg:#1c1c1a;
   --c-ok:#6cc04a; --c-warn:#e0a030; --c-danger:#f0625a;
   --c-mark-live:#6cc04a; --c-mark-conn:#e0a030; --c-mark-drop:#f0625a; --c-lamp-halo:#6cc04a33;
+  --c-sel2:#4a4843; --c-sel-bar:#eceae4; --c-lock-bg:#1c1c1a; --c-btn-line:#77746d;
   --c-band:#3b3a36; --c-band-fg:#f6f5f1; --c-pict:#eceae4; --c-pict-fg:#1c1c1a;
   --c-overlay:rgba(0,0,0,.52); --c-dialog:#262624; --c-dialog-line:#3f3e3a; --c-shadow:rgba(0,0,0,.5);
   --c-dlg-input:#1c1c1a; --c-dlg-input-line:#4a4843;
@@ -354,13 +394,13 @@ body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--pg-font
 <main class="page">
   <header>
     <h1>fernjo design concepts</h1>
-    <p class="lede">Milestone 1: four directions for the main window and the vault unlock dialog, each in light and dark. Every mockup shows the same synthetic workspace at the design size of 1280 × 800, so only the design changes when you switch.</p>
+    <p class="lede">Milestone 1: four directions for the main window and the vault unlock dialog, each in light and dark, plus a first revision of Ulm from your feedback. Every mockup shows the same synthetic workspace at the design size of 1280 × 800, so only the design changes when you switch.</p>
   </header>
 
   <div class="controls" role="group" aria-label="Mockup controls">
     <div class="ctl"><span class="seg-label" id="lbl-c">Concept</span>
       <div class="seg" data-key="c" aria-labelledby="lbl-c">
-        <button type="button" id="c-fv" data-v="fv">Fernverkehr</button><button type="button" id="c-ulm" data-v="ulm">Ulm</button><button type="button" id="c-gate" data-v="gate">Gate</button><button type="button" id="c-wb" data-v="wb">Workbench</button>
+        <button type="button" id="c-fv" data-v="fv">Fernverkehr</button><button type="button" id="c-ulm2" data-v="ulm2">Ulm, revised</button><button type="button" id="c-ulm" data-v="ulm">Ulm</button><button type="button" id="c-gate" data-v="gate">Gate</button><button type="button" id="c-wb" data-v="wb">Workbench</button>
       </div></div>
     <div class="ctl"><span class="seg-label" id="lbl-m">Theme</span>
       <div class="seg" data-key="m" aria-labelledby="lbl-m">
@@ -369,6 +409,14 @@ body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--pg-font
     <div class="ctl"><span class="seg-label" id="lbl-v">View</span>
       <div class="seg" data-key="v" aria-labelledby="lbl-v">
         <button type="button" id="v-main" data-v="main">Main window</button><button type="button" id="v-unlock" data-v="unlock">Unlock</button><button type="button" id="v-error" data-v="error">Unlock error</button>
+      </div></div>
+    <div class="ctl" id="ctl-host"><span class="seg-label" id="lbl-h">Host column</span>
+      <div class="seg" data-key="h" aria-labelledby="lbl-h">
+        <button type="button" id="h-on" data-v="on">On</button><button type="button" id="h-off" data-v="off">Off</button>
+      </div></div>
+    <div class="ctl" id="ctl-props"><span class="seg-label" id="lbl-p">Properties</span>
+      <div class="seg" data-key="p" aria-labelledby="lbl-p">
+        <button type="button" id="p-open" data-v="open">Open</button><button type="button" id="p-closed" data-v="closed">Collapsed</button>
       </div></div>
   </div>
 
@@ -381,6 +429,7 @@ body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--pg-font
               <div class="filter"><svg><use href="#i-search"/></svg><span>Filter connections</span></div>
               <button class="vault" id="vault-btn"><svg><use href="#i-unlock"/></svg><span>Unlocked</span></button>
             </div>
+            <div class="lockbar"><svg><use href="#i-lock"/></svg><div class="lb-t"><b>Vault locked</b><span>Connections with stored credentials ask for it.</span></div><button class="lb-btn">Unlock</button></div>
             <div class="tree">
               <div class="row folder" style="--d:0"><svg class="chev"><use href="#i-chev"/></svg><span class="name">Homelab</span></div>
               <div class="row folder" style="--d:1"><svg class="chev"><use href="#i-chev"/></svg><span class="name">Proxmox</span></div>
@@ -395,13 +444,13 @@ body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--pg-font
               <div class="row folder" style="--d:1"><svg class="chev closed"><use href="#i-chev"/></svg><span class="name">Network</span></div>
               <div class="row folder" style="--d:1"><svg class="chev"><use href="#i-chev"/></svg><span class="name">Storage</span></div>
               <div class="row conn" style="--d:2"><span class="ind none"><svg><use href="#m-live"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="name">nas-01</span><span class="host">192.0.2.40</span><span class="lamp"></span></div>
-              <div class="row conn" style="--d:2"><span class="ind none"><svg><use href="#m-live"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="name">backup-nas</span><span class="host">192.0.2.41</span><span class="lamp"></span></div>
+              <div class="row conn" style="--d:2"><span class="ind none"><svg><use href="#m-live"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="name">backup-nas</span><span class="host">192.0.2.41</span><span class="lamp u2drop"></span></div>
               <div class="row folder" style="--d:1"><svg class="chev closed"><use href="#i-chev"/></svg><span class="name">IoT</span></div>
               <div class="row folder" style="--d:0"><svg class="chev"><use href="#i-chev"/></svg><span class="name">Work</span></div>
               <div class="row folder" style="--d:1"><svg class="chev"><use href="#i-chev"/></svg><span class="name">Nordwerk</span></div>
               <div class="row folder" style="--d:2"><svg class="chev"><use href="#i-chev"/></svg><span class="name">Web</span></div>
               <div class="row conn sel" style="--d:3"><span class="ind live"><svg><use href="#m-live"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="name">web-01</span><span class="host">198.51.100.21</span><span class="lamp live"></span></div>
-              <div class="row conn" style="--d:3"><span class="ind none"><svg><use href="#m-live"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="name">web-02</span><span class="host">198.51.100.22</span><span class="lamp"></span></div>
+              <div class="row conn" style="--d:3"><span class="ind none"><svg><use href="#m-live"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="name">web-02</span><span class="host">198.51.100.22</span><span class="lamp u2wait"></span></div>
               <div class="row conn" style="--d:3"><span class="ind none"><svg><use href="#m-live"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="name">lb-01</span><span class="host">198.51.100.10</span><span class="lamp"></span></div>
               <div class="row folder" style="--d:2"><svg class="chev"><use href="#i-chev"/></svg><span class="name">Database</span></div>
               <div class="row conn" style="--d:3"><span class="ind none"><svg><use href="#m-live"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="name">db-01</span><span class="host">198.51.100.31</span><span class="lamp"></span></div>
@@ -421,7 +470,7 @@ body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--pg-font
                 <div class="path">Work <svg><use href="#i-next"/></svg> Nordwerk <svg><use href="#i-next"/></svg> Web</div>
                 <div class="here"><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg></span>web-01</div>
               </div>
-              <div class="props-head"><span class="pn">web-01</span><span class="pk">SSH connection</span></div>
+              <div class="props-head" id="props-head"><svg class="pchev"><use href="#i-chev"/></svg><span class="pn">web-01</span><span class="pk">SSH connection</span></div>
               <div class="prop"><span class="k">Host</span><span class="vwrap"><span class="v">198.51.100.21</span></span><span></span></div>
               <div class="prop"><span class="k">Port</span><span class="vwrap"><span class="v">22</span><sup class="fn">a</sup></span><span class="inh">from Work</span></div>
               <div class="prop"><span class="k">Username</span><span class="vwrap"><span class="v">deploy</span><sup class="fn">b</sup></span><span class="inh">from Nordwerk</span></div>
@@ -433,9 +482,11 @@ body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--pg-font
 
           <section class="main">
             <div class="tabs">
-              <div class="tab act"><span class="ind live"><svg><use href="#m-live"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="t">web-01</span><button class="x" aria-label="Close web-01"><svg><use href="#i-x"/></svg></button></div>
+              <div class="tab act" id="tab-web01"><span class="ind live"><svg><use href="#m-live"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="t">web-01</span><button class="x" aria-label="Close web-01"><svg><use href="#i-x"/></svg></button></div>
+              <div class="tab act u2only u2lock"><span class="ind conn"><svg><use href="#m-conn"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg></span><span class="t">web-02</span><span class="st">Needs vault</span><button class="x" aria-label="Close web-02"><svg><use href="#i-x"/></svg></button></div>
               <div class="tab"><span class="ind conn"><svg><use href="#m-conn"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="t">docker-01</span><span class="st">Connecting…</span><button class="x" aria-label="Close docker-01"><svg><use href="#i-x"/></svg></button></div>
               <div class="tab"><span class="ind drop"><svg><use href="#m-drop"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg><b class="pc"><i>SSH</i></b></span><span class="t">pve-01</span><button class="recon"><svg><use href="#i-recon"/></svg>Reconnect</button><button class="x" aria-label="Close pve-01"><svg><use href="#i-x"/></svg></button></div>
+              <div class="tab u2only u2main"><span class="ind drop"><svg><use href="#m-drop"/></svg></span><span class="proto ssh"><svg class="pi"><use href="#i-ssh"/></svg></span><span class="t">backup-nas</span><button class="recon"><svg><use href="#i-recon"/></svg>Reconnect</button><button class="x" aria-label="Close backup-nas"><svg><use href="#i-x"/></svg></button></div>
               <div class="tab"><span class="ind live"><svg><use href="#m-live"/></svg></span><span class="proto rdp"><svg class="pi"><use href="#i-rdp"/></svg><b class="pc"><i>RDP</i></b></span><span class="t">dc01</span><button class="x" aria-label="Close dc01"><svg><use href="#i-x"/></svg></button></div>
               <div class="tabs-rest"></div>
             </div>
@@ -461,6 +512,19 @@ body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--pg-font
 <span class="a0">black</span> <span class="a1">red</span> <span class="a2">green</span> <span class="a3">yellow</span> <span class="a4">blue</span> <span class="a5">magenta</span> <span class="a6">cyan</span> <span class="a7">white</span>
 <span class="a8">black</span> <span class="a9">red</span> <span class="a10">green</span> <span class="a11">yellow</span> <span class="a12">blue</span> <span class="a13">magenta</span> <span class="a14">cyan</span> <span class="a15">white</span>
 <b class="a2">deploy@web-01</b>:<b class="a4">~</b>$ <span class="cur"> </span></div>
+            <div class="inline-unlock">
+              <div class="iu">
+                <h3><svg><use href="#i-lock"/></svg>web-02 needs the vault</h3>
+                <p>Its credential "deploy key" is stored in the vault. Enter the master password to connect. Other tabs keep running.</p>
+                <div class="fld">
+                  <label for="mpw2">Master password</label>
+                  <div class="pw"><span class="dots" id="mpw2">••••••••••••••</span><button class="eye" aria-label="Show password"><svg><use href="#i-eye"/></svg></button></div>
+                  <div class="errmsg" data-err><svg><use href="#i-alert"/></svg><span>Wrong master password. Check Caps Lock and try again.</span></div>
+                </div>
+                <div class="chk"><span class="box"></span><span>Unlock automatically on this device</span></div>
+                <div class="dlg-actions"><button class="btn pri"><svg><use href="#i-unlock"/></svg>Unlock and connect</button><button class="btn sec">Cancel</button></div>
+              </div>
+            </div>
           </section>
 
           <div class="overlay" id="overlay" hidden>
@@ -500,6 +564,25 @@ body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--pg-font
         <li>From the convention catalog: density courage, with codes and hosts packed into a 22 px line.</li>
         <li>From the Metro tiles: no decorative borders; areas are separated by ground colour.</li>
       </ul></div>
+  </section>
+
+  <section class="caption" data-for="ulm2" hidden>
+    <div class="cap-head"><h2>Ulm, revised</h2><span class="cap-kind">Round 1 with your feedback; the original Ulm stays in the switcher for comparison</span></div>
+    <ul class="raises">
+      <li>Lamps only where something runs: no session = no lamp, connecting = pulsing ring, live = filled, dropped = struck. State is told by shape; colour only supports it.</li>
+      <li>Selection is a darker row with a bar on the left and semibold text; keyboard focus is a 1 px outline.</li>
+      <li>A locked vault is not modal: a note at the top of the sidebar, the tree stays usable, and the password is asked inside the tab of the connection that needs it (views "Unlock" and "Unlock error").</li>
+      <li>Host column as an option (switch above): greyed address on the right, the lamp in the last column.</li>
+      <li>The properties panel collapses (click its header or use the switch above), so the whole tree fits.</li>
+      <li>Property labels in normal case, 12 px, grey.</li>
+      <li>One yellow key per context: only the active tab's action is yellow; Reconnect on inactive tabs is outlined (pve-01, backup-nas).</li>
+      <li>Terminal minimum contrast 4.5 : 1, on by default (xterm.js <code>minimumContrastRatio</code>): the palette stays, foreground colours that are too faint are darkened or lightened when drawn. Here: ANSI white on light, ANSI black and bright black on dark, and three colours just under 4.5.</li>
+    </ul>
+    <dl class="facts">
+      <div><dt>Type</dt><dd>Hanken Grotesk (UI), Red Hat Mono (terminal)</dd></div>
+      <div><dt>Density</dt><dd>24 px rows</dd></div>
+      <div><dt>Colour</dt><dd>Warm neutrals, yellow as the only accent, green/amber/red only in lamps and marks</dd></div>
+    </dl>
   </section>
 
   <section class="caption" data-for="ulm" hidden>
@@ -555,17 +638,23 @@ body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--pg-font
 
 <script>
 (function () {
-  var state = { c: "fv", m: "light", v: "main" };
-  var allowed = { c: ["fv", "ulm", "gate", "wb"], m: ["light", "dark"], v: ["main", "unlock", "error"] };
+  var state = { c: "ulm2", m: "light", v: "main", h: "on", p: "open" };
+  var allowed = { c: ["fv", "ulm2", "ulm", "gate", "wb"], m: ["light", "dark"], v: ["main", "unlock", "error"] };
   var app = document.getElementById("app");
   var overlay = document.getElementById("overlay");
   var vaultBtn = document.getElementById("vault-btn");
-  var pw = document.getElementById("pw");
+  var tabWeb01 = document.getElementById("tab-web01");
 
   function apply() {
-    app.className = "app c-" + state.c + " m-" + state.m + (state.v === "error" ? "" : " hidden-err");
-    overlay.hidden = state.v === "main";
-    pw.classList.toggle("err", state.v === "error");
+    var rev = state.c === "ulm2";
+    app.className = "app " + (rev ? "c-ulm c-ulm2" : "c-" + state.c) + " m-" + state.m +
+      " v-" + (state.v === "main" ? "main" : "lock") + (state.v === "error" ? "" : " hidden-err") +
+      (state.h === "off" ? " no-host" : "") + (state.p === "closed" ? " props-closed" : "");
+    overlay.hidden = state.v === "main" || rev;
+    document.querySelectorAll(".pw").forEach(function (el) { el.classList.toggle("err", state.v === "error"); });
+    tabWeb01.classList.toggle("act", !(rev && state.v !== "main"));
+    document.getElementById("ctl-host").hidden = !rev;
+    document.getElementById("ctl-props").hidden = !rev;
     vaultBtn.innerHTML = state.v === "main"
       ? '<svg><use href="#i-unlock"/></svg><span>Unlocked</span>'
       : '<svg><use href="#i-lock"/></svg><span>Locked</span>';
@@ -598,6 +687,11 @@ body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--pg-font
     });
   });
   window.addEventListener("hashchange", function () { fromHash(); apply(); });
+  document.getElementById("props-head").addEventListener("click", function () {
+    if (state.c !== "ulm2") return;
+    state.p = state.p === "open" ? "closed" : "open";
+    apply();
+  });
 
   var wrap = document.getElementById("stage-wrap");
   var frame = document.getElementById("frame");
