@@ -55,7 +55,7 @@ Goal: An empty but fully set-up, public repo with a running Tauri shell and gree
 - [x] Fill in the project header in `CLAUDE.md` and `README.md`, remove the template section from the README
 - [x] Stack-specific `.gitignore` (Rust `target/`, `node_modules/`, UI build output, `.env`) and `.gitattributes` additions
 - [x] Cargo workspace (edition 2024, `rust-toolchain.toml`, `license = "MIT OR Apache-2.0"`) with crate `fernjo-core` incl. a first test
-- [ ] Tauri 2 app in `src-tauri/` with Svelte 5 + TypeScript frontend in `ui/` (Vite, pnpm) showing an empty fernjo window; ESLint, Prettier, `svelte-check` and Vitest set up
+- [x] Tauri 2 app in `src-tauri/` with Svelte 5 + TypeScript frontend in `ui/` (Vite, pnpm) showing an empty fernjo window; ESLint, Prettier, `svelte-check` and Vitest set up
 - [x] `LICENSE-MIT` and `LICENSE-APACHE` added
 - [x] `.env.example` with placeholders, only if secrets are needed (none expected)
 - [ ] CI on GitHub-hosted `ubuntu-latest`: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `cargo-deny`, UI lint/check/test and a Tauri build check (WebKitGTK installed in the job), on PRs to `dev` and `main`
