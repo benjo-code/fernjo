@@ -56,6 +56,9 @@ pub struct AppState {
     /// `settings.json` has a newer schema (or was unusable): it must not be saved over.
     pub settings_unusable: bool,
     pub restart_required: AtomicBool,
+    /// The folder chosen by `apply_data_folder` while a restart is pending (shown by
+    /// `get_data_folder`); `None` otherwise.
+    pub pending_data_dir: Mutex<Option<PathBuf>>,
 }
 
 /// Debug output never includes the vault, the key store or the connection data.
@@ -184,6 +187,7 @@ impl AppState {
             source,
             settings_unusable,
             restart_required: AtomicBool::new(false),
+            pending_data_dir: Mutex::new(None),
         }
     }
 

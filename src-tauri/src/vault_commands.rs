@@ -1230,6 +1230,14 @@ mod tests {
             entry("reveal_credential", |w| {
                 j(reveal_credential(&w.st, w.key_id))
             }),
+            entry("get_data_folder", |w| {
+                j(crate::data_folder::get_data_folder(&w.st))
+            }),
+            entry("apply_data_folder", |w| {
+                // the state has no config folder, so this is refused; the response and error
+                // must be free of secrets either way
+                j(crate::data_folder::apply_data_folder(&w.st, w._dir.path()))
+            }),
         ]
     }
 
@@ -1279,32 +1287,50 @@ mod tests {
         assert_no_sentinel("RevealedSecret Debug", &format!("{r:?}"));
     }
 
+    /// Commands that need an `AppHandle` cannot be called without a running app, so they have
+    /// no `table()` entry. Each is exempt for the stated reason: no secret type appears in
+    /// its signature (`choose_data_folder` returns `DataFolderInfo`, `restart_app` nothing).
+    const APP_HANDLE_EXEMPT: [(&str, &str); 2] = [
+        (
+            "choose_data_folder",
+            "takes an AppHandle; returns only DataFolderInfo",
+        ),
+        ("restart_app", "takes an AppHandle; returns nothing"),
+    ];
+
     #[test]
     fn command_table_covers_every_tauri_command() {
-        // Split so this test's own source does not count as an occurrence. Task 8 adds
-        // `include_str!("data_folder.rs")` to `sources` and its commands to `table()`.
-        const ATTR: &str = concat!("#[tauri::", "command]");
+        // The attribute is split so this test's own source does not count as an occurrence.
+        const ATTR: &str = concat!("#[tauri::", "command");
         let sources = [
             include_str!("commands.rs"),
             include_str!("vault_commands.rs"),
+            include_str!("data_folder.rs"),
         ];
-        // Only lines that are exactly the attribute count (not doc comments or strings).
+        // Only lines that start with the attribute count (not doc comments or strings), so
+        // `#[tauri::command(async)]` and similar forms are counted too.
         let declared: usize = sources
             .iter()
-            .map(|s| s.lines().filter(|l| l.trim() == ATTR).count())
+            .map(|s| s.lines().filter(|l| l.trim().starts_with(ATTR)).count())
             .sum();
         let names: Vec<&str> = table().iter().map(|(n, _)| *n).collect();
+        let exempt: Vec<&str> = APP_HANDLE_EXEMPT.iter().map(|(n, _)| *n).collect();
+        let covered: Vec<&str> = names.iter().chain(&exempt).copied().collect();
         assert_eq!(
             declared,
-            names.len(),
-            "a #[tauri::command] was added or removed without updating table()"
+            covered.len(),
+            "a tauri command was added or removed without updating table() / APP_HANDLE_EXEMPT"
         );
-        // every table entry is a real wrapper and is registered in run()
+        // every covered name is a real wrapper and is registered in run()
         let lib = include_str!("lib.rs");
-        for name in names {
-            let wrapper = format!("pub fn {name}(");
+        for name in &covered {
+            // exempt commands only exist as handlers; the others also as a plain function
+            let wrapper = format!("fn {name}(");
+            let needed = if exempt.contains(name) { 1 } else { 2 };
             assert!(
-                sources.iter().any(|s| s.matches(&wrapper).count() >= 2),
+                sources
+                    .iter()
+                    .any(|s| s.matches(&wrapper).count() >= needed),
                 "{name} needs a plain function and a handler"
             );
             assert!(
@@ -1312,5 +1338,17 @@ mod tests {
                 "{name} is not registered in run()"
             );
         }
+        // and the other way round: every handler registered in run() has a table entry
+        let list = lib
+            .split("generate_handler![")
+            .nth(1)
+            .and_then(|rest| rest.split(']').next())
+            .expect("generate_handler! list in lib.rs");
+        let registered = list.matches("handlers::").count();
+        assert_eq!(
+            registered,
+            covered.len(),
+            "run() registers a command that table() / APP_HANDLE_EXEMPT does not cover"
+        );
     }
 }

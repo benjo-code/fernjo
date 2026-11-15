@@ -140,3 +140,9 @@ Follow-up closed in: IPC content security policy (M2).
 **Decision:** Tauri 2 shell, Svelte 5 + TypeScript frontend, xterm.js for the terminal. All logic stays in Rust crates that do not depend on Tauri.
 **Rationale:** xterm.js is a mature terminal (used by VS Code); web UI makes design iteration cheap. RDP via canvas is the accepted risk, checked by a spike.
 **Rejected alternatives:** egui/Iced + alacritty_terminal (all Rust, best RDP, but immature terminal widget and harder to make look modern); Slint (no terminal widget); Electron (heavy, non-Rust core); Qt bindings (awkward in Rust).
+
+## 2026-11-15 – Data folder dialog: tauri-plugin-dialog (Rust API only)
+**Context:** M3 lets the user pick the data folder; the native folder picker must open from Rust and the webview must gain no new permissions.
+**Decision:** `tauri-plugin-dialog` 2.8.4 (`tauri-plugin-dialog = "2"`), registered after the single-instance plugin and used only through its Rust API (`DialogExt::file().blocking_pick_folder()` on a `spawn_blocking` worker). No JS permission is added: `capabilities/default.json` stays `["core:default"]` (guarded by `src-tauri/tests/tauri_conf.rs`), so the webview cannot call the plugin's own commands. `apply_data_folder` copies `connections.json` and `vault.fernjo` only into a folder that has neither of them, writes `settings.json` last and then sets `restart_required`; the running app keeps its old folder until `restart_app`.
+**Rationale:** The picker needs no frontend code, and the dialog result goes through the same validated Rust path as any other choice.
+**Rejected alternatives:** `@tauri-apps/plugin-dialog` from the webview (needs a capability, and the path would come from the UI); a text field for the path (error-prone); moving files instead of copying them (the old folder stays intact as backup).

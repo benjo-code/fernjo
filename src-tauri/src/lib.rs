@@ -1,4 +1,5 @@
 mod commands;
+mod data_folder;
 mod state;
 mod vault_commands;
 
@@ -23,6 +24,7 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::open_for_app(fernjo_core::locate()))
         .invoke_handler(tauri::generate_handler![
             commands::handlers::list_tree,
@@ -46,6 +48,10 @@ pub fn run() {
             vault_commands::handlers::credential_usage,
             vault_commands::handlers::delete_credential,
             vault_commands::handlers::reveal_credential,
+            data_folder::handlers::get_data_folder,
+            data_folder::handlers::apply_data_folder,
+            data_folder::handlers::choose_data_folder,
+            data_folder::handlers::restart_app,
         ])
         .run(tauri::generate_context!())
         .expect("error while running fernjo");
