@@ -50,7 +50,8 @@
         {
           "id": "1",
           "title": "UI design direction",
-          "status": "in-progress",
+          "status": "done",
+          "completedOn": "2026-11-15",
           "plan": "superpowers/plans/2026-11-15-milestone-01-design-direction.md",
           "prerequisites": ["0"],
           "goal": "The visual direction of fernjo is chosen by the owner from at least three concepts and recorded, so every UI milestone builds on it.",
@@ -65,9 +66,9 @@
             { "text": "App icon derived from the chosen direction (source SVG committed, icon set generated with `pnpm tauri icon`), replacing the M0 placeholder", "done": true }
           ],
           "acceptance": [
-            { "text": "The artifact shows at least three concepts, switchable, each in light and dark", "done": false },
-            { "text": "Owner has approved the direction (recorded in `Docs/DECISIONS.md`)", "done": false },
-            { "text": "`DESIGN.md` exists and the shell uses the token file; build, test and lint are green", "done": false }
+            { "text": "The artifact shows at least three concepts, switchable, each in light and dark", "done": true, "evidence": "https://claude.ai/artifact/9BhGCKAfNbHvbsUUQQwhas (private to the owner; source `Docs/design/m01-concepts.html`) shows Fernverkehr, Ulm, Gate and Workbench plus Ulm, revised, switchable by concept, Light/Dark and Main window/Unlock/Unlock error (plus an App icon view). Every combination rendered with headless Edge during Task 4 and the revisions, palettes pass the WCAG contrast script in both themes; the owner worked with it for the feedback round on 2026-11-15" },
+            { "text": "Owner has approved the direction (recorded in `Docs/DECISIONS.md`)", "done": true, "evidence": "`Docs/DECISIONS.md` entry \"Visual direction: \"Ulm, revised\"\": owner approval on 2026-11-15 (\"ulm revised is approved\") after one feedback round; contract in `.impeccable/surfaces/ui-src-app-svelte.md`" },
+            { "text": "`DESIGN.md` exists and the shell uses the token file; build, test and lint are green", "done": true, "evidence": "`DESIGN.md` and `.impeccable/design.json` written by impeccable's documenter after the finish review (fix batch, all 8 findings resolved). `ui/src/main.ts` imports `styles/tokens.css` and `styles/base.css`; the built `ui/dist/assets/index-*.css` contains `--color-bg`; owner checked `pnpm tauri dev` on Windows 11 in light and dark mode, DevTools console without CSP or font errors. Gate 2026-11-15 on Windows: `pnpm install --frozen-lockfile`, `pnpm ui:build`, `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (3 config tests + 1 core test), `pnpm lint` (0 errors, 0 warnings), `pnpm test` (8 tests), `cargo deny check` (ok), `dotnet run tools/roadmap.cs -- check` (valid) all green. OPEN: visual check of the shell and icon on macOS and Linux (`pnpm tauri dev`), no machine available yet" }
           ]
         },
         {
