@@ -140,7 +140,7 @@ Goal: Passwords and SSH keys are stored encrypted, unlocked by a master password
 **Tasks**
 - [ ] `fernjo-vault`: file format with wrapped random data key, Argon2id, XChaCha20-Poly1305, atomic writes; format documented
 - [ ] Entries (password, private key with optional passphrase, username, domain, notes) with `secrecy`/`zeroize`
-- [ ] Master password on first run, unlock dialog, lock action, change master password (re-wrap only)
+- [ ] Master password on first run, unlock dialog, lock action, change master password (re-wraps the data key)
 - [ ] "Unlock automatically on this device" via the OS keychain (`keyring`)
 - [ ] Credential reference as inheritable setting in the properties panel
 - [ ] Vault UI: list, create, edit, explicit reveal, delete with usage warning

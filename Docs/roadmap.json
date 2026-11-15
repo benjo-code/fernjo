@@ -104,7 +104,7 @@
           "tasks": [
             { "text": "`fernjo-vault`: file format with wrapped random data key, Argon2id, XChaCha20-Poly1305, atomic writes; format documented", "done": false },
             { "text": "Entries (password, private key with optional passphrase, username, domain, notes) with `secrecy`/`zeroize`", "done": false },
-            { "text": "Master password on first run, unlock dialog, lock action, change master password (re-wrap only)", "done": false },
+            { "text": "Master password on first run, unlock dialog, lock action, change master password (re-wraps the data key)", "done": false },
             { "text": "\"Unlock automatically on this device\" via the OS keychain (`keyring`)", "done": false },
             { "text": "Credential reference as inheritable setting in the properties panel", "done": false },
             { "text": "Vault UI: list, create, edit, explicit reveal, delete with usage warning", "done": false },
