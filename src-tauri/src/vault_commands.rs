@@ -239,8 +239,10 @@ pub struct CredentialDraft {
     pub passphrase: Option<SecretString>,
 }
 
-/// Partial update. A secret field that is present replaces the secret; the kind cannot
-/// change. Empty `username`/`domain` clear the field. Never serialised.
+/// Partial update. A secret field that is present replaces that part of the secret; the
+/// kind cannot change. A new `private_key` keeps the stored passphrase unless `passphrase`
+/// replaces it or `clear_passphrase` removes it. Empty `username`/`domain` clear the
+/// field. Never serialised.
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CredentialUpdate {
@@ -254,6 +256,8 @@ pub struct CredentialUpdate {
     pub private_key: Option<SecretString>,
     #[serde(deserialize_with = "secret_opt")]
     pub passphrase: Option<SecretString>,
+    /// Remove the stored passphrase of a private key credential.
+    pub clear_passphrase: bool,
 }
 
 fn is_blank(s: &SecretString) -> bool {
@@ -288,6 +292,10 @@ fn draft_secret(d: &mut CredentialDraft) -> Result<Secret, CommandError> {
 }
 
 /// The replacement secret of an update, or `None` when no secret field is present.
+///
+/// A new `privateKey` without `passphrase` keeps the stored passphrase; `passphrase`
+/// sets or replaces it (empty means none) and `clearPassphrase` removes it. A passphrase
+/// alone (or `clearPassphrase` alone) keeps the stored key.
 fn update_secret(
     vault: &Vault,
     id: CredentialId,
@@ -298,6 +306,7 @@ fn update_secret(
         if kind != SecretKind::Password
             || u.private_key.is_some()
             || u.passphrase.is_some()
+            || u.clear_passphrase
             || is_blank(&password)
         {
             return Err(invalid(
@@ -306,7 +315,7 @@ fn update_secret(
         }
         return Ok(Some(Secret::Password { password }));
     }
-    if u.private_key.is_none() && u.passphrase.is_none() {
+    if u.private_key.is_none() && u.passphrase.is_none() && !u.clear_passphrase {
         return Ok(None);
     }
     if kind != SecretKind::PrivateKey {
@@ -314,22 +323,36 @@ fn update_secret(
             "a key or passphrase can only replace the secret of a private key credential",
         ));
     }
-    match u.private_key.take() {
-        Some(key) if is_blank(&key) => Err(invalid("the private key must not be empty")),
-        // a new key replaces the whole secret
-        Some(key) => Ok(Some(Secret::PrivateKey {
-            key,
-            passphrase: passphrase(u.passphrase.take()),
-        })),
-        // a passphrase alone keeps the stored key
-        None => match vault.reveal(id)? {
-            Secret::PrivateKey { key, .. } => Ok(Some(Secret::PrivateKey {
-                key,
-                passphrase: passphrase(u.passphrase.take()),
-            })),
-            Secret::Password { .. } => Err(invalid("not a private key credential")),
-        },
+    if u.passphrase.is_some() && u.clear_passphrase {
+        return Err(invalid(
+            "a passphrase cannot be set and removed in the same update",
+        ));
     }
+    let Secret::PrivateKey {
+        key: stored_key,
+        passphrase: stored_passphrase,
+    } = vault.reveal(id)?
+    else {
+        return Err(invalid("not a private key credential"));
+    };
+    let key = match u.private_key.take() {
+        Some(key) if is_blank(&key) => {
+            return Err(invalid("the private key must not be empty"));
+        }
+        Some(key) => key,
+        None => stored_key,
+    };
+    let new_passphrase = if u.clear_passphrase {
+        None
+    } else if u.passphrase.is_some() {
+        passphrase(u.passphrase.take())
+    } else {
+        stored_passphrase
+    };
+    Ok(Some(Secret::PrivateKey {
+        key,
+        passphrase: new_passphrase,
+    }))
 }
 
 pub fn list_credentials(state: &AppState) -> Result<Vec<CredentialInfo>, CommandError> {
@@ -979,11 +1002,11 @@ mod tests {
         let revealed = reveal_credential(&w.st, w.key_id).unwrap();
         assert_eq!(revealed.private_key.as_deref(), Some(KEY));
         assert_eq!(revealed.passphrase.as_deref(), Some("p2"));
-        // a new key without a passphrase drops the old passphrase
+        // a new key without a passphrase keeps the stored passphrase
         update_credential(&w.st, w.key_id, update(json!({"privateKey": "k2"}))).unwrap();
         let revealed = reveal_credential(&w.st, w.key_id).unwrap();
         assert_eq!(revealed.private_key.as_deref(), Some("k2"));
-        assert_eq!(revealed.passphrase, None);
+        assert_eq!(revealed.passphrase.as_deref(), Some("p2"));
 
         assert_eq!(code(get_credential(&w.st, NodeId::new_v4())), "not_found");
         assert_eq!(
@@ -994,6 +1017,71 @@ mod tests {
             )),
             "empty_name"
         );
+    }
+
+    #[test]
+    fn private_key_updates_keep_or_clear_the_passphrase_as_asked() {
+        let w = world(true);
+        let id = w.key_id;
+        let secret = |st: &AppState| {
+            let r = reveal_credential(st, id).unwrap();
+            (r.private_key, r.passphrase)
+        };
+        assert_eq!(secret(&w.st), (Some(KEY.to_owned()), Some(PASS.to_owned())));
+        // a new key without a passphrase keeps the stored passphrase
+        update_credential(&w.st, id, update(json!({"privateKey": "key-two"}))).unwrap();
+        assert_eq!(
+            secret(&w.st),
+            (Some("key-two".to_owned()), Some(PASS.to_owned()))
+        );
+        // clearPassphrase alone removes the passphrase and keeps the key
+        update_credential(&w.st, id, update(json!({"clearPassphrase": true}))).unwrap();
+        assert_eq!(secret(&w.st), (Some("key-two".to_owned()), None));
+        // a new key plus a new passphrase replaces both
+        update_credential(
+            &w.st,
+            id,
+            update(json!({"privateKey": "key-three", "passphrase": "pass-three"})),
+        )
+        .unwrap();
+        assert_eq!(
+            secret(&w.st),
+            (Some("key-three".to_owned()), Some("pass-three".to_owned()))
+        );
+        // a new key together with clearPassphrase drops the old passphrase
+        update_credential(
+            &w.st,
+            id,
+            update(json!({"privateKey": "key-four", "clearPassphrase": true})),
+        )
+        .unwrap();
+        assert_eq!(secret(&w.st), (Some("key-four".to_owned()), None));
+        // clearPassphrase false is a no-op
+        update_credential(&w.st, id, update(json!({"passphrase": "p5"}))).unwrap();
+        update_credential(&w.st, id, update(json!({"clearPassphrase": false}))).unwrap();
+        assert_eq!(
+            secret(&w.st),
+            (Some("key-four".to_owned()), Some("p5".to_owned()))
+        );
+        // a typed passphrase and clearPassphrase together are contradictory
+        assert_eq!(
+            code(update_credential(
+                &w.st,
+                id,
+                update(json!({"passphrase": "x", "clearPassphrase": true}))
+            )),
+            "invalid_credential"
+        );
+        // clearPassphrase does not apply to a password credential
+        assert_eq!(
+            code(update_credential(
+                &w.st,
+                w.pw_id,
+                update(json!({"clearPassphrase": true}))
+            )),
+            "invalid_credential"
+        );
+        assert_eq!(secret(&w.st).1.as_deref(), Some("p5"));
     }
 
     #[test]
