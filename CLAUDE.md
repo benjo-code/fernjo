@@ -1,17 +1,38 @@
-# <Project name>
+# fernjo
 
-<1–2 sentences: What is the project, for whom, and with what goal?>
+Cross-platform (Windows, macOS, Linux) SSH & RDP connection manager in the spirit of mRemoteNG: connection tree in a sidebar, sessions as tabs in one window, encrypted credential vault, mRemoteNG import. Built primarily for the owner's daily use; open source.
 
-- **Stack:** <e.g. .NET 10 / Unity 6 / Next.js 16>
-- **Language:** Docs, commits, code and comments in English · UI texts <…>
-- **Build:** `<command>` · **Test:** `<command>` · **Format/lint:** `<command>`
+- **Stack:** Rust (edition 2024, Cargo workspace) · Tauri 2 · Svelte 5 + TypeScript (Vite, pnpm) · xterm.js · russh (SSH) · IronRDP (RDP)
+- **Language:** Docs, commits, code and comments in English · UI texts English
+- **Build:** `cargo build --workspace` · app: `pnpm tauri build` (dev: `pnpm tauri dev`)
+- **Test:** `cargo test --workspace` · `pnpm test`
+- **Format/lint:** `cargo fmt --all --check` · `cargo clippy --workspace --all-targets -- -D warnings` · `pnpm lint` (ESLint, Prettier, `svelte-check`) · `cargo deny check`
+- **Spec:** [Docs/superpowers/specs/2026-11-15-fernjo-design.md](Docs/superpowers/specs/2026-11-15-fernjo-design.md)
+- **Licence:** MIT OR Apache-2.0
 - **Roadmap:** [Docs/ROADMAP.md](Docs/ROADMAP.md) (generated, source [Docs/roadmap.json](Docs/roadmap.json), see "Maintaining the roadmap")
 - **Decisions:** [Docs/DECISIONS.md](Docs/DECISIONS.md)
 - **Specs:** `Docs/superpowers/specs/` · **Plans:** `Docs/superpowers/plans/`
 
 ## Project-specific
 
-<Architecture, conventions, peculiarities, pitfalls – grows with the project.>
+> The commands above are introduced in M0. Until the workspace exists, only the roadmap tool works.
+
+**Architecture** (details in the spec, §4–5)
+- `crates/fernjo-core` (model, tree, inheritance, persistence), `crates/fernjo-vault`, `crates/fernjo-ssh`, `crates/fernjo-rdp`, `crates/fernjo-import`, `src-tauri/` (Tauri shell, commands, session manager), `ui/` (Svelte frontend). Each crate is created in the milestone that needs it, not earlier.
+- Protocol, vault and import crates never depend on Tauri; they are testable without the UI.
+- Frontend ↔ Rust: Tauri commands for requests, Tauri channels for streaming session data.
+
+**Rules that must not be broken**
+- **Secrets stay in Rust.** Passwords, private keys and passphrases are never sent to the webview (only IDs and names), never written to `connections.json`, logs or webview storage. The only exception is the explicit "reveal" action in the vault UI. Secrets in memory use `secrecy`/`zeroize`.
+- No home-made crypto: Argon2id + XChaCha20-Poly1305 from RustCrypto crates; vault uses a wrapped random data key.
+- All logic (model, vault, protocols, import) is Rust; TypeScript is for presentation only.
+- Files in the data folder are written atomically (temp file + rename) and keep a `.bak`.
+- The visual direction is fixed in M1 (`DESIGN.md` + CSS tokens in `ui/`); UI work follows it instead of inventing new styles.
+
+**CI and repo**
+- The repo is public (from M0). CI runs only on GitHub-hosted runners; **never use the org's self-hosted runners** in this repo's workflows, because fork PRs could execute code on them.
+- Actions stay pinned to commit SHAs, workflows default to `permissions: contents: read`.
+- Linux target: Wayland on recent GNOME/KDE distros is tested; minimum Ubuntu 22.04 (WebKitGTK 4.1).
 
 ---
 
