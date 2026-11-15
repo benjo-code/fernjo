@@ -25,7 +25,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 |---|---|---|---|---|---|
 | 0 | Repo scaffold & CI | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-15-milestone-00-repo-scaffold.md) | 2026-11-15 |
 | 1 | UI design direction | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-15-milestone-01-design-direction.md) | 2026-11-15 |
-| 2 | Connection tree & data model | 1 – fernjo app | ⬜ open | – | – |
+| 2 | Connection tree & data model | 1 – fernjo app | 🔵 in progress | [Plan](superpowers/plans/2026-11-15-milestone-02-connection-tree.md) | – |
 | 3 | Credential vault | 1 – fernjo app | ⬜ open | – | – |
 | 4 | SSH sessions in tabs | 1 – fernjo app | ⬜ open | – | – |
 | 5 | mRemoteNG import & export | 1 – fernjo app | ⬜ open | – | – |
@@ -94,23 +94,23 @@ Goal: The visual direction of fernjo is chosen by the owner from at least three 
 - [x] `DESIGN.md` exists and the shell uses the token file; build, test and lint are green – `DESIGN.md` and `.impeccable/design.json` written by impeccable's documenter after the finish review (fix batch, all 8 findings resolved). `ui/src/main.ts` imports `styles/tokens.css` and `styles/base.css`; the built `ui/dist/assets/index-*.css` contains `--color-bg`; owner checked `pnpm tauri dev` on Windows 11 in light and dark mode, DevTools console without CSP or font errors. Gate 2026-11-15 on Windows: `pnpm install --frozen-lockfile`, `pnpm ui:build`, `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (3 config tests + 1 core test), `pnpm lint` (0 errors, 0 warnings), `pnpm test` (8 tests), `cargo deny check` (ok), `dotnet run tools/roadmap.cs -- check` (valid) all green. OPEN: visual check of the shell and icon on macOS and Linux (`pnpm tauri dev`), no machine available yet
 
 ## Milestone 2 – Connection tree & data model
-**Status:** ⬜ open · **Plan:** – · **Prerequisites:** M1
+**Status:** 🔵 in progress · **Plan:** [2026-11-15-milestone-02-connection-tree.md](superpowers/plans/2026-11-15-milestone-02-connection-tree.md) · **Prerequisites:** M1
 
 Goal: Connections can be organised in a persistent folder tree with mRemoteNG-style inheritance, without connecting anywhere yet.
 
 **Tasks**
-- [ ] `fernjo-core`: tree of folders and connections (UUIDs, manual order), inheritable settings, effective-value resolution with built-in defaults
-- [ ] Persistence in `connections.json` (`schemaVersion`, atomic write, `.bak`) in the data folder from the OS config directory
-- [ ] Tauri commands for creating, editing, moving and deleting nodes
-- [ ] Sidebar: tree with filter (name, host, description), expand/collapse, drag and drop, context menu (new folder/connection, duplicate, rename, delete)
-- [ ] Properties panel: edit fields, show "inherited from <folder>", reset to inherit
-- [ ] Single instance: a second launch focuses the running window
+- [x] `fernjo-core`: tree of folders and connections (UUIDs, manual order), inheritable settings, effective-value resolution with built-in defaults
+- [x] Persistence in `connections.json` (`schemaVersion`, atomic write, `.bak`) in the data folder from the OS config directory
+- [x] Tauri commands for creating, editing, moving and deleting nodes
+- [x] Sidebar: tree with filter (name, host, description), expand/collapse, drag and drop, context menu (new folder/connection, duplicate, rename, delete)
+- [x] Properties panel: edit fields, show "inherited from <folder>", reset to inherit
+- [x] Single instance: a second launch focuses the running window
 
 **Acceptance criteria**
-- [ ] Unit tests for inheritance (multi-level, override, reset) and persistence (round trip, atomic write, `.bak`) are green
-- [ ] Manual: nested folders and connections created, moved by drag and drop, state preserved after restart
-- [ ] Manual: filtering a generated tree of 500 connections shows no visible lag
-- [ ] Build, test and lint are green
+- [x] Unit tests for inheritance (multi-level, override, reset) and persistence (round trip, atomic write, `.bak`) are green – 2026-11-15, Windows: `cargo test -p fernjo-core` 69 passed. Inheritance (`resolve::tests`: nearest_folder_wins_over_three_levels, local_value_wins_even_if_equal_to_inherited, inherits_username_from_grandparent, defaults; `tree::tests`: patch_inherit_clears_local_value, resolve_node_uses_folders_above). Persistence (`persist::tests`: save_then_load_round_trips_nested_tree_with_settings, save_leaves_no_temp_file, second_save_keeps_previous_content_as_bak, corrupt_main_falls_back_to_bak, newer_schema_is_refused_and_files_untouched, both_unreadable_is_unreadable_error_and_writes_nothing; `store::tests`: failed_save_rolls_back_memory, mutation_is_persisted_and_survives_reopen).
+- [ ] Manual: nested folders and connections created, moved by drag and drop, state preserved after restart – Automated part verified: `store::tests::mutation_is_persisted_and_survives_reopen` and `every_mutation_kind_is_saved` (state survives reopening the store), UI tests for the drag logic (`drop-target.test.ts`, `drag.test.ts`, `TreeView.drag.test.ts`: 5 edge cases), and `pnpm tauri dev` with a generated tree rendered the tree from `connections.json` through the commands and restored the expanded folders from the previous run. OPEN (owner): create nested folders and connections, drag them with the real mouse, restart and compare; run `pnpm tauri dev` (use `FERNJO_DATA_DIR` for a scratch folder).
+- [ ] Manual: filtering a generated tree of 500 connections shows no visible lag – Automated part verified: `cargo run -p fernjo-core --example generate_tree -- <dir> 500` wrote 500 connections in 60 folders (167 KB); `rows.test.ts` filtering_500_connections_stays_under_100_ms passes; the app opened that data and rendered it. OPEN (owner): type in the filter box on the generated tree and judge the lag: `cargo run -p fernjo-core --example generate_tree -- <dir> 500`, then `FERNJO_DATA_DIR=<dir> pnpm tauri dev`.
+- [x] Build, test and lint are green – 2026-11-15 on Windows, branch head after the review fixes: `pnpm install --frozen-lockfile`, `pnpm ui:build`, `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (core 69, app 10, tauri_conf 3 passed), `pnpm lint` (0 errors, 0 warnings), `pnpm test` (141 passed in 11 files), `cargo deny check` (ok), `dotnet run tools/roadmap.cs -- check` (valid) all green
 
 ## Milestone 3 – Credential vault
 **Status:** ⬜ open · **Plan:** – · **Prerequisites:** M2

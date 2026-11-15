@@ -97,6 +97,7 @@
   --radius-sm: 4px;
   --radius-md: 6px;
   --row-height-tree: 24px;
+  --tree-indent: 14px;
   --sidebar-width: 300px;
   --shadow-raised: 0 2px 6px var(--color-shadow), 0 24px 48px -12px var(--color-shadow);
 

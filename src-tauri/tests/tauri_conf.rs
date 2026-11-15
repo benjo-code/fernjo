@@ -17,9 +17,20 @@ fn csp_is_strict() {
         .as_str()
         .expect("app.security.csp must be a string");
     assert!(csp.contains("default-src 'self'"), "csp: {csp}");
+    assert!(
+        csp.contains("connect-src ipc: http://ipc.localhost"),
+        "Tauri IPC needs connect-src; csp: {csp}"
+    );
     assert!(!csp.contains("unsafe-eval"), "csp: {csp}");
-    assert!(!csp.contains("http:"), "csp: {csp}");
-    assert!(!csp.contains("https:"), "csp: {csp}");
+    for token in csp.split(|c: char| c.is_whitespace() || c == ';') {
+        assert_ne!(token, "*", "csp must not use a wildcard source: {csp}");
+        if token.starts_with("http:") || token.starts_with("https:") {
+            assert_eq!(
+                token, "http://ipc.localhost",
+                "the only allowed web origin is the Tauri IPC host; csp: {csp}"
+            );
+        }
+    }
 }
 
 #[test]

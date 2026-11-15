@@ -3,6 +3,9 @@
 [advisories]
 ignore = [
     { id = "RUSTSEC-2024-0370", reason = "proc-macro-error is unmaintained; pulled in by Tauri's Linux GTK3 stack (glib-macros), no safe upgrade exists" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant is unmaintained; pulled in by zbus via tauri-plugin-single-instance (Linux D-Bus only), no safe upgrade exists" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names is unmaintained; pulled in by zbus via tauri-plugin-single-instance (Linux D-Bus only), no safe upgrade exists" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive is unmaintained; pulled in by zbus via tauri-plugin-single-instance (Linux D-Bus only), no safe upgrade exists" },
 ]
 
 [licenses]

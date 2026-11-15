@@ -1,5 +1,24 @@
 //! Core model of fernjo: connection tree, inheritance and persistence.
 
+pub mod error;
+pub mod model;
+pub mod paths;
+pub mod persist;
+pub mod resolve;
+pub mod store;
+pub mod tree;
+
+pub use error::{LoadError, SaveError, StoreError, TreeError};
+pub use model::{
+    DEFAULT_KEEPALIVE_SECS, DEFAULT_RDP_PORT, DEFAULT_SSH_PORT, Field, Node, NodeId, NodeKind,
+    NodeType, Protocol, ResolvedNode, Settings, Source,
+};
+pub use paths::{DATA_DIR_ENV, data_dir, data_dir_from};
+pub use persist::{CURRENT_VERSION, FILE_NAME, Loaded, Notice, load, migrate_with, save};
+pub use resolve::resolve;
+pub use store::{Opened, Store};
+pub use tree::{NodePatch, Patch, Tree};
+
 /// Returns the crate version.
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
