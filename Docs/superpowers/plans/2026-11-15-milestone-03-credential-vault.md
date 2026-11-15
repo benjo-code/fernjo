@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Secrets stay in Rust: a secret never reaches the webview except through `reveal_credential`, and is never written to `connections.json`, `settings.json`, logs or webview storage. Secret types use `secrecy`/`zeroize`; their `Debug` output is redacted.
-- No home-made crypto: Argon2id + XChaCha20-Poly1305 from RustCrypto crates; random 256-bit data key wrapped by the password-derived key; the body is encrypted with the data key; `change_password` re-wraps only.
+- No home-made crypto: Argon2id + XChaCha20-Poly1305 from RustCrypto crates; random 256-bit data key wrapped by the password-derived key; the body is encrypted with the data key; `change_password` re-wraps the data key and re-saves (the body is re-sealed under the same data key because the whole header is its associated data; the data key and entries stay unchanged).
 - Files in the data folder are written atomically (temp file + `sync_all` + copy to `.bak` + rename). A newer format version is refused and never overwritten.
 - `fernjo-vault` depends on neither Tauri nor `fernjo-core`. Capabilities stay `["core:default"]` and the CSP is unchanged (`src-tauri/tests/tauri_conf.rs` guards both).
 - Tauri commands are plain functions over `AppState` (unit-tested) with thin `#[tauri::command]` wrappers in `commands::handlers`; every mutating tree command returns the full snapshot. TypeScript never derives validity or inherited values.
@@ -89,10 +89,10 @@ Inputs the spec implies but no task would otherwise test, most likely first. Eac
   - `locked_vault_refuses_every_entry_operation_with_vault_locked`.
   - `delete_unknown_entry_is_not_found`; `empty_name_is_rejected`.
   - `failed_save_leaves_entries_unchanged` (target folder replaced by a file).
-  - `change_password_keeps_entries_and_data_key` (old data key still `unlock_with_key`s the file, new password unlocks, old password gets `wrong_password`, body ciphertext bytes unchanged).
+  - `change_password_keeps_entries_and_data_key` (old data key still `unlock_with_key`s the file, new password unlocks, old password gets `wrong_password`, the decrypted entries are identical, and the salt, wrap nonce and body nonce are all fresh).
   - `change_password_with_wrong_old_password_changes_nothing`.
 - [ ] **Step 2: Run** `cargo test -p fernjo-vault` — expected: FAIL.
-- [ ] **Step 3: Implement** the API above. `change_password` rewrites only the header (new salt, new wrap), keeps the body ciphertext.
+- [ ] **Step 3: Implement** the API above. `change_password` verifies the old password, then uses a new salt and wrap nonce, re-wraps the unchanged data key and saves once (the save re-seals the body under the unchanged data key with a fresh nonce; there is no wrap-only path).
 - [ ] **Step 4: Run** tests, clippy, fmt — expected: PASS.
 - [ ] **Step 5: Commit** `feat(vault): entries, reveal and master password change`.
 
