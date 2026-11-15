@@ -14,7 +14,7 @@ pub fn run() {
     tauri::Builder::default()
         // The single-instance plugin must stay the first plugin so a second launch is
         // intercepted before any other plugin initialises. (`AppState::open` below runs
-        // while the builder is assembled, i.e. also in a second launch; it only reads.)
+        // while the builder is assembled, i.e. also in a second launch; it normally only reads.)
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();

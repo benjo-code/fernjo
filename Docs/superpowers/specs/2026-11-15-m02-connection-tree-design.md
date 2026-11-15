@@ -1,6 +1,6 @@
 # fernjo – Milestone 2 design: connection tree & data model
 
-**Status:** approved by the owner on 2026-11-15 · **Date:** 2026-11-15 · **Parent spec:** [2026-11-15-fernjo-design.md](2026-11-15-fernjo-design.md) (§3, §5.1, §5.4) · **Roadmap:** M2
+**Status:** approved by the owner on 2026-11-15; implemented on branch `feature/m02-connection-tree` (owner checks still open, see the roadmap) · **Date:** 2026-11-15 · **Parent spec:** [2026-11-15-fernjo-design.md](2026-11-15-fernjo-design.md) (§3, §5.1, §5.4) · **Roadmap:** M2
 
 This document records the decisions for M2 only. Intent, goals, non-goals and anti-goals are those of the parent spec; the visual language is `DESIGN.md`.
 
