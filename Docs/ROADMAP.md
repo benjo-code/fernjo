@@ -53,11 +53,11 @@ Goal: An empty but fully set-up, public repo with a running Tauri shell and gree
 - [x] Create spec (brainstorming): goal, scope, stack, subprojects; link it here and enter the first milestones
 - [x] Repo setup per README done: `dev` as default branch, merge options, branch protection for `main` and `dev`
 - [x] Fill in the project header in `CLAUDE.md` and `README.md`, remove the template section from the README
-- [ ] Stack-specific `.gitignore` (Rust `target/`, `node_modules/`, UI build output, `.env`) and `.gitattributes` additions
+- [x] Stack-specific `.gitignore` (Rust `target/`, `node_modules/`, UI build output, `.env`) and `.gitattributes` additions
 - [ ] Cargo workspace (edition 2024, `rust-toolchain.toml`, `license = "MIT OR Apache-2.0"`) with crate `fernjo-core` incl. a first test
 - [ ] Tauri 2 app in `src-tauri/` with Svelte 5 + TypeScript frontend in `ui/` (Vite, pnpm) showing an empty fernjo window; ESLint, Prettier, `svelte-check` and Vitest set up
-- [ ] `LICENSE-MIT` and `LICENSE-APACHE` added
-- [ ] `.env.example` with placeholders, only if secrets are needed (none expected)
+- [x] `LICENSE-MIT` and `LICENSE-APACHE` added
+- [x] `.env.example` with placeholders, only if secrets are needed (none expected)
 - [ ] CI on GitHub-hosted `ubuntu-latest`: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `cargo-deny`, UI lint/check/test and a Tauri build check (WebKitGTK installed in the job), on PRs to `dev` and `main`
 - [ ] Move the `roadmap` job in `.github/workflows/roadmap.yml` from `[self-hosted, dotnet-linux]` to `ubuntu-latest`; no workflow uses a self-hosted runner
 - [ ] Add the CI jobs (`roadmap` and the build/test/lint jobs) as required status checks in the branch protection of `main` and `dev`
