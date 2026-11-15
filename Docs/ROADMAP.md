@@ -25,7 +25,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 |---|---|---|---|---|---|
 | 0 | Repo scaffold & CI | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-15-milestone-00-repo-scaffold.md) | 2026-11-15 |
 | 1 | UI design direction | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-15-milestone-01-design-direction.md) | 2026-11-15 |
-| 2 | Connection tree & data model | 1 – fernjo app | 🟡 planned | [Plan](superpowers/plans/2026-11-15-milestone-02-connection-tree.md) | – |
+| 2 | Connection tree & data model | 1 – fernjo app | 🔵 in progress | [Plan](superpowers/plans/2026-11-15-milestone-02-connection-tree.md) | – |
 | 3 | Credential vault | 1 – fernjo app | ⬜ open | – | – |
 | 4 | SSH sessions in tabs | 1 – fernjo app | ⬜ open | – | – |
 | 5 | mRemoteNG import & export | 1 – fernjo app | ⬜ open | – | – |
@@ -94,7 +94,7 @@ Goal: The visual direction of fernjo is chosen by the owner from at least three 
 - [x] `DESIGN.md` exists and the shell uses the token file; build, test and lint are green – `DESIGN.md` and `.impeccable/design.json` written by impeccable's documenter after the finish review (fix batch, all 8 findings resolved). `ui/src/main.ts` imports `styles/tokens.css` and `styles/base.css`; the built `ui/dist/assets/index-*.css` contains `--color-bg`; owner checked `pnpm tauri dev` on Windows 11 in light and dark mode, DevTools console without CSP or font errors. Gate 2026-11-15 on Windows: `pnpm install --frozen-lockfile`, `pnpm ui:build`, `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (3 config tests + 1 core test), `pnpm lint` (0 errors, 0 warnings), `pnpm test` (8 tests), `cargo deny check` (ok), `dotnet run tools/roadmap.cs -- check` (valid) all green. OPEN: visual check of the shell and icon on macOS and Linux (`pnpm tauri dev`), no machine available yet
 
 ## Milestone 2 – Connection tree & data model
-**Status:** 🟡 planned · **Plan:** [2026-11-15-milestone-02-connection-tree.md](superpowers/plans/2026-11-15-milestone-02-connection-tree.md) · **Prerequisites:** M1
+**Status:** 🔵 in progress · **Plan:** [2026-11-15-milestone-02-connection-tree.md](superpowers/plans/2026-11-15-milestone-02-connection-tree.md) · **Prerequisites:** M1
 
 Goal: Connections can be organised in a persistent folder tree with mRemoteNG-style inheritance, without connecting anywhere yet.
 
