@@ -20,7 +20,7 @@ The owner, all day, on Windows/macOS/Linux, 125–200 % laptop scaling up to lar
 - Design size 1280×800; minimum 900×600.
 
 ## Density
-- **Dense, compact tree:** row height 22–28 px, small icons, little padding; at least 25 rows visible at 1280×800 with the properties panel open; indentation legible over at least 4 levels.
+- **Dense, compact tree:** row height 22–24 px, small icons, little padding; at least 23 rows visible at 1280×800 with the properties panel open (adjusted from 22–28 px / 25 rows during M1: with a five-field properties panel, 25 rows only fit at 22 px); indentation legible over at least 4 levels.
 - **Protocol icon per row** (SSH vs RDP readable at a glance, not by colour alone).
 
 ## Themes

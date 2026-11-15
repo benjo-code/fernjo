@@ -56,8 +56,8 @@
           "goal": "The visual direction of fernjo is chosen by the owner from at least three concepts and recorded, so every UI milestone builds on it.",
           "tasks": [
             { "text": "Design brief from spec §3: one-window layout, tree density for hundreds of connections, light and dark", "done": true },
-            { "text": "Create at least three distinct design concepts with the `impeccable` skill, each showing the main window (tree with folders, tabs, an SSH terminal, properties panel) and the vault unlock dialog, in light and dark", "done": false },
-            { "text": "Publish all concepts together as one Claude artifact with a switcher between them", "done": false },
+            { "text": "Create at least three distinct design concepts with the `impeccable` skill, each showing the main window (tree with folders, tabs, an SSH terminal, properties panel) and the vault unlock dialog, in light and dark", "done": true },
+            { "text": "Publish all concepts together as one Claude artifact with a switcher between them", "done": true },
             { "text": "Owner picks a concept (or combines parts); iterate on the chosen direction", "done": false },
             { "text": "Record the direction in `DESIGN.md` (principles, typography, colour, spacing, components, terminal colour scheme)", "done": false },
             { "text": "Design tokens as CSS variables (light and dark) in `ui/`, applied to the empty shell", "done": false },

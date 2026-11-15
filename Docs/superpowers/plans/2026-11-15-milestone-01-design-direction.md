@@ -30,7 +30,7 @@ These are failure modes the spec implies but no acceptance criterion exercises, 
 3. **CSS that WebKitGTK on Ubuntu 22.04 or the `safari13` target cannot render** (`oklch`, `color-mix`, `light-dark()`, nesting). The app looks broken on Linux only. Expected: a test rejects these in `ui/` CSS. → Task 6.
 4. **Fonts loaded from the network** (Google Fonts copied from the artifact). The CSP blocks them silently, or a privacy leak appears if someone loosens the CSP. Expected: fonts are bundled, the CSP is unchanged, and the webview console shows no CSP error. → Task 6.
 5. **Unreadable terminal colours** (ANSI yellow on a light background, ANSI blue on a dark one). Expected: ANSI 1–6 and 9–14 reach at least 3:1 against the terminal background and the terminal text at least 4.5:1, in both themes. → Task 6.
-6. **A tree too loose for hundreds of connections.** Expected: tree rows are 22–28 px high, and the mockup shows at least 25 tree rows in a 1280×800 window with the properties panel visible. → Task 3 (brief), Task 4.
+6. **A tree too loose for hundreds of connections.** Expected: tree rows are 22–24 px high, and the mockup shows at least 23 tree rows in a 1280×800 window with the properties panel visible (adjusted during Task 4 from 22–28 px / 25 rows: with a five-field properties panel, 25 rows only fit at 22 px). → Task 3 (brief), Task 4.
 7. **Real data in the public repo** (hostnames or IPs from the owner's environment pasted into mockups). → Global Constraints; checked in Task 4 Step 5.
 8. **The direction contract leaks into shipped files** (impeccable rule). → Task 8 (reviewer check).
 
@@ -54,7 +54,7 @@ These are failure modes the spec implies but no acceptance criterion exercises, 
 - [ ] **Step 2: New-work questions (Operate mode).** Ask the owner about task, information, states, frequency, what must stay untouched and what would feel wrong, in two or three questions.
 - [ ] **Step 3: Write the design brief into the surface brief** (roadmap task 1). It must contain:
   - **Layout:** one window, sidebar left (filter, tree, properties panel below the tree), tab bar and session area right; native title bar; design size 1280×800, minimum 900×600 (`src-tauri/tauri.conf.json`).
-  - **Density:** hundreds of connections; tree row height 22–28 px; at least 25 tree rows visible at 1280×800 with the properties panel open; indentation readable over at least 4 levels.
+  - **Density:** hundreds of connections; tree row height 22–24 px; at least 23 tree rows visible at 1280×800 with the properties panel open (adjusted in Task 4, see Review Focus 6); indentation readable over at least 4 levels.
   - **Themes:** light and dark, both first-class; "follow system" is the default (switch in M6).
   - **Screens and states every concept shows:**
     - **Main window:** filter box (empty); tree with at least 30 nodes over 3 levels (expanded and collapsed folders, SSH and RDP badges, open-session indicator, a selected row, a keyboard-focused row).
