@@ -200,6 +200,22 @@ describe("TreeStore", () => {
     expect(store.selectedId).toBe("web-01 copy");
   });
 
+  test("loaded_becomes_true_after_init_even_when_it_fails", async () => {
+    const ok = new TreeStore(mockApi(tree()).api);
+    expect(ok.loaded).toBe(false);
+    await ok.init();
+    expect(ok.loaded).toBe(true);
+    const bad = new TreeStore(
+      mockApi([], {
+        listTree: async () => {
+          throw apiError("load_failed", "x");
+        },
+      }).api,
+    );
+    await bad.init();
+    expect(bad.loaded).toBe(true);
+  });
+
   test("filter_and_rows_are_derived", async () => {
     const { store } = await started();
     expect(store.rows.map((r) => r.node.name)).toEqual(["Homelab", "web-01"]);

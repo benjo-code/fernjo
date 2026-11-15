@@ -39,6 +39,8 @@ export class TreeStore {
   renamingId = $state<string | null>(null);
   error = $state<string | null>(null);
   loadError = $state<string | null>(null);
+  /** True once the first load has finished, whether it worked or not. */
+  loaded = $state(false);
   rows: Row[] = $derived(flattenRows(this.children, this.expanded, this.filter));
 
   #api: Api;
@@ -55,6 +57,7 @@ export class TreeStore {
       const snapshot = await this.#api.listTree();
       this.#apply(snapshot.children, snapshot.notice);
     });
+    this.loaded = true;
   }
 
   select(id: string | null) {
