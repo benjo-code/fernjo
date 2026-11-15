@@ -349,6 +349,15 @@ Shown in the session area of the tab that needs the vault (tab status "Needs vau
 - **Secondary:** transparent, 1 px `--color-border-strong` outline, `--color-text` ink.
 - **Focus:** the global 1 px `--color-focus` outline.
 
+### Confirm dialog
+For destructive actions that cannot be undone (deleting a node: "Delete “Homelab” and 4 items inside?").
+- **Surface:** modal, 360 px wide, on `--color-surface-raised` with `--shadow-raised` and `--radius-md`, the window behind it dimmed with `--color-overlay`. Title in 600 (13 px), an optional muted 12 px line ("This cannot be undone.").
+- **Actions:** right-aligned secondary buttons. Cancel has the initial focus (Enter does not confirm); the confirm button is secondary style with `--color-danger` text. No yellow: a destructive action is never "the one action that matters".
+- **Keyboard:** Escape cancels, Tab cycles between the two buttons only.
+
+### Context menu
+Popover on `--color-surface-raised` with `--shadow-raised` and `--radius-md`, 28 px items with `--radius-sm` hover on `--color-hover`. Opens at the pointer (or under the focused row with Shift+F10 / the menu key), stays inside the window, closes on Escape, outside click and after an action; arrows move, Enter activates.
+
 ### Inputs and checkbox
 - **Field:** 32 px, `--color-surface`, 1 px `--color-border-input`, `--radius-sm`, 10 px left padding; trailing icon buttons in muted ink.
 - **Error:** border and 1 px ring in `--color-danger`.

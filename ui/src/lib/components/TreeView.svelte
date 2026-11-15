@@ -1,11 +1,16 @@
 <script lang="ts">
   import { tick } from "svelte";
+  import { countDescendants, type Row } from "../rows";
   import type { TreeStore } from "../store.svelte";
+  import ConfirmDialog from "./ConfirmDialog.svelte";
+  import ContextMenu, { type MenuItem } from "./ContextMenu.svelte";
   import TreeRow from "./TreeRow.svelte";
 
   let { store }: { store: TreeStore } = $props();
 
   let container = $state<HTMLElement>();
+  let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
+  let pendingDelete = $state<{ id: string; title: string } | null>(null);
 
   const rows = $derived(store.rows);
   const tabbableId = $derived(
@@ -25,6 +30,61 @@
     rowElement(id)?.focus();
   }
 
+  /** New nodes go inside a folder (at the end) and right after a connection. */
+  function placement(row: Row): { parentId: string | null; index: number | null } {
+    return row.node.type === "folder"
+      ? { parentId: row.node.id, index: null }
+      : { parentId: row.parentId, index: row.index + 1 };
+  }
+
+  function menuItemsFor(row: Row | null): MenuItem[] {
+    if (!row) {
+      return [
+        { label: "New folder", action: () => void store.createFolder(null, null) },
+        { label: "New connection", action: () => void store.createConnection(null, null) },
+      ];
+    }
+    const { parentId, index } = placement(row);
+    return [
+      { label: "New folder", action: () => void store.createFolder(parentId, index) },
+      { label: "New connection", action: () => void store.createConnection(parentId, index) },
+      { label: "Duplicate", action: () => void store.duplicate(row.node.id) },
+      { label: "Rename", action: () => store.startRename(row.node.id) },
+      { label: "Delete", action: () => requestDelete(row) },
+    ];
+  }
+
+  function requestDelete(row: Row) {
+    const { name } = row.node;
+    const count = countDescendants(row.node);
+    const inside = count > 0 ? ` and ${count} ${count === 1 ? "item" : "items"} inside` : "";
+    pendingDelete = { id: row.node.id, title: `Delete “${name}”${inside}?` };
+  }
+
+  function confirmDelete() {
+    if (!pendingDelete) return;
+    const { id } = pendingDelete;
+    pendingDelete = null;
+    void store.remove(id);
+  }
+
+  function oncontextmenu(e: MouseEvent) {
+    e.preventDefault();
+    const el = (e.target as HTMLElement).closest<HTMLElement>("[data-node-id]");
+    const row = el ? rows.find((r) => r.node.id === el.dataset.nodeId) : undefined;
+    if (row) store.select(row.node.id);
+    menu = { x: e.clientX, y: e.clientY, items: menuItemsFor(row ?? null) };
+  }
+
+  function openMenuForSelection(current: Row) {
+    const rect = rowElement(current.node.id)?.getBoundingClientRect();
+    menu = {
+      x: (rect?.left ?? 0) + 24,
+      y: rect?.bottom ?? 0,
+      items: menuItemsFor(current),
+    };
+  }
+
   function onclick(e: MouseEvent) {
     const target = e.target as HTMLElement;
     const el = target.closest<HTMLElement>("[data-node-id]");
@@ -40,6 +100,14 @@
   function onkeydown(e: KeyboardEvent) {
     if (e.target instanceof HTMLInputElement || e.altKey || e.ctrlKey || e.metaKey) return;
     if (rows.length === 0) return;
+    if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
+      const selected = rows.find((r) => r.node.id === store.selectedId);
+      if (selected) {
+        e.preventDefault();
+        openMenuForSelection(selected);
+      }
+      return;
+    }
     const index = rows.findIndex((r) => r.node.id === store.selectedId);
     const current = index >= 0 ? rows[index] : null;
     const go = (to: number) => {
@@ -73,6 +141,12 @@
           store.toggle(current.node.id);
         } else if (current.parentId !== null) {
           void selectAndFocus(current.parentId);
+        }
+        break;
+      case "Delete":
+        if (current) {
+          e.preventDefault();
+          requestDelete(current);
         }
         break;
       case "F2":
@@ -109,6 +183,7 @@
     aria-label="Connections"
     tabindex="-1"
     {onclick}
+    {oncontextmenu}
     {onkeydown}
   >
     {#each rows as row (row.node.id)}
@@ -127,8 +202,23 @@
   </div>
 {/if}
 
+{#if menu}
+  <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => (menu = null)} />
+{/if}
+
+{#if pendingDelete}
+  <ConfirmDialog
+    title={pendingDelete.title}
+    detail="This cannot be undone."
+    confirmLabel="Delete"
+    onConfirm={confirmDelete}
+    onCancel={() => (pendingDelete = null)}
+  />
+{/if}
+
 <style>
   .tree {
+    flex: 1;
     min-height: 0;
     overflow-y: auto;
     outline: none;
