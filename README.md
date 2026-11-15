@@ -1,71 +1,44 @@
-# <Project name>
+# fernjo
 
-<Short description: what does the project do, and for whom?>
+A lightweight, cross-platform remote connection manager for **SSH and RDP** on Windows, macOS and Linux, built on Rust.
 
-**Status:** in development – see [Docs/ROADMAP.md](Docs/ROADMAP.md)
+All your connections live in one folder tree in the sidebar, sessions open as tabs in a single window, and passwords and keys are kept in an encrypted vault. Existing connections can be imported from mRemoteNG, including saved passwords.
+
+**Status:** in development – see [Docs/ROADMAP.md](Docs/ROADMAP.md). Nothing is installable yet; the first release (v0.1.0) brings SSH, v0.2.0 adds RDP.
+
+## Features (planned)
+
+- Connection tree with nested folders; folders pass settings such as username, credential or port down to their connections
+- SSH sessions in tabs with a full terminal (xterm.js), agent/key/password/keyboard-interactive login and host key verification
+- RDP sessions in tabs (IronRDP)
+- Encrypted credential vault (Argon2id + XChaCha20-Poly1305), optional unlock via the OS keychain
+- Import from mRemoteNG, export and encrypted backup
+- Data folder you can sync yourself (Syncthing, Nextcloud, iCloud) – the vault stays encrypted
+
+Design and scope: [Docs/superpowers/specs/2026-11-15-fernjo-design.md](Docs/superpowers/specs/2026-11-15-fernjo-design.md)
 
 ## Setup
 
-<Prerequisites, build, run>
+Prerequisites: Rust (stable, version pinned in `rust-toolchain.toml`), Node.js LTS with pnpm, the [Tauri 2 system prerequisites](https://tauri.app/start/prerequisites/) for your OS, and the .NET 10 SDK for the roadmap tool.
+
+```bash
+pnpm install
+pnpm tauri dev          # run the app
+cargo test --workspace  # Rust tests
+pnpm test               # UI tests
+```
+
+> The workspace and these commands are being set up in milestone 0.
+
+## Security
+
+Please report vulnerabilities privately, see `SECURITY.md` (added in milestone 0).
 
 ## License
 
-<License or "Proprietary – all rights reserved">
+Licensed under either of
 
----
+- Apache License, Version 2.0 (`LICENSE-APACHE`)
+- MIT license (`LICENSE-MIT`)
 
-## New project from this template
-
-> Delete this section after setup.
-
-> [!IMPORTANT]
-> Always create repos in the **`benjo-code`** organization. Without the owner prefix (`gh`) or without selecting "Owner: benjo-code" (browser), the repo ends up under the personal account.
-
-Run all commands in Git Bash and replace `<name>` with the repo name.
-
-### 1. Create and clone the repo
-
-```bash
-gh repo create benjo-code/<name> --template benjo-code/project-template --private --clone
-cd <name>
-git pull origin main   # if the clone is empty: wait a moment, then run again
-gh repo view benjo-code/<name> --json owner -q .owner.login   # must print "benjo-code"
-```
-
-### 2. Create `dev`, set it as default branch, configure merge options
-
-```bash
-git switch -c dev
-git push -u origin dev
-gh repo edit benjo-code/<name> --default-branch dev --enable-merge-commit --enable-squash-merge --enable-rebase-merge=false --delete-branch-on-merge
-```
-
-### 3. Branch protection for `main` and `dev`
-
-PR required, no force push, no deletion. Admins are exempt (`enforce_admins: false`); the rule "never directly on `main`/`dev`" from `CLAUDE.md` still applies. The `roadmap` check (workflow `.github/workflows/roadmap.yml`, shipped with the template) is required from the start; the CI check for build and test is added in M0 once the CI exists.
-
-```bash
-REPO=benjo-code/<name>
-for b in main dev; do
-gh api -X PUT "repos/$REPO/branches/$b/protection" --input - <<'EOF'
-{
-  "required_status_checks": { "strict": true, "contexts": ["roadmap"] },
-  "enforce_admins": false,
-  "required_pull_request_reviews": { "required_approving_review_count": 0 },
-  "restrictions": null,
-  "allow_force_pushes": false,
-  "allow_deletions": false
-}
-EOF
-done
-```
-
-From now on nothing goes directly to `main` or `dev`; everything goes through feature branches and PRs.
-
-### 4. Get started
-
-Tell Claude Code **"Plan milestone 0"**. Claude creates the branch `feature/m00-…` for it. That is also where the header of `CLAUDE.md`, this README, and the placeholders in `Docs/roadmap.json` (then `dotnet run tools/roadmap.cs -- generate`) and `Docs/DECISIONS.md` get filled in.
-
-### 5. Roadmap tool
-
-The roadmap lives in `Docs/roadmap.json`; `Docs/ROADMAP.md` is generated with `dotnet run tools/roadmap.cs -- generate` (see "Maintaining the roadmap" in `CLAUDE.md`). This requires the .NET 10 SDK on the development machine, even if the project otherwise uses a different stack. The `roadmap` job runs on the organization's runners with the label `dotnet-linux`. A project does not need the `tools/roadmap-fixtures/` folder; it only tests the template.
+at your option. Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.

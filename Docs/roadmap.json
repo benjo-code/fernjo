@@ -1,36 +1,223 @@
 {
   "$schema": "./roadmap.schema.json",
   "schemaVersion": 1,
-  "title": "<Project name>",
+  "title": "fernjo",
   "subprojects": [
     {
       "number": 1,
-      "name": "<Name>",
-      "spec": { "text": "not created yet (created in M0)" },
+      "name": "fernjo app",
+      "spec": { "text": "Cross-platform SSH & RDP connection manager (Rust core, Tauri 2 UI)", "link": "superpowers/specs/2026-11-15-fernjo-design.md" },
       "milestones": [
         {
           "id": "0",
           "title": "Repo scaffold & CI",
           "status": "open",
-          "goal": "An empty but fully set-up repo that all further milestones build on.",
+          "goal": "An empty but fully set-up, public repo with a running Tauri shell and green CI that all further milestones build on.",
           "tasks": [
-            { "text": "Create spec (brainstorming): goal, scope, stack, subprojects; link it here and enter the first milestones", "done": false },
-            { "text": "Repo setup per README done: `dev` as default branch, merge options, branch protection for `main` and `dev`", "done": false },
-            { "text": "Fill in the project header in `CLAUDE.md` and `README.md`, remove the template section from the README", "done": false },
-            { "text": "Stack-specific `.gitignore` (incl. `.env`) and `.gitattributes` additions (e.g. Unity: Git LFS for large assets)", "done": false },
-            { "text": "Project scaffold incl. test project", "done": false },
-            { "text": "`.env.example` with placeholders, if secrets are needed", "done": false },
-            { "text": "CI (GitHub Actions): build, test and format/lint on PRs to `dev` and `main`; the `roadmap` job from `.github/workflows/roadmap.yml` stays", "done": false },
-            { "text": "Add the CI jobs (`roadmap` and the job for build, test, lint) as required status checks in the branch protection of `main` and `dev`", "done": false },
-            { "text": "Dependabot for the package ecosystem and GitHub Actions", "done": false }
+            { "text": "Create spec (brainstorming): goal, scope, stack, subprojects; link it here and enter the first milestones", "done": true },
+            { "text": "Repo setup per README done: `dev` as default branch, merge options, branch protection for `main` and `dev`", "done": true },
+            { "text": "Fill in the project header in `CLAUDE.md` and `README.md`, remove the template section from the README", "done": true },
+            { "text": "Stack-specific `.gitignore` (Rust `target/`, `node_modules/`, UI build output, `.env`) and `.gitattributes` additions", "done": false },
+            { "text": "Cargo workspace (edition 2024, `rust-toolchain.toml`, `license = \"MIT OR Apache-2.0\"`) with crate `fernjo-core` incl. a first test", "done": false },
+            { "text": "Tauri 2 app in `src-tauri/` with Svelte 5 + TypeScript frontend in `ui/` (Vite, pnpm) showing an empty fernjo window; ESLint, Prettier, `svelte-check` and Vitest set up", "done": false },
+            { "text": "`LICENSE-MIT` and `LICENSE-APACHE` added", "done": false },
+            { "text": "`.env.example` with placeholders, only if secrets are needed (none expected)", "done": false },
+            { "text": "CI on GitHub-hosted `ubuntu-latest`: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `cargo-deny`, UI lint/check/test and a Tauri build check (WebKitGTK installed in the job), on PRs to `dev` and `main`", "done": false },
+            { "text": "Move the `roadmap` job in `.github/workflows/roadmap.yml` from `[self-hosted, dotnet-linux]` to `ubuntu-latest`; no workflow uses a self-hosted runner", "done": false },
+            { "text": "Add the CI jobs (`roadmap` and the build/test/lint jobs) as required status checks in the branch protection of `main` and `dev`", "done": false },
+            { "text": "Dependabot for Cargo, npm (pnpm) and GitHub Actions", "done": false },
+            { "text": "Scan the full git history for secrets (e.g. gitleaks), then make the repo public", "done": false },
+            { "text": "Repo security on: secret scanning with push protection, Dependabot alerts and security updates, CodeQL for Rust and JavaScript/TypeScript, private vulnerability reporting with `SECURITY.md`, approval required for workflows from outside contributors", "done": false }
           ],
           "acceptance": [
             { "text": "Build, test and format/lint run green locally (commands in `CLAUDE.md`)", "done": false },
+            { "text": "`pnpm tauri dev` opens the empty fernjo window (manual check on Windows; macOS/Linux checked when a machine is available, otherwise marked open)", "done": false },
             { "text": "CI is green on a PR to `dev`", "done": false },
-            { "text": "Branch protection for `main` and `dev` is active: PR required, CI check required, no force push, no deletion", "done": false, "evidence": "`gh api repos/benjo-code/<name>/branches/<branch>/protection`" }
+            { "text": "Branch protection for `main` and `dev` is active: PR required, CI checks required, no force push, no deletion", "done": false, "evidence": "`gh api repos/benjo-code/fernjo/branches/<branch>/protection`" },
+            { "text": "Repo is public with secret scanning and push protection enabled, and CodeQL has a green run", "done": false, "evidence": "`gh api repos/benjo-code/fernjo --jq '.visibility, .security_and_analysis'`" },
+            { "text": "No workflow uses a self-hosted runner", "done": false, "evidence": "`grep -rn self-hosted .github/workflows` returns nothing" }
+          ]
+        },
+        {
+          "id": "1",
+          "title": "UI design direction",
+          "status": "open",
+          "prerequisites": ["0"],
+          "goal": "The visual direction of fernjo is chosen by the owner from at least three concepts and recorded, so every UI milestone builds on it.",
+          "tasks": [
+            { "text": "Design brief from spec §3: one-window layout, tree density for hundreds of connections, light and dark", "done": false },
+            { "text": "Create at least three distinct design concepts with the `impeccable` skill, each showing the main window (tree with folders, tabs, an SSH terminal, properties panel) and the vault unlock dialog, in light and dark", "done": false },
+            { "text": "Publish all concepts together as one Claude artifact with a switcher between them", "done": false },
+            { "text": "Owner picks a concept (or combines parts); iterate on the chosen direction", "done": false },
+            { "text": "Record the direction in `DESIGN.md` (principles, typography, colour, spacing, components, terminal colour scheme)", "done": false },
+            { "text": "Design tokens as CSS variables (light and dark) in `ui/`, applied to the empty shell", "done": false },
+            { "text": "Decision entry in `Docs/DECISIONS.md` naming the chosen concept and why", "done": false }
+          ],
+          "acceptance": [
+            { "text": "The artifact shows at least three concepts, switchable, each in light and dark", "done": false },
+            { "text": "Owner has approved the direction (recorded in `Docs/DECISIONS.md`)", "done": false },
+            { "text": "`DESIGN.md` exists and the shell uses the token file; build, test and lint are green", "done": false }
+          ]
+        },
+        {
+          "id": "2",
+          "title": "Connection tree & data model",
+          "status": "open",
+          "prerequisites": ["1"],
+          "goal": "Connections can be organised in a persistent folder tree with mRemoteNG-style inheritance, without connecting anywhere yet.",
+          "tasks": [
+            { "text": "`fernjo-core`: tree of folders and connections (UUIDs, manual order), inheritable settings, effective-value resolution with built-in defaults", "done": false },
+            { "text": "Persistence in `connections.json` (`schemaVersion`, atomic write, `.bak`) in the data folder from the OS config directory", "done": false },
+            { "text": "Tauri commands for creating, editing, moving and deleting nodes", "done": false },
+            { "text": "Sidebar: tree with filter (name, host, description), expand/collapse, drag and drop, context menu (new folder/connection, duplicate, rename, delete)", "done": false },
+            { "text": "Properties panel: edit fields, show \"inherited from <folder>\", reset to inherit", "done": false },
+            { "text": "Single instance: a second launch focuses the running window", "done": false }
+          ],
+          "acceptance": [
+            { "text": "Unit tests for inheritance (multi-level, override, reset) and persistence (round trip, atomic write, `.bak`) are green", "done": false },
+            { "text": "Manual: nested folders and connections created, moved by drag and drop, state preserved after restart", "done": false },
+            { "text": "Manual: filtering a generated tree of 500 connections shows no visible lag", "done": false },
+            { "text": "Build, test and lint are green", "done": false }
+          ]
+        },
+        {
+          "id": "3",
+          "title": "Credential vault",
+          "status": "open",
+          "prerequisites": ["2"],
+          "goal": "Passwords and SSH keys are stored encrypted, unlocked by a master password or the OS keychain, and attachable to connections and folders.",
+          "tasks": [
+            { "text": "`fernjo-vault`: file format with wrapped random data key, Argon2id, XChaCha20-Poly1305, atomic writes; format documented", "done": false },
+            { "text": "Entries (password, private key with optional passphrase, username, domain, notes) with `secrecy`/`zeroize`", "done": false },
+            { "text": "Master password on first run, unlock dialog, lock action, change master password (re-wrap only)", "done": false },
+            { "text": "\"Unlock automatically on this device\" via the OS keychain (`keyring`)", "done": false },
+            { "text": "Credential reference as inheritable setting in the properties panel", "done": false },
+            { "text": "Vault UI: list, create, edit, explicit reveal, delete with usage warning", "done": false },
+            { "text": "Data folder selectable in settings; warning for sync-conflict copies", "done": false }
+          ],
+          "acceptance": [
+            { "text": "Tests: round trip, wrong password rejected, tampered file rejected, master password change keeps entries and the keychain key valid", "done": false },
+            { "text": "Test: serialised `connections.json` and IPC responses to the UI contain no secret values", "done": false },
+            { "text": "Manual: auto-unlock via keychain works on Windows (macOS/Linux checked when available, otherwise marked open)", "done": false },
+            { "text": "Build, test and lint are green", "done": false }
+          ]
+        },
+        {
+          "id": "4",
+          "title": "SSH sessions in tabs",
+          "status": "open",
+          "prerequisites": ["3"],
+          "goal": "Any SSH connection in the tree opens as a terminal tab with stored credentials and verified host keys.",
+          "tasks": [
+            { "text": "`fernjo-ssh`: russh client with PTY (`xterm-256color`), resize, keepalive", "done": false },
+            { "text": "Auth in OpenSSH order: agent → key → password → keyboard-interactive → prompt", "done": false },
+            { "text": "Host keys: own `known_hosts`, first-connect fingerprint dialog, blocking warning on mismatch", "done": false },
+            { "text": "Tab area: open or focus, second session, states (connecting/connected/disconnected), reconnect, reorder, close", "done": false },
+            { "text": "xterm.js terminal with fit, WebGL, search and web-links addons; copy/paste; font and scrollback settings", "done": false },
+            { "text": "App shortcuts that do not steal terminal keys, documented in the README", "done": false },
+            { "text": "SSH integration tests against an OpenSSH server container in CI", "done": false }
+          ],
+          "acceptance": [
+            { "text": "Integration tests (password, key, keyboard-interactive, host key mismatch) are green in CI", "done": false },
+            { "text": "Manual: connect to a real host with each auth method; `vim` and `htop` render correctly; resize works; 10 tabs open at once", "done": false },
+            { "text": "Build, test and lint are green", "done": false }
+          ]
+        },
+        {
+          "id": "5",
+          "title": "mRemoteNG import & export",
+          "status": "open",
+          "prerequisites": ["3"],
+          "goal": "The owner's existing mRemoteNG connection file, passwords included, moves into fernjo in one step, and fernjo data can be backed up and restored.",
+          "tasks": [
+            { "text": "Owner provides a sanitised `confCons.xml` as a test fixture", "done": false },
+            { "text": "Parser for `confCons.xml` (current AES-GCM format, full-file encryption, default key `mR3m` and custom key)", "done": false },
+            { "text": "Mapping: containers → folders, `SSH2`/`RDP` → connections, inheritance flags; other protocols skipped and reported", "done": false },
+            { "text": "Passwords → vault entries, identical (username, domain, password) combinations shared", "done": false },
+            { "text": "Import UI: pick file, custom key prompt, import into \"Imported from mRemoteNG (YYYY-MM-DD)\", report dialog", "done": false },
+            { "text": "Export connections as fernjo JSON; full backup (connections + vault) encrypted with an export password; restore both", "done": false },
+            { "text": "Legacy CBC format only if cheap, otherwise stays in the backlog", "done": false }
+          ],
+          "acceptance": [
+            { "text": "Import tests against the owner's sanitised fixture and synthetic fixtures (default key, custom key, full-file encryption) are green", "done": false },
+            { "text": "Manual: the owner's real file imports; five spot-checked connections connect with their imported passwords", "done": false },
+            { "text": "Test: backup → restore round trip yields identical tree and vault", "done": false },
+            { "text": "Build, test and lint are green", "done": false }
+          ]
+        },
+        {
+          "id": "6",
+          "title": "Packaging & app settings",
+          "status": "open",
+          "prerequisites": ["4", "5"],
+          "goal": "fernjo installs from a GitHub release on Windows, macOS and Linux and can replace mRemoteNG for daily SSH work.",
+          "tasks": [
+            { "text": "Settings dialog: theme (light/dark/system), terminal font and size, scrollback, data folder", "done": false },
+            { "text": "Tauri bundler: Windows NSIS, macOS `.dmg` (Apple Silicon and Intel), Linux AppImage and `.deb` (minimum Ubuntu 22.04)", "done": false },
+            { "text": "Release workflow on GitHub-hosted Windows, macOS and Ubuntu runners attaches the installers to the GitHub release", "done": false },
+            { "text": "README: installation and first-launch workarounds for unsigned builds", "done": false },
+            { "text": "Measure the performance targets from the spec (§6)", "done": false }
+          ],
+          "acceptance": [
+            { "text": "A release workflow run produces all installers", "done": false },
+            { "text": "Manual: installers install and start on Windows, macOS and Linux (Wayland); unavailable machines marked open", "done": false },
+            { "text": "Cold start under 2 s and idle memory under ~150 MB measured", "done": false },
+            { "text": "Build, test and lint are green", "done": false }
+          ]
+        },
+        {
+          "id": "7",
+          "title": "RDP sessions",
+          "status": "open",
+          "prerequisites": ["6"],
+          "goal": "RDP connections in the tree open as tabs next to SSH sessions, smoothly enough for daily admin work.",
+          "tasks": [
+            { "text": "Throwaway spike: IronRDP → framebuffer → Tauri channel → canvas at 1920×1080 on all three OSes, measured; result in `Docs/DECISIONS.md`", "done": false },
+            { "text": "`fernjo-rdp`: IronRDP client with TLS + NLA (CredSSP), credentials and domain from the vault", "done": false },
+            { "text": "RDP tab: fit to tab with dynamic resize (fixed size as fallback), keyboard and mouse input, text clipboard both ways, fullscreen", "done": false },
+            { "text": "RDP settings (domain, resolution/scaling, colour depth, clipboard) as inheritable settings", "done": false },
+            { "text": "If the bar is missed after optimising the canvas path: record a scope change and insert a native-surface milestone before v0.2.0", "done": false }
+          ],
+          "acceptance": [
+            { "text": "Spike measured ≥ 30 frames/s while scrolling and dragging; owner judges keystroke latency acceptable", "done": false },
+            { "text": "Manual: connect to Windows 11 / Windows Server with NLA; clipboard both ways, resize and fullscreen work", "done": false },
+            { "text": "Build, test and lint are green", "done": false }
           ]
         }
       ]
     }
+  ],
+  "releases": [
+    {
+      "version": "0.1.0",
+      "title": "Daily SSH driver",
+      "status": "open",
+      "afterMilestone": "6",
+      "covers": ["0", "1", "2", "3", "4", "5", "6"],
+      "intro": "First installable version: connection tree, vault, SSH tabs and mRemoteNG import on Windows, macOS and Linux."
+    },
+    {
+      "version": "0.2.0",
+      "title": "RDP",
+      "status": "open",
+      "afterMilestone": "7",
+      "covers": ["7"],
+      "intro": "RDP sessions in tabs next to SSH."
+    }
+  ],
+  "backlog": [
+    { "title": "Built-in device sync", "text": "End-to-end-encrypted sync of connections and vault between devices. Until then the data folder can be synced with Syncthing/Nextcloud/iCloud." },
+    { "title": "SFTP file browser", "text": "Browse and transfer files over an open SSH connection." },
+    { "title": "Port forwarding and jump hosts", "text": "Local/remote forwards and ProxyJump per connection or folder." },
+    { "title": "Local shell tabs", "text": "Open a local terminal as a tab." },
+    { "title": "Split panes and detached tabs", "text": "Show several sessions side by side; pop a tab out into its own window." },
+    { "title": "Quick connect", "text": "Type `user@host` and connect without saving a connection." },
+    { "title": "Broadcast input", "text": "Send keystrokes to several SSH tabs at once." },
+    { "title": "Export to mRemoteNG format", "text": "Write `confCons.xml` for migration back or to other tools." },
+    { "title": "Legacy mRemoteNG format", "text": "Import of files from mRemoteNG ≤ 1.75 (AES-CBC), if not already done in M5." },
+    { "title": "Vault auto-lock", "text": "Lock the vault after a configurable idle time." },
+    { "title": "Pageant support", "text": "Use PuTTY's Pageant as SSH agent on Windows." },
+    { "title": "More protocols", "text": "VNC, Telnet, serial." },
+    { "title": "Code signing, notarisation and auto-update", "text": "Signed installers for Windows and macOS, update channel." }
   ]
 }
