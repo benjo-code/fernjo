@@ -17,6 +17,8 @@
   --color-sidebar: #e6e4de;
   --color-border: #cfccc3;
   --color-border-strong: #77736b;
+  --color-border-input: #7f7b73;
+  --color-tab-text: #55534d;
 
   /* Ink */
   --color-text: #1e1e1c;
@@ -36,6 +38,12 @@
   --color-success: #2f7d22;
   --color-warning: #9a5d00;
   --color-danger: #b3261e;
+
+  /* Lamp column: shape carries the state (none, pulsing ring, filled, struck), colour supports it.
+     Light lamps are darker than the concept's (#2f8a22, #a86400) so they hold 3:1 on the selected row. */
+  --color-lamp-live: #2f7d22;
+  --color-lamp-connecting: #9a5d00;
+  --color-lamp-dropped: #b3261e;
 
   /* Protocol icons are told apart by shape, not colour */
   --color-ssh: #5a5852;
@@ -96,6 +104,8 @@
   --duration-fast: 120ms;
   --duration-normal: 200ms;
   --duration-pulse: 1600ms;
+  --easing-pulse: cubic-bezier(0.45, 0, 0.55, 1);
+  --lamp-size: 9px;
 }
 
 :root[data-theme="dark"] {
@@ -106,6 +116,8 @@
   --color-sidebar: #262624;
   --color-border: #363531;
   --color-border-strong: #77746d;
+  --color-border-input: #75736c;
+  --color-tab-text: #a3a097;
   --color-text: #eceae4;
   --color-text-muted: #a3a097;
   --color-accent: #f0b400;
@@ -116,7 +128,10 @@
   --color-focus: #eceae4;
   --color-success: #6cc04a;
   --color-warning: #e0a030;
-  --color-danger: #f0625a;
+  --color-danger: #ff7a70;
+  --color-lamp-live: #6cc04a;
+  --color-lamp-connecting: #e0a030;
+  --color-lamp-dropped: #ff7a70;
   --color-ssh: #a3a097;
   --color-rdp: #a3a097;
   --color-overlay: #00000085;
@@ -152,6 +167,8 @@
     --color-sidebar: #262624;
     --color-border: #363531;
     --color-border-strong: #77746d;
+    --color-border-input: #75736c;
+    --color-tab-text: #a3a097;
     --color-text: #eceae4;
     --color-text-muted: #a3a097;
     --color-accent: #f0b400;
@@ -162,7 +179,10 @@
     --color-focus: #eceae4;
     --color-success: #6cc04a;
     --color-warning: #e0a030;
-    --color-danger: #f0625a;
+    --color-danger: #ff7a70;
+    --color-lamp-live: #6cc04a;
+    --color-lamp-connecting: #e0a030;
+    --color-lamp-dropped: #ff7a70;
     --color-ssh: #a3a097;
     --color-rdp: #a3a097;
     --color-overlay: #00000085;

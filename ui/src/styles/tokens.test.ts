@@ -7,6 +7,7 @@ import tokens from "./tokens.css?raw";
 type Block = Map<string, string>;
 
 function parseBlock(css: string, selector: RegExp): Block {
+  css = css.replace(/\/\*[\s\S]*?\*\//g, "");
   const match = selector.exec(css);
   if (!match) throw new Error(`block not found: ${selector}`);
   const start = match.index + match[0].length;
@@ -32,6 +33,9 @@ const themed = [
   "--color-surface-raised",
   "--color-sidebar",
   "--color-border",
+  "--color-border-strong",
+  "--color-border-input",
+  "--color-tab-text",
   "--color-text",
   "--color-text-muted",
   "--color-accent",
@@ -42,6 +46,9 @@ const themed = [
   "--color-danger",
   "--color-warning",
   "--color-success",
+  "--color-lamp-live",
+  "--color-lamp-connecting",
+  "--color-lamp-dropped",
   "--color-ssh",
   "--color-rdp",
   "--color-overlay",
@@ -68,6 +75,9 @@ const unthemed = [
   "--shadow-raised",
   "--duration-fast",
   "--duration-normal",
+  "--duration-pulse",
+  "--easing-pulse",
+  "--lamp-size",
 ];
 
 const isColour = (name: string) => name.startsWith("--color-") || name.startsWith("--term-");
@@ -120,6 +130,13 @@ const pairs: [string, string, number][] = [
   ["--color-success", "--color-sidebar", 3],
   ["--color-warning", "--color-sidebar", 3],
   ["--color-danger", "--color-sidebar", 3],
+  ["--color-tab-text", "--color-sidebar", 4.5],
+  ["--color-border-input", "--color-surface", 3],
+  ["--color-border-strong", "--color-sidebar", 3],
+  ...["live", "connecting", "dropped"].flatMap((lamp): [string, string, number][] => [
+    [`--color-lamp-${lamp}`, "--color-sidebar", 3],
+    [`--color-lamp-${lamp}`, "--color-selection", 3],
+  ]),
   ...[1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14].map((n): [string, string, number] => [
     `--term-ansi-${n}`,
     "--term-bg",
