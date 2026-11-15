@@ -15,6 +15,12 @@ Log of architecture and technology decisions. Newest entries on top.
 **Rejected alternatives:** <What else was considered and why not>
 -->
 
+## 2026-11-15 – cargo-deny: licence allow-list and advisory ignores
+**Context:** M0 adds a `cargo-deny` CI job (advisories, bans, licences, sources) that must be green on the workspace including Tauri's dependency tree (cargo-deny 0.20.2, run with `--all-features`; the graph covers all platforms, so Linux-only crates are checked too).
+**Decision:** `deny.toml` allows only `MIT`, `Apache-2.0`, `Apache-2.0 WITH LLVM-exception`, `BSD-2-Clause`, `BSD-3-Clause`, `ISC`, `Zlib`, `Unicode-3.0`, `CC0-1.0`, `MPL-2.0`; no licence was added beyond this starting list (the first run reported no licence violations). Sources are crates.io only (unknown registry and git denied); duplicate versions only warn. One advisory is ignored: `RUSTSEC-2024-0370` (`proc-macro-error` unmaintained, pulled in by `glib-macros` through Tauri's Linux GTK3 stack; no safe upgrade exists). Remove the ignore when Tauri moves off GTK3 (or `glib-macros` drops `proc-macro-error`); `cargo deny check` will then show the entry as unused.
+**Rationale:** The allow-list is limited to permissive licences and MPL-2.0 (weak copyleft), all compatible with distribution under `MIT OR Apache-2.0`. The ignore is a single, id-specific entry with a reason: the crate is a build-time proc macro we cannot replace, and it is an unmaintained notice, not a vulnerability.
+**Rejected alternatives:** Disabling the unmaintained check (`unmaintained = "none"`) or blanket-ignoring advisories (would hide future findings); allowing licences speculatively (every addition should be driven by a real finding); skipping crates in the licence check.
+
 ## 2026-11-15 – Licence MIT OR Apache-2.0
 **Context:** The owner wants fernjo open source and left the choice of licence open.
 **Decision:** Dual licence `MIT OR Apache-2.0`.
