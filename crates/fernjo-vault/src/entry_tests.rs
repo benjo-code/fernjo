@@ -359,7 +359,7 @@ fn failed_save_during_change_password_keeps_the_old_password_working() {
 // --- lost-update guard: a file changed on disk after unlock is never overwritten ---
 
 /// A second handle on the same file, unlocked: stands for another device or process.
-fn second_handle(path: &PathBuf) -> Vault {
+fn second_handle(path: &std::path::Path) -> Vault {
     let mut other = Vault::open(path).unwrap().unwrap();
     other.unlock(&secret(PW)).unwrap();
     other
@@ -371,14 +371,19 @@ fn a_save_after_another_writer_changed_the_file_is_refused() {
     let (mut vault, path) = new_vault(&dir);
     let keep = vault.add(password_entry("keep", "pw-one")).unwrap();
     let mut other = second_handle(&path);
-    other.add(password_entry("from-elsewhere", "pw-two")).unwrap();
+    other
+        .add(password_entry("from-elsewhere", "pw-two"))
+        .unwrap();
     let on_disk = fs::read(&path).unwrap();
 
     assert_eq!(
         code(vault.add(password_entry("late", "pw-three"))),
         "changed_on_disk"
     );
-    assert_eq!(code(vault.update(keep, rename("renamed"))), "changed_on_disk");
+    assert_eq!(
+        code(vault.update(keep, rename("renamed"))),
+        "changed_on_disk"
+    );
     assert_eq!(code(vault.delete(keep)), "changed_on_disk");
     assert_eq!(
         code(vault.change_password(&secret(PW), &secret(NEW_PW))),

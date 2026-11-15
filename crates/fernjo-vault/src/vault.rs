@@ -42,7 +42,7 @@ pub struct Vault {
     /// The header bytes this handle last read from or wrote to the file. `save` refuses to
     /// overwrite a file that no longer starts with them (see `check_unchanged_on_disk`).
     /// It differs from `header.encode()` only while `change_password` saves.
-    disk_header: [u8; HEADER_LEN],
+    disk_header: Box<[u8; HEADER_LEN]>,
     unlocked: Option<Unlocked>,
 }
 
@@ -119,7 +119,7 @@ impl Vault {
             .map_err(|_| VaultError::SaveFailed("unexpected wrapped key size".to_owned()))?;
         let mut vault = Self {
             path: path.to_path_buf(),
-            disk_header: header.encode(),
+            disk_header: Box::new(header.encode()),
             header,
             unlocked: Some(Unlocked {
                 key,
@@ -143,7 +143,7 @@ impl Vault {
         let (header, _) = Header::parse(&bytes)?;
         Ok(Some(Self {
             path: path.to_path_buf(),
-            disk_header: header.encode(),
+            disk_header: Box::new(header.encode()),
             header,
             unlocked: None,
         }))
@@ -194,7 +194,7 @@ impl Vault {
             .map_err(|_| VaultError::Tampered)?;
         let key = DataKey::from_bytes(key_bytes);
         let body = open_body(&key, &header, &header_bytes, ciphertext)?;
-        self.disk_header = header.encode();
+        *self.disk_header = header.encode();
         self.header = header;
         self.unlocked = Some(Unlocked { key, body });
         Ok(())
@@ -216,7 +216,7 @@ impl Vault {
         }
         let header_bytes = header.encode();
         let body = open_body(key, &header, &header_bytes, ciphertext)?;
-        self.disk_header = header.encode();
+        *self.disk_header = header.encode();
         self.header = header;
         self.unlocked = Some(Unlocked {
             key: DataKey::from_bytes(*key.as_bytes()),
@@ -432,7 +432,7 @@ impl Vault {
         file.take(HEADER_LEN as u64)
             .read_to_end(&mut head)
             .map_err(|e| VaultError::SaveFailed(e.to_string()))?;
-        if head == self.disk_header {
+        if head == self.disk_header.as_slice() {
             Ok(())
         } else {
             Err(VaultError::ChangedOnDisk)
@@ -462,7 +462,7 @@ impl Vault {
         file.extend_from_slice(&header_bytes);
         file.extend_from_slice(&ciphertext);
         write_atomic(&self.path, &file).map_err(|e| VaultError::SaveFailed(e.to_string()))?;
-        self.disk_header = header_bytes;
+        *self.disk_header = header_bytes;
         self.header = header;
         Ok(())
     }
