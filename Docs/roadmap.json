@@ -11,7 +11,7 @@
         {
           "id": "0",
           "title": "Repo scaffold & CI",
-          "status": "planned",
+          "status": "in-progress",
           "plan": "superpowers/plans/2026-11-15-milestone-00-repo-scaffold.md",
           "goal": "An empty but fully set-up, public repo with a running Tauri shell and green CI that all further milestones build on.",
           "tasks": [

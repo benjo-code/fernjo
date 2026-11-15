@@ -23,7 +23,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 
 | # | Milestone | Subproject | Status | Plan | Done on |
 |---|---|---|---|---|---|
-| 0 | Repo scaffold & CI | 1 – fernjo app | 🟡 planned | [Plan](superpowers/plans/2026-11-15-milestone-00-repo-scaffold.md) | – |
+| 0 | Repo scaffold & CI | 1 – fernjo app | 🔵 in progress | [Plan](superpowers/plans/2026-11-15-milestone-00-repo-scaffold.md) | – |
 | 1 | UI design direction | 1 – fernjo app | ⬜ open | – | – |
 | 2 | Connection tree & data model | 1 – fernjo app | ⬜ open | – | – |
 | 3 | Credential vault | 1 – fernjo app | ⬜ open | – | – |
@@ -45,7 +45,7 @@ _None yet._
 **Spec:** [2026-11-15-fernjo-design.md](superpowers/specs/2026-11-15-fernjo-design.md) Cross-platform SSH & RDP connection manager (Rust core, Tauri 2 UI)
 
 ## Milestone 0 – Repo scaffold & CI
-**Status:** 🟡 planned · **Plan:** [2026-11-15-milestone-00-repo-scaffold.md](superpowers/plans/2026-11-15-milestone-00-repo-scaffold.md) · **Prerequisites:** none
+**Status:** 🔵 in progress · **Plan:** [2026-11-15-milestone-00-repo-scaffold.md](superpowers/plans/2026-11-15-milestone-00-repo-scaffold.md) · **Prerequisites:** none
 
 Goal: An empty but fully set-up, public repo with a running Tauri shell and green CI that all further milestones build on.
 
