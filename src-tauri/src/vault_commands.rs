@@ -1246,6 +1246,38 @@ mod tests {
         }
     }
 
+    /// Opens a session on the world's connection (pointed at a port that refuses at once, so
+    /// nothing leaves the machine) and records the JSON events it emits.
+    fn opened(w: &World) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use crate::session_commands::open_session;
+        use tauri::ipc::{Channel, InvokeResponseBody};
+        commands::update_node(
+            &w.st,
+            w.conn,
+            patch(json!({"host": "127.0.0.1", "port": 1})),
+        )
+        .unwrap();
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = std::sync::Arc::clone(&events);
+        let channel = Channel::new(move |body: InvokeResponseBody| {
+            if let InvokeResponseBody::Json(text) = body {
+                sink.lock().unwrap().push(text);
+            }
+            Ok(())
+        });
+        let id = open_session(&w.st, w.conn, channel, 80, 24).unwrap();
+        (id, events)
+    }
+
+    fn dump(events: &std::sync::Mutex<Vec<String>>) -> String {
+        events.lock().unwrap().join("|")
+    }
+
+    fn secret_answer() -> crate::sessions::PromptAnswer {
+        serde_json::from_value(json!({"kind": "secrets", "values": [PW, KEY, PASS, MASTER]}))
+            .unwrap()
+    }
+
     type Call = Box<dyn Fn(&World) -> String>;
 
     /// Every command function, called with sentinel secrets in play. When a command is
@@ -1336,6 +1368,58 @@ mod tests {
                     },
                 ))
             }),
+            entry("open_session", |w| {
+                let (id, events) = opened(w);
+                format!("{id}{}", dump(&events))
+            }),
+            entry("session_input", |w| {
+                let (id, _) = opened(w);
+                j(crate::session_commands::session_input(
+                    &w.st,
+                    &id,
+                    [PW, KEY].concat().into_bytes(),
+                ))
+            }),
+            entry("session_resize", |w| {
+                let (id, _) = opened(w);
+                j(crate::session_commands::session_resize(&w.st, &id, 100, 30))
+            }),
+            entry("session_ack", |w| {
+                let (id, _) = opened(w);
+                j(crate::session_commands::session_ack(&w.st, &id, 10))
+            }),
+            entry("close_session", |w| {
+                let (id, _) = opened(w);
+                j(crate::session_commands::close_session(&w.st, &id))
+            }),
+            entry("reconnect_session", |w| {
+                let (id, _) = opened(w);
+                j(crate::session_commands::reconnect_session(
+                    &w.st, &id, 80, 24,
+                ))
+            }),
+            entry("answer_prompt", |w| {
+                let (id, events) = opened(w);
+                // an unknown prompt id on a real session, and an unknown session
+                let known = j(crate::session_commands::answer_prompt(
+                    &w.st,
+                    &id,
+                    999,
+                    secret_answer(),
+                ));
+                let unknown = j(crate::session_commands::answer_prompt(
+                    &w.st,
+                    "no-such-session",
+                    1,
+                    secret_answer(),
+                ));
+                format!("{known}{unknown}{}", dump(&events))
+            }),
+            entry("resume_session", |w| {
+                let (id, events) = opened(w);
+                let r = j(crate::session_commands::resume_session(&w.st, &id, true));
+                format!("{r}{}", dump(&events))
+            }),
             entry("apply_data_folder", |w| {
                 // not an IPC command (see `NOT_A_COMMAND`), but called here as a plain
                 // function: the state has no config folder, so this is refused; the response
@@ -1394,12 +1478,13 @@ mod tests {
     /// Commands that need an `AppHandle` cannot be called without a running app, so they have
     /// no `table()` entry. Each is exempt for the stated reason: no secret type appears in
     /// its signature (`choose_data_folder` returns `DataFolderInfo`, `restart_app` nothing).
-    const APP_HANDLE_EXEMPT: [(&str, &str); 2] = [
+    const APP_HANDLE_EXEMPT: [(&str, &str); 3] = [
         (
             "choose_data_folder",
             "takes an AppHandle; returns only DataFolderInfo",
         ),
         ("restart_app", "takes an AppHandle; returns nothing"),
+        ("open_external_url", "takes an AppHandle; returns nothing"),
     ];
 
     /// Plain functions that `table()` calls but that are deliberately not IPC commands:

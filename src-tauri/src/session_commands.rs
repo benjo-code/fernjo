@@ -3,13 +3,19 @@
 //! Like `commands.rs`: plain functions over `&AppState` (testable without Tauri) plus thin
 //! wrappers in [`handlers`].
 
+use fernjo_core::NodeId;
 use fernjo_core::{
     AppSettings, DEFAULT_FONT_SIZE, DEFAULT_SCROLLBACK, DataDirSource, TerminalPrefs, settings,
 };
 use serde::{Deserialize, Serialize};
+use tauri::ipc::{Channel, InvokeResponseBody};
 
 use crate::commands::CommandError;
+use crate::sessions::PromptAnswer;
 use crate::state::AppState;
+
+/// Header of `session_input` carrying the session id (the body is the raw bytes).
+pub const SESSION_HEADER: &str = "x-fernjo-session";
 
 fn error(code: &str, message: impl Into<String>) -> CommandError {
     CommandError {
@@ -107,10 +113,179 @@ pub fn set_terminal_settings(
     Ok(info(state, &slot))
 }
 
+/// Opens a session for a connection and returns its id (a UUID). Everything is resolved in Rust.
+/// Output (raw) and events (JSON) arrive on `on_event`; see the wire contract in `sessions.rs`.
+///
+/// # Errors
+/// `not_found`, `not_a_connection`, `unsupported_protocol`, `invalid_host`, `no_data_dir`, or a
+/// vault error.
+pub fn open_session(
+    state: &AppState,
+    node_id: NodeId,
+    on_event: Channel<InvokeResponseBody>,
+    cols: u32,
+    rows: u32,
+) -> Result<String, CommandError> {
+    state.sessions.open(state, node_id, on_event, cols, rows)
+}
+
+/// Queues keystrokes. `not_found` for an unknown id, `session_not_connected` without a shell.
+pub fn session_input(state: &AppState, id: &str, data: Vec<u8>) -> Result<(), CommandError> {
+    state.sessions.input(id, data)
+}
+
+pub fn session_resize(
+    state: &AppState,
+    id: &str,
+    cols: u32,
+    rows: u32,
+) -> Result<(), CommandError> {
+    state.sessions.resize(id, cols, rows)
+}
+
+/// The UI finished writing `bytes` of output to the terminal (flow control).
+pub fn session_ack(state: &AppState, id: &str, bytes: usize) -> Result<(), CommandError> {
+    state.sessions.ack(id, bytes)
+}
+
+pub fn close_session(state: &AppState, id: &str) -> Result<(), CommandError> {
+    state.sessions.close(id)
+}
+
+/// Connects again; only when the session is disconnected, else `session_active`.
+pub fn reconnect_session(
+    state: &AppState,
+    id: &str,
+    cols: u32,
+    rows: u32,
+) -> Result<(), CommandError> {
+    state.sessions.reconnect(state, id, cols, rows)
+}
+
+pub fn answer_prompt(
+    state: &AppState,
+    id: &str,
+    prompt_id: u64,
+    answer: PromptAnswer,
+) -> Result<(), CommandError> {
+    state.sessions.answer(id, prompt_id, answer)
+}
+
+/// Continues a session waiting for the vault; only then, else `session_active`.
+pub fn resume_session(
+    state: &AppState,
+    id: &str,
+    skip_credential: bool,
+) -> Result<(), CommandError> {
+    state.sessions.resume(state, id, skip_credential)
+}
+
 /// The `#[tauri::command]` wrappers registered in `run()`.
 pub mod handlers {
     use super::*;
-    use tauri::State;
+    use tauri::ipc::{InvokeBody, Request};
+    use tauri::{AppHandle, State};
+    use tauri_plugin_opener::OpenerExt;
+
+    #[tauri::command]
+    pub fn open_session(
+        state: State<'_, AppState>,
+        node_id: NodeId,
+        on_event: Channel<InvokeResponseBody>,
+        cols: u32,
+        rows: u32,
+    ) -> Result<String, CommandError> {
+        super::open_session(&state, node_id, on_event, cols, rows)
+    }
+
+    /// The body is the raw bytes, the session id travels in the `x-fernjo-session` header.
+    #[tauri::command]
+    pub fn session_input(
+        state: State<'_, AppState>,
+        request: Request<'_>,
+    ) -> Result<(), CommandError> {
+        let InvokeBody::Raw(data) = request.body() else {
+            return Err(CommandError {
+                code: "invalid_request".to_string(),
+                message: "the input must be sent as raw bytes".to_string(),
+            });
+        };
+        let id = request
+            .headers()
+            .get(SESSION_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| CommandError {
+                code: "invalid_request".to_string(),
+                message: "the session id header is missing".to_string(),
+            })?;
+        super::session_input(&state, id, data.clone())
+    }
+
+    #[tauri::command]
+    pub fn session_resize(
+        state: State<'_, AppState>,
+        id: String,
+        cols: u32,
+        rows: u32,
+    ) -> Result<(), CommandError> {
+        super::session_resize(&state, &id, cols, rows)
+    }
+
+    #[tauri::command]
+    pub fn session_ack(
+        state: State<'_, AppState>,
+        id: String,
+        bytes: usize,
+    ) -> Result<(), CommandError> {
+        super::session_ack(&state, &id, bytes)
+    }
+
+    #[tauri::command]
+    pub fn close_session(state: State<'_, AppState>, id: String) -> Result<(), CommandError> {
+        super::close_session(&state, &id)
+    }
+
+    #[tauri::command]
+    pub fn reconnect_session(
+        state: State<'_, AppState>,
+        id: String,
+        cols: u32,
+        rows: u32,
+    ) -> Result<(), CommandError> {
+        super::reconnect_session(&state, &id, cols, rows)
+    }
+
+    #[tauri::command]
+    pub fn answer_prompt(
+        state: State<'_, AppState>,
+        id: String,
+        prompt_id: u64,
+        answer: PromptAnswer,
+    ) -> Result<(), CommandError> {
+        super::answer_prompt(&state, &id, prompt_id, answer)
+    }
+
+    #[tauri::command]
+    pub fn resume_session(
+        state: State<'_, AppState>,
+        id: String,
+        skip_credential: bool,
+    ) -> Result<(), CommandError> {
+        super::resume_session(&state, &id, skip_credential)
+    }
+
+    /// Opens a web link in the default browser; only `http` and `https`. Goes through the
+    /// opener plugin's Rust API, so the webview needs no capability for it.
+    #[tauri::command]
+    pub fn open_external_url(app: AppHandle, url: String) -> Result<(), CommandError> {
+        crate::sessions::check_external_url(&url)?;
+        app.opener()
+            .open_url(url, None::<&str>)
+            .map_err(|_| CommandError {
+                code: "open_failed".to_string(),
+                message: "the link could not be opened".to_string(),
+            })
+    }
 
     #[tauri::command]
     pub fn get_terminal_settings(

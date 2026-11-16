@@ -13,6 +13,7 @@ use fernjo_vault::{
 };
 
 use crate::commands::CommandError;
+use crate::sessions::SessionManager;
 
 /// Why the data could not be opened. Every command reports this until the app restarts.
 #[derive(Debug, Clone)]
@@ -52,8 +53,8 @@ pub struct AppState {
     pub data_dir: Option<PathBuf>,
     /// Folder of `settings.json` (`None` for the test constructor).
     pub config_dir: Option<PathBuf>,
-    /// Where `data_dir` came from. Task 8 must not save `settings.json` when this is `Env`
-    /// (the variable wins) nor when `settings_unusable` is set.
+    /// Where `data_dir` came from. `settings.json` is never saved when this is `Env` (the
+    /// variable wins) nor when `settings_unusable` is set (`set_terminal_settings` enforces it).
     pub source: DataDirSource,
     /// `settings.json` has a newer schema (or was unusable): it must not be saved over.
     pub settings_unusable: bool,
@@ -64,6 +65,8 @@ pub struct AppState {
     /// Terminal preferences: loaded from `settings.json` at startup, in memory only while
     /// `FERNJO_DATA_DIR` is set.
     pub terminal: Mutex<TerminalPrefs>,
+    /// The open terminal sessions.
+    pub sessions: SessionManager,
 }
 
 /// Debug output never includes the vault, the key store or the connection data.
@@ -209,6 +212,7 @@ impl AppState {
             restart_required: AtomicBool::new(false),
             pending_data_dir: Mutex::new(None),
             terminal: Mutex::new(TerminalPrefs::default()),
+            sessions: SessionManager::default(),
         }
     }
 

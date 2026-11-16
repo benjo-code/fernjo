@@ -51,12 +51,16 @@ pub enum CredentialPlan {
 /// Everything the session manager needs to open a connection. `Debug` never shows a secret.
 #[derive(Debug)]
 pub struct ConnectPlan {
-    pub title: String,
     pub host: String,
     pub port: u16,
     pub username: Option<String>,
     pub keepalive_secs: u32,
     pub credential: CredentialPlan,
+}
+
+fn non_blank(name: &str) -> Option<String> {
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 fn error(code: &str, message: impl Into<String>) -> CommandError {
@@ -91,10 +95,10 @@ pub fn resolve(
         return Err(error("invalid_host", "the connection has no host"));
     }
     let mut plan = ConnectPlan {
-        title: node.name.clone(),
         host,
         port: node.port.effective.unwrap_or(DEFAULT_SSH_PORT),
-        username: node.username.effective.clone(),
+        // `Tree` keeps whatever was stored (also "" or blanks): blank means unset here.
+        username: node.username.effective.as_deref().and_then(non_blank),
         keepalive_secs: node
             .keepalive_secs
             .effective
@@ -134,7 +138,7 @@ pub fn resolve(
     };
     // The connection's own or inherited username wins over the entry's.
     if plan.username.is_none() {
-        plan.username = entry.username;
+        plan.username = entry.username.as_deref().and_then(non_blank);
     }
     plan.credential = CredentialPlan::Ready(match vault.reveal(credential_id)? {
         Secret::Password { password } => Credential::Password(password),
@@ -243,6 +247,26 @@ mod tests {
     }
 
     #[test]
+    fn a_blank_username_counts_as_unset() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = with_vault_state(dir.path());
+        let entry = pw_entry(&st, Some("entryuser"));
+        let c = conn(&st, None, "h");
+        set(&st, c, json!({"credential": entry, "username": "  "}));
+        assert_eq!(
+            resolve(&st, c, false).unwrap().username.as_deref(),
+            Some("entryuser")
+        );
+        set(&st, c, json!({"username": "  padded "}));
+        assert_eq!(
+            resolve(&st, c, false).unwrap().username.as_deref(),
+            Some("padded")
+        );
+        set(&st, c, json!({"credential": null, "username": ""}));
+        assert_eq!(resolve(&st, c, false).unwrap().username, None);
+    }
+
+    #[test]
     fn entry_username_is_the_fallback() {
         let dir = tempfile::tempdir().unwrap();
         let st = with_vault_state(dir.path());
@@ -273,7 +297,7 @@ mod tests {
         let c = conn(&st, Some(f), "h");
         let plain = resolve(&st, c, false).unwrap();
         assert_eq!((plain.port, plain.keepalive_secs), (22, 30));
-        assert_eq!((plain.title.as_str(), plain.host.as_str()), ("c", "h"));
+        assert_eq!(plain.host.as_str(), "h");
         set(&st, f, json!({"port": 2222, "keepaliveSecs": 60}));
         let inherited = resolve(&st, c, false).unwrap();
         assert_eq!((inherited.port, inherited.keepalive_secs), (2222, 60));
