@@ -1,5 +1,6 @@
 import { flushSync, mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { SessionStore } from "../sessions.svelte";
 import { TreeStore } from "../store.svelte";
 import { apiError, conn, folder, mockApi, snapshot } from "../testing";
 import type { Api, TreeNode } from "../types";
@@ -31,7 +32,10 @@ async function setup(impl: Partial<Api> = {}) {
   const store = new TreeStore(mock.api);
   await store.init();
   store.expand("Homelab");
-  mounted = mount(TreeView, { target: document.body, props: { store } });
+  mounted = mount(TreeView, {
+    target: document.body,
+    props: { store, sessions: new SessionStore(mock.api, (id) => id) },
+  });
   flushSync();
   return { store, ...mock };
 }

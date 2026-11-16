@@ -1,5 +1,9 @@
 mod commands;
+mod connect_plan;
 mod data_folder;
+mod session_commands;
+mod session_flow;
+mod sessions;
 mod state;
 mod vault_commands;
 
@@ -27,7 +31,18 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(AppState::open_for_app(fernjo_core::locate()))
+        // A reload or a crashed page leaves its sessions running without a UI (the page's
+        // `closeAll` on `pagehide` is fire-and-forget), so every page load ends them. The first
+        // load of the app finds none.
+        .on_page_load(|webview, payload| {
+            if webview.label() == "main"
+                && matches!(payload.event(), tauri::webview::PageLoadEvent::Started)
+            {
+                webview.state::<AppState>().sessions.close_all();
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::handlers::list_tree,
             commands::handlers::get_node,
@@ -53,6 +68,17 @@ pub fn run() {
             data_folder::handlers::get_data_folder,
             data_folder::handlers::choose_data_folder,
             data_folder::handlers::restart_app,
+            session_commands::handlers::get_terminal_settings,
+            session_commands::handlers::set_terminal_settings,
+            session_commands::handlers::open_session,
+            session_commands::handlers::session_input,
+            session_commands::handlers::session_resize,
+            session_commands::handlers::session_ack,
+            session_commands::handlers::close_session,
+            session_commands::handlers::reconnect_session,
+            session_commands::handlers::answer_prompt,
+            session_commands::handlers::resume_session,
+            session_commands::handlers::open_external_url,
         ])
         .run(tauri::generate_context!())
         .expect("error while running fernjo");

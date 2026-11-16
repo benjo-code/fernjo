@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
+  import type { SessionStore } from "../sessions.svelte";
   import type { TreeStore } from "../store.svelte";
   import type { VaultStore } from "../vault.svelte";
   import FilterBox from "./FilterBox.svelte";
@@ -12,6 +13,7 @@
   let {
     store,
     vault,
+    sessions,
     onOpenVault,
     onsettings,
     restartPending = false,
@@ -20,14 +22,22 @@
   }: {
     store: TreeStore;
     vault: VaultStore;
+    sessions: SessionStore;
     /** The chip was clicked while the vault is unlocked. */
     onOpenVault: () => void;
-    /** The settings (data folder) button was clicked. */
+    /** The settings button was clicked. */
     onsettings?: () => void;
     restartPending?: boolean;
     onRestart?: () => void;
     children?: Snippet;
   } = $props();
+
+  let filterBox: FilterBox | undefined = $state();
+
+  /** Focuses the tree filter (the Ctrl+Shift+K shortcut). */
+  export function focusFilter() {
+    filterBox?.focus();
+  }
 
   let note: VaultNote | undefined = $state();
   let noteOpen = $state(false);
@@ -35,21 +45,15 @@
 
 <aside class="sidebar" class:note-open={noteOpen} aria-label="Connections">
   <div class="head">
-    <div class="filter"><FilterBox {store} /></div>
+    <div class="filter"><FilterBox bind:this={filterBox} {store} /></div>
     <VaultChip {vault} onOpenManager={onOpenVault} onFocusUnlock={() => void note?.focusForm()} />
   </div>
   <VaultNote bind:this={note} bind:open={noteOpen} {vault} />
   <NoticeBar {store} {restartPending} {onRestart} />
-  <div class="tree-slot"><TreeView {store} /></div>
+  <div class="tree-slot"><TreeView {store} {sessions} /></div>
   {@render children?.()}
   <div class="foot">
-    <button
-      type="button"
-      class="gear"
-      aria-label="Settings: data folder"
-      title="Settings: data folder"
-      onclick={onsettings}
-    >
+    <button type="button" class="gear" aria-label="Settings" title="Settings" onclick={onsettings}>
       <Icon name="gear" />
     </button>
   </div>

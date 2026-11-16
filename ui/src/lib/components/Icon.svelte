@@ -10,7 +10,9 @@
     | "unlock"
     | "eye"
     | "eye-off"
-    | "gear";
+    | "gear"
+    | "close"
+    | "reconnect";
 
   let { name, size = 16 }: { name: Name; size?: number } = $props();
 </script>
@@ -61,6 +63,10 @@
     <path
       d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4"
     />
+  {:else if name === "close"}
+    <path d="M4 4l8 8M12 4l-8 8" />
+  {:else if name === "reconnect"}
+    <path d="M12.5 8a4.5 4.5 0 1 1-1.4-3.3M13 2.5v3h-3" />
   {/if}
 </svg>
 

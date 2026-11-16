@@ -1,5 +1,6 @@
 import { flushSync, mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { SessionStore } from "../sessions.svelte";
 import { TreeStore } from "../store.svelte";
 import { conn, folder, mockApi, snapshot } from "../testing";
 import type { Api, TreeNode } from "../types";
@@ -29,7 +30,10 @@ async function setup(impl: Partial<Api> = {}) {
   const store = new TreeStore(mock.api);
   await store.init();
   store.expand("Homelab");
-  mounted = mount(TreeView, { target: document.body, props: { store } });
+  mounted = mount(TreeView, {
+    target: document.body,
+    props: { store, sessions: new SessionStore(mock.api, (id) => id) },
+  });
   flushSync();
   return { store, ...mock };
 }
@@ -73,8 +77,14 @@ describe("context menu", () => {
   test("row_context_menu_lists_items_in_order_and_selects_the_row", async () => {
     const { store } = await setup();
     contextMenu(row("web-01"));
-    expect(menuLabels()).toEqual(["New folder", "New connection", "Duplicate", "Rename", "Delete"]);
-    expect(menuLabels()).not.toContain("Connect");
+    expect(menuLabels()).toEqual([
+      "Connect",
+      "New folder",
+      "New connection",
+      "Duplicate",
+      "Rename",
+      "Delete",
+    ]);
     expect(store.selectedId).toBe("web-01");
   });
 
@@ -278,7 +288,8 @@ describe("context menu", () => {
 
   test("arrow_keys_move_through_items_and_enter_activates", async () => {
     const { calls } = await setup();
-    contextMenu(row("web-01"));
+    // a folder row: five items, "New folder" first (connections start with "Connect")
+    contextMenu(row("Homelab"));
     await settle();
     expect(document.activeElement).toBe(item("New folder"));
     await key(menu()!, "ArrowDown");
@@ -300,10 +311,10 @@ describe("context menu", () => {
     store.select("web-01");
     flushSync();
     await key(row("web-01"), "F10", { shiftKey: true });
-    expect(menuLabels()).toHaveLength(5);
+    expect(menuLabels()).toHaveLength(6);
     await key(menu()!, "Escape");
     await key(row("web-01"), "ContextMenu");
-    expect(menuLabels()).toHaveLength(5);
+    expect(menuLabels()).toHaveLength(6);
   });
 
   test("focus_returns_to_the_row_after_rename_commit_and_cancel", async () => {

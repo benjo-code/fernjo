@@ -3,12 +3,13 @@
   import { DragController, type DragTarget, type Hit } from "../drag";
   import { dropPosition } from "../drop-target";
   import { countDescendants, type Row } from "../rows";
+  import type { SessionStore } from "../sessions.svelte";
   import type { TreeStore } from "../store.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import ContextMenu, { type MenuItem } from "./ContextMenu.svelte";
   import TreeRow from "./TreeRow.svelte";
 
-  let { store }: { store: TreeStore } = $props();
+  let { store, sessions }: { store: TreeStore; sessions: SessionStore } = $props();
 
   let container = $state<HTMLElement>();
   let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
@@ -164,6 +165,18 @@
       : { parentId: row.parentId, index: row.index + 1 };
   }
 
+  /** Opens a session for a connection; RDP is not implemented yet and says so. */
+  function connect(row: Row, another = false) {
+    const { node } = row;
+    if (node.type !== "connection") return;
+    if (node.protocol === "rdp") {
+      store.showError("RDP sessions are not available yet");
+      return;
+    }
+    if (another) sessions.open(node.id, { another: true });
+    else sessions.open(node.id);
+  }
+
   function menuItemsFor(row: Row | null): MenuItem[] {
     if (!row) {
       return [
@@ -172,7 +185,15 @@
       ];
     }
     const { parentId, index } = placement(row);
+    const connectItems: MenuItem[] = [];
+    if (row.node.type === "connection") {
+      connectItems.push({ label: "Connect", action: () => connect(row) });
+      if (sessions.tabs.some((t) => t.nodeId === row.node.id)) {
+        connectItems.push({ label: "Open another session", action: () => connect(row, true) });
+      }
+    }
     return [
+      ...connectItems,
       { label: "New folder", action: () => void store.createFolder(parentId, index) },
       { label: "New connection", action: () => void store.createConnection(parentId, index) },
       { label: "Duplicate", action: () => void store.duplicate(row.node.id) },
@@ -234,6 +255,17 @@
     store.select(id);
   }
 
+  function ondblclick(e: MouseEvent) {
+    const target = e.target as HTMLElement;
+    if (target instanceof HTMLInputElement || target.closest(".chevron")) return;
+    const el = target.closest<HTMLElement>("[data-node-id]");
+    if (!el || !container?.contains(el)) return;
+    const row = rows.find((r) => r.node.id === el.dataset.nodeId);
+    if (!row) return;
+    if (row.node.type === "folder") store.toggle(row.node.id);
+    else connect(row);
+  }
+
   function onkeydown(e: KeyboardEvent) {
     if (e.target instanceof HTMLInputElement || e.altKey || e.ctrlKey || e.metaKey) return;
     if (rows.length === 0) return;
@@ -286,6 +318,12 @@
           requestDelete(current);
         }
         break;
+      case "Enter":
+        if (current?.node.type === "connection") {
+          e.preventDefault();
+          connect(current);
+        }
+        break;
       case "F2":
         if (current) {
           e.preventDefault();
@@ -323,6 +361,7 @@
     aria-label="Connections"
     tabindex="-1"
     {onclick}
+    {ondblclick}
     {oncontextmenu}
     {onkeydown}
     {onpointerdown}
@@ -338,6 +377,7 @@
         renaming={row.node.id === store.renamingId}
         drop={dragView.target?.rowId === row.node.id ? dragView.target.position : null}
         dragging={dragView.dragId === row.node.id}
+        lamp={row.node.type === "connection" ? sessions.lampFor(row.node.id) : null}
         onrename={(value) => {
           if (value.trim() === row.node.name) store.stopRename();
           else void store.rename(row.node.id, value);

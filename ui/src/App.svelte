@@ -1,12 +1,18 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { tauriApi, toApiError } from "./lib/api";
   import DataFolderDialog from "./lib/components/DataFolderDialog.svelte";
   import PropertiesPanel from "./lib/components/PropertiesPanel.svelte";
+  import SessionArea from "./lib/components/SessionArea.svelte";
   import Sidebar from "./lib/components/Sidebar.svelte";
+  import TabStrip from "./lib/components/TabStrip.svelte";
   import VaultManager from "./lib/components/VaultManager.svelte";
+  import { findNode } from "./lib/rows";
+  import { SessionStore } from "./lib/sessions.svelte";
+  import { isMac, routeKey } from "./lib/shortcuts";
   import { TreeStore } from "./lib/store.svelte";
-  import type { Api } from "./lib/types";
+  import { TerminalSettingsStore } from "./lib/terminal-settings.svelte";
+  import type { Api, Protocol, TerminalSettings } from "./lib/types";
   import { VaultStore } from "./lib/vault.svelte";
 
   let { api = tauriApi }: { api?: Api } = $props();
@@ -16,6 +22,39 @@
   const store = new TreeStore(api);
   // svelte-ignore state_referenced_locally
   const vault = new VaultStore(api, (message) => store.showError(message));
+
+  // svelte-ignore state_referenced_locally
+  const sessions = new SessionStore(api, (id) => findNode(store.children, id)?.name ?? "Session");
+
+  // svelte-ignore state_referenced_locally
+  const terminal = new TerminalSettingsStore(api);
+
+  /** Until Rust answers (or when it cannot), terminals use these. */
+  const DEFAULT_TERMINAL: TerminalSettings = {
+    fontFamily: null,
+    fontSize: 13,
+    scrollback: 10000,
+    persistent: true,
+  };
+  const terminalSettings = $derived(terminal.info ?? DEFAULT_TERMINAL);
+
+  function protocolOf(nodeId: string): Protocol {
+    const node = findNode(store.children, nodeId);
+    return node?.type === "connection" ? node.protocol : "ssh";
+  }
+
+  // a session that could not start reports through the global error bar
+  $effect(() => {
+    if (sessions.error !== null) {
+      store.showError(sessions.error);
+      sessions.error = null;
+    }
+  });
+
+  /** A reload or closing window must not leave sessions running in Rust without a UI. */
+  function endSessions() {
+    sessions.closeAll();
+  }
 
   let folderOpen = $state(false);
   let restartPending = $state(false);
@@ -43,17 +82,63 @@
     if (view === "vault" && vault.status?.state !== "unlocked") view = "empty";
   });
 
+  // Opening or activating a tab brings the session area back; opening the manager or closing a
+  // tab does not count. `view` is read untracked so the effect only reacts to the counter.
+  $effect(() => {
+    void sessions.revealed;
+    untrack(() => {
+      if (view === "vault") view = "empty";
+    });
+  });
+
+  let sidebar: Sidebar | undefined = $state();
+
+  /**
+   * Only the app chords are handled here: tab switching, closing and the filter. Copy, paste and
+   * search belong to the terminal controller, which leaves the app chords unhandled so they get here.
+   */
+  function onkeydown(e: KeyboardEvent) {
+    // a modal (settings, any confirm dialog) owns the keyboard; so does anything that handled the key
+    if (e.defaultPrevented || folderOpen || sessions.closeRequest) return;
+    if (document.querySelector("[aria-modal='true']")) return;
+    const inTerminal = e.target instanceof Element && e.target.closest(".xterm") !== null;
+    const action = routeKey(e, isMac(), inTerminal);
+    if (action === "nextTab" || action === "prevTab") {
+      if (sessions.tabs.length === 0) return;
+      if (action === "nextTab") sessions.next();
+      else sessions.previous();
+    } else if (action === "closeTab") {
+      if (sessions.activeId === null) return;
+      // a held key must not close one tab after the other
+      if (e.repeat) {
+        e.preventDefault();
+        return;
+      }
+      sessions.requestClose(sessions.activeId);
+    } else if (action === "focusFilter") {
+      sidebar?.focusFilter();
+    } else {
+      return;
+    }
+    e.preventDefault();
+  }
+
   onMount(() => {
     void store.init();
     void vault.init();
     void refreshRestart();
+    void terminal.load();
   });
 </script>
 
+<svelte:window onpagehide={endSessions} onbeforeunload={endSessions} {onkeydown} />
+
 <div class="shell">
   <Sidebar
+    bind:this={sidebar}
     {store}
     {vault}
+    {sessions}
     onOpenVault={() => (view = "vault")}
     onsettings={() => (folderOpen = true)}
     {restartPending}
@@ -62,17 +147,26 @@
     <PropertiesPanel {store} {vault} />
   </Sidebar>
   <main class="main">
-    {#if view === "vault"}
-      <VaultManager {vault} tree={store} onclose={() => (view = "empty")} />
-    {:else}
-      <p class="empty">Open a connection from the tree</p>
+    {#if sessions.tabs.length > 0}
+      <TabStrip {sessions} {protocolOf} />
     {/if}
+    <div class="content">
+      {#if view === "vault"}
+        <VaultManager {vault} tree={store} onclose={() => (view = "empty")} />
+      {/if}
+      {#if sessions.tabs.length > 0}
+        <SessionArea {sessions} {vault} settings={terminalSettings} hidden={view === "vault"} />
+      {:else if view !== "vault"}
+        <p class="empty">Open a connection from the tree</p>
+      {/if}
+    </div>
   </main>
 </div>
 
 {#if folderOpen}
   <DataFolderDialog
     {api}
+    {terminal}
     onclose={() => (folderOpen = false)}
     onchange={(info) => (restartPending = info.restartRequired)}
   />
@@ -87,14 +181,21 @@
 
   .main {
     display: flex;
-    align-items: center;
-    justify-content: center;
+    flex-direction: column;
     min-width: 0;
+    min-height: 0;
     background: var(--color-bg);
   }
 
+  .content {
+    display: flex;
+    flex: 1 1 0;
+    min-height: 0;
+    min-width: 0;
+  }
+
   .empty {
-    margin: 0;
+    margin: auto;
     color: var(--color-text-muted);
     font-size: var(--text-sm);
   }

@@ -4,6 +4,14 @@
 
   let { store }: { store: TreeStore } = $props();
 
+  let input = $state<HTMLInputElement>();
+
+  /** Puts the caret in the field with the text selected, ready to be typed over. */
+  export function focus() {
+    input?.focus();
+    input?.select();
+  }
+
   function onkeydown(e: KeyboardEvent) {
     if (e.key === "Escape" && store.filter !== "") {
       e.preventDefault();
@@ -15,6 +23,7 @@
 <label class="filter">
   <span class="icon"><Icon name="search" size={14} /></span>
   <input
+    bind:this={input}
     type="text"
     placeholder="Filter connections"
     aria-label="Filter connections"

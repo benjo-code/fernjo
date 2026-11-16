@@ -1,5 +1,6 @@
 import { flushSync, mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { SessionStore } from "../sessions.svelte";
 import { TreeStore } from "../store.svelte";
 import { VaultStore } from "../vault.svelte";
 import { apiError, conn, folder, mockApi } from "../testing";
@@ -35,7 +36,12 @@ async function setup(
   const vault = new VaultStore(mock.api);
   mounted = mount(component, {
     target: document.body,
-    props: { store, vault, onOpenVault: () => {} },
+    props: {
+      store,
+      vault,
+      sessions: new SessionStore(mock.api, (id) => id),
+      onOpenVault: () => {},
+    },
   });
   flushSync();
   return { store, ...mock };
@@ -210,7 +216,10 @@ describe("TreeView", () => {
       },
     });
     const store = new TreeStore(mock.api);
-    mounted = mount(TreeView, { target: document.body, props: { store } });
+    mounted = mount(TreeView, {
+      target: document.body,
+      props: { store, sessions: new SessionStore(mock.api, (id) => id) },
+    });
     flushSync();
     expect(document.querySelector("button")).toBeNull(); // not loaded yet
     await store.init();
@@ -262,7 +271,12 @@ describe("TreeView", () => {
     const vault = new VaultStore(mock.api);
     mounted = mount(Sidebar, {
       target: document.body,
-      props: { store, vault, onOpenVault: () => {} },
+      props: {
+        store,
+        vault,
+        sessions: new SessionStore(mock.api, (id) => id),
+        onOpenVault: () => {},
+      },
     });
     flushSync();
     expect(document.body.textContent).toContain("backup was restored");

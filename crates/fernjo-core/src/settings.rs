@@ -26,6 +26,52 @@ pub struct AppSettings {
     /// Custom data folder; unset means `<OS config dir>/fernjo`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_dir: Option<PathBuf>,
+    /// Terminal appearance; unset means the built-in defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<TerminalPrefs>,
+}
+
+/// Default terminal font size in pixels.
+pub const DEFAULT_FONT_SIZE: u16 = 13;
+/// Default number of scrollback lines.
+pub const DEFAULT_SCROLLBACK: u32 = 10_000;
+/// Allowed terminal font sizes.
+pub const FONT_SIZE_RANGE: std::ops::RangeInclusive<u16> = 8..=32;
+/// Allowed scrollback line counts.
+pub const SCROLLBACK_RANGE: std::ops::RangeInclusive<u32> = 1000..=100_000;
+
+/// Terminal preferences; an unset field means its default.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalPrefs {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_family: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_size: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scrollback: Option<u32>,
+}
+
+impl TerminalPrefs {
+    /// Checks the set fields against their ranges.
+    ///
+    /// # Errors
+    /// The error code: `invalid_font_size` or `invalid_scrollback`.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self
+            .font_size
+            .is_some_and(|v| !FONT_SIZE_RANGE.contains(&v))
+        {
+            return Err("invalid_font_size");
+        }
+        if self
+            .scrollback
+            .is_some_and(|v| !SCROLLBACK_RANGE.contains(&v))
+        {
+            return Err("invalid_scrollback");
+        }
+        Ok(())
+    }
 }
 
 #[derive(Serialize)]
@@ -143,6 +189,7 @@ mod tests {
     fn with_dir(p: &str) -> AppSettings {
         AppSettings {
             data_dir: Some(PathBuf::from(p)),
+            terminal: None,
         }
     }
 
@@ -165,6 +212,51 @@ mod tests {
         let v: serde_json::Value =
             serde_json::from_slice(&fs::read(path(dir.path())).unwrap()).unwrap();
         assert_eq!(v, json!({ "schemaVersion": 1 }));
+    }
+
+    #[test]
+    fn terminal_prefs_round_trip_and_leave_data_dir_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = AppSettings {
+            data_dir: Some(PathBuf::from("/srv/fernjo")),
+            terminal: Some(TerminalPrefs {
+                font_family: Some("Fira Code".into()),
+                font_size: Some(15),
+                scrollback: Some(5000),
+            }),
+        };
+        save(&path(dir.path()), &settings).unwrap();
+        assert_eq!(load(&path(dir.path())).unwrap(), settings);
+        let v: serde_json::Value =
+            serde_json::from_slice(&fs::read(path(dir.path())).unwrap()).unwrap();
+        assert_eq!(
+            v,
+            json!({"schemaVersion": 1, "dataDir": "/srv/fernjo",
+                   "terminal": {"fontFamily": "Fira Code", "fontSize": 15, "scrollback": 5000}})
+        );
+    }
+
+    #[test]
+    fn validate_rejects_font_size_7_and_33_and_scrollback_999_and_100001() {
+        let p = |font_size, scrollback| TerminalPrefs {
+            font_family: None,
+            font_size,
+            scrollback,
+        };
+        assert_eq!(p(Some(7), None).validate(), Err("invalid_font_size"));
+        assert_eq!(p(Some(33), None).validate(), Err("invalid_font_size"));
+        assert_eq!(p(None, Some(999)).validate(), Err("invalid_scrollback"));
+        assert_eq!(p(None, Some(100_001)).validate(), Err("invalid_scrollback"));
+        assert_eq!(p(Some(8), Some(1000)).validate(), Ok(()));
+        assert_eq!(p(Some(32), Some(100_000)).validate(), Ok(()));
+        assert_eq!(p(None, None).validate(), Ok(()));
+    }
+
+    #[test]
+    fn settings_without_terminal_still_load() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(path(dir.path()), r#"{"schemaVersion":1,"dataDir":"/x"}"#).unwrap();
+        assert_eq!(load(&path(dir.path())).unwrap(), with_dir("/x"));
     }
 
     #[test]

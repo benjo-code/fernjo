@@ -191,4 +191,73 @@ export interface Api {
   /** Opens the folder picker; `null` when it was cancelled. */
   chooseDataFolder(): Promise<DataFolderInfo | null>;
   restartApp(): Promise<void>;
+  /**
+   * Starts a session. Terminal output reaches `onEvent` as an `ArrayBuffer`, events as parsed
+   * objects. Resolves with the session id.
+   */
+  openSession(
+    nodeId: string,
+    onEvent: (e: SessionEvent | ArrayBuffer) => void,
+    cols: number,
+    rows: number,
+  ): Promise<string>;
+  sessionInput(id: string, data: Uint8Array): Promise<void>;
+  sessionResize(id: string, cols: number, rows: number): Promise<void>;
+  sessionAck(id: string, bytes: number): Promise<void>;
+  closeSession(id: string): Promise<void>;
+  reconnectSession(id: string, cols: number, rows: number): Promise<void>;
+  answerPrompt(id: string, promptId: number, answer: PromptAnswer): Promise<void>;
+  resumeSession(id: string, skipCredential: boolean): Promise<void>;
+  openExternalUrl(url: string): Promise<void>;
+  getTerminalSettings(): Promise<TerminalSettings>;
+  setTerminalSettings(s: {
+    fontFamily: string | null;
+    fontSize: number;
+    scrollback: number;
+  }): Promise<TerminalSettings>;
+}
+
+export type SessionState = "connecting" | "needsVault" | "connected" | "disconnected";
+
+/** What the user is asked. Never contains a secret. */
+export type Prompt =
+  | { kind: "hostKey"; host: string; port: number; keyType: string; fingerprint: string }
+  | {
+      kind: "hostKeyChanged";
+      host: string;
+      port: number;
+      keyType: string;
+      old: string[];
+      new: string;
+    }
+  | {
+      kind: "keyboardInteractive";
+      name: string;
+      instructions: string;
+      prompts: { text: string; echo: boolean }[];
+    }
+  | { kind: "password"; user: string; host: string }
+  | { kind: "username"; host: string }
+  | { kind: "keyPassphrase" };
+
+/** A JSON message on a session channel. */
+export type SessionEvent =
+  | { kind: "state"; state: SessionState; detail: string | null }
+  | { kind: "prompt"; id: number; prompt: Prompt };
+
+/** The user's answer to a prompt (UI to Rust only). */
+export type PromptAnswer =
+  | { kind: "hostKey"; decision: "once" | "always" | "reject" }
+  | { kind: "hostKeyChanged"; decision: "replace" | "reject" }
+  | { kind: "secrets"; values: string[] }
+  | { kind: "text"; value: string }
+  | { kind: "cancel" };
+
+export interface TerminalSettings {
+  /** `null` means the default monospace stack. */
+  fontFamily: string | null;
+  fontSize: number;
+  scrollback: number;
+  /** `false` when the values only live in memory. */
+  persistent: boolean;
 }
