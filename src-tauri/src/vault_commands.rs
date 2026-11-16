@@ -640,7 +640,17 @@ mod tests {
         include_bytes!("../../crates/fernjo-import/tests/fixtures/custom-key.xml");
     const CUSTOM_KEY: &str = "fixture-key-ünï";
     const EXPORT_PW: &str = "SENTINEL-exportpw-3c9d1e";
-    const IMPORT_SECRETS: [&str; 4] = ["folder-pw-1", "vnc-pw", CUSTOM_KEY, EXPORT_PW];
+    // Wrongly typed keys and passwords are secrets too: an error that echoes one is a leak.
+    const WRONG_KEY: &str = "SENTINEL-wrongkey-8a1f";
+    const WRONG_PW: &str = "SENTINEL-wrongpw-2b7c";
+    const IMPORT_SECRETS: [&str; 6] = [
+        "folder-pw-1",
+        "vnc-pw",
+        CUSTOM_KEY,
+        EXPORT_PW,
+        WRONG_KEY,
+        WRONG_PW,
+    ];
 
     fn sec(s: &str) -> SecretString {
         SecretString::from(s)
@@ -1451,9 +1461,11 @@ mod tests {
                 format!("{inspected}{applied}")
             }),
             entry("import_cancel", |w| {
-                import_begin(&w.st, ImportKind::Backup, w._dir.path().join("x.fjbk"));
+                let picked = import_begin(&w.st, ImportKind::Backup, w._dir.path().join("x.fjbk"));
+                assert!(w.st.pending.lock().unwrap().is_some());
                 import_cancel(&w.st);
-                format!("{:?}", w.st.pending)
+                assert!(w.st.pending.lock().unwrap().is_none());
+                format!("{picked:?}")
             }),
             // not IPC commands (see `NOT_A_COMMAND`), but called as plain functions
             entry("import_begin", |w| {
@@ -1509,68 +1521,99 @@ mod tests {
     }
 
     /// The whole import and restore path with sentinel secrets in every input: an mRemoteNG file
-    /// with a custom key, the key itself, the export password and a backup holding the entries.
-    /// No response, error, `Debug` output, exported file or `connections.json` shows one.
+    /// with a custom key, the key itself, wrongly typed keys and passwords, the export password
+    /// and a backup holding the entries. No response, error, `Debug` output, exported file or
+    /// `connections.json` shows one. Every step that must succeed is unwrapped and every step
+    /// that must fail has its error code asserted, so the scan never runs over empty output.
     #[test]
     fn import_and_export_flow_leaks_no_secret() {
+        fn shown<T: Serialize + std::fmt::Debug>(v: &T) -> String {
+            format!("{}{:?}", serde_json::to_string(v).unwrap(), v)
+        }
         let w = world(true);
         let dir = w._dir.path().to_path_buf();
         let mut seen: Vec<(String, String)> = Vec::new();
         let mut note = |what: &str, text: String| seen.push((what.to_string(), text));
+        let credentials = || list_credentials(&w.st).unwrap().len();
+        let at_start = credentials();
+        assert_eq!(at_start, 2);
 
+        // mRemoteNG file with a custom key
         let custom = dir.join("custom.xml");
         fs::write(&custom, CUSTOM_KEY_XML).unwrap();
         note(
             "begin",
             format!("{:?}", import_begin(&w.st, ImportKind::Mremoteng, custom)),
         );
-        note("inspect without key", j(import_inspect(&w.st, None)));
-        note(
-            "inspect wrong key",
-            j(import_inspect(&w.st, Some("SENTINEL-wrongkey".into()))),
-        );
-        note("inspect", j(import_inspect(&w.st, Some(CUSTOM_KEY.into()))));
+        let e = import_inspect(&w.st, None).unwrap_err();
+        assert_eq!(e.code, "key_needed");
+        note("inspect without key", j::<()>(Err(e)));
+        let e = import_inspect(&w.st, Some(WRONG_KEY.into())).unwrap_err();
+        assert_eq!(e.code, "wrong_key");
+        note("inspect wrong key", j::<()>(Err(e)));
+        let preview = import_inspect(&w.st, Some(CUSTOM_KEY.into())).unwrap();
+        let planned_custom = preview.report.as_ref().unwrap().counts.credentials;
+        assert!(planned_custom > 0);
+        note("inspect", shown(&preview));
         note("pending Debug", format!("{:?}", w.st.pending));
-        note("apply", j(import_apply(&w.st, ApplyOptions::default())));
+        let applied = import_apply(&w.st, ApplyOptions::default()).unwrap();
+        note("apply", shown(&applied));
+        assert_eq!(credentials(), at_start + planned_custom);
 
+        // mRemoteNG file with the default key
         let plain = dir.join("plain.xml");
         fs::write(&plain, DEFAULT_KEY_XML).unwrap();
         import_begin(&w.st, ImportKind::Mremoteng, plain);
-        note("inspect default key", j(import_inspect(&w.st, None)));
-        note(
-            "apply default key",
-            j(import_apply(&w.st, ApplyOptions::default())),
-        );
+        let preview = import_inspect(&w.st, None).unwrap();
+        let planned_plain = preview.report.as_ref().unwrap().counts.credentials;
+        assert!(planned_plain > 0);
+        note("inspect default key", shown(&preview));
+        let applied = import_apply(&w.st, ApplyOptions::default()).unwrap();
+        note("apply default key", shown(&applied));
+        let total = at_start + planned_custom + planned_plain;
+        assert_eq!(credentials(), total);
 
+        // exports; the backup holds the secrets (positive control) and the file hides them
         let backup = dir.join("out.fjbk");
-        note(
-            "export backup",
-            j(export_backup_to(&w.st, &backup, EXPORT_PW.into())),
-        );
+        let info = export_backup_to(&w.st, &backup, EXPORT_PW.into()).unwrap();
+        note("export backup", shown(&info));
+        let bytes = fs::read(&backup).unwrap();
+        let opened = fernjo_import::backup::open(&bytes, &sec(EXPORT_PW)).unwrap();
+        assert_eq!(opened.entries.len(), total);
+        let inside: String = opened
+            .entries
+            .iter()
+            .map(|(_, e)| serde_json::to_string(&e.secret).unwrap())
+            .collect();
+        for secret in [PW, KEY, PASS, "folder-pw-1"] {
+            assert!(inside.contains(secret), "{secret} is not in the backup");
+        }
         let connections = dir.join("out.json");
-        note(
-            "export connections",
-            j(export_connections_to(&w.st, &connections)),
-        );
+        let info = export_connections_to(&w.st, &connections).unwrap();
+        note("export connections", shown(&info));
 
+        // restore
         import_begin(&w.st, ImportKind::Backup, backup.clone());
-        note("backup without password", j(import_inspect(&w.st, None)));
-        note(
-            "backup wrong password",
-            j(import_inspect(&w.st, Some("SENTINEL-wrongpw-123".into()))),
-        );
-        note(
-            "backup inspect",
-            j(import_inspect(&w.st, Some(EXPORT_PW.into()))),
-        );
+        let e = import_inspect(&w.st, None).unwrap_err();
+        assert_eq!(e.code, "password_needed");
+        note("backup without password", j::<()>(Err(e)));
+        let e = import_inspect(&w.st, Some(WRONG_PW.into())).unwrap_err();
+        assert_eq!(e.code, "wrong_password");
+        note("backup wrong password", j::<()>(Err(e)));
+        let preview = import_inspect(&w.st, Some(EXPORT_PW.into())).unwrap();
+        assert_eq!(preview.backup.as_ref().unwrap().credentials, total);
+        note("backup inspect", shown(&preview));
         note("pending backup Debug", format!("{:?}", w.st.pending));
-        note("restore", j(import_apply(&w.st, ApplyOptions::default())));
+        let restored = import_apply(&w.st, ApplyOptions::default()).unwrap();
+        assert_eq!(restored.restored.as_ref().unwrap().credentials, total);
+        note("restore", shown(&restored));
+        assert_eq!(credentials(), total);
         note("AppState Debug", format!("{:?}", w.st));
 
         for (what, text) in &seen {
             assert_no_sentinel(what, text);
         }
-        // the exported files and the saved tree hold none (the backup is encrypted)
+        // the exported files and the saved tree hold none
         for file in [
             backup.as_path(),
             connections.as_path(),
@@ -1579,11 +1622,6 @@ mod tests {
             let text = String::from_utf8_lossy(&fs::read(file).unwrap()).into_owned();
             assert_no_sentinel(&file.display().to_string(), &text);
         }
-        // sanity: the flow really ran
-        assert!(
-            seen.iter()
-                .any(|(what, t)| *what == "restore" && t.contains("\"restored\":{"))
-        );
     }
 
     #[test]
