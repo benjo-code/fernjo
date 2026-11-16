@@ -192,6 +192,7 @@ export class SessionStore {
     let lamp: Lamp | null = null;
     for (const t of this.tabs) {
       if (t.nodeId !== nodeId) continue;
+      // "needsVault" counts as connecting here (the tab shows a lock icon, the tree a pulsing ring).
       if (t.state === "connected") return "live";
       if (t.state === "disconnected") lamp ??= "dropped";
       else lamp = "connecting";

@@ -9,11 +9,13 @@ import type {
   Mutation,
   Protocol,
   ResolvedNode,
+  SessionEvent,
   Snapshot,
   TerminalSettings,
   TreeNode,
   VaultStatus,
 } from "./types";
+import { SessionStore } from "./sessions.svelte";
 
 export function folder(name: string, children: TreeNode[] = [], extra: Partial<FolderNode> = {}) {
   const node: FolderNode = {
@@ -315,4 +317,25 @@ export function deferred<T>() {
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+/**
+ * A session store with one started tab whose events the test drives (prompts, state changes).
+ * `emit` plays the part of Rust's session channel.
+ */
+export async function startedTab(impl: Partial<Api> = {}) {
+  let handler: (e: SessionEvent | ArrayBuffer) => void = () => {};
+  const mock = mockApi([], {
+    ...impl,
+    openSession: async (_nodeId, onEvent) => {
+      handler = onEvent;
+      return "sid";
+    },
+  });
+  const sessions = new SessionStore(mock.api, (id) => id);
+  sessions.open("n1");
+  const tab = sessions.tabs[0]!;
+  sessions.attachTerminal(tab.id, { write() {}, size: () => ({ cols: 80, rows: 24 }) });
+  await new Promise((r) => setTimeout(r, 0));
+  return { sessions, tab, emit: (e: SessionEvent) => handler(e), ...mock };
 }

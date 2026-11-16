@@ -1,0 +1,35 @@
+<script lang="ts">
+  import type { SessionStore, Tab } from "../sessions.svelte";
+  import type { VaultStore } from "../vault.svelte";
+  import HostKeyChangedPrompt from "./HostKeyChangedPrompt.svelte";
+  import HostKeyPrompt from "./HostKeyPrompt.svelte";
+  import NeedsVaultPrompt from "./NeedsVaultPrompt.svelte";
+  import SecretsPrompt from "./SecretsPrompt.svelte";
+
+  let {
+    tab,
+    sessions,
+    vault,
+  }: {
+    tab: Tab;
+    sessions: SessionStore;
+    vault: VaultStore;
+  } = $props();
+
+  const asked = $derived(tab.prompt);
+</script>
+
+<!-- A new prompt id remounts the variant, so nothing typed into the last one carries over. -->
+{#if tab.state === "needsVault"}
+  <NeedsVaultPrompt {tab} {sessions} {vault} />
+{:else if asked}
+  {#key asked.id}
+    {#if asked.prompt.kind === "hostKey"}
+      <HostKeyPrompt {tab} {sessions} prompt={asked.prompt} />
+    {:else if asked.prompt.kind === "hostKeyChanged"}
+      <HostKeyChangedPrompt {tab} {sessions} prompt={asked.prompt} />
+    {:else}
+      <SecretsPrompt {tab} {sessions} prompt={asked.prompt} />
+    {/if}
+  {/key}
+{/if}
