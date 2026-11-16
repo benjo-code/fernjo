@@ -166,6 +166,11 @@ export class TerminalController {
     await navigator.clipboard.writeText(this.#term.getSelection());
   }
 
+  /**
+   * Menu paste. WebView2 shows a permission prompt for `readText` (measured: it stays pending),
+   * so keyboard paste (Ctrl+V, Ctrl+Shift+V) is left to the browser's native paste event, which
+   * xterm handles without a prompt.
+   */
   async paste(): Promise<void> {
     const text = await navigator.clipboard.readText();
     if (text) this.#term.paste(text);
@@ -187,8 +192,6 @@ export class TerminalController {
     const key = e.key.toLowerCase();
     if (key === "c") {
       void this.copySelection().catch(() => {});
-    } else if (key === "v") {
-      void this.paste().catch(() => {});
     } else if (key === "f" && this.#deps.onSearchRequest) {
       this.#deps.onSearchRequest();
     } else {
