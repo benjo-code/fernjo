@@ -16,6 +16,7 @@
     sessions,
     onOpenVault,
     onsettings,
+    onimport,
     restartPending = false,
     onRestart,
     children,
@@ -27,6 +28,8 @@
     onOpenVault: () => void;
     /** The settings button was clicked. */
     onsettings?: () => void;
+    /** The "Import & backup" button was clicked. */
+    onimport?: () => void;
     restartPending?: boolean;
     onRestart?: () => void;
     children?: Snippet;
@@ -50,11 +53,20 @@
   </div>
   <VaultNote bind:this={note} bind:open={noteOpen} {vault} />
   <NoticeBar {store} {restartPending} {onRestart} />
-  <div class="tree-slot"><TreeView {store} {sessions} /></div>
+  <div class="tree-slot"><TreeView {store} {sessions} {onimport} /></div>
   {@render children?.()}
   <div class="foot">
     <button type="button" class="gear" aria-label="Settings" title="Settings" onclick={onsettings}>
       <Icon name="gear" />
+    </button>
+    <button
+      type="button"
+      class="gear"
+      aria-label="Import & backup"
+      title="Import & backup"
+      onclick={onimport}
+    >
+      <Icon name="import" />
     </button>
   </div>
 </aside>
@@ -82,6 +94,7 @@
   .foot {
     display: flex;
     flex: none;
+    gap: var(--space-2);
     padding: var(--space-2) var(--space-3);
     border-top: 1px solid var(--color-border);
   }

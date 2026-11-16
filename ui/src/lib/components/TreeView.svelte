@@ -9,7 +9,16 @@
   import ContextMenu, { type MenuItem } from "./ContextMenu.svelte";
   import TreeRow from "./TreeRow.svelte";
 
-  let { store, sessions }: { store: TreeStore; sessions: SessionStore } = $props();
+  let {
+    store,
+    sessions,
+    onimport,
+  }: {
+    store: TreeStore;
+    sessions: SessionStore;
+    /** Opens the import dialog from the empty tree. */
+    onimport?: () => void;
+  } = $props();
 
   let container = $state<HTMLElement>();
   let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
@@ -348,6 +357,9 @@
       <button type="button" class="btn" onclick={() => store.createConnection(null, null)}>
         New connection
       </button>
+      {#if onimport}
+        <button type="button" class="btn" onclick={onimport}>Import from mRemoteNG…</button>
+      {/if}
     </div>
   </div>
 {:else if rows.length === 0}

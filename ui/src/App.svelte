@@ -2,11 +2,13 @@
   import { onMount, untrack } from "svelte";
   import { tauriApi, toApiError } from "./lib/api";
   import DataFolderDialog from "./lib/components/DataFolderDialog.svelte";
+  import ImportDialog from "./lib/components/ImportDialog.svelte";
   import PropertiesPanel from "./lib/components/PropertiesPanel.svelte";
   import SessionArea from "./lib/components/SessionArea.svelte";
   import Sidebar from "./lib/components/Sidebar.svelte";
   import TabStrip from "./lib/components/TabStrip.svelte";
   import VaultManager from "./lib/components/VaultManager.svelte";
+  import { ImportStore } from "./lib/import.svelte";
   import { findNode } from "./lib/rows";
   import { SessionStore } from "./lib/sessions.svelte";
   import { isMac, routeKey } from "./lib/shortcuts";
@@ -56,7 +58,11 @@
     sessions.closeAll();
   }
 
+  // svelte-ignore state_referenced_locally
+  const importer = new ImportStore(api, (snapshot) => void store.applySnapshot(snapshot));
+
   let folderOpen = $state(false);
+  let importOpen = $state(false);
   let restartPending = $state(false);
 
   async function refreshRestart() {
@@ -99,7 +105,7 @@
    */
   function onkeydown(e: KeyboardEvent) {
     // a modal (settings, any confirm dialog) owns the keyboard; so does anything that handled the key
-    if (e.defaultPrevented || folderOpen || sessions.closeRequest) return;
+    if (e.defaultPrevented || folderOpen || importOpen || sessions.closeRequest) return;
     if (document.querySelector("[aria-modal='true']")) return;
     const inTerminal = e.target instanceof Element && e.target.closest(".xterm") !== null;
     const action = routeKey(e, isMac(), inTerminal);
@@ -141,6 +147,7 @@
     {sessions}
     onOpenVault={() => (view = "vault")}
     onsettings={() => (folderOpen = true)}
+    onimport={() => (importOpen = true)}
     {restartPending}
     onRestart={() => void restart()}
   >
@@ -170,6 +177,10 @@
     onclose={() => (folderOpen = false)}
     onchange={(info) => (restartPending = info.restartRequired)}
   />
+{/if}
+
+{#if importOpen}
+  <ImportDialog store={importer} {vault} tree={store} onclose={() => (importOpen = false)} />
 {/if}
 
 <style>
