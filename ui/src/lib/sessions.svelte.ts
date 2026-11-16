@@ -2,7 +2,6 @@
 // its terminal. Everything about a connection (credentials, host keys, state changes) is decided
 // in Rust; this store only mirrors the events. Typed prompt answers go straight to the api and are
 // never kept here.
-import { SvelteMap } from "svelte/reactivity";
 import { toApiError } from "./api";
 import { reorder } from "./tabs";
 import type { Api, Prompt, PromptAnswer, SessionEvent, SessionState } from "./types";
@@ -51,7 +50,9 @@ export class SessionStore {
 
   #api: Api;
   #nameOf: (nodeId: string) => string;
-  #runtime = new SvelteMap<string, Runtime>();
+  // A plain Map on purpose: plumbing, not view state; effects that call the bridge must not subscribe to it.
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
+  #runtime = new Map<string, Runtime>();
   #counter = 0;
 
   constructor(api: Api, nameOf: (nodeId: string) => string) {
