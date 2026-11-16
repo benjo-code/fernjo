@@ -34,41 +34,67 @@ export class ImportStore {
 
   #api: Api;
   #onSnapshot: (snapshot: Snapshot) => void;
+  #busy = $state(false);
+  /** Bumped by `reset()`: an async call that started before it drops its result. */
+  #generation = 0;
 
   constructor(api: Api, onSnapshot: (snapshot: Snapshot) => void) {
     this.#api = api;
     this.#onSnapshot = onSnapshot;
   }
 
-  /** Picks a file and inspects it without a secret. A cancelled dialog changes nothing. */
+  /** True while a call to Rust is in flight; the dialog disables its buttons on it. */
+  get busy(): boolean {
+    return this.#busy;
+  }
+
+  /**
+   * Picks a file and inspects it without a secret. A cancelled dialog changes nothing (the view
+   * of a previous import stays); a pick replaces it. Ignored while a call is in flight.
+   */
   async start(kind: ImportKind): Promise<void> {
-    this.reset();
+    if (this.#busy) return;
+    const gen = this.#generation;
+    this.#busy = true;
     try {
       const picked = await this.#api.importPick(kind);
-      if (picked === null) return;
+      if (gen !== this.#generation || picked === null) return;
+      this.#clear();
       this.kind = kind;
       this.fileName = picked.fileName;
-      await this.#inspect(null);
+      await this.#inspect(null, gen);
     } catch (e) {
-      this.#fail(toApiError(e));
+      if (gen === this.#generation) this.#fail(toApiError(e));
+    } finally {
+      this.#release(gen);
     }
   }
 
-  /** Inspects the picked file again with the typed key or password. */
+  /** Inspects the picked file again with the typed key or password. Ignored while busy. */
   async submitSecret(secret: string): Promise<void> {
-    await this.#inspect(secret);
+    if (this.#busy) return;
+    const gen = this.#generation;
+    this.#busy = true;
+    try {
+      await this.#inspect(secret, gen);
+    } finally {
+      this.#release(gen);
+    }
   }
 
-  /** Applies the inspected plan; callable again from the `vault` step. */
+  /** Applies the inspected plan; callable again from the `vault` step. Ignored while busy. */
   async apply(options: { withoutPasswords: boolean }): Promise<void> {
+    if (this.#busy) return;
+    const gen = this.#generation;
+    this.#busy = true;
     this.step = "applying";
     this.error = null;
+    let result: ApplyResult;
     try {
-      const result = await this.#api.importApply(options);
-      this.result = result;
-      this.#onSnapshot(result.snapshot);
-      this.step = "done";
+      result = await this.#api.importApply(options);
     } catch (e) {
+      this.#release(gen);
+      if (gen !== this.#generation) return;
       const err = toApiError(e);
       if (err.code === "vault_needed") {
         this.error = err;
@@ -76,17 +102,26 @@ export class ImportStore {
       } else {
         this.#fail(err);
       }
+      return;
     }
+    this.#release(gen);
+    if (gen === this.#generation) {
+      this.result = result;
+      this.step = "done";
+    }
+    // Rust applied it, so the tree must follow, even when the dialog was cancelled meanwhile.
+    // Outside the try: a failing callback is not an api error and cannot undo "done".
+    this.#onSnapshot(result.snapshot);
   }
 
-  /** Drops the pending plan in Rust and returns to `idle`. */
+  /** Drops the pending plan in Rust and returns to `idle`, also while a call is in flight. */
   async cancel(): Promise<void> {
+    this.reset();
     try {
       await this.#api.importCancel();
     } catch {
       // nothing is pending either way
     }
-    this.reset();
   }
 
   /** `null` from the save dialog (cancelled) leaves the store idle. */
@@ -98,8 +133,14 @@ export class ImportStore {
     await this.#export(() => this.#api.exportBackup(password));
   }
 
-  /** Back to `idle` and forgets everything shown. */
+  /** Back to `idle`, forgets everything shown and drops results of calls still in flight. */
   reset(): void {
+    this.#generation++;
+    this.#busy = false;
+    this.#clear();
+  }
+
+  #clear(): void {
     this.step = "idle";
     this.kind = null;
     this.fileName = "";
@@ -109,12 +150,19 @@ export class ImportStore {
     this.error = null;
   }
 
-  async #inspect(secret: string | null): Promise<void> {
+  #release(gen: number): void {
+    if (gen === this.#generation) this.#busy = false;
+  }
+
+  async #inspect(secret: string | null, gen: number): Promise<void> {
     this.error = null;
     try {
-      this.preview = await this.#api.importInspect(secret);
+      const preview = await this.#api.importInspect(secret);
+      if (gen !== this.#generation) return;
+      this.preview = preview;
       this.step = "preview";
     } catch (e) {
+      if (gen !== this.#generation) return;
       const err = toApiError(e);
       if (!ASKS_FOR_SECRET.has(err.code)) {
         this.#fail(err);
@@ -126,15 +174,25 @@ export class ImportStore {
     }
   }
 
+  /**
+   * Exports only from `idle`, `done` and `error`: while an import is in `key`, `preview`,
+   * `vault` or `applying` the call is ignored, so a pending import is never hidden without
+   * `importCancel`.
+   */
   async #export(run: () => Promise<ExportInfo | null>): Promise<void> {
+    if (this.#busy || ["key", "preview", "vault", "applying"].includes(this.step)) return;
     this.reset();
+    const gen = this.#generation;
+    this.#busy = true;
     try {
       const info = await run();
-      if (info === null) return;
+      if (gen !== this.#generation || info === null) return;
       this.exportResult = info;
       this.step = "done";
     } catch (e) {
-      this.#fail(toApiError(e));
+      if (gen === this.#generation) this.#fail(toApiError(e));
+    } finally {
+      this.#release(gen);
     }
   }
 

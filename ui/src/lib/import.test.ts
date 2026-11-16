@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { ImportStore } from "./import.svelte";
-import { apiError, conn, mockApi, preview, report } from "./testing";
-import type { Snapshot } from "./types";
+import { apiError, conn, deferred, mockApi, preview, report } from "./testing";
+import type { ApplyResult, ImportPreview, Snapshot } from "./types";
 
 function setup(impl: Parameters<typeof mockApi>[1] = {}) {
   const mock = mockApi([], impl);
@@ -190,5 +190,134 @@ describe("ImportStore", () => {
     await c.store.exportConnections();
     expect(c.store.step).toBe("error");
     expect(c.store.error?.code).toBe("save_failed");
+  });
+
+  test("a_double_apply_calls_rust_once_and_ends_in_done", async () => {
+    const d = deferred<ApplyResult>();
+    const { store, calls } = setup({ importApply: () => d.promise });
+    await store.start("mremoteng");
+    const first = store.apply({ withoutPasswords: false });
+    const second = store.apply({ withoutPasswords: false });
+    d.resolve({ snapshot: { children: [], notices: [] }, report: report(), restored: null });
+    await Promise.all([first, second]);
+    expect(calls.importApply).toHaveLength(1);
+    expect(store.step).toBe("done");
+    expect(store.error).toBeNull();
+  });
+
+  test("a_double_submit_secret_calls_rust_once", async () => {
+    const d = deferred<ImportPreview>();
+    const { store, calls } = setup({
+      importInspect: (secret) =>
+        secret === null ? Promise.reject(apiError("key_needed")) : d.promise,
+    });
+    await store.start("mremoteng");
+    const first = store.submitSecret("k");
+    const second = store.submitSecret("k");
+    d.resolve(preview());
+    await Promise.all([first, second]);
+    expect(calls.importInspect).toEqual([[null], ["k"]]);
+    expect(store.step).toBe("preview");
+  });
+
+  test("cancel_during_an_inflight_inspect_stays_idle", async () => {
+    const d = deferred<ImportPreview>();
+    const { store, calls } = setup({ importInspect: () => d.promise });
+    const started = store.start("mremoteng");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(store.busy).toBe(true);
+    await store.cancel();
+    expect(calls.importCancel).toHaveLength(1);
+    d.resolve(preview());
+    await started;
+    expect(store.step).toBe("idle");
+    expect(store.preview).toBeNull();
+    expect(store.fileName).toBe("");
+    expect(store.busy).toBe(false);
+  });
+
+  test("cancel_during_an_inflight_pick_stays_idle", async () => {
+    const d = deferred<{ fileName: string } | null>();
+    const { store, calls } = setup({ importPick: () => d.promise });
+    const started = store.start("mremoteng");
+    await store.cancel();
+    d.resolve({ fileName: "x.xml" });
+    await started;
+    expect(store.step).toBe("idle");
+    expect(calls.importInspect).toHaveLength(0);
+  });
+
+  test("a_second_start_while_the_first_is_pending_is_ignored", async () => {
+    const d = deferred<{ fileName: string } | null>();
+    const { store, calls } = setup({ importPick: () => d.promise });
+    const first = store.start("mremoteng");
+    const second = store.start("backup");
+    d.resolve({ fileName: "a.xml" });
+    await Promise.all([first, second]);
+    expect(calls.importPick).toEqual([["mremoteng"]]);
+    expect(store.kind).toBe("mremoteng");
+    expect(store.step).toBe("preview");
+  });
+
+  test("busy_is_true_during_a_call_and_false_after_success_and_error", async () => {
+    const d = deferred<ImportPreview>();
+    const { store } = setup({ importInspect: () => d.promise });
+    const started = store.start("mremoteng");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(store.busy).toBe(true);
+    d.resolve(preview());
+    await started;
+    expect(store.busy).toBe(false);
+
+    const failing = setup({
+      importApply: async () => {
+        throw apiError("damaged");
+      },
+    });
+    await failing.store.start("mremoteng");
+    await failing.store.apply({ withoutPasswords: false });
+    expect(failing.store.step).toBe("error");
+    expect(failing.store.busy).toBe(false);
+  });
+
+  test("a_cancelled_pick_keeps_the_view_of_a_previous_import", async () => {
+    let picks = 0;
+    const { store } = setup({
+      importPick: async () => (picks++ === 0 ? { fileName: "a.xml" } : null),
+    });
+    await store.start("mremoteng");
+    expect(store.step).toBe("preview");
+    await store.start("mremoteng");
+    expect(store.step).toBe("preview");
+    expect(store.fileName).toBe("a.xml");
+  });
+
+  test("exports_are_refused_while_an_import_is_pending_and_allowed_from_done", async () => {
+    const { store, calls } = setup();
+    await store.start("mremoteng");
+    expect(store.step).toBe("preview");
+    await store.exportConnections();
+    await store.exportBackup("pw-123456");
+    expect(calls.exportConnections).toHaveLength(0);
+    expect(calls.exportBackup).toHaveLength(0);
+    expect(store.step).toBe("preview");
+
+    await store.apply({ withoutPasswords: false });
+    expect(store.step).toBe("done");
+    await store.exportConnections();
+    expect(calls.exportConnections).toHaveLength(1);
+    expect(store.exportResult).not.toBeNull();
+  });
+
+  test("a_throwing_snapshot_callback_does_not_turn_a_successful_apply_into_an_error", async () => {
+    const mock = mockApi([]);
+    const store = new ImportStore(mock.api, () => {
+      throw new Error("tree blew up");
+    });
+    await store.start("mremoteng");
+    await expect(store.apply({ withoutPasswords: false })).rejects.toThrow("tree blew up");
+    expect(store.step).toBe("done");
+    expect(store.result).not.toBeNull();
+    expect(store.error).toBeNull();
   });
 });
