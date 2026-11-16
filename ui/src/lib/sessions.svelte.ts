@@ -134,13 +134,24 @@ export class SessionStore {
   reconnect(id: string): void {
     const tab = this.tabs.find((t) => t.id === id);
     const rt = this.#runtime.get(id);
-    if (!tab || !rt?.sessionId) return;
+    if (!tab || !rt?.sessionId || tab.state !== "disconnected") return;
     const { cols, rows } = rt.bridge?.size() ?? { cols: 80, rows: 24 };
-    this.#emit(rt, new TextEncoder().encode(RECONNECTED));
+    const previous = { state: tab.state, detail: tab.detail };
     tab.state = "connecting";
     tab.detail = null;
     tab.prompt = null;
-    this.#guard(tab, this.#api.reconnectSession(rt.sessionId, cols, rows));
+    this.#guard(
+      tab,
+      // The separator is written only once Rust accepted the reconnect.
+      this.#api.reconnectSession(rt.sessionId, cols, rows).then(() => {
+        this.#emit(rt, new TextEncoder().encode(RECONNECTED));
+      }),
+      () => {
+        // The click raced the state: undo the optimistic change, the next event decides.
+        tab.state = previous.state;
+        tab.detail = previous.detail;
+      },
+    );
   }
 
   reorder(fromId: string, beforeId: string | null): void {
@@ -161,7 +172,7 @@ export class SessionStore {
   resume(id: string, skipCredential: boolean): void {
     const tab = this.tabs.find((t) => t.id === id);
     const rt = this.#runtime.get(id);
-    if (!tab || !rt?.sessionId) return;
+    if (!tab || !rt?.sessionId || tab.state !== "needsVault") return;
     this.#guard(tab, this.#api.resumeSession(rt.sessionId, skipCredential));
   }
 
@@ -253,12 +264,21 @@ export class SessionStore {
     else rt.pending.push(bytes);
   }
 
-  /** A rejected call on a live session ends the tab as disconnected with the message. */
-  #guard(tab: Tab, p: Promise<unknown>): void {
+  /**
+   * A rejected call on a live session ends the tab as disconnected with the message. Exception:
+   * `session_active` only means the call raced the state; Rust's state is authoritative and the
+   * next event updates the tab (`onActive` can undo an optimistic change).
+   */
+  #guard(tab: Tab, p: Promise<unknown>, onActive?: () => void): void {
     p.catch((e: unknown) => {
       if (!this.tabs.some((t) => t.id === tab.id)) return;
+      const err = toApiError(e);
+      if (err.code === "session_active") {
+        onActive?.();
+        return;
+      }
       tab.state = "disconnected";
-      tab.detail = toApiError(e).message;
+      tab.detail = err.message;
       tab.prompt = null;
     });
   }

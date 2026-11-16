@@ -181,6 +181,7 @@ describe("SessionStore", () => {
     emit(buf("before"));
     emit({ kind: "state", state: "disconnected", detail: null });
     s.store.reconnect(tab.id);
+    await tick();
     expect(b.out).toEqual(["before", "\r\n\x1b[2m— reconnected —\x1b[0m\r\n"]);
   });
 
@@ -243,5 +244,149 @@ describe("SessionStore", () => {
     s.store.closeAll();
     expect(s.calls.closeSession).toEqual([["S-a"], ["S-b"]]);
     expect(s.store.tabs).toHaveLength(0);
+  });
+
+  test("rejected_reconnect_ends_the_tab_as_disconnected_with_the_message", async () => {
+    const s = setup({
+      openSession: async () => "S1",
+      reconnectSession: async () => {
+        throw apiError("connect_failed", "no route to host");
+      },
+    });
+    const { tab, emit, b } = await openAttached(s);
+    emit({ kind: "state", state: "disconnected", detail: "gone" });
+    s.store.reconnect(tab.id);
+    await tick();
+    expect(s.store.tabs[0]).toMatchObject({ state: "disconnected", detail: "no route to host" });
+    expect(b.text()).not.toContain("reconnected");
+  });
+
+  test("rejected_answer_ends_the_tab_as_disconnected_with_the_message", async () => {
+    const s = setup({
+      openSession: async () => "S1",
+      answerPrompt: async () => {
+        throw apiError("not_found", "the prompt is gone");
+      },
+    });
+    const { tab, emit } = await openAttached(s);
+    emit({ kind: "prompt", id: 1, prompt: { kind: "username", host: "h" } });
+    s.store.answer(tab.id, { kind: "text", value: "root" });
+    await tick();
+    expect(s.store.tabs[0]).toMatchObject({
+      state: "disconnected",
+      detail: "the prompt is gone",
+      prompt: null,
+    });
+  });
+
+  test("rejected_resume_ends_the_tab_as_disconnected_with_the_message", async () => {
+    const s = setup({
+      openSession: async () => "S1",
+      resumeSession: async () => {
+        throw apiError("vault_locked", "the vault is locked");
+      },
+    });
+    const { tab, emit } = await openAttached(s);
+    emit({ kind: "state", state: "needsVault", detail: null });
+    s.store.resume(tab.id, false);
+    await tick();
+    expect(s.store.tabs[0]).toMatchObject({ state: "disconnected", detail: "the vault is locked" });
+  });
+
+  test("session_active_rejection_leaves_the_tab_state_unchanged", async () => {
+    const active = async () => {
+      throw apiError("session_active", "the session is active");
+    };
+    const s = setup({
+      openSession: async () => "S1",
+      reconnectSession: active,
+      resumeSession: active,
+      answerPrompt: active,
+    });
+    const { tab, emit, b } = await openAttached(s);
+    emit({ kind: "state", state: "needsVault", detail: null });
+    s.store.resume(tab.id, true);
+    await tick();
+    expect(s.store.tabs[0]).toMatchObject({ state: "needsVault", detail: null });
+
+    emit({ kind: "prompt", id: 2, prompt: { kind: "keyPassphrase" } });
+    s.store.answer(tab.id, { kind: "cancel" });
+    await tick();
+    expect(s.store.tabs[0]!.state).toBe("needsVault");
+
+    emit({ kind: "state", state: "disconnected", detail: "gone" });
+    s.store.reconnect(tab.id);
+    await tick();
+    // the optimistic "connecting" is undone and no separator line is written
+    expect(s.store.tabs[0]).toMatchObject({ state: "disconnected", detail: "gone" });
+    expect(b.out).toEqual([]);
+  });
+
+  test("reconnect_on_a_connected_or_connecting_tab_is_a_no_op", async () => {
+    const s = setup({ openSession: async () => "S1" });
+    const { tab, emit, b } = await openAttached(s);
+    s.store.reconnect(tab.id);
+    emit({ kind: "state", state: "connected", detail: null });
+    s.store.reconnect(tab.id);
+    await tick();
+    expect(s.calls.reconnectSession).toHaveLength(0);
+    expect(b.out).toEqual([]);
+    expect(s.store.tabs[0]!.state).toBe("connected");
+  });
+
+  test("resume_on_a_tab_that_is_not_waiting_for_the_vault_is_a_no_op", async () => {
+    const s = setup({ openSession: async () => "S1" });
+    const { tab, emit } = await openAttached(s);
+    s.store.resume(tab.id, false);
+    emit({ kind: "state", state: "connected", detail: null });
+    s.store.resume(tab.id, true);
+    expect(s.calls.resumeSession).toHaveLength(0);
+    emit({ kind: "state", state: "needsVault", detail: null });
+    s.store.resume(tab.id, true);
+    expect(s.calls.resumeSession).toEqual([["S1", true]]);
+  });
+
+  test("answer_without_a_prompt_does_nothing_and_does_not_call_the_api", async () => {
+    const s = setup({ openSession: async () => "S1" });
+    const { tab, emit } = await openAttached(s);
+    s.store.answer(tab.id, { kind: "cancel" });
+    expect(s.calls.answerPrompt).toHaveLength(0);
+    emit({ kind: "prompt", id: 3, prompt: { kind: "keyPassphrase" } });
+    s.store.answer(tab.id, { kind: "cancel" });
+    s.store.answer(tab.id, { kind: "cancel" }); // stale: the prompt is already answered
+    expect(s.calls.answerPrompt).toEqual([["S1", 3, { kind: "cancel" }]]);
+  });
+
+  test("reorder_moves_a_tab_before_another", () => {
+    const s = setup();
+    s.store.open("a");
+    s.store.open("b");
+    s.store.open("c");
+    const [a, b, c] = s.store.tabs.map((t) => t.id);
+    s.store.reorder(c!, a!);
+    expect(s.store.tabs.map((t) => t.id)).toEqual([c, a, b]);
+    s.store.reorder(c!, null);
+    expect(s.store.tabs.map((t) => t.id)).toEqual([a, b, c]);
+    s.store.reorder("nope", a!);
+    expect(s.store.tabs.map((t) => t.id)).toEqual([a, b, c]);
+  });
+
+  test("next_and_previous_cycle_and_wrap", () => {
+    const s = setup();
+    s.store.next();
+    s.store.previous();
+    expect(s.store.activeId).toBeNull();
+    s.store.open("a");
+    s.store.open("b");
+    s.store.open("c");
+    const [a, b, c] = s.store.tabs.map((t) => t.id);
+    expect(s.store.activeId).toBe(c);
+    s.store.next();
+    expect(s.store.activeId).toBe(a);
+    s.store.next();
+    expect(s.store.activeId).toBe(b);
+    s.store.previous();
+    s.store.previous();
+    expect(s.store.activeId).toBe(c);
   });
 });
