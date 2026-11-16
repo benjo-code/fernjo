@@ -215,6 +215,84 @@ export interface Api {
     fontSize: number;
     scrollback: number;
   }): Promise<TerminalSettings>;
+  /** Opens the native file picker; `null` when it was cancelled. */
+  importPick(kind: ImportKind): Promise<PickedFile | null>;
+  /** The secret is an mRemoteNG key or a backup password; the only secret that goes in. */
+  importInspect(secret: string | null): Promise<ImportPreview>;
+  importApply(options: { withoutPasswords: boolean }): Promise<ApplyResult>;
+  importCancel(): Promise<void>;
+  /** Opens the save dialog and writes the file; `null` when it was cancelled. */
+  exportConnections(): Promise<ExportInfo | null>;
+  exportBackup(password: string): Promise<ExportInfo | null>;
+}
+
+export type ImportKind = "mremoteng" | "connections" | "backup";
+
+export interface PickedFile {
+  fileName: string;
+}
+
+/** Names and paths only, never a password. */
+export interface ReportLine {
+  path: string;
+  text: string;
+}
+
+export interface Counts {
+  folders: number;
+  ssh: number;
+  rdp: number;
+  credentials: number;
+  sharedCredentials: number;
+  skipped: number;
+  partial: number;
+  problems: number;
+}
+
+export interface Report {
+  counts: Counts;
+  skipped: ReportLine[];
+  partial: ReportLine[];
+  problems: ReportLine[];
+}
+
+export interface BackupSummary {
+  createdAt: string;
+  app: string;
+  folders: number;
+  connections: number;
+  credentials: number;
+}
+
+export interface ImportPreview {
+  kind: ImportKind;
+  fileName: string;
+  /** mRemoteNG and connections imports. */
+  report: Report | null;
+  /** Restores. */
+  backup: BackupSummary | null;
+  /** Applying needs an unlocked vault. */
+  needsVault: boolean;
+  vault: VaultStatus;
+}
+
+export interface RestoreSummary {
+  createdAt: string;
+  folders: number;
+  connections: number;
+  credentials: number;
+}
+
+export interface ApplyResult {
+  snapshot: Snapshot;
+  report: Report | null;
+  restored: RestoreSummary | null;
+}
+
+export interface ExportInfo {
+  fileName: string;
+  /** Credential references left out of a connections export. */
+  droppedCredentials: number;
 }
 
 export type SessionState = "connecting" | "needsVault" | "connected" | "disconnected";
