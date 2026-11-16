@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use fernjo_core::{Node, NodeKind, Protocol, Tree};
+use fernjo_core::{Node, NodeKind, Protocol, Source, Tree};
 use fernjo_import::mremoteng::{
     ImportPlan, Inherit, PlannedEntry, RawDocument, RawKind, RawNode, plan, read,
 };
@@ -83,13 +83,6 @@ fn all_ids(n: &Node, out: &mut Vec<uuid::Uuid>) {
             all_ids(c, out);
         }
     }
-}
-
-fn texts(lines: &[ReportLine]) -> Vec<String> {
-    lines
-        .iter()
-        .map(|l| format!("{}|{}", l.path, l.text))
-        .collect()
 }
 
 fn password_of(p: &PlannedEntry) -> String {
@@ -404,34 +397,192 @@ fn rdp_display_settings_are_one_aggregate_line() {
     assert_eq!(none.report.counts.partial, 0);
 }
 
+fn find<'a>(lines: &'a [ReportLine], path: &str, needle: &str) -> Option<&'a str> {
+    lines
+        .iter()
+        .find(|l| l.path == path && l.text.contains(needle))
+        .map(|l| l.text.as_str())
+}
+
+const NO_PASSWORD: &str = "has no password of its own";
+const NO_USERNAME: &str = "has no username of its own";
+
 #[test]
-fn empty_own_password_under_folder_with_credential_is_reported() {
-    let mut f = pw(folder("Prod", vec![]), "admin", "", "folder-pw");
-    let mut db = ssh("db");
-    db.username = "bob".to_owned();
-    let web = ssh("web");
-    f.children = vec![db, web];
-    let p = run(vec![f]);
-    let lines = texts(&p.report.partial);
-    // db: own empty password -> now inherits the folder's credential.
-    assert!(
-        lines
-            .iter()
-            .any(|l| l.starts_with("Prod / db|") && l.contains("password") && l.contains("Prod")),
-        "{lines:?}"
+fn empty_own_password_names_the_nearest_folder_with_a_credential() {
+    // Outer sets credential and username; Inner sets nothing; the node sits below both.
+    let inner = inheriting(folder("Inner", vec![ssh("db")]));
+    let outer = pw(folder("Outer", vec![inner]), "admin", "", "folder-pw");
+    let p = run(vec![outer]);
+    let lines = &p.report.partial;
+    let pw_line = find(lines, "Outer / Inner / db", NO_PASSWORD).expect("password line");
+    assert!(pw_line.contains("folder \"Outer\""), "{pw_line}");
+    let user_line = find(lines, "Outer / Inner / db", NO_USERNAME).expect("username line");
+    assert!(user_line.contains("folder \"Outer\""), "{user_line}");
+    // Inner inherits everything, so it has nothing to report itself.
+    assert!(find(lines, "Outer / Inner", "has no").is_none());
+}
+
+#[test]
+fn an_inner_folder_that_sets_its_own_credential_is_the_one_named() {
+    let inner = pw(folder("Inner", vec![ssh("db")]), "svc", "", "inner-pw");
+    let outer = pw(folder("Outer", vec![inner]), "admin", "", "outer-pw");
+    let p = run(vec![outer]);
+    let lines = &p.report.partial;
+    let pw_line = find(lines, "Outer / Inner / db", NO_PASSWORD).expect("password line");
+    assert!(pw_line.contains("folder \"Inner\""), "{pw_line}");
+    let user_line = find(lines, "Outer / Inner / db", NO_USERNAME).expect("username line");
+    assert!(user_line.contains("folder \"Inner\""), "{user_line}");
+    // Inner itself has no password-less own value: it has both.
+    assert!(find(lines, "Outer / Inner", "has no").is_none());
+}
+
+fn check_against_core(
+    raw: &RawNode,
+    node: &Node,
+    path: &str,
+    tree: &Tree,
+    lines: &[ReportLine],
+    seen: &mut usize,
+) {
+    let r = tree.resolve_node(node.id).unwrap();
+    let own_empty_pw = !raw.inherit.password && raw.password.is_none() && !raw.password_error;
+    let expected_pw = match (&r.credential.source, own_empty_pw) {
+        (Source::Folder { name, .. }, true) => Some(name.clone()),
+        _ => None,
+    };
+    let own_empty_user = !raw.inherit.username && raw.username.is_empty();
+    let expected_user = match (&r.username.source, own_empty_user) {
+        (Source::Folder { name, .. }, true) => Some(name.clone()),
+        _ => None,
+    };
+    for (needle, expected) in [(NO_PASSWORD, expected_pw), (NO_USERNAME, expected_user)] {
+        let got = find(lines, path, needle);
+        match expected {
+            Some(folder) => {
+                *seen += 1;
+                let text = got.unwrap_or_else(|| panic!("missing line for {path}: {needle}"));
+                assert!(
+                    text.contains(&format!("folder \"{folder}\"")),
+                    "{path}: {text}"
+                );
+            }
+            None => assert!(got.is_none(), "unexpected line for {path}: {got:?}"),
+        }
+    }
+    for (rc, nc) in raw.children.iter().zip(children_of(node)) {
+        check_against_core(rc, nc, &format!("{path} / {}", nc.name), tree, lines, seen);
+    }
+}
+
+fn children_of(n: &Node) -> &[Node] {
+    match &n.kind {
+        NodeKind::Folder { children } => children,
+        NodeKind::Connection { .. } => &[],
+    }
+}
+
+#[test]
+fn inherit_lines_agree_with_core_resolution() {
+    let mut n5 = pw(ssh("n5"), "", "", "own");
+    n5.inherit.username = false;
+    let b_folder = {
+        let mut b = folder("B", vec![ssh("n4"), n5]);
+        b.username = "bee".to_owned();
+        b
+    };
+    let a = inheriting(folder(
+        "A",
+        vec![
+            ssh("n1"),
+            inheriting(ssh("n2")),
+            pw(ssh("n3"), "u", "", "p"),
+        ],
+    ));
+    let d = inheriting(folder("D", vec![ssh("n7")]));
+    let c = pw(folder("C", vec![ssh("n6"), d]), "cee", "", "cpw");
+    let outer = pw(folder("Outer", vec![a, b_folder, c]), "admin", "", "opw");
+    let nodes = vec![outer, ssh("n8"), folder("Plain", vec![ssh("n9")])];
+    let p = run(nodes.clone());
+    let tree = Tree::from_children(vec![p.folder.clone()]);
+    let mut seen = 0;
+    for (rc, nc) in nodes.iter().zip(children_of(&p.folder)) {
+        check_against_core(rc, nc, &nc.name, &tree, &p.report.partial, &mut seen);
+    }
+    // The sample really exercises the lines (not a vacuous pass).
+    assert!(seen >= 8, "only {seen} inherit lines were compared");
+}
+
+#[test]
+fn undecryptable_password_gets_no_inherit_line() {
+    let mut c = ssh("db");
+    c.password_error = true;
+    let prod = pw(folder("Prod", vec![c]), "admin", "", "folder-pw");
+    let p = run(vec![prod]);
+    assert!(find(&p.report.partial, "Prod / db", NO_PASSWORD).is_none());
+    assert_eq!(p.report.counts.problems, 1);
+}
+
+#[test]
+fn entry_name_comes_from_the_node_name_even_with_a_slash_in_it() {
+    let mut n = pw(ssh("a / b"), "", "", "x");
+    n.inherit.username = true;
+    let p = run(vec![folder("F", vec![n])]);
+    assert_eq!(p.entries[0].entry.name, "a / b");
+}
+
+#[test]
+fn report_lines_are_cut_to_200_characters() {
+    let long = "é".repeat(10_000);
+    let mut host_less = conn(&long, "SSH2", "");
+    host_less.inherit.password = false;
+    let outer = pw(
+        folder(&long, vec![host_less, ssh("kid")]),
+        "admin",
+        "",
+        "pw",
     );
-    // web: own empty username -> now inherits "admin" from the folder.
+    let p = run(vec![outer]);
+    let all: Vec<&ReportLine> = p
+        .report
+        .problems
+        .iter()
+        .chain(&p.report.partial)
+        .chain(&p.report.skipped)
+        .collect();
+    assert!(!all.is_empty());
+    for l in all {
+        assert!(l.path.chars().count() <= 200 && l.text.chars().count() <= 200);
+    }
+    let first = &p.report.problems[0];
+    assert!(first.path.ends_with('…'));
+    // The partial list names the long folder in its text.
+    let named = p
+        .report
+        .partial
+        .iter()
+        .find(|l| l.text.contains("folder \""))
+        .unwrap();
+    assert_eq!(named.text.chars().count(), 200);
+}
+
+#[test]
+fn many_entries_with_one_username_are_numbered_in_linear_time() {
+    const N: usize = 20_000;
+    let nodes: Vec<RawNode> = (0..N)
+        .map(|i| pw(ssh(&format!("n{i}")), "root", "", &format!("pw-{i}")))
+        .collect();
+    let started = std::time::Instant::now();
+    let p = run(nodes);
+    let elapsed = started.elapsed();
+    assert_eq!(p.entries.len(), N);
+    assert_eq!(p.entries[0].entry.name, "root");
+    assert_eq!(p.entries[N - 1].entry.name, format!("root ({N})"));
+    // Quadratic numbering needs roughly N^2/2 = 2e8 name lookups here (tens of seconds in a debug
+    // build); the linear version takes well under a second. The generous bound only catches the
+    // quadratic shape, not machine speed.
     assert!(
-        lines
-            .iter()
-            .any(|l| l.starts_with("Prod / web|") && l.contains("username") && l.contains("Prod")),
-        "{lines:?}"
-    );
-    // db has its own username, so no username line for it.
-    assert!(
-        !lines
-            .iter()
-            .any(|l| l.starts_with("Prod / db|") && l.contains("username"))
+        elapsed < std::time::Duration::from_secs(5),
+        "took {elapsed:?}"
     );
 }
 

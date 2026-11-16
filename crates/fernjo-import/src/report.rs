@@ -30,11 +30,29 @@ pub struct ReportLine {
     pub text: String,
 }
 
+/// Longest `path` or `text` of a line, in characters (an ellipsis counts).
+pub const MAX_LINE_CHARS: usize = 200;
+
+/// Cuts `s` to `MAX_LINE_CHARS` characters, ending in an ellipsis when it was longer.
+fn clip(s: String) -> String {
+    match s.char_indices().nth(MAX_LINE_CHARS) {
+        None => s,
+        Some(_) => {
+            let end = s
+                .char_indices()
+                .nth(MAX_LINE_CHARS - 1)
+                .map_or(s.len(), |(i, _)| i);
+            format!("{}…", &s[..end])
+        }
+    }
+}
+
 impl ReportLine {
+    /// A line; `path` and `text` are cut to `MAX_LINE_CHARS` characters.
     pub fn new(path: impl Into<String>, text: impl Into<String>) -> Self {
         Self {
-            path: path.into(),
-            text: text.into(),
+            path: clip(path.into()),
+            text: clip(text.into()),
         }
     }
 }

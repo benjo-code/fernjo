@@ -4,9 +4,10 @@
 //! Inheritance is mapped faithfully: an `Inherit*` flag decides local or unset for every setting,
 //! folders included. The "inherits now" report lines are computed while descending (the nearest
 //! folder above that sets a credential or username), which gives the same answer as
-//! `Tree::resolve_node` without searching the tree once per node.
+//! `Tree::resolve_node` without searching the tree once per node (a test cross-checks both).
 
 use std::collections::{HashMap, HashSet};
+use std::hash::{BuildHasher, RandomState};
 
 use fernjo_core::{CredentialId, Node, NodeId, NodeKind, Protocol, Settings};
 use fernjo_vault::{EntryId, NewEntry, Secret};
@@ -41,14 +42,21 @@ struct Above {
     username: Option<String>,
 }
 
+/// (entry username, entry domain, keyed hash of the password).
+type EntryKey = (Option<String>, Option<String>, u64);
+
 #[derive(Default)]
 struct Builder {
     entries: Vec<PlannedEntry>,
     uses: Vec<usize>,
-    /// (entry username, entry domain) -> indexes into `entries`; passwords are compared
-    /// afterwards, so no secret is ever hashed.
-    by_identity: HashMap<(Option<String>, Option<String>), Vec<usize>>,
+    /// Key -> indexes into `entries`. The hash only narrows the lookup (random per-process keys,
+    /// never stored or printed); a hit is confirmed by comparing the real passwords, so a
+    /// collision cannot merge two different passwords.
+    by_identity: HashMap<EntryKey, Vec<usize>>,
+    hasher: RandomState,
     entry_names: HashSet<String>,
+    /// Base entry name -> the next ` (n)` suffix to try, so numbering never restarts at 2.
+    next_suffix: HashMap<String, usize>,
     counts: Counts,
     skipped: Vec<ReportLine>,
     partial: Vec<ReportLine>,
@@ -60,10 +68,11 @@ struct Builder {
 pub fn plan(doc: &RawDocument, today: &str, taken_names: &[String]) -> ImportPlan {
     let mut b = Builder::default();
     let above = Above::default();
+    let mut trail = Vec::new();
     let children: Vec<Node> = doc
         .nodes
         .iter()
-        .filter_map(|n| b.convert(n, "", &above))
+        .filter_map(|n| b.convert(n, &mut trail, &above))
         .collect();
 
     let base = format!("{FOLDER_PREFIX} ({today})");
@@ -88,12 +97,9 @@ pub fn plan(doc: &RawDocument, today: &str, taken_names: &[String]) -> ImportPla
     }
 }
 
-fn join(prefix: &str, name: &str) -> String {
-    if prefix.is_empty() {
-        name.to_owned()
-    } else {
-        format!("{prefix} / {name}")
-    }
+/// The report path of the node at the end of `trail`. Built only when a line needs it.
+fn path(trail: &[&str]) -> String {
+    trail.join(" / ")
 }
 
 impl Builder {
@@ -125,26 +131,44 @@ impl Builder {
         }
     }
 
-    fn skip(&mut self, path: &str, text: String) {
-        self.skipped.push(ReportLine::new(path, text));
+    fn skip(&mut self, trail: &[&str], text: String) {
+        self.skipped.push(ReportLine::new(path(trail), text));
     }
-    fn partly(&mut self, path: &str, text: String) {
-        self.partial.push(ReportLine::new(path, text));
+    fn partly(&mut self, trail: &[&str], text: String) {
+        self.partial.push(ReportLine::new(path(trail), text));
     }
-    fn problem(&mut self, path: &str, text: String) {
-        self.problems.push(ReportLine::new(path, text));
+    fn problem(&mut self, trail: &[&str], text: String) {
+        self.problems.push(ReportLine::new(path(trail), text));
     }
 
-    /// Maps one raw node (and below). `None` when the node is skipped.
-    fn convert(&mut self, raw: &RawNode, prefix: &str, above: &Above) -> Option<Node> {
+    /// Maps one raw node (and below). `None` when the node is skipped. `trail` holds the display
+    /// names from the top down to and including this node while it is being mapped.
+    fn convert<'a>(
+        &mut self,
+        raw: &'a RawNode,
+        trail: &mut Vec<&'a str>,
+        above: &Above,
+    ) -> Option<Node> {
         let trimmed = raw.name.trim();
         let name = if trimmed.is_empty() { UNNAMED } else { trimmed };
-        let path = join(prefix, name);
+        trail.push(name);
+        let node = self.convert_in(raw, name, trimmed.is_empty(), trail, above);
+        trail.pop();
+        node
+    }
 
+    fn convert_in<'a>(
+        &mut self,
+        raw: &'a RawNode,
+        name: &'a str,
+        unnamed: bool,
+        trail: &mut Vec<&'a str>,
+        above: &Above,
+    ) -> Option<Node> {
         let protocol = match &raw.kind {
             RawKind::Unknown(t) => {
                 self.skip(
-                    &path,
+                    trail,
                     format!(
                         "node type \"{t}\" is not supported; it and everything below it were skipped"
                     ),
@@ -160,22 +184,22 @@ impl Builder {
                     Some(Protocol::Rdp)
                 } else {
                     let shown = if p.is_empty() { "(none)" } else { p };
-                    self.skip(&path, format!("protocol {shown} is not supported"));
+                    self.skip(trail, format!("protocol {shown} is not supported"));
                     return None;
                 }
             }
         };
 
-        if trimmed.is_empty() {
-            self.problem(&path, "has no name; imported as \"Unnamed\"".to_owned());
+        if unnamed {
+            self.problem(trail, "has no name; imported as \"Unnamed\"".to_owned());
         }
-        let (settings, credential_set, username_set) = self.settings(raw, &path, above);
+        let (settings, credential_set, username_set) = self.settings(raw, name, trail, above);
 
         let kind = match protocol {
             Some(protocol) => {
                 let host = raw.hostname.trim().to_owned();
                 if host.is_empty() {
-                    self.problem(&path, "has no host; imported with an empty host".to_owned());
+                    self.problem(trail, "has no host; imported with an empty host".to_owned());
                 }
                 match protocol {
                     Protocol::Ssh => self.counts.ssh += 1,
@@ -184,7 +208,7 @@ impl Builder {
                 let putty = raw.putty_session.trim();
                 if !putty.is_empty() && putty != DEFAULT_PUTTY_SESSION {
                     self.partly(
-                        &path,
+                        trail,
                         format!("PuTTY session \"{putty}\" is not carried over"),
                     );
                 }
@@ -207,7 +231,7 @@ impl Builder {
                 let children = raw
                     .children
                     .iter()
-                    .filter_map(|c| self.convert(c, &path, &below))
+                    .filter_map(|c| self.convert(c, trail, &below))
                     .collect();
                 NodeKind::Folder { children }
             }
@@ -224,7 +248,13 @@ impl Builder {
 
     /// The node's own settings. Also returns whether it sets a credential and a username (so a
     /// folder can tell its children where they inherit from).
-    fn settings(&mut self, raw: &RawNode, path: &str, above: &Above) -> (Settings, bool, bool) {
+    fn settings(
+        &mut self,
+        raw: &RawNode,
+        name: &str,
+        trail: &[&str],
+        above: &Above,
+    ) -> (Settings, bool, bool) {
         let mut s = Settings::default();
 
         if !raw.inherit.port {
@@ -232,13 +262,13 @@ impl Builder {
                 match u16::try_from(p).ok().filter(|p| *p != 0) {
                     Some(p) => s.port = Some(p),
                     None => self.problem(
-                        path,
+                        trail,
                         format!("port {p} is out of range; the port is left unset"),
                     ),
                 }
             } else if let Some(text) = &raw.port_invalid {
                 self.problem(
-                    path,
+                    trail,
                     format!("port \"{text}\" is not a number; the port is left unset"),
                 );
             }
@@ -254,18 +284,17 @@ impl Builder {
             match &raw.password {
                 Some(password) => {
                     s.credential =
-                        Some(self.entry_for(own_username, own_domain.clone(), password, path));
+                        Some(self.entry_for(own_username, own_domain.clone(), password, name));
                 }
                 None => {
                     if raw.password_error {
                         self.problem(
-                            path,
+                            trail,
                             "its password could not be decrypted; imported without one".to_owned(),
                         );
-                    }
-                    if let Some(folder) = &above.credential {
+                    } else if let Some(folder) = &above.credential {
                         self.partly(
-                            path,
+                            trail,
                             format!(
                                 "has no password of its own in mRemoteNG; it now uses the credential of folder \"{folder}\""
                             ),
@@ -278,7 +307,7 @@ impl Builder {
             && s.credential.is_none()
         {
             self.partly(
-                path,
+                trail,
                 format!("domain \"{domain}\" is not imported (no password to attach it to)"),
             );
         }
@@ -287,7 +316,7 @@ impl Builder {
             && let Some(folder) = &above.username
         {
             self.partly(
-                path,
+                trail,
                 format!(
                     "has no username of its own in mRemoteNG; it now uses the username of folder \"{folder}\""
                 ),
@@ -300,14 +329,19 @@ impl Builder {
     }
 
     /// The id of the entry for this (username, domain, password), creating it when it is new.
+    /// `node_name` names an entry that has no username.
     fn entry_for(
         &mut self,
         username: Option<String>,
         domain: Option<String>,
         password: &str,
-        path: &str,
+        node_name: &str,
     ) -> CredentialId {
-        let key = (username.clone(), domain.clone());
+        let key = (
+            username.clone(),
+            domain.clone(),
+            self.hasher.hash_one(password),
+        );
         if let Some(indexes) = self.by_identity.get(&key) {
             for &i in indexes {
                 if let Secret::Password { password: stored } = &self.entries[i].entry.secret
@@ -326,13 +360,18 @@ impl Builder {
             (Some(u), Some(d)) => format!("{u}@{d}"),
             (Some(u), None) => u.clone(),
             // No username: named after the first node that uses the entry.
-            _ => path.rsplit(" / ").next().unwrap_or(path).to_owned(),
+            _ => node_name.to_owned(),
         };
         let mut name = base.clone();
-        let mut n = 2;
-        while self.entry_names.contains(&name) {
-            name = format!("{base} ({n})");
-            n += 1;
+        if self.entry_names.contains(&name) {
+            let next = self.next_suffix.entry(base.clone()).or_insert(2);
+            loop {
+                name = format!("{base} ({next})");
+                *next += 1;
+                if !self.entry_names.contains(&name) {
+                    break;
+                }
+            }
         }
         self.entry_names.insert(name.clone());
 
