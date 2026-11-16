@@ -132,6 +132,7 @@ mod tests {
             &base.path().join("fernjo").join(settings::FILE_NAME),
             &AppSettings {
                 data_dir: Some(target.clone()),
+                terminal: None,
             },
         )
         .unwrap();

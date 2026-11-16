@@ -80,7 +80,7 @@ fn view(state: &AppState, vault: &VaultState) -> VaultStatus {
 }
 
 /// Runs `f` on the vault, or reports why there is none.
-fn with_vault<T>(
+pub(crate) fn with_vault<T>(
     state: &AppState,
     f: impl FnOnce(&mut Vault) -> Result<T, CommandError>,
 ) -> Result<T, CommandError> {
@@ -1323,6 +1323,19 @@ mod tests {
             entry("get_data_folder", |w| {
                 j(crate::data_folder::get_data_folder(&w.st))
             }),
+            entry("get_terminal_settings", |w| {
+                j(crate::session_commands::get_terminal_settings(&w.st))
+            }),
+            entry("set_terminal_settings", |w| {
+                j(crate::session_commands::set_terminal_settings(
+                    &w.st,
+                    crate::session_commands::TerminalSettingsInput {
+                        font_family: Some("Fira Code".into()),
+                        font_size: 14,
+                        scrollback: 5000,
+                    },
+                ))
+            }),
             entry("apply_data_folder", |w| {
                 // not an IPC command (see `NOT_A_COMMAND`), but called here as a plain
                 // function: the state has no config folder, so this is refused; the response
@@ -1402,6 +1415,7 @@ mod tests {
             include_str!("commands.rs"),
             include_str!("vault_commands.rs"),
             include_str!("data_folder.rs"),
+            include_str!("session_commands.rs"),
         ];
         // Only lines that start with the attribute count (not doc comments or strings), so
         // `#[tauri::command(async)]` and similar forms are counted too.

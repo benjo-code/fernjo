@@ -1,5 +1,8 @@
 mod commands;
+#[allow(dead_code)] // consumed by the session commands (next task)
+mod connect_plan;
 mod data_folder;
+mod session_commands;
 mod state;
 mod vault_commands;
 
@@ -53,6 +56,8 @@ pub fn run() {
             data_folder::handlers::get_data_folder,
             data_folder::handlers::choose_data_folder,
             data_folder::handlers::restart_app,
+            session_commands::handlers::get_terminal_settings,
+            session_commands::handlers::set_terminal_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running fernjo");

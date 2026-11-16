@@ -1392,6 +1392,7 @@ name = "fernjo-app"
 version = "0.0.0"
 dependencies = [
  "fernjo-core",
+ "fernjo-ssh",
  "fernjo-vault",
  "secrecy",
  "serde",

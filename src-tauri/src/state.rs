@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 
-use fernjo_core::{DataDirSource, Location, Notice, Store, find_conflicts};
+use fernjo_core::{
+    DataDirSource, Location, Notice, Store, TerminalPrefs, find_conflicts, settings,
+};
 use fernjo_vault::{
     FILE_NAME as VAULT_FILE_NAME, KdfParams, KeyStore, MemoryKeyStore, OsKeyStore, Vault,
     try_auto_unlock,
@@ -59,6 +61,9 @@ pub struct AppState {
     /// The folder chosen by `apply_data_folder` while a restart is pending (shown by
     /// `get_data_folder`) with the data files that already existed there; `None` otherwise.
     pub pending_data_dir: Mutex<Option<(PathBuf, Vec<String>)>>,
+    /// Terminal preferences: loaded from `settings.json` at startup, in memory only while
+    /// `FERNJO_DATA_DIR` is set.
+    pub terminal: Mutex<TerminalPrefs>,
 }
 
 /// Debug output never includes the vault, the key store or the connection data.
@@ -100,17 +105,32 @@ impl AppState {
                 keystore,
                 KdfParams::default(),
             ),
-            Some(l) => Self::build(
-                Some(l.data_dir),
-                Some(l.config_dir),
-                l.source,
-                l.settings_error.is_some(),
-                l.settings_error.map(|e| Notice::SettingsUnreadable {
-                    message: e.to_string(),
-                }),
-                keystore,
-                KdfParams::default(),
-            ),
+            Some(l) => {
+                // `settings.json` is neither read nor written while the variable is set, and
+                // an unusable file yields the defaults.
+                let terminal = if l.source == DataDirSource::Env || l.settings_error.is_some() {
+                    None
+                } else {
+                    settings::load(&l.config_dir.join(settings::FILE_NAME))
+                        .ok()
+                        .and_then(|s| s.terminal)
+                };
+                let state = Self::build(
+                    Some(l.data_dir),
+                    Some(l.config_dir),
+                    l.source,
+                    l.settings_error.is_some(),
+                    l.settings_error.map(|e| Notice::SettingsUnreadable {
+                        message: e.to_string(),
+                    }),
+                    keystore,
+                    KdfParams::default(),
+                );
+                if let (Some(prefs), Ok(mut slot)) = (terminal, state.terminal.lock()) {
+                    *slot = prefs;
+                }
+                state
+            }
         }
     }
 
@@ -188,6 +208,7 @@ impl AppState {
             settings_unusable,
             restart_required: AtomicBool::new(false),
             pending_data_dir: Mutex::new(None),
+            terminal: Mutex::new(TerminalPrefs::default()),
         }
     }
 

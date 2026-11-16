@@ -19,7 +19,10 @@ pub use model::{
 pub use paths::{DATA_DIR_ENV, DataDirSource, Location, locate, locate_from};
 pub use persist::{CURRENT_VERSION, FILE_NAME, Loaded, Notice, load, migrate_with, save};
 pub use resolve::resolve;
-pub use settings::AppSettings;
+pub use settings::{
+    AppSettings, DEFAULT_FONT_SIZE, DEFAULT_SCROLLBACK, FONT_SIZE_RANGE, SCROLLBACK_RANGE,
+    TerminalPrefs,
+};
 pub use store::{Opened, Store};
 pub use tree::{NodePatch, Patch, Tree};
 
