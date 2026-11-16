@@ -23,7 +23,13 @@
 <div class="area" class:hidden>
   {#each sessions.tabs as tab (tab.id)}
     <div class="pane" class:inactive={hidden || tab.id !== sessions.activeId}>
-      <TerminalView {tab} {sessions} {settings} visible={!hidden && tab.id === sessions.activeId} />
+      <TerminalView
+        {tab}
+        {sessions}
+        {settings}
+        visible={!hidden && tab.id === sessions.activeId}
+        locked={tab.state === "needsVault" || tab.prompt !== null}
+      />
       <!-- Only the tab in front shows its prompt, so it can take the keyboard when it appears (a
            prompt of another tab waits, and typed text is not kept across a tab switch). -->
       {#if !hidden && tab.id === sessions.activeId}

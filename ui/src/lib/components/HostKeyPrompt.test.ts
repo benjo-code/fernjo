@@ -92,3 +92,53 @@ test("host_key_prompt_is_a_labelled_dialog_and_the_keyboard_does_not_start_on_th
   // a stray Enter (typed into the terminal a moment ago) must not trust the key
   expect(document.activeElement).toBe(dialog);
 });
+
+test("a_click_on_the_empty_area_refocuses_the_prompt_and_escape_still_works", async () => {
+  const t = await setup();
+  const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+  button("Trust once").focus();
+  const wrap = document.querySelector<HTMLElement>(".wrap")!;
+  const down = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+  wrap.dispatchEvent(down);
+  // the default (focus to <body>) is cancelled and the prompt has the focus
+  expect(down.defaultPrevented).toBe(true);
+  expect(document.activeElement).toBe(dialog);
+  // a mousedown inside the column is left alone (text selection, buttons)
+  const inside = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+  button("Cancel").dispatchEvent(inside);
+  expect(inside.defaultPrevented).toBe(false);
+
+  document.activeElement!.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+  );
+  expect(t.calls.answerPrompt[0]![2]).toEqual({ kind: "hostKey", decision: "reject" });
+});
+
+test("tab_and_shift_tab_wrap_inside_the_prompt", async () => {
+  await setup();
+  const first = button("Trust and connect");
+  const last = button("Cancel");
+  const press = (shiftKey: boolean) => {
+    const e = new KeyboardEvent("keydown", {
+      key: "Tab",
+      shiftKey,
+      bubbles: true,
+      cancelable: true,
+    });
+    document.activeElement!.dispatchEvent(e);
+    return e;
+  };
+  // Shift+Tab from the dialog itself or the first button goes to the last, never out of the prompt
+  const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+  expect(document.activeElement).toBe(dialog);
+  expect(press(true).defaultPrevented).toBe(true);
+  expect(document.activeElement).toBe(last);
+  // Tab from the last wraps to the first
+  expect(press(false).defaultPrevented).toBe(true);
+  expect(document.activeElement).toBe(first);
+  expect(press(true).defaultPrevented).toBe(true);
+  expect(document.activeElement).toBe(last);
+  // in the middle the browser's own order is used
+  button("Trust once").focus();
+  expect(press(false).defaultPrevented).toBe(false);
+});

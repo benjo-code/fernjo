@@ -240,6 +240,9 @@ export class SessionStore {
   }
 
   input(id: string, bytes: Uint8Array): void {
+    // Keystrokes belong to a running shell only: while a prompt or the vault is pending (or the
+    // tab dropped) Rust has no shell and rejects them anyway, so they are not even sent.
+    if (this.tabs.find((t) => t.id === id)?.state !== "connected") return;
     const sessionId = this.#runtime.get(id)?.sessionId;
     if (sessionId) this.#fire(this.#api.sessionInput(sessionId, bytes));
   }

@@ -91,6 +91,43 @@ describe("TabStrip", () => {
     expect(dropped!.querySelector("button.close")).not.toBeNull();
   });
 
+  test("a_tab_with_a_pending_prompt_says_what_it_waits_for", () => {
+    const { sessions } = setup(["connecting", "connecting", "connecting", "needsVault"]);
+    const ask = (i: number, prompt: Tab["prompt"]) => (sessions.tabs[i]!.prompt = prompt);
+    ask(0, {
+      id: 1,
+      prompt: {
+        kind: "hostKey",
+        host: "h",
+        port: 22,
+        keyType: "ssh-ed25519",
+        fingerprint: "SHA256:x",
+      },
+    });
+    ask(1, {
+      id: 2,
+      prompt: {
+        kind: "hostKeyChanged",
+        host: "h",
+        port: 22,
+        keyType: "ssh-ed25519",
+        old: ["a"],
+        new: "b",
+      },
+    });
+    ask(2, { id: 3, prompt: { kind: "password", user: "u", host: "h" } });
+    flushSync();
+    const caption = (i: number) => tabs()[i]!.querySelector(".caption")?.textContent;
+    expect(caption(0)).toBe("Confirm host key");
+    expect(caption(1)).toBe("Confirm host key");
+    expect(caption(2)).toBe("Needs input");
+    expect(caption(3)).toBe("Needs vault");
+    // answered: back to the plain state caption
+    sessions.tabs[2]!.prompt = null;
+    flushSync();
+    expect(caption(2)).toBe("Connecting…");
+  });
+
   test("the_caption_of_a_disconnected_tab_is_its_detail_text", () => {
     const { sessions } = setup(["disconnected"]);
     sessions.tabs[0]!.detail = "Connection reset by peer";

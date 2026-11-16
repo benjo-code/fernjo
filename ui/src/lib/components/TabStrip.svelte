@@ -29,6 +29,11 @@
   });
 
   function caption(tab: Tab): string | null {
+    // a pending prompt is state "connecting" in Rust; the caption tells that the tab waits for the user
+    if (tab.prompt) {
+      const kind = tab.prompt.prompt.kind;
+      return kind === "hostKey" || kind === "hostKeyChanged" ? "Confirm host key" : "Needs input";
+    }
     switch (tab.state) {
       case "connecting":
         return "Connecting…";

@@ -13,7 +13,15 @@
     sessions,
     settings,
     visible,
-  }: { tab: Tab; sessions: SessionStore; settings: TerminalSettings; visible: boolean } = $props();
+    locked = false,
+  }: {
+    tab: Tab;
+    sessions: SessionStore;
+    settings: TerminalSettings;
+    visible: boolean;
+    /** An inline prompt covers the terminal: it keeps rendering output but takes no input or focus. */
+    locked?: boolean;
+  } = $props();
 
   let host = $state<HTMLElement>();
   let controller = $state.raw<TerminalController | null>(null);
@@ -121,7 +129,7 @@
   }
 </script>
 
-<div class="view" class:hidden={!visible} {oncontextmenu} role="presentation">
+<div class="view" class:hidden={!visible} inert={locked} {oncontextmenu} role="presentation">
   <div class="term" bind:this={host}></div>
   {#if searching && controller}
     <SearchBar search={(t, d) => controller?.search(t, d) ?? false} onClose={closeSearch} />

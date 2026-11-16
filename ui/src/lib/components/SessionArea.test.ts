@@ -170,3 +170,38 @@ test("after_the_vault_prompt_the_terminal_takes_the_focus_when_the_tab_connects"
   expect(h.made[0]!.calls.filter((c) => c === "focus").length).toBeGreaterThan(before);
   expect(sessions.tabs[0]!.state).toBe("connecting");
 });
+
+test("the_terminal_is_inert_while_a_prompt_or_the_vault_wait_covers_it_and_free_afterwards", async () => {
+  setup(false, 1);
+  await tick();
+  await new Promise((r) => setTimeout(r, 0));
+  // Svelte assigns the `inert` property; jsdom does not reflect it to an attribute
+  const inert = () => Boolean((views()[0] as HTMLElement & { inert?: boolean }).inert);
+  expect(inert()).toBe(false);
+
+  handlers[0]!({ kind: "prompt", id: 1, prompt: { kind: "keyPassphrase" } });
+  flushSync();
+  await tick();
+  expect(inert()).toBe(true);
+  // still mounted: output keeps arriving
+  expect(h.made[0]!.calls.includes("dispose")).toBe(false);
+  const before = h.made[0]!.calls.filter((c) => c === "focus").length;
+
+  document
+    .querySelector('[role="dialog"]')!
+    .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  flushSync();
+  await tick();
+  expect(inert()).toBe(false);
+  // the terminal gets the focus back once it is no longer inert
+  expect(h.made[0]!.calls.filter((c) => c === "focus").length).toBeGreaterThan(before);
+
+  handlers[0]!({ kind: "state", state: "needsVault", detail: null });
+  flushSync();
+  await tick();
+  expect(inert()).toBe(true);
+  handlers[0]!({ kind: "state", state: "connecting", detail: null });
+  flushSync();
+  await tick();
+  expect(inert()).toBe(false);
+});

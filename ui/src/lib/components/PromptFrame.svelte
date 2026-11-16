@@ -20,11 +20,38 @@
   } = $props();
 
   const uid = $props.id();
+
+  const FOCUSABLE = "button:not([disabled]), input:not([disabled]), a[href]";
+
+  // The handlers sit on the covering area, so Escape and the Tab rules keep working after a click
+  // on its empty part. Tab never leaves the prompt: the ends of the column wrap around.
+  function keydown(e: KeyboardEvent) {
+    onkeydown?.(e);
+    if (e.defaultPrevented || e.key !== "Tab" || !root) return;
+    const items = [...root.querySelectorAll<HTMLElement>(FOCUSABLE)];
+    if (items.length === 0) return;
+    const at = items.indexOf(document.activeElement as HTMLElement);
+    if (e.shiftKey && at <= 0) {
+      e.preventDefault();
+      items[items.length - 1]!.focus();
+    } else if (!e.shiftKey && at === items.length - 1) {
+      e.preventDefault();
+      items[0]!.focus();
+    }
+  }
+
+  // A click on the empty area must not drop the focus on <body>.
+  function mousedown(e: MouseEvent) {
+    if (root && !root.contains(e.target as Node)) {
+      e.preventDefault();
+      root.focus();
+    }
+  }
 </script>
 
 <!-- Covers the terminal area of its own tab only; the terminal stays mounted underneath. -->
-<div class="wrap">
-  <div bind:this={root} class="col" {role} aria-labelledby="{uid}-title" tabindex="-1" {onkeydown}>
+<div class="wrap" role="presentation" onkeydown={keydown} onmousedown={mousedown}>
+  <div bind:this={root} class="col" {role} aria-labelledby="{uid}-title" tabindex="-1">
     <div class="head">
       <Icon name={icon} size={16} />
       <h2 id="{uid}-title">{title}</h2>

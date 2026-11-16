@@ -197,12 +197,35 @@ describe("SessionStore", () => {
 
   test("ack_and_input_forward_to_the_api", async () => {
     const s = setup({ openSession: async () => "S1" });
-    const { tab } = await openAttached(s);
+    const { tab, emit } = await openAttached(s);
+    emit({ kind: "state", state: "connected", detail: null });
     const bytes = new Uint8Array([1, 2]);
     s.store.input(tab.id, bytes);
     s.store.ack(tab.id, 512);
     expect(s.calls.sessionInput).toEqual([["S1", bytes]]);
     expect(s.calls.sessionAck).toEqual([["S1", 512]]);
+  });
+
+  test("input_is_dropped_unless_the_tab_is_connected", async () => {
+    const s = setup({ openSession: async () => "S1" });
+    const { tab, emit } = await openAttached(s);
+    const bytes = new Uint8Array([7]);
+    // connecting (also while a prompt is pending), needing the vault, dropped: nothing is sent
+    s.store.input(tab.id, bytes);
+    emit({
+      kind: "prompt",
+      id: 1,
+      prompt: { kind: "password", user: "u", host: "h" },
+    });
+    s.store.input(tab.id, bytes);
+    emit({ kind: "state", state: "needsVault", detail: null });
+    s.store.input(tab.id, bytes);
+    emit({ kind: "state", state: "disconnected", detail: null });
+    s.store.input(tab.id, bytes);
+    expect(s.calls.sessionInput).toHaveLength(0);
+    emit({ kind: "state", state: "connected", detail: null });
+    s.store.input(tab.id, bytes);
+    expect(s.calls.sessionInput).toEqual([["S1", bytes]]);
   });
 
   test("lamp_priority_live_over_connecting_over_dropped", async () => {
