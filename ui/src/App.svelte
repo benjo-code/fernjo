@@ -9,7 +9,9 @@
   import VaultManager from "./lib/components/VaultManager.svelte";
   import { findNode } from "./lib/rows";
   import { SessionStore } from "./lib/sessions.svelte";
+  import { isMac, routeKey } from "./lib/shortcuts";
   import { TreeStore } from "./lib/store.svelte";
+  import { TerminalSettingsStore } from "./lib/terminal-settings.svelte";
   import type { Api, Protocol, TerminalSettings } from "./lib/types";
   import { VaultStore } from "./lib/vault.svelte";
 
@@ -24,21 +26,17 @@
   // svelte-ignore state_referenced_locally
   const sessions = new SessionStore(api, (id) => findNode(store.children, id)?.name ?? "Session");
 
+  // svelte-ignore state_referenced_locally
+  const terminal = new TerminalSettingsStore(api);
+
   /** Until Rust answers (or when it cannot), terminals use these. */
-  let terminalSettings = $state<TerminalSettings>({
+  const DEFAULT_TERMINAL: TerminalSettings = {
     fontFamily: null,
     fontSize: 13,
     scrollback: 10000,
     persistent: true,
-  });
-
-  async function loadTerminalSettings() {
-    try {
-      terminalSettings = await api.getTerminalSettings();
-    } catch {
-      // the defaults above stay in effect
-    }
-  }
+  };
+  const terminalSettings = $derived(terminal.info ?? DEFAULT_TERMINAL);
 
   function protocolOf(nodeId: string): Protocol {
     const node = findNode(store.children, nodeId);
@@ -93,18 +91,43 @@
     });
   });
 
+  let sidebar: Sidebar | undefined = $state();
+
+  /**
+   * Only the app chords are handled here: tab switching, closing and the filter. Copy, paste and
+   * search belong to the terminal controller, which leaves the app chords unhandled so they get here.
+   */
+  function onkeydown(e: KeyboardEvent) {
+    const inTerminal = e.target instanceof Element && e.target.closest(".xterm") !== null;
+    const action = routeKey(e, isMac(), inTerminal);
+    if (action === "nextTab" || action === "prevTab") {
+      if (sessions.tabs.length === 0) return;
+      if (action === "nextTab") sessions.next();
+      else sessions.previous();
+    } else if (action === "closeTab") {
+      if (sessions.activeId === null) return;
+      sessions.requestClose(sessions.activeId);
+    } else if (action === "focusFilter") {
+      sidebar?.focusFilter();
+    } else {
+      return;
+    }
+    e.preventDefault();
+  }
+
   onMount(() => {
     void store.init();
     void vault.init();
     void refreshRestart();
-    void loadTerminalSettings();
+    void terminal.load();
   });
 </script>
 
-<svelte:window onpagehide={endSessions} onbeforeunload={endSessions} />
+<svelte:window onpagehide={endSessions} onbeforeunload={endSessions} {onkeydown} />
 
 <div class="shell">
   <Sidebar
+    bind:this={sidebar}
     {store}
     {vault}
     {sessions}
@@ -135,6 +158,7 @@
 {#if folderOpen}
   <DataFolderDialog
     {api}
+    {terminal}
     onclose={() => (folderOpen = false)}
     onchange={(info) => (restartPending = info.restartRequired)}
   />

@@ -18,7 +18,6 @@
   const DRAG_THRESHOLD = 4;
 
   let strip = $state<HTMLElement>();
-  let pendingClose = $state<{ id: string; title: string } | null>(null);
 
   // --- reorder by pointer drag ---
   let press: { id: string; x: number; y: number } | null = null;
@@ -51,19 +50,6 @@
     if (tab.state === "connected") return "live";
     if (tab.state === "disconnected") return "dropped";
     return null;
-  }
-
-  function requestClose(tab: Tab) {
-    // only a running session is worth a question
-    if (tab.state === "connected") pendingClose = { id: tab.id, title: tab.title };
-    else sessions.close(tab.id);
-  }
-
-  function confirmClose() {
-    if (!pendingClose) return;
-    const { id } = pendingClose;
-    pendingClose = null;
-    sessions.close(id);
   }
 
   function onpointerdown(e: PointerEvent, tab: Tab) {
@@ -222,7 +208,7 @@
         class="close"
         aria-label={`Close ${tab.title}`}
         title="Close"
-        onclick={() => requestClose(tab)}
+        onclick={() => sessions.requestClose(tab.id)}
       >
         <Icon name="close" size={12} />
       </button>
@@ -230,13 +216,13 @@
   {/each}
 </div>
 
-{#if pendingClose}
+{#if sessions.closeRequest}
   <ConfirmDialog
-    title={`Close “${pendingClose.title}”?`}
+    title={`Close “${sessions.closeRequest.title}”?`}
     detail="The session ends."
     confirmLabel="Close"
-    onConfirm={confirmClose}
-    onCancel={() => (pendingClose = null)}
+    onConfirm={() => sessions.confirmClose()}
+    onCancel={() => sessions.cancelClose()}
   />
 {/if}
 

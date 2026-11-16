@@ -53,6 +53,8 @@ export class SessionStore {
    * (the vault manager) when it changes.
    */
   revealed = $state(0);
+  /** A close that waits for the user's answer (only a running session is worth a question). */
+  closeRequest = $state<{ id: string; title: string } | null>(null);
 
   #api: Api;
   #nameOf: (nodeId: string) => string;
@@ -122,7 +124,26 @@ export class SessionStore {
     this.revealed++;
   }
 
+  /** The one closing rule (× button and shortcut): a connected tab asks first, others close. */
+  requestClose(id: string): void {
+    const tab = this.tabs.find((t) => t.id === id);
+    if (!tab) return;
+    if (tab.state === "connected") this.closeRequest = { id: tab.id, title: tab.title };
+    else this.close(id);
+  }
+
+  confirmClose(): void {
+    const request = this.closeRequest;
+    this.closeRequest = null;
+    if (request) this.close(request.id);
+  }
+
+  cancelClose(): void {
+    this.closeRequest = null;
+  }
+
   close(id: string): void {
+    if (this.closeRequest?.id === id) this.closeRequest = null;
     const at = this.tabs.findIndex((t) => t.id === id);
     if (at < 0) return;
     const rt = this.#runtime.get(id);

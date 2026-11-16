@@ -1,6 +1,7 @@
 import { flushSync, mount, tick, unmount } from "svelte";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { apiError, dataFolder, deferred, mockApi } from "../testing";
+import { TerminalSettingsStore } from "../terminal-settings.svelte";
+import { apiError, dataFolder, deferred, mockApi, terminalSettings } from "../testing";
 import type { Api, DataFolderInfo } from "../types";
 import DataFolderDialog from "./DataFolderDialog.svelte";
 
@@ -24,7 +25,7 @@ async function setup(impl: Partial<Api> = {}) {
   const onchange = vi.fn();
   mounted = mount(DataFolderDialog, {
     target: document.body,
-    props: { api: m.api, onclose, onchange },
+    props: { api: m.api, terminal: new TerminalSettingsStore(m.api), onclose, onchange },
   });
   await settle();
   return { ...m, onclose, onchange };
@@ -44,6 +45,8 @@ describe("DataFolderDialog", () => {
     const dialog = document.querySelector("[role=dialog]")!;
     expect(dialog.getAttribute("aria-modal")).toBe("true");
     expect(dialog.textContent).toContain("Data folder");
+    expect(dialog.getAttribute("aria-labelledby")).toBeTruthy();
+    expect(document.querySelector("h2")?.textContent).toBe("Settings");
     expect(dialog.textContent).toContain("C:\\data\\fernjo");
     expect(dialog.textContent).toContain("Chosen in settings");
   });
@@ -121,7 +124,12 @@ describe("DataFolderDialog", () => {
     const m = mockApi([], { getDataFolder: () => d.promise });
     mounted = mount(DataFolderDialog, {
       target: document.body,
-      props: { api: m.api, onclose: () => {}, onchange: () => {} },
+      props: {
+        api: m.api,
+        terminal: new TerminalSettingsStore(m.api),
+        onclose: () => {},
+        onchange: () => {},
+      },
     });
     await tick();
     expect(document.body.textContent).toContain("Loading…");
@@ -209,6 +217,90 @@ describe("DataFolderDialog", () => {
     pending.resolve(null);
     await settle();
     expect(choose.getAttribute("aria-disabled")).not.toBe("true");
+  });
+
+  const field = (label: string) =>
+    document.querySelector<HTMLInputElement>(`input[aria-label='${label}']`)!;
+  const type = (el: HTMLInputElement, value: string) => {
+    el.value = value;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+
+  test("terminal_section_saves_the_values_and_shows_inline_errors", async () => {
+    const { calls } = await setup({
+      getTerminalSettings: async () =>
+        terminalSettings({ fontFamily: "Fira Code", fontSize: 15, scrollback: 4000 }),
+      setTerminalSettings: async (s) => {
+        if (s.fontSize < 8) throw apiError("invalid_font_size", "rust text");
+        if (s.scrollback > 100000) throw apiError("invalid_scrollback", "rust text");
+        return terminalSettings(s);
+      },
+    });
+    expect(calls.getTerminalSettings).toHaveLength(1);
+    expect(field("Font family").value).toBe("Fira Code");
+    expect(field("Font size").value).toBe("15");
+    expect(field("Scrollback").value).toBe("4000");
+
+    type(field("Font family"), "  ");
+    type(field("Font size"), "18");
+    type(field("Scrollback"), "2500");
+    button("Save").click();
+    await settle();
+    expect(calls.setTerminalSettings[0]).toEqual([
+      { fontFamily: null, fontSize: 18, scrollback: 2500 },
+    ]);
+    expect(alert()).toBeNull();
+
+    type(field("Font size"), "5");
+    button("Save").click();
+    await settle();
+    expect(alert()?.textContent).toBe("Font size must be between 8 and 32.");
+
+    type(field("Font size"), "18");
+    type(field("Scrollback"), "200000");
+    button("Save").click();
+    await settle();
+    expect(alert()?.textContent).toBe("Scrollback must be between 1000 and 100000 lines.");
+
+    // a field that is not a number is sent as 0 and rejected by Rust, never judged here
+    type(field("Font size"), "");
+    type(field("Scrollback"), "2000");
+    button("Save").click();
+    await settle();
+    expect(calls.setTerminalSettings.at(-1)).toEqual([
+      { fontFamily: null, fontSize: 0, scrollback: 2000 },
+    ]);
+  });
+
+  test("non_persistent_note_is_shown_when_persistent_is_false", async () => {
+    const note = "Applies to this run only; settings are not saved while FERNJO_DATA_DIR is set";
+    await setup({ getTerminalSettings: async () => terminalSettings({ persistent: false }) });
+    expect(document.body.textContent).toContain(note);
+    unmount(mounted!);
+    mounted = null;
+    document.body.innerHTML = "";
+    await setup();
+    expect(document.body.textContent).not.toContain(note);
+  });
+
+  test("data_folder_section_still_works", async () => {
+    const { onchange } = await setup({
+      chooseDataFolder: async () => dataFolder({ path: "/new", restartRequired: true }),
+    });
+    expect(document.body.textContent).toContain("Terminal");
+    button("Choose folder…").click();
+    await settle();
+    expect(document.body.textContent).toContain("Restart to use the new folder");
+    expect(onchange).toHaveBeenCalled();
+  });
+
+  test("tab_stays_inside_the_dialog_across_the_fields", async () => {
+    await setup();
+    const dialog = document.querySelector("[role=dialog]")!;
+    field("Scrollback").focus();
+    dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).not.toBe(field("Scrollback"));
   });
 
   test("escape_closes_the_dialog", async () => {

@@ -87,9 +87,7 @@ test("the_gear_button_opens_the_data_folder_dialog_and_escape_closes_it", async 
   const { api, calls } = mockApi();
   const app = mount(App, { target: document.body, props: { api } });
   await settle();
-  const gear = document.querySelector<HTMLButtonElement>(
-    "button[aria-label='Settings: data folder']",
-  )!;
+  const gear = document.querySelector<HTMLButtonElement>("button[aria-label='Settings']")!;
   gear.click();
   await settle();
   expect(document.querySelector("[role=dialog]")?.textContent).toContain("Data folder");
@@ -125,7 +123,7 @@ test("choosing_a_folder_in_the_dialog_raises_the_persistent_restart_bar", async 
   const app = mount(App, { target: document.body, props: { api } });
   await settle();
   expect(document.querySelector(".bar.restart")).toBeNull();
-  document.querySelector<HTMLButtonElement>("button[aria-label='Settings: data folder']")!.click();
+  document.querySelector<HTMLButtonElement>("button[aria-label='Settings']")!.click();
   await settle();
   [...document.querySelectorAll("[role=dialog] button")]
     .find((b) => b.textContent?.trim() === "Choose folder…")!

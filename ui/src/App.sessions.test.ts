@@ -2,7 +2,7 @@ import { mount, unmount } from "svelte";
 import { afterEach, expect, test, vi } from "vitest";
 import App from "./App.svelte";
 import { apiError, conn, mockApi, vaultStatus } from "./lib/testing";
-import type { Api, TreeNode } from "./lib/types";
+import type { Api, SessionEvent, TreeNode } from "./lib/types";
 
 const h = vi.hoisted(() => ({ made: [] as { calls: string[] }[] }));
 
@@ -225,4 +225,166 @@ test("closing_a_tab_while_the_vault_manager_is_open_keeps_the_vault_view", async
     expect(manager()).not.toBeNull();
   }
   expect(tabs()).toHaveLength(0);
+});
+
+// --- app shortcuts ---------------------------------------------------------------------------
+
+const handlers: ((e: SessionEvent | ArrayBuffer) => void)[] = [];
+
+/** A started app whose sessions report "connected" as soon as they open. */
+async function startConnected(tree: TreeNode[] = [conn("web-01"), conn("db-01")]) {
+  handlers.length = 0;
+  const mock = await start(tree, {
+    openSession: async (_id, onEvent) => {
+      handlers.push(onEvent);
+      queueMicrotask(() => onEvent({ kind: "state", state: "connected", detail: null }));
+      return `sid-${handlers.length}`;
+    },
+  });
+  return mock;
+}
+
+function press(init: KeyboardEventInit, target: EventTarget = document.body): KeyboardEvent {
+  const e = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+  target.dispatchEvent(e);
+  return e;
+}
+
+/** An element the terminal controller would own: a keydown from it counts as "in the terminal". */
+function xtermIn(view: HTMLElement): HTMLElement {
+  const el = document.createElement("textarea");
+  el.className = "xterm-helper-textarea";
+  const host = document.createElement("div");
+  host.className = "xterm";
+  host.append(el);
+  view.append(host);
+  return el;
+}
+
+const activeTitle = () =>
+  document.querySelector("[role=tab][aria-selected=true] .title")?.textContent ?? null;
+const confirm = () => document.querySelector<HTMLElement>("[role=alertdialog]");
+
+test("ctrl_shift_w_closes_the_active_tab_with_confirm_for_a_connected_one", async () => {
+  const { calls } = await startConnected();
+  doubleClick("web-01");
+  await settle();
+  doubleClick("db-01");
+  await settle();
+  expect(tabs()).toHaveLength(2);
+
+  // connected: asks first, Cancel has focus, Escape keeps the tab
+  const e = press({ key: "W", ctrlKey: true, shiftKey: true });
+  await settle();
+  expect(e.defaultPrevented).toBe(true);
+  expect(confirm()).not.toBeNull();
+  expect(confirm()!.textContent).toContain("db-01");
+  expect(document.activeElement?.textContent?.trim()).toBe("Cancel");
+  confirm()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await settle();
+  expect(confirm()).toBeNull();
+  expect(tabs()).toHaveLength(2);
+  expect(calls.closeSession).toHaveLength(0);
+
+  // confirmed: closes the active tab only
+  press({ key: "W", ctrlKey: true, shiftKey: true });
+  await settle();
+  [...confirm()!.querySelectorAll("button")]
+    .find((b) => b.textContent?.trim() === "Close")!
+    .click();
+  await settle();
+  expect(tabs()).toHaveLength(1);
+  expect(activeTitle()).toBe("web-01");
+  expect(calls.closeSession).toEqual([["sid-2"]]);
+
+  // a tab that is not connected closes at once
+  document.querySelector<HTMLButtonElement>("button[aria-label='Close web-01']")!.click();
+  await settle();
+  confirm()?.querySelector("button")?.click();
+});
+
+test("a_tab_that_is_not_connected_closes_at_once_and_no_tab_means_no_effect", async () => {
+  await start([conn("web-01")]);
+  // no active tab: not handled, not prevented
+  const idle = press({ key: "W", ctrlKey: true, shiftKey: true });
+  expect(idle.defaultPrevented).toBe(false);
+  doubleClick("web-01");
+  await settle();
+  // the mock session never reports connected, so the tab is still "connecting"
+  const e = press({ key: "W", ctrlKey: true, shiftKey: true });
+  await settle();
+  expect(e.defaultPrevented).toBe(true);
+  expect(confirm()).toBeNull();
+  expect(tabs()).toHaveLength(0);
+});
+
+test("ctrl_tab_cycles_tabs_and_plain_ctrl_w_inside_the_terminal_is_untouched", async () => {
+  const { calls } = await startConnected([conn("a"), conn("b"), conn("c")]);
+  for (const id of ["a", "b", "c"]) {
+    doubleClick(id);
+    await settle();
+  }
+  expect(activeTitle()).toBe("c");
+  const inside = xtermIn(views()[2]!);
+
+  const next = press({ key: "Tab", ctrlKey: true }, inside);
+  await settle();
+  expect(next.defaultPrevented).toBe(true);
+  expect(activeTitle()).toBe("a");
+  press({ key: "Tab", ctrlKey: true, shiftKey: true }, inside);
+  await settle();
+  expect(activeTitle()).toBe("c");
+
+  // plain Ctrl+W belongs to the shell: neither handled nor prevented
+  const plain = press({ key: "w", ctrlKey: true }, inside);
+  await settle();
+  expect(plain.defaultPrevented).toBe(false);
+  expect(tabs()).toHaveLength(3);
+  expect(confirm()).toBeNull();
+
+  // Ctrl+Shift+C and +F are the controller's: the app handler leaves them alone
+  const copy = press({ key: "C", ctrlKey: true, shiftKey: true }, inside);
+  const find = press({ key: "F", ctrlKey: true, shiftKey: true }, inside);
+  expect(copy.defaultPrevented).toBe(false);
+  expect(find.defaultPrevented).toBe(false);
+
+  // none of the app chords reaches the shell as input
+  press({ key: "W", ctrlKey: true, shiftKey: true }, inside);
+  press({ key: "K", ctrlKey: true, shiftKey: true }, inside);
+  await settle();
+  expect(calls.sessionInput).toHaveLength(0);
+});
+
+test("ctrl_shift_k_focuses_the_filter", async () => {
+  await startConnected([conn("web-01")]);
+  doubleClick("web-01");
+  await settle();
+  const inside = xtermIn(views()[0]!);
+  inside.focus();
+  const e = press({ key: "K", ctrlKey: true, shiftKey: true }, inside);
+  await settle();
+  expect(e.defaultPrevented).toBe(true);
+  expect(document.activeElement).toBe(
+    document.querySelector("input[aria-label='Filter connections']"),
+  );
+  // plain Ctrl+K stays with the page
+  const plain = press({ key: "k", ctrlKey: true });
+  expect(plain.defaultPrevented).toBe(false);
+});
+
+test("saving_terminal_settings_reaches_open_terminals", async () => {
+  await startConnected([conn("web-01")]);
+  doubleClick("web-01");
+  await settle();
+  const seen: number[] = [];
+  const proto = h.made[0] as unknown as { setOptions: (o: { fontSize: number }) => void };
+  proto.setOptions = (o) => seen.push(o.fontSize);
+  document.querySelector<HTMLButtonElement>("button[aria-label='Settings']")!.click();
+  await settle();
+  const size = document.querySelector<HTMLInputElement>("input[aria-label='Font size']")!;
+  size.value = "20";
+  size.dispatchEvent(new Event("input", { bubbles: true }));
+  [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Save")!.click();
+  await settle();
+  expect(seen).toContain(20);
 });
