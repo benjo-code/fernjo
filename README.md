@@ -17,6 +17,31 @@ All your connections live in one folder tree in the sidebar, sessions open as ta
 
 Design and scope: [Docs/superpowers/specs/2026-11-15-fernjo-design.md](Docs/superpowers/specs/2026-11-15-fernjo-design.md)
 
+## SSH
+
+Double-click a connection (or press Enter on it) to open it as a tab; the context menu has "Open another session" for a second tab. Sign-in follows OpenSSH's order: SSH agent, then the key or password of the credential the connection references in the vault, then keyboard-interactive, then a prompt in the tab. Everything the server asks (host key, password, passphrase, one-time code) is asked inside that tab, never in a popup.
+
+- **Host keys:** fernjo keeps its own `known_hosts` file in the data folder (OpenSSH format, hashed entries are read). A new host asks for confirmation once ("Trust and connect" remembers it, "Trust once" does not); a key that differs from the stored one is blocked with a warning and only replaced after an explicit "Replace key and connect".
+- **Agent:** `SSH_AUTH_SOCK` on Linux and macOS, the OpenSSH named pipe (`\\.\pipe\openssh-ssh-agent`) on Windows. Pageant is not supported yet.
+- **Terminal:** xterm.js with search and clickable links; font family, size and scrollback are set in Settings (gear in the sidebar). A dropped connection keeps the screen, shows a struck lamp and a Reconnect button.
+- Secrets never leave the Rust side except for the explicit "reveal" in the vault.
+
+### Keyboard shortcuts
+
+Plain Ctrl+letter and Alt+letter always go to the shell. App shortcuts are Ctrl+Shift+letter on Windows and Linux and Cmd+letter on macOS (there, Ctrl+Shift+letter stays with the terminal).
+
+| Action | Windows / Linux | macOS |
+|---|---|---|
+| Next tab | Ctrl+Tab | Ctrl+Tab |
+| Previous tab | Ctrl+Shift+Tab | Ctrl+Shift+Tab |
+| Close tab | Ctrl+Shift+W | Cmd+W |
+| Focus the connection filter | Ctrl+Shift+K | Cmd+K |
+| Search in the terminal | Ctrl+Shift+F | Cmd+F |
+| Copy selection (terminal) | Ctrl+Shift+C | Cmd+C |
+| Paste (terminal) | Ctrl+Shift+V | Cmd+V |
+
+Copy and paste only apply while the terminal has focus; elsewhere the page keeps its normal behaviour.
+
 ## Setup
 
 Prerequisites: Rust (stable, version pinned in `rust-toolchain.toml`), Node.js LTS with pnpm, the [Tauri 2 system prerequisites](https://tauri.app/start/prerequisites/) for your OS, `cargo-deny` (`cargo install cargo-deny --locked`), and the .NET 10 SDK for the roadmap tool.
