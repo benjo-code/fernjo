@@ -361,6 +361,23 @@ fn open_external_url_accepts_only_http_and_https() {
     ] {
         assert!(check_external_url(ok).is_ok(), "{ok}");
     }
+    // what is opened is the parsed, normalised URL, not the input text
+    for (input, normalised) in [
+        (" http://x", "http://x/"),
+        (
+            "http://x 
+",
+            "http://x/",
+        ),
+        ("http:/x", "http://x/"),
+        ("http:x", "http://x/"),
+        ("ht	tp://x", "http://x/"),
+        ("HTTP://X", "http://x/"),
+        ("https://Example.com/a b", "https://example.com/a%20b"),
+    ] {
+        let parsed = check_external_url(input).unwrap_or_else(|_| panic!("{input:?}"));
+        assert_eq!(parsed.as_str(), normalised, "{input:?}");
+    }
     for bad in [
         "file:///etc/passwd",
         "javascript:alert(1)",
@@ -370,6 +387,10 @@ fn open_external_url_accepts_only_http_and_https() {
         "example.com",
         "",
         "https://",
+        "http:",
+        "http://",
+        "http:///",
+        "https://:80",
         "ms-settings:",
     ] {
         assert_eq!(

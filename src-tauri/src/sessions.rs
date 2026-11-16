@@ -194,15 +194,19 @@ impl fmt::Debug for PromptAnswer {
     }
 }
 
-/// Accepts only absolute `http` and `https` URLs with a host.
+/// Accepts only absolute `http` and `https` URLs with a non-empty host and returns the parsed
+/// URL. Callers must open `parsed.as_str()`, never the input: the parser strips surrounding
+/// whitespace and embedded tabs and newlines and normalises `http:/x` to `http://x/`, so the
+/// input text is not what was validated.
 ///
 /// # Errors
 /// `invalid_url` for anything else.
-pub fn check_external_url(url: &str) -> Result<(), CommandError> {
+pub fn check_external_url(url: &str) -> Result<tauri::Url, CommandError> {
     let refused = || error("invalid_url", "only http and https links can be opened");
     let parsed = tauri::Url::parse(url).map_err(|_| refused())?;
-    if matches!(parsed.scheme(), "http" | "https") && parsed.host_str().is_some() {
-        Ok(())
+    let has_host = parsed.host_str().is_some_and(|host| !host.is_empty());
+    if matches!(parsed.scheme(), "http" | "https") && has_host {
+        Ok(parsed)
     } else {
         Err(refused())
     }

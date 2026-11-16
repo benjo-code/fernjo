@@ -278,9 +278,10 @@ pub mod handlers {
     /// opener plugin's Rust API, so the webview needs no capability for it.
     #[tauri::command]
     pub fn open_external_url(app: AppHandle, url: String) -> Result<(), CommandError> {
-        crate::sessions::check_external_url(&url)?;
+        // Open the normalised URL that was validated, not the raw text.
+        let parsed = crate::sessions::check_external_url(&url)?;
         app.opener()
-            .open_url(url, None::<&str>)
+            .open_url(parsed.as_str(), None::<&str>)
             .map_err(|_| CommandError {
                 code: "open_failed".to_string(),
                 message: "the link could not be opened".to_string(),
