@@ -41,11 +41,10 @@
   let vaultError = $state<string | null>(null);
   let vaultBusy = $state(false);
   let confirming = $state(false);
+  /** The vault was created or unlocked in this dialog since the file was picked. */
+  let vaultReady = $state(false);
 
   const step = $derived(store.step);
-  const pending = $derived(
-    step === "key" || step === "preview" || step === "vault" || step === "applying",
-  );
   const locked = $derived(store.busy);
   const backupOk = $derived(
     backupPassword.length >= MIN_PASSWORD && backupPassword === backupRepeat,
@@ -70,6 +69,15 @@
     n === 1 ? "1 folder or connection" : `${n} folders and connections`;
   const creds = (n: number) => (n === 1 ? "1 credential" : `${n} credentials`);
 
+  /**
+   * What the dialog decides on: Rust's word at inspect time (`preview.vault`) beats the UI
+   * store's copy, which another window of events may have left stale; once the form here
+   * succeeded the vault is open.
+   */
+  const vaultState = $derived(
+    vaultReady ? "unlocked" : (store.preview?.vault.state ?? vault.status?.state),
+  );
+
   // the current credential count is only known while the vault is unlocked and its list loaded
   const credentialsKnown = $derived(
     vault.status?.state === "unlocked" && vault.credentialsState === "loaded",
@@ -81,7 +89,7 @@
     const now = nodes(collectIds(tree.children).all.size);
     const current = credentialsKnown ? `${now} and ${creds(vault.credentials.length)}` : now;
     const unknown =
-      !credentialsKnown && vault.status?.state !== "none"
+      !credentialsKnown && vaultState !== "none"
         ? " The credentials in the vault are replaced too."
         : "";
     return `This replaces your current ${current} with the backup from ${dateOf(b.createdAt)}, which has ${nodes(b.folders + b.connections)} and ${creds(b.credentials)}.${unknown} Open sessions are closed.`;
@@ -91,7 +99,7 @@
   const restoreNeedsVault = $derived(
     store.preview?.backup != null &&
       store.preview.needsVault &&
-      (vault.status?.state === "locked" || vault.status?.state === "none"),
+      (vaultState === "locked" || vaultState === "none"),
   );
 
   $effect(() => {
@@ -116,8 +124,10 @@
     });
   });
 
-  // the field is empty when asked for again after a wrong secret: put the cursor back in it
+  // The field is empty when asked for again after a wrong secret and the clicked Continue
+  // button still has focus: a new error (the step stays `key`) puts the cursor back in it.
   $effect(() => {
+    void store.error;
     if (step === "key") void tick().then(() => secretField?.focus());
   });
   $effect(() => {
@@ -130,6 +140,7 @@
   async function pick(kind: ImportKind) {
     if (locked) return;
     secret = "";
+    vaultReady = false;
     await store.start(kind);
   }
 
@@ -156,7 +167,7 @@
   async function submitVault(e: SubmitEvent, resume: boolean) {
     e.preventDefault();
     if (vaultBusy || locked) return;
-    const none = vault.status?.state === "none";
+    const none = vaultState === "none";
     if (none && vaultPassword !== vaultRepeat) {
       vaultError = "The passwords do not match.";
       return;
@@ -178,6 +189,7 @@
       return;
     }
     vaultError = null;
+    vaultReady = true;
     if (resume) await apply(false);
   }
 
@@ -199,6 +211,7 @@
   function startOver() {
     store.reset();
     confirming = false;
+    vaultReady = false;
   }
 
   function close() {
@@ -209,8 +222,9 @@
     backupRepeat = "";
     vaultPassword = "";
     vaultRepeat = "";
-    if (pending) void store.cancel();
-    else store.reset();
+    // Always: after a failed apply the plan (with its decrypted passwords) is still in Rust, and
+    // a pick or inspect that is still running would install one after the dialog is gone.
+    void store.cancel();
     onclose();
   }
 
@@ -239,7 +253,7 @@
 </script>
 
 {#snippet vaultForm(resume: boolean, withoutOption: boolean)}
-  {@const none = vault.status?.state === "none"}
+  {@const none = vaultState === "none"}
   <form onsubmit={(e) => void submitVault(e, resume)}>
     <PasswordField
       bind:this={vaultField}
@@ -336,7 +350,7 @@
         </p>
         {#if restoreNeedsVault}
           <p class="note">
-            {vault.status?.state === "none"
+            {vaultState === "none"
               ? "The backup holds credentials. Create the vault they are restored into."
               : "A restore replaces the vault, so unlock it first."}
           </p>
@@ -357,13 +371,13 @@
       <p class="file">{store.fileName}</p>
       {#if store.kind === "backup"}
         <p class="note">
-          {vault.status?.state === "none"
+          {vaultState === "none"
             ? "The backup holds credentials. Create the vault they are restored into."
             : "A restore replaces the vault, so it must be unlocked first."}
         </p>
       {:else}
         <p class="note">
-          {vault.status?.state === "none"
+          {vaultState === "none"
             ? "Imported passwords are stored in the vault. Create one with a master password, or import without passwords."
             : "Imported passwords are stored in the vault. Unlock it, or import without passwords."}
         </p>

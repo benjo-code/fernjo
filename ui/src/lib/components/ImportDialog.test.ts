@@ -151,6 +151,23 @@ describe("ImportDialog", () => {
     expect(input("import-secret")).toBeNull();
   });
 
+  test("a_wrong_key_puts_the_cursor_back_in_the_key_field", async () => {
+    await setup({
+      importInspect: async (secret) => {
+        if (secret === null) throw apiError("key_needed", "This file needs a key.");
+        throw apiError("wrong_key", "That key does not open the file.");
+      },
+    });
+    await click("mRemoteNG file…");
+    type(input("import-secret"), "bad");
+    // the focused button is the one that was clicked, as in the real dialog
+    button("Continue").focus();
+    await click("Continue");
+    await settle();
+    expect(alert()?.textContent).toContain("That key does not open the file.");
+    expect(document.activeElement).toBe(input("import-secret"));
+  });
+
   test("skipped_and_partial_lists_are_collapsed_until_opened", async () => {
     await setup({ importInspect: async () => preview({ report: withCounts() }) });
     await click("mRemoteNG file…");
@@ -228,12 +245,17 @@ describe("ImportDialog", () => {
     expect(document.body.textContent).toContain("Restored");
   });
 
-  const backupPreview = (needsVault = false): ImportPreview =>
+  /** `vault` is the state Rust reports with the preview (what the dialog decides on). */
+  const backupPreview = (
+    needsVault = false,
+    vault: "none" | "locked" | "unlocked" = "none",
+  ): ImportPreview =>
     preview({
       kind: "backup",
       fileName: "b.fernjo",
       report: null,
       needsVault,
+      vault: vaultStatus({ state: vault }),
       backup: {
         createdAt: "2026-11-01T10:00:00Z",
         app: "fernjo 0.5.0",
@@ -253,7 +275,7 @@ describe("ImportDialog", () => {
       vaultStatus: async () => vaultStatus({ state: "unlocked" }),
       listCredentials: async () => [credential({ id: "c1" })],
       importPick: async () => ({ fileName: "b.fernjo" }),
-      importInspect: async () => backupPreview(true),
+      importInspect: async () => backupPreview(true, "unlocked"),
     });
     await click("Backup file…");
     await click("Restore…");
@@ -265,7 +287,7 @@ describe("ImportDialog", () => {
   test("restore_confirmation_does_not_claim_zero_credentials_for_a_locked_vault", async () => {
     await setup({
       vaultStatus: async () => vaultStatus({ state: "locked" }),
-      importInspect: async () => backupPreview(false),
+      importInspect: async () => backupPreview(false, "locked"),
     });
     await click("Backup file…");
     await click("Restore…");
@@ -274,11 +296,28 @@ describe("ImportDialog", () => {
     expect(text).toContain("The credentials in the vault are replaced too.");
   });
 
+  test("a_stale_ui_vault_status_cannot_skip_the_vault_form_of_a_restore", async () => {
+    // the UI store believes the vault is unlocked; Rust said "locked" when it inspected
+    const { vault } = await setup({
+      vaultStatus: async () => vaultStatus({ state: "unlocked" }),
+      importPick: async () => ({ fileName: "b.fernjo" }),
+      importInspect: async () => ({
+        ...backupPreview(true),
+        vault: vaultStatus({ state: "locked" }),
+      }),
+    });
+    expect(vault.status?.state).toBe("unlocked");
+    await click("Backup file…");
+    expect(button("Restore…")).toBeUndefined();
+    expect(input("import-vault-password")).not.toBeNull();
+    expect(document.body.textContent).toContain("unlock it first");
+  });
+
   test("restore_preview_unlocks_the_vault_before_the_confirmation", async () => {
     const { calls } = await setup({
       vaultStatus: async () => vaultStatus({ state: "locked" }),
       vaultUnlock: async () => vaultStatus({ state: "unlocked" }),
-      importInspect: async () => backupPreview(true),
+      importInspect: async () => backupPreview(true, "locked"),
       importApply: async () => restored(),
     });
     await click("Backup file…");
@@ -297,7 +336,7 @@ describe("ImportDialog", () => {
     const { calls } = await setup({
       vaultStatus: async () => vaultStatus({ state: "locked" }),
       vaultUnlock: async () => vaultStatus({ state: "unlocked" }),
-      importInspect: async () => backupPreview(false),
+      importInspect: async () => backupPreview(false, "locked"),
       importApply: async () => {
         attempts++;
         if (attempts === 1) throw apiError("vault_needed", "Unlock the vault first.");
@@ -437,11 +476,48 @@ describe("ImportDialog", () => {
     expect(store.step).toBe("idle");
   });
 
-  test("escape_without_a_pending_import_just_closes", async () => {
+  test("closing_always_tells_rust_to_drop_what_is_pending", async () => {
+    // harmless when nothing is pending, and the only safe thing when the store cannot know
     const { calls, onclose } = await setup();
     escape();
-    expect(calls.importCancel).toHaveLength(0);
+    expect(calls.importCancel).toHaveLength(1);
     expect(onclose).toHaveBeenCalledTimes(1);
+  });
+
+  test("closing_after_a_failed_apply_still_drops_the_plan_in_rust", async () => {
+    // import_apply keeps the plan (with every decrypted password) on most errors, and the error
+    // step has no retry: closing must clear it
+    const { calls, onclose, store } = await setup({
+      importInspect: async () => preview({ report: withCounts() }),
+      importApply: async () => {
+        throw apiError("save_failed", "could not write connections.json");
+      },
+    });
+    await click("mRemoteNG file…");
+    await click("Import");
+    expect(store.step).toBe("error");
+    expect(calls.importCancel).toHaveLength(0);
+    escape();
+    await settle();
+    expect(calls.importCancel).toHaveLength(1);
+    expect(onclose).toHaveBeenCalledTimes(1);
+  });
+
+  test("closing_while_the_file_is_still_being_picked_cancels_again_when_the_pick_arrives", async () => {
+    // the native picker has no parent window: it can still be open when the dialog closes
+    const pick = deferred<PickedFile | null>();
+    const { calls, onclose, store } = await setup({ importPick: () => pick.promise });
+    await click("mRemoteNG file…");
+    escape();
+    await settle();
+    expect(calls.importCancel).toHaveLength(1);
+    expect(onclose).toHaveBeenCalledTimes(1);
+    pick.resolve({ fileName: "confCons.xml" });
+    await settle();
+    // Rust now remembers the picked path: the store must drop it again and not inspect it
+    expect(calls.importInspect).toHaveLength(0);
+    expect(calls.importCancel).toHaveLength(2);
+    expect(store.step).toBe("idle");
   });
 
   test("actions_show_the_busy_state", async () => {
