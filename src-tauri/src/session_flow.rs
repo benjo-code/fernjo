@@ -6,9 +6,9 @@
 //! (hysteresis, so a slow consumer does not make the forwarder flap per byte).
 
 /// Unacknowledged bytes above which the forwarder stops reading from the SSH channel.
-pub const HIGH_WATER: usize = 256 * 1024;
+pub const HIGH_WATER: usize = 128 * 1024;
 /// Unacknowledged bytes at or below which it resumes.
-pub const LOW_WATER: usize = 64 * 1024;
+pub const LOW_WATER: usize = 32 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct FlowControl {

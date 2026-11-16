@@ -17,6 +17,12 @@
 //! than `session_flow::HIGH_WATER` unacknowledged bytes pause the reader until the count falls
 //! to `session_flow::LOW_WATER` (see `session_flow`).
 //!
+//! Output in flight between the server and xterm.js is bounded on purpose, because everything
+//! ahead of the echo of Ctrl+C has to drain through xterm's parser: SSH window 512 KiB, 4 packets
+//! buffered in the russh channel, 4 events in `fernjo_ssh`'s queue (32 KiB packets), `HIGH_WATER`
+//! 128 KiB unacknowledged and at most one more batch (`MAX_BATCH` 32 KiB). Details and
+//! measurements: `Docs/DECISIONS.md`, "M4 flow control numbers".
+//!
 //! No event carries a secret: prompts describe what is asked, answers travel UI to Rust only.
 
 use std::collections::HashMap;
@@ -45,7 +51,7 @@ use crate::session_flow::FlowControl;
 use crate::state::AppState;
 
 /// Largest raw output message.
-pub const MAX_BATCH: usize = 64 * 1024;
+pub const MAX_BATCH: usize = 32 * 1024;
 /// How long output is collected before it is sent.
 pub const BATCH_INTERVAL: Duration = Duration::from_millis(16);
 
@@ -651,19 +657,48 @@ impl SessionManager {
     /// `not_found`.
     pub fn close(&self, id: &str) -> Result<(), CommandError> {
         let entry = lock(&self.entries)?.remove(id).ok_or_else(not_found)?;
-        entry.shared.sink.close();
-        entry.shared.hub.close();
-        if let Ok(ops) = entry.shared.ops.lock()
-            && let Some(tx) = ops.as_ref()
-        {
-            let _ = tx.send(Op::Close);
-        }
-        if let Ok(mut task) = entry.task.lock()
-            && let Some(handle) = task.take()
-        {
-            handle.abort();
-        }
+        shut_down(&entry);
         Ok(())
+    }
+
+    /// Ends every session, silently, like `close` for each. Called when the webview starts
+    /// loading a page: a reload or a crash leaves the old page's sessions without a UI, and the
+    /// page's own `closeAll` on `pagehide` is fire-and-forget and may never arrive.
+    pub fn close_all(&self) {
+        let entries: Vec<Arc<Entry>> = match self.entries.lock() {
+            Ok(mut map) => map.drain().map(|(_, entry)| entry).collect(),
+            Err(poisoned) => poisoned
+                .into_inner()
+                .drain()
+                .map(|(_, entry)| entry)
+                .collect(),
+        };
+        for entry in &entries {
+            shut_down(entry);
+        }
+    }
+
+    /// Number of sessions that exist (open, connecting, prompting or disconnected).
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.entries.lock().map_or(0, |map| map.len())
+    }
+}
+
+/// Mutes the channel, answers every prompt with the safe answer, tells the writer task to close
+/// and aborts the connect task.
+fn shut_down(entry: &Entry) {
+    entry.shared.sink.close();
+    entry.shared.hub.close();
+    if let Ok(ops) = entry.shared.ops.lock()
+        && let Some(tx) = ops.as_ref()
+    {
+        let _ = tx.send(Op::Close);
+    }
+    if let Ok(mut task) = entry.task.lock()
+        && let Some(handle) = task.take()
+    {
+        handle.abort();
     }
 }
 

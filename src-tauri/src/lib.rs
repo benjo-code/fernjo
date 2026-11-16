@@ -33,6 +33,16 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::open_for_app(fernjo_core::locate()))
+        // A reload or a crashed page leaves its sessions running without a UI (the page's
+        // `closeAll` on `pagehide` is fire-and-forget), so every page load ends them. The first
+        // load of the app finds none.
+        .on_page_load(|webview, payload| {
+            if webview.label() == "main"
+                && matches!(payload.event(), tauri::webview::PageLoadEvent::Started)
+            {
+                webview.state::<AppState>().sessions.close_all();
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::handlers::list_tree,
             commands::handlers::get_node,

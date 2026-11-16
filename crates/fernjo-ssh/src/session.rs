@@ -24,7 +24,7 @@ use crate::known_hosts::KnownHosts;
 use crate::params::{ConnectParams, Credential};
 
 /// Entries the events channel holds before the session task blocks (backpressure towards the server).
-const EVENT_QUEUE: usize = 64;
+const EVENT_QUEUE: usize = 4;
 /// Keyboard-interactive rounds one attempt may take before it counts as failed.
 const MAX_KI_ROUNDS: usize = 5;
 
@@ -55,6 +55,11 @@ pub(crate) fn client_config(keepalive_secs: u32) -> client::Config {
             .then(|| Duration::from_secs(u64::from(keepalive_secs))),
         keepalive_max: 3,
         nodelay: true,
+        // Everything between the server and the terminal must drain before Ctrl+C is echoed, so the
+        // data in flight is kept small: SSH window + packets buffered in the channel + EVENT_QUEUE
+        // events (see Docs/DECISIONS.md, "M4 flow control numbers").
+        window_size: 512 * 1024,
+        channel_buffer_size: 4,
         ..client::Config::default()
     }
 }
@@ -804,5 +809,14 @@ mod tests {
         assert_eq!(c.keepalive_interval, Some(Duration::from_secs(30)));
         assert_eq!(c.keepalive_max, 3);
         assert_eq!(client_config(0).keepalive_interval, None);
+    }
+
+    #[test]
+    fn client_config_bounds_the_data_in_flight() {
+        let c = client_config(30);
+        assert_eq!(c.window_size, 512 * 1024);
+        assert_eq!(c.channel_buffer_size, 4);
+        assert_eq!(c.maximum_packet_size, 32 * 1024);
+        assert_eq!(EVENT_QUEUE, 4);
     }
 }

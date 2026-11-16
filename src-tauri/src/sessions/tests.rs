@@ -403,7 +403,7 @@ fn open_external_url_accepts_only_http_and_https() {
 
 #[test]
 fn batching_constants_match_the_contract() {
-    assert_eq!(MAX_BATCH, 64 * 1024);
+    assert_eq!(MAX_BATCH, 32 * 1024);
     assert_eq!(BATCH_INTERVAL, Duration::from_millis(16));
 }
 
@@ -842,9 +842,12 @@ async fn flood_stops_at_high_water_mark_and_ctrl_c_returns_within_one_second() {
         }
         received += std::mem::take(&mut rec.output).len();
     }
-    assert!(received > 0, "the flood produced no output");
-    // the contract value (256 KiB), not the constant: the test must notice a changed mark
-    let limit = 256 * 1024 + 2 * MAX_BATCH;
+    assert!(
+        received >= 64 * 1024,
+        "the flood produced only {received} bytes"
+    );
+    // the contract values (128 KiB mark, 32 KiB batches), not the constants: the test must notice a change
+    let limit = 128 * 1024 + 2 * MAX_BATCH;
     assert!(
         received <= limit,
         "received {received} bytes unacknowledged, limit {limit}"
@@ -880,6 +883,57 @@ async fn flood_stops_at_high_water_mark_and_ctrl_c_returns_within_one_second() {
         );
     }
     close_session(&r.st, &id).unwrap();
+}
+
+#[tokio::test]
+async fn close_all_removes_every_session_and_is_silent() {
+    let r = rig("127.0.0.1", 1, "u", "p", true);
+    let (ch1, mut rec1) = recorder();
+    let (ch2, mut rec2) = recorder();
+    let id1 = open_session(&r.st, r.node, ch1, 80, 24).unwrap();
+    let id2 = open_session(&r.st, r.node, ch2, 80, 24).unwrap();
+    assert_eq!(rec1.wait_state("needsVault").await, None);
+    assert_eq!(rec2.wait_state("needsVault").await, None);
+    assert_eq!(r.st.sessions.len(), 2);
+    r.st.sessions.close_all();
+    assert_eq!(r.st.sessions.len(), 0);
+    assert_eq!(code(close_session(&r.st, &id1)), "not_found");
+    assert_eq!(code(close_session(&r.st, &id2)), "not_found");
+    // nothing follows on the channels
+    assert!(rec1.next(Duration::from_millis(200)).await.is_none());
+    // closing nothing is fine
+    r.st.sessions.close_all();
+}
+
+#[tokio::test]
+async fn close_all_aborts_a_connecting_task_and_closes_its_prompts() {
+    let Some(s) = server() else { return };
+    let r = rig_for(&s, false);
+    let (ch, mut rec) = recorder();
+    let id = open_session(&r.st, r.node, ch, 80, 24).unwrap();
+    let (pid, prompt) = rec.wait_prompt().await;
+    assert_eq!(prompt["kind"], "hostKey");
+    let weak = r.st.sessions.weak_shared(&id).unwrap();
+    r.st.sessions.close_all();
+    assert_eq!(r.st.sessions.len(), 0);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while weak.upgrade().is_some() {
+        assert!(
+            Instant::now() < deadline,
+            "the connect task is still running"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(!r.known_hosts.exists(), "nothing may be trusted by closing");
+    assert_eq!(
+        code(answer_prompt(
+            &r.st,
+            &id,
+            pid,
+            answer(json!({"kind": "hostKey", "decision": "always"}))
+        )),
+        "not_found"
+    );
 }
 
 #[tokio::test]

@@ -236,7 +236,8 @@ async fn flood_blocks_when_receiver_is_slow() {
         }
     }
     eprintln!("flood: {queued} bytes in {entries} entries were queued after 2 s");
-    assert!(queued < 16 * 1024 * 1024, "queued {queued} bytes");
+    // window 512 KiB + 4 buffered packets + 4 queued events (about 264 KiB without the window), with margin
+    assert!(queued < 1024 * 1024, "queued {queued} bytes");
 
     session.write(b"\x03".to_vec()).await.unwrap();
     session
@@ -244,6 +245,61 @@ async fn flood_blocks_when_receiver_is_slow() {
         .await
         .unwrap();
     read_until(&mut rx, "mark42", Duration::from_secs(1)).await;
+    session.close();
+}
+
+/// The small SSH window (512 KiB) must not turn bulk output into a crawl: 30 MB of long lines,
+/// read as fast as the receiver can over the loopback container. Measured on the Windows
+/// development machine: 3 to 6 MB/s with the small window and with russh's default 2 MiB window
+/// alike, so the container and the cipher are the limit there, not the window. The floor
+/// (1.5 MB/s) only catches a collapse.
+#[tokio::test]
+async fn bulk_output_throughput_stays_high_with_the_small_window() {
+    let Some(s) = support::server() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let ia = Arc::new(ScriptedInteraction::new().host_key(HostKeyDecision::TrustOnce));
+    let (session, mut rx) = Session::connect(params(&s, &dir.path().join("kh")), ia)
+        .await
+        .unwrap();
+    const TOTAL: usize = 30_000_000;
+    let line =
+        "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz0123456789";
+    session
+        .write(
+            format!(
+                "yes {line} | head -c {TOTAL}; echo END$((40+2))
+"
+            )
+            .into_bytes(),
+        )
+        .await
+        .unwrap();
+    let started = Instant::now();
+    let mut bytes = 0usize;
+    let mut tail = String::new();
+    loop {
+        match timeout(Duration::from_secs(30), rx.recv()).await {
+            Ok(Some(SessionEvent::Output(b))) => {
+                bytes += b.len();
+                tail.push_str(&String::from_utf8_lossy(&b[b.len().saturating_sub(64)..]));
+                if tail.len() > 192 {
+                    tail.drain(..tail.len() - 128);
+                }
+                if tail.contains("END42") {
+                    break;
+                }
+            }
+            other => panic!(
+                "the bulk output ended early after {bytes} bytes, {:.1} s: {other:?}",
+                started.elapsed().as_secs_f64()
+            ),
+        }
+    }
+    let secs = started.elapsed().as_secs_f64();
+    let mb_s = bytes as f64 / 1e6 / secs;
+    eprintln!("throughput: {bytes} bytes in {secs:.2} s = {mb_s:.1} MB/s");
+    assert!(bytes >= TOTAL, "only {bytes} bytes arrived");
+    assert!(mb_s >= 1.5, "bulk output crawled at {mb_s:.1} MB/s");
     session.close();
 }
 
