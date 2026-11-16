@@ -17,16 +17,15 @@ use std::collections::HashSet;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::PoisonError;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{MutexGuard, PoisonError};
 
-use fernjo_core::{Node, NodeKind, Tree, write_exact};
+use fernjo_core::{Node, NodeKind, write_exact};
 use fernjo_import::backup::{self, BackupContents, BackupError};
 use fernjo_import::connections::{self, ConnectionsError, ConnectionsPlan};
 use fernjo_import::error::ImportError;
 use fernjo_import::mremoteng::{self, ImportPlan, PlannedEntry};
 use fernjo_import::report::{Report, ReportLine};
-use fernjo_vault::{EntryId, Vault};
+use fernjo_vault::{EntryId, FILE_NAME as VAULT_FILE_NAME, NewEntry, Vault};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
@@ -160,37 +159,15 @@ impl From<BackupError> for CommandError {
 
 // ---- date and time ------------------------------------------------------------------------
 
-/// `(YYYY-MM-DD, YYYY-MM-DDTHH:MM:SSZ)` for Unix seconds, in UTC. The workspace has no date
-/// crate of its own, so the folder date is the UTC date (it can differ from the local date
-/// around midnight; a repeat on the same day relies on the numbered folder name).
-fn format_utc(secs: u64) -> (String, String) {
-    let days = i64::try_from(secs / 86_400).unwrap_or(0);
-    let rest = secs % 86_400;
-    // civil-from-days (proleptic Gregorian), after H. Hinnant
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    let date = format!("{year:04}-{month:02}-{day:02}");
-    let time = format!(
-        "{date}T{:02}:{:02}:{:02}Z",
-        rest / 3_600,
-        rest % 3_600 / 60,
-        rest % 60
-    );
-    (date, time)
+/// Today's local date as `YYYY-MM-DD`: the date in the import folder names and in the export
+/// file names.
+pub(crate) fn today_local() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
-fn now_utc() -> (String, String) {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    format_utc(secs)
+/// The current time as RFC 3339 in UTC with a `Z` (`exportedAt`, `createdAt`).
+fn now_utc_rfc3339() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
 // ---- helpers ------------------------------------------------------------------------------
@@ -307,17 +284,22 @@ fn require_unlocked_vault(state: &AppState, what: &str) -> Result<(), CommandErr
 
 // ---- pick, inspect, cancel ----------------------------------------------------------------
 
+/// The pending slot. A poisoned lock is recovered: the slot only holds plain values and a
+/// panic elsewhere must not make import and cancel unusable.
+fn pending_slot(state: &AppState) -> MutexGuard<'_, Option<Pending>> {
+    state.pending.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// Remembers the picked file and drops whatever was pending.
 pub fn import_begin(state: &AppState, kind: ImportKind, path: PathBuf) -> PickedFile {
     let file_name = file_name_of(&path);
-    *state.pending.lock().unwrap_or_else(PoisonError::into_inner) =
-        Some(Pending::Picked { kind, path });
+    *pending_slot(state) = Some(Pending::Picked { kind, path });
     PickedFile { file_name }
 }
 
 /// Drops the pending value (also what every page load does).
 pub fn import_cancel(state: &AppState) {
-    *state.pending.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    *pending_slot(state) = None;
 }
 
 /// Reads the picked file with the optional typed key (mRemoteNG) or password (backup) and
@@ -325,7 +307,7 @@ pub fn import_cancel(state: &AppState) {
 /// `password_needed` leave the picked file in place for a retry; success replaces it by the
 /// plan; any other error leaves it as it was.
 pub fn import_inspect(state: &AppState, secret: Option<String>) -> Result<Preview, CommandError> {
-    inspect_on(state, secret, &now_utc().0)
+    inspect_on(state, secret, &today_local())
 }
 
 /// [`import_inspect`] with the date passed in, so tests do not depend on the clock.
@@ -336,7 +318,7 @@ pub(crate) fn inspect_on(
 ) -> Result<Preview, CommandError> {
     // wrapped at once; `String` -> `SecretString` moves the buffer
     let secret = secret.map(SecretString::from);
-    let (kind, path) = match &*state.pending.lock().map_err(|_| CommandError::internal())? {
+    let (kind, path) = match &*pending_slot(state) {
         Some(Pending::Picked { kind, path }) => (*kind, path.clone()),
         Some(_) => {
             return Err(error(
@@ -378,27 +360,44 @@ pub(crate) fn inspect_on(
             (Pending::Backup(contents), None, Some(summary))
         }
     };
+    let vault = vault_status(state)?;
+    // Must agree with `import_apply`: a restore needs the vault whenever one exists (it is
+    // replaced as a whole) or the backup holds entries.
     let needs_vault = match &next {
         Pending::MRemoteNg(p) => !p.entries.is_empty(),
-        Pending::Backup(c) => !c.entries.is_empty(),
+        Pending::Backup(c) => !c.entries.is_empty() || vault.state != "none",
         _ => false,
     };
-    // Replace only when the user has not picked or cancelled something else meanwhile.
-    {
-        let mut slot = state.pending.lock().map_err(|_| CommandError::internal())?;
-        match &*slot {
-            Some(Pending::Picked { path: now, .. }) if *now == path => *slot = Some(next),
-            _ => return Err(error("no_pending_import", "the picked file was replaced")),
-        }
-    }
+    install(state, kind, &path, next)?;
     Ok(Preview {
         kind,
         file_name: file_name_of(&path),
         report,
         backup,
         needs_vault,
-        vault: vault_status(state)?,
+        vault,
     })
+}
+
+/// Replaces the picked file by its inspected form, but only when the user has not picked
+/// something else or cancelled meanwhile (same kind and path).
+fn install(
+    state: &AppState,
+    kind: ImportKind,
+    path: &Path,
+    next: Pending,
+) -> Result<(), CommandError> {
+    let mut slot = pending_slot(state);
+    match &*slot {
+        Some(Pending::Picked {
+            kind: now_kind,
+            path: now_path,
+        }) if *now_kind == kind && now_path == path => {
+            *slot = Some(next);
+            Ok(())
+        }
+        _ => Err(error("no_pending_import", "the picked file was replaced")),
+    }
 }
 
 fn secret_is_empty(s: &SecretString) -> bool {
@@ -412,7 +411,7 @@ fn secret_is_empty(s: &SecretString) -> bool {
 /// when a backup turns out to be damaged, since it can never be applied).
 pub fn import_apply(state: &AppState, options: ApplyOptions) -> Result<ApplyResult, CommandError> {
     ensure_writable(state)?;
-    let mut slot = state.pending.lock().map_err(|_| CommandError::internal())?;
+    let mut slot = pending_slot(state);
     let result = match &*slot {
         None => Err(error("no_pending_import", "there is nothing to apply")),
         Some(Pending::Picked { .. }) => Err(error(
@@ -421,12 +420,17 @@ pub fn import_apply(state: &AppState, options: ApplyOptions) -> Result<ApplyResu
         )),
         Some(Pending::MRemoteNg(plan)) => apply_mremoteng(state, plan, options.without_passwords),
         Some(Pending::Connections(plan)) => apply_connections(state, plan),
-        Some(Pending::Backup(contents)) => apply_backup(state, contents),
+        Some(Pending::Backup(contents)) => match validate_backup(contents) {
+            Ok(()) => apply_backup(state, contents),
+            Err(e) => {
+                // never applicable: drop it
+                *slot = None;
+                return Err(e);
+            }
+        },
     };
-    match &result {
-        Ok(_) => *slot = None,
-        Err(e) if e.code == "damaged" => *slot = None,
-        Err(_) => {}
+    if result.is_ok() {
+        *slot = None;
     }
     result
 }
@@ -480,19 +484,12 @@ fn apply_mremoteng(
     } else {
         require_unlocked_vault(state, "this import")?;
         with_vault(state, |v| {
-            let mut added: Vec<EntryId> = Vec::new();
-            for planned in entries {
-                if let Err(e) = v.add_with_id(planned.id, planned.entry.clone()) {
-                    remove_entries(v, &added);
-                    return Err(e.into());
-                }
-                added.push(planned.id);
-            }
-            with_store(state, |store| {
-                store.graft(None, folder)?;
-                Ok(snapshot(store, Vec::new()))
+            add_then_graft(v, entries, |_| {
+                with_store(state, |store| {
+                    store.graft(None, folder)?;
+                    Ok(snapshot(store, Vec::new()))
+                })
             })
-            .inspect_err(|_| remove_entries(v, &added))
         })?
     };
     Ok(ApplyResult {
@@ -502,40 +499,99 @@ fn apply_mremoteng(
     })
 }
 
-/// Best effort: a delete that fails leaves an unreferenced entry behind, which the owner can
-/// remove in the vault.
-fn remove_entries(vault: &mut Vault, ids: &[EntryId]) {
-    for id in ids.iter().rev() {
-        let _ = vault.delete(*id);
+/// Adds the planned entries, then runs `graft`. When an add or the graft fails, the entries
+/// added so far are deleted again; if one of those deletes fails too, the error is
+/// `import_incomplete`, naming how many entries could not be removed.
+fn add_then_graft(
+    vault: &mut Vault,
+    entries: &[PlannedEntry],
+    graft: impl FnOnce(&mut Vault) -> Result<Snapshot, CommandError>,
+) -> Result<Snapshot, CommandError> {
+    let mut added: Vec<EntryId> = Vec::new();
+    let mut failure = None;
+    for planned in entries {
+        match vault.add_with_id(planned.id, planned.entry.clone()) {
+            Ok(()) => added.push(planned.id),
+            Err(e) => {
+                failure = Some(CommandError::from(e));
+                break;
+            }
+        }
+    }
+    let failure = match failure {
+        Some(e) => e,
+        None => match graft(vault) {
+            Ok(snapshot) => return Ok(snapshot),
+            Err(e) => e,
+        },
+    };
+    let stuck = added
+        .iter()
+        .rev()
+        .filter(|id| vault.delete(**id).is_err())
+        .count();
+    if stuck == 0 {
+        return Err(failure);
+    }
+    let s = if stuck == 1 { "y" } else { "ies" };
+    Err(error(
+        "import_incomplete",
+        format!(
+            "the import failed ({}) and {stuck} imported credential entr{s} could not be removed again; remove them in the vault",
+            failure.message
+        ),
+    ))
+}
+
+/// Puts the backup's entries in the vault, then runs `tree_step`. When that fails, the
+/// previous entries are put back; if that fails too the error is `restore_incomplete`: the
+/// vault then holds the backup's entries while the tree is the old one.
+fn replace_entries_then(
+    vault: &mut Vault,
+    new: Vec<(EntryId, NewEntry)>,
+    previous: Vec<(EntryId, NewEntry)>,
+    tree_step: impl FnOnce() -> Result<Snapshot, CommandError>,
+) -> Result<Snapshot, CommandError> {
+    vault.replace_entries(new)?;
+    match tree_step() {
+        Ok(snapshot) => Ok(snapshot),
+        Err(failure) => match vault.replace_entries(previous) {
+            Ok(()) => Err(failure),
+            Err(_) => Err(error(
+                "restore_incomplete",
+                format!(
+                    "the restore failed ({}) and the vault could not be put back to its previous state; its previous content is in {VAULT_FILE_NAME}.bak next to the vault file",
+                    failure.message
+                ),
+            )),
+        },
     }
 }
 
 fn apply_backup(state: &AppState, contents: &BackupContents) -> Result<ApplyResult, CommandError> {
-    validate_backup(contents)?;
     // A vault that exists is part of "replace everything", so it must be usable and unlocked
     // even when the backup holds no entries; without a vault there is nothing to replace.
     let has_vault = !matches!(state.vault_status()?, State::None);
     if has_vault || !contents.entries.is_empty() {
         require_unlocked_vault(state, "this restore")?;
     }
+    // The store must have loaded: otherwise sessions would be closed for nothing.
+    with_store(state, |_| Ok(()))?;
 
     state.sessions.close_all();
-    let replace_tree = |tree: Tree| {
+    let replace_tree = || {
         with_store(state, |store| {
-            store.replace_tree(tree)?;
+            store.replace_tree(contents.tree.clone())?;
             Ok(snapshot(store, Vec::new()))
         })
     };
     let snap = if has_vault {
         with_vault(state, |v| {
             let previous = v.export_entries()?;
-            v.replace_entries(contents.entries.clone())?;
-            replace_tree(contents.tree.clone()).inspect_err(|_| {
-                let _ = v.replace_entries(previous);
-            })
+            replace_entries_then(v, contents.entries.clone(), previous, replace_tree)
         })?
     } else {
-        replace_tree(contents.tree.clone())?
+        replace_tree()?
     };
     let (folders, connections) = count_nodes(contents.tree.children());
     Ok(ApplyResult {
@@ -560,7 +616,7 @@ fn write_file(path: &Path, bytes: &[u8]) -> Result<(), CommandError> {
 /// references).
 pub fn export_connections_to(state: &AppState, path: &Path) -> Result<ExportInfo, CommandError> {
     let tree = with_store(state, |s| Ok(s.tree().clone()))?;
-    let out = connections::export(&tree, &now_utc().1);
+    let out = connections::export(&tree, &now_utc_rfc3339());
     write_file(path, &out.bytes)?;
     Ok(ExportInfo {
         file_name: file_name_of(path),
@@ -589,7 +645,7 @@ pub fn export_backup_to(
     };
     let tree = with_store(state, |s| Ok(s.tree().clone()))?;
     drop(vault_guard);
-    let (_, created_at) = now_utc();
+    let created_at = now_utc_rfc3339();
     let contents = BackupContents {
         created_at,
         app: fernjo_core::version().to_string(),
@@ -740,19 +796,45 @@ mod tests {
         (src, out)
     }
 
+    /// Entries as another run of the app finds them on disk.
+    fn entries_on_disk(data: &Path) -> Vec<(EntryId, Value)> {
+        let fresh = st(data);
+        vault_commands::vault_unlock(&fresh, sec(MASTER), false).unwrap();
+        entries_json(&fresh)
+    }
+
+    fn empty_snapshot() -> Snapshot {
+        Snapshot {
+            children: Vec::new(),
+            notices: Vec::new(),
+        }
+    }
+
+    /// Makes the next save of the vault fail with `changed_on_disk`.
+    fn spoil_vault_file(data: &Path) {
+        fs::write(
+            data.join(fernjo_vault::FILE_NAME),
+            b"changed by someone else",
+        )
+        .unwrap();
+    }
+
     fn block_store_save(dir: &Path) {
         // the store writes `connections.json.tmp` first; a folder of that name fails the save
         fs::create_dir(dir.join("connections.json.tmp")).unwrap();
     }
 
     #[test]
-    fn utc_date_and_time_are_formatted_from_unix_seconds() {
-        assert_eq!(
-            format_utc(0),
-            ("1970-01-01".to_string(), "1970-01-01T00:00:00Z".to_string())
-        );
-        assert_eq!(format_utc(1_700_000_000).1, "2023-11-14T22:13:20Z");
-        assert_eq!(format_utc(1_709_164_800).0, "2024-02-29");
+    fn today_is_a_local_date_and_timestamps_are_utc_with_z() {
+        let d = today_local();
+        assert_eq!(d.len(), 10);
+        assert!(d.chars().enumerate().all(|(i, c)| if i == 4 || i == 7 {
+            c == '-'
+        } else {
+            c.is_ascii_digit()
+        }));
+        let t = now_utc_rfc3339();
+        assert!(t.ends_with('Z') && t.len() == 20, "{t}");
     }
 
     #[test]
@@ -978,6 +1060,228 @@ mod tests {
         assert_eq!(credential_count(&s), 0);
         assert!(top_names(&s).is_empty());
         assert_eq!(pending_kind(&s), "mremoteng");
+        // the vault on disk agrees with memory: nothing is left behind
+        assert!(entries_on_disk(&data).is_empty());
+    }
+
+    fn planned(n: usize) -> Vec<PlannedEntry> {
+        (0..n)
+            .map(|i| PlannedEntry {
+                id: uuid::Uuid::new_v4(),
+                entry: new_entry(&format!("e{i}"), "pw"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn entries_exist_at_the_graft_step_and_are_removed_when_it_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("d");
+        let s = st(&data);
+        unlocked(&s);
+        let entries = planned(3);
+        let e = vault_commands::with_vault(&s, |v| {
+            Ok(add_then_graft(v, &entries, |v| {
+                assert_eq!(v.list().unwrap().len(), 3, "added before the graft");
+                assert_eq!(entries_on_disk_of(v), 3);
+                Err(error("save_failed", "x"))
+            })
+            .unwrap_err())
+        })
+        .unwrap();
+        assert_eq!(e.code, "save_failed");
+        assert_eq!(credential_count(&s), 0);
+        assert!(entries_on_disk(&data).is_empty());
+    }
+
+    /// Entry count of the vault file as written (a second handle on the same file).
+    fn entries_on_disk_of(v: &fernjo_vault::Vault) -> usize {
+        let mut other = fernjo_vault::Vault::open(v.path()).unwrap().unwrap();
+        other.unlock(&sec(MASTER)).unwrap();
+        other.list().unwrap().len()
+    }
+
+    #[test]
+    fn entries_that_cannot_be_removed_again_are_reported_as_import_incomplete() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("d");
+        let s = st(&data);
+        unlocked(&s);
+        let entries = planned(2);
+        let e = vault_commands::with_vault(&s, |v| {
+            Ok(add_then_graft(v, &entries, |_| {
+                // the graft fails and the vault file changes under us: deletes cannot save
+                spoil_vault_file(&data);
+                Err(error("save_failed", "tree"))
+            })
+            .unwrap_err())
+        })
+        .unwrap();
+        assert_eq!(e.code, "import_incomplete");
+        assert!(
+            e.message.contains("2 imported credential entries"),
+            "{}",
+            e.message
+        );
+        assert!(e.message.contains("tree"), "{}", e.message);
+    }
+
+    #[test]
+    fn a_failed_entry_add_rolls_back_the_earlier_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = st(&dir.path().join("d"));
+        unlocked(&s);
+        let mut entries = planned(3);
+        entries[2].entry.name = "  ".to_string(); // refused by the vault
+        let e = vault_commands::with_vault(&s, |v| {
+            Ok(add_then_graft(v, &entries, |_| panic!("not reached")).unwrap_err())
+        })
+        .unwrap();
+        assert_eq!(e.code, "empty_name");
+        assert_eq!(credential_count(&s), 0);
+    }
+
+    #[test]
+    fn restore_reports_restore_incomplete_when_the_vault_cannot_be_put_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("d");
+        let s = st(&data);
+        unlocked(&s);
+        vault_commands::with_vault(&s, |v| Ok(v.add(new_entry("old", "x"))?)).unwrap();
+        let e = vault_commands::with_vault(&s, |v| {
+            let previous = v.export_entries()?;
+            Ok(replace_entries_then(v, planned_pairs(2), previous, || {
+                spoil_vault_file(&data);
+                Err(error("save_failed", "tree"))
+            })
+            .unwrap_err())
+        })
+        .unwrap();
+        assert_eq!(e.code, "restore_incomplete");
+        assert!(e.message.contains("vault.fernjo.bak"), "{}", e.message);
+        assert!(e.message.contains("tree"), "{}", e.message);
+    }
+
+    fn planned_pairs(n: usize) -> Vec<(EntryId, NewEntry)> {
+        planned(n).into_iter().map(|p| (p.id, p.entry)).collect()
+    }
+
+    #[test]
+    fn restore_keeps_the_pending_backup_when_the_store_did_not_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_src, backup_path) = source_with_backup(dir.path());
+        let data = dir.path().join("dst");
+        let dst = st(&data);
+        unlocked(&dst);
+        vault_commands::with_vault(&dst, |v| Ok(v.add(new_entry("old", "x"))?)).unwrap();
+        let before = entries_json(&dst);
+        // the store failed to load: nothing may be touched
+        fs::write(
+            data.join(fernjo_core::FILE_NAME),
+            r#"{"schemaVersion":99,"children":[]}"#,
+        )
+        .unwrap();
+        let dst2 = st(&data);
+        vault_commands::vault_unlock(&dst2, sec(MASTER), false).unwrap();
+        // (inspect already needs the store, so the plan is put in place directly)
+        let opened = backup::open(&fs::read(&backup_path).unwrap(), &sec(BACKUP_PW)).unwrap();
+        *dst2.pending.lock().unwrap() = Some(Pending::Backup(opened));
+        assert_eq!(apply(&dst2).unwrap_err().code, "load_failed");
+        assert_eq!(entries_json(&dst2), before);
+        assert_eq!(pending_kind(&dst2), "backup");
+    }
+
+    #[test]
+    fn backup_preview_needs_the_vault_whenever_apply_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = st(&dir.path().join("a"));
+        let out = dir.path().join("b.fjbk");
+        export_backup_to(&a, &out, BACKUP_PW.to_string()).unwrap(); // no entries
+        let none = st(&dir.path().join("none"));
+        let p = inspect(&none, ImportKind::Backup, &out, Some(BACKUP_PW)).unwrap();
+        assert!(!p.needs_vault);
+        assert!(apply(&none).is_ok());
+        let with = st(&dir.path().join("with"));
+        unlocked(&with);
+        let p = inspect(&with, ImportKind::Backup, &out, Some(BACKUP_PW)).unwrap();
+        assert!(p.needs_vault);
+        vault_commands::vault_lock(&with).unwrap();
+        assert_eq!(apply(&with).unwrap_err().code, "vault_needed");
+    }
+
+    #[test]
+    fn inspecting_twice_is_already_inspected() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = st(&dir.path().join("d"));
+        let path = file(dir.path(), "c.xml", DEFAULT_KEY_XML);
+        inspect(&s, ImportKind::Mremoteng, &path, None).unwrap();
+        let e = inspect_on(&s, None, TODAY).unwrap_err();
+        assert_eq!(e.code, "already_inspected");
+        assert_eq!(pending_kind(&s), "mremoteng");
+    }
+
+    #[test]
+    fn a_picked_file_replaced_meanwhile_is_not_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = st(&dir.path().join("d"));
+        let a = dir.path().join("a.xml");
+        let b = dir.path().join("b.xml");
+        let plan = || {
+            Pending::Connections(ConnectionsPlan {
+                folder: Node {
+                    id: uuid::Uuid::new_v4(),
+                    name: "x".into(),
+                    description: String::new(),
+                    settings: Default::default(),
+                    kind: NodeKind::Folder { children: vec![] },
+                },
+                report: Report::default(),
+            })
+        };
+        // another path
+        import_begin(&s, ImportKind::Mremoteng, b.clone());
+        let e = install(&s, ImportKind::Mremoteng, &a, plan()).unwrap_err();
+        assert_eq!(e.code, "no_pending_import");
+        // same path, other kind
+        import_begin(&s, ImportKind::Backup, a.clone());
+        let e = install(&s, ImportKind::Mremoteng, &a, plan()).unwrap_err();
+        assert_eq!(e.code, "no_pending_import");
+        // cancelled
+        import_cancel(&s);
+        assert!(install(&s, ImportKind::Mremoteng, &a, plan()).is_err());
+        assert_eq!(pending_kind(&s), "none");
+        // the matching one goes through
+        import_begin(&s, ImportKind::Mremoteng, a.clone());
+        install(&s, ImportKind::Mremoteng, &a, plan()).unwrap();
+        assert_eq!(pending_kind(&s), "connections");
+    }
+
+    #[test]
+    fn a_poisoned_pending_lock_does_not_block_cancel_and_begin() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = st(dir.path());
+        std::thread::scope(|scope| {
+            let _ = scope
+                .spawn(|| {
+                    let _g = s.pending.lock().unwrap();
+                    panic!("poison");
+                })
+                .join();
+        });
+        assert!(s.pending.is_poisoned());
+        import_begin(&s, ImportKind::Backup, dir.path().join("x"));
+        assert_eq!(pending_kind_poisoned(&s), "picked");
+        import_cancel(&s);
+        assert_eq!(pending_kind_poisoned(&s), "none");
+        assert_eq!(apply(&s).unwrap_err().code, "no_pending_import");
+    }
+
+    fn pending_kind_poisoned(s: &AppState) -> &'static str {
+        match &*pending_slot(s) {
+            None => "none",
+            Some(Pending::Picked { .. }) => "picked",
+            _ => "other",
+        }
     }
 
     #[test]
@@ -1191,6 +1495,8 @@ mod tests {
         assert_eq!(entries_json(&dst), before);
         assert_eq!(top_names(&dst), ["old"]);
         assert_eq!(pending_kind(&dst), "backup");
+        // and the vault file on disk holds the old entries again
+        assert_eq!(entries_on_disk(&data), before);
     }
 
     #[test]
@@ -1205,7 +1511,8 @@ mod tests {
         unlocked(&dst);
         vault_commands::with_vault(&dst, |v| Ok(v.add(new_entry("gone", "x"))?)).unwrap();
         let p = inspect(&dst, ImportKind::Backup, &out, Some(BACKUP_PW)).unwrap();
-        assert!(!p.needs_vault);
+        // a vault exists and gets replaced as a whole, so it must be unlocked
+        assert!(p.needs_vault);
         assert_eq!(p.backup.unwrap().credentials, 0);
         let r = apply(&dst).unwrap();
         assert_eq!(r.restored.unwrap().credentials, 0);
