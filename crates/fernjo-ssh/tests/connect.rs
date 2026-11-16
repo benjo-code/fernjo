@@ -270,3 +270,19 @@ async fn close_ends_with_closed_by_user() {
     assert_eq!(end, Some(CloseReason::ClosedByUser));
     assert!(session.write(b"x".to_vec()).await.is_err());
 }
+
+#[tokio::test]
+async fn time_spent_on_the_host_key_prompt_does_not_count_towards_the_connect_timeout() {
+    let Some(s) = support::server() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let ia = Arc::new(
+        ScriptedInteraction::new()
+            .host_key(HostKeyDecision::TrustOnce)
+            .slow_host_key(Duration::from_millis(1500)),
+    );
+    let mut p = params(&s, &dir.path().join("kh"));
+    p.connect_timeout = Duration::from_millis(500);
+    // The user takes three times the timeout to answer; the connection must still succeed.
+    let (session, _rx) = Session::connect(p, ia).await.unwrap();
+    session.close();
+}

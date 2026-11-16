@@ -1,5 +1,6 @@
 //! russh client handler: decides about the server's host key before anything else is sent.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use russh::client::Handler;
@@ -21,6 +22,24 @@ pub(crate) struct ClientHandler<I: Interaction> {
     pub known_hosts: KnownHosts,
     pub interaction: Arc<I>,
     pub rejection: Rejection,
+    /// Set while a user decision is pending, so the handshake deadline does not count that time.
+    pub prompting: Arc<AtomicBool>,
+}
+
+/// Raises the flag for the lifetime of the guard.
+struct Prompting<'a>(&'a AtomicBool);
+
+impl<'a> Prompting<'a> {
+    fn begin(flag: &'a AtomicBool) -> Self {
+        flag.store(true, Ordering::SeqCst);
+        Self(flag)
+    }
+}
+
+impl Drop for Prompting<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }
 
 impl<I: Interaction> ClientHandler<I> {
@@ -45,7 +64,11 @@ impl<I: Interaction> ClientHandler<I> {
                     key_type: key.algorithm().to_string(),
                     fingerprint: fingerprint(key),
                 };
-                match self.interaction.host_key(prompt).await {
+                let decision = {
+                    let _prompting = Prompting::begin(&self.prompting);
+                    self.interaction.host_key(prompt).await
+                };
+                match decision {
                     HostKeyDecision::TrustOnce => true,
                     HostKeyDecision::TrustAlways => {
                         match self.known_hosts.add(&self.host, self.port, key) {
@@ -64,7 +87,11 @@ impl<I: Interaction> ClientHandler<I> {
                     old: stored,
                     new: fingerprint(key),
                 };
-                match self.interaction.host_key_changed(prompt).await {
+                let decision = {
+                    let _prompting = Prompting::begin(&self.prompting);
+                    self.interaction.host_key_changed(prompt).await
+                };
+                match decision {
                     HostKeyChangedDecision::Replace => {
                         match self.known_hosts.replace(&self.host, self.port, key) {
                             Ok(()) => true,

@@ -1,6 +1,7 @@
 //! One SSH connection with an interactive shell on a PTY.
 
 use std::borrow::Cow;
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -102,15 +103,28 @@ fn io_to_lost(_: russh::Error) -> SshError {
     SshError::ConnectionLost
 }
 
+/// Bounds one wait for the server (never a user prompt) by the connect timeout.
+async fn bounded<T>(
+    limit: Duration,
+    fut: impl Future<Output = Result<T, russh::Error>>,
+) -> Result<T, SshError> {
+    match tokio::time::timeout(limit, fut).await {
+        Ok(result) => result.map_err(io_to_lost),
+        Err(_) => Err(SshError::Timeout),
+    }
+}
+
 async fn password_attempt<H: client::Handler>(
     handle: &mut client::Handle<H>,
     user: &str,
     password: &SecretString,
+    limit: Duration,
 ) -> Result<Outcome, SshError> {
-    match handle
-        .authenticate_password(user, password.expose_secret().to_owned())
-        .await
-        .map_err(io_to_lost)?
+    match bounded(
+        limit,
+        handle.authenticate_password(user, password.expose_secret().to_owned()),
+    )
+    .await?
     {
         russh::client::AuthResult::Success => Ok(Outcome::Success),
         russh::client::AuthResult::Failure {
@@ -123,11 +137,13 @@ async fn keyboard_interactive_attempt<H: client::Handler, I: Interaction>(
     handle: &mut client::Handle<H>,
     user: &str,
     interaction: &I,
+    limit: Duration,
 ) -> Result<Outcome, SshError> {
-    let mut response = handle
-        .authenticate_keyboard_interactive_start(user, None)
-        .await
-        .map_err(io_to_lost)?;
+    let mut response = bounded(
+        limit,
+        handle.authenticate_keyboard_interactive_start(user, None),
+    )
+    .await?;
     for _ in 0..MAX_KI_ROUNDS {
         match response {
             KeyboardInteractiveAuthResponse::Success => return Ok(Outcome::Success),
@@ -167,10 +183,11 @@ async fn keyboard_interactive_attempt<H: client::Handler, I: Interaction>(
                         .map(|a| a.expose_secret().to_owned())
                         .collect()
                 };
-                response = handle
-                    .authenticate_keyboard_interactive_respond(answers)
-                    .await
-                    .map_err(io_to_lost)?;
+                response = bounded(
+                    limit,
+                    handle.authenticate_keyboard_interactive_respond(answers),
+                )
+                .await?;
             }
         }
     }
@@ -196,7 +213,8 @@ async fn authenticate<H: client::Handler, I: Interaction>(
     };
     // The host key was accepted during the handshake, so nothing secret has been sent yet; `none`
     // only asks which methods the server offers.
-    let mut offered = match handle.authenticate_none(&user).await.map_err(io_to_lost)? {
+    let limit = params.connect_timeout;
+    let mut offered = match bounded(limit, handle.authenticate_none(&user)).await? {
         russh::client::AuthResult::Success => return Ok(()),
         russh::client::AuthResult::Failure {
             remaining_methods, ..
@@ -215,18 +233,18 @@ async fn authenticate<H: client::Handler, I: Interaction>(
     while let Some(attempt) = planner.next(offered) {
         let outcome = match attempt {
             Attempt::CredentialPassword => match stored_password {
-                Some(password) => password_attempt(handle, &user, password).await?,
+                Some(password) => password_attempt(handle, &user, password, limit).await?,
                 None => continue,
             },
             Attempt::KeyboardInteractive => {
-                keyboard_interactive_attempt(handle, &user, interaction).await?
+                keyboard_interactive_attempt(handle, &user, interaction, limit).await?
             }
             Attempt::TypedPassword => {
                 let password = interaction
                     .password(&user, &params.host)
                     .await
                     .ok_or_else(auth_failed)?;
-                password_attempt(handle, &user, &password).await?
+                password_attempt(handle, &user, &password, limit).await?
             }
             // Not planned yet (see above).
             Attempt::Agent(_) | Attempt::CredentialKey => continue,
@@ -237,6 +255,33 @@ async fn authenticate<H: client::Handler, I: Interaction>(
         }
     }
     Err(auth_failed())
+}
+
+/// How often the handshake deadline is checked.
+const TICK: Duration = Duration::from_millis(50);
+
+/// Runs the handshake, failing with `Timeout` once `limit` of waiting for the server has passed.
+/// Time the handler spends on a user decision (`prompting` set) does not count.
+async fn with_handshake_deadline<T>(
+    fut: impl Future<Output = T>,
+    prompting: &AtomicBool,
+    limit: Duration,
+) -> Result<T, SshError> {
+    tokio::pin!(fut);
+    let mut spent = Duration::ZERO;
+    loop {
+        tokio::select! {
+            out = &mut fut => return Ok(out),
+            () = tokio::time::sleep(TICK) => {
+                if !prompting.load(Ordering::SeqCst) {
+                    spent += TICK;
+                    if spent >= limit {
+                        return Err(SshError::Timeout);
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl Session {
@@ -250,8 +295,7 @@ impl Session {
         let stored = known_hosts.stored_algorithms(&params.host, params.port)?;
         restrict_host_key_algorithms(&mut config, &stored);
 
-        // The timeout covers name resolution and the TCP connect only: the host key prompt that
-        // follows waits for the user for as long as it takes.
+        // Name resolution and the TCP connect get the whole timeout.
         let stream = match tokio::time::timeout(
             params.connect_timeout,
             TcpStream::connect((params.host.as_str(), params.port)),
@@ -265,44 +309,56 @@ impl Session {
         let _ = stream.set_nodelay(true);
 
         let rejection: Rejection = Rejection::default();
+        let prompting = Arc::new(AtomicBool::new(false));
         let handler = ClientHandler {
             host: params.host.clone(),
             port: params.port,
             known_hosts,
             interaction: Arc::clone(&interaction),
             rejection: Arc::clone(&rejection),
+            prompting: Arc::clone(&prompting),
         };
-        let mut handle = match client::connect_stream(Arc::new(config), stream, handler).await {
-            Ok(handle) => handle,
-            Err(e) => {
-                let parked = rejection.lock().ok().and_then(|mut slot| slot.take());
-                return Err(parked.unwrap_or(match e {
-                    russh::Error::IO(_) | russh::Error::ConnectionTimeout => {
-                        SshError::ConnectFailed
-                    }
-                    _ => SshError::Protocol,
-                }));
-            }
-        };
+        let handshake = client::connect_stream(Arc::new(config), stream, handler);
+        let mut handle =
+            match with_handshake_deadline(handshake, &prompting, params.connect_timeout).await? {
+                Ok(handle) => handle,
+                Err(e) => {
+                    let parked = rejection.lock().ok().and_then(|mut slot| slot.take());
+                    return Err(parked.unwrap_or(match e {
+                        russh::Error::IO(_) | russh::Error::ConnectionTimeout => {
+                            SshError::ConnectFailed
+                        }
+                        _ => SshError::Protocol,
+                    }));
+                }
+            };
 
         authenticate(&mut handle, &params, interaction.as_ref()).await?;
 
-        let channel = handle
-            .channel_open_session()
-            .await
-            .map_err(|_| SshError::Protocol)?;
+        let channel =
+            match tokio::time::timeout(params.connect_timeout, handle.channel_open_session()).await
+            {
+                Err(_) => return Err(SshError::Timeout),
+                Ok(Err(_)) => return Err(SshError::Protocol),
+                Ok(Ok(channel)) => channel,
+            };
         let (mut reader, writer) = channel.split();
         writer
             .request_pty(true, "xterm-256color", params.cols, params.rows, 0, 0, &[])
             .await
             .map_err(io_to_lost)?;
-        loop {
-            match reader.wait().await {
-                Some(ChannelMsg::Success) => break,
-                Some(ChannelMsg::Failure) | None => return Err(SshError::Protocol),
-                Some(_) => {}
+        let pty_reply = async {
+            loop {
+                match reader.wait().await {
+                    Some(ChannelMsg::Success) => return Ok(()),
+                    Some(ChannelMsg::Failure) | None => return Err(SshError::Protocol),
+                    Some(_) => {}
+                }
             }
-        }
+        };
+        tokio::time::timeout(params.connect_timeout, pty_reply)
+            .await
+            .map_err(|_| SshError::Timeout)??;
         writer.request_shell(false).await.map_err(io_to_lost)?;
 
         let (tx, rx) = mpsc::channel(EVENT_QUEUE);

@@ -67,6 +67,7 @@ struct State {
     host_key_prompts: Vec<HostKeyPrompt>,
     changed_prompts: Vec<HostKeyChangedPrompt>,
     ki_rounds: Vec<KiRound>,
+    host_key_delay: std::time::Duration,
     host_key_calls: usize,
     changed_calls: usize,
     ki_calls: usize,
@@ -96,6 +97,12 @@ impl ScriptedInteraction {
 
     pub fn host_key(self, d: HostKeyDecision) -> Self {
         self.state.lock().unwrap().host_keys.push_back(d);
+        self
+    }
+
+    /// Makes the host key prompt take this long to answer (a slow human).
+    pub fn slow_host_key(self, d: std::time::Duration) -> Self {
+        self.state.lock().unwrap().host_key_delay = d;
         self
     }
 
@@ -159,9 +166,14 @@ impl ScriptedInteraction {
 
 impl Interaction for ScriptedInteraction {
     async fn host_key(&self, prompt: HostKeyPrompt) -> HostKeyDecision {
+        let delay = {
+            let mut s = self.state.lock().unwrap();
+            s.host_key_calls += 1;
+            s.host_key_prompts.push(prompt);
+            s.host_key_delay
+        };
+        tokio::time::sleep(delay).await;
         let mut s = self.state.lock().unwrap();
-        s.host_key_calls += 1;
-        s.host_key_prompts.push(prompt);
         s.host_keys.pop_front().unwrap_or(HostKeyDecision::Reject)
     }
 
