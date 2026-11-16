@@ -1419,8 +1419,12 @@ dependencies = [
 name = "fernjo-ssh"
 version = "0.0.0"
 dependencies = [
+ "data-encoding",
+ "hmac",
  "russh",
  "secrecy",
+ "sha1",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
 ]
