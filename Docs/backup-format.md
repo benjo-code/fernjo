@@ -62,6 +62,10 @@ Bytes 0..62 are the header. A reader checks, in this order: magic (otherwise not
 
 A backup made without a vault has `"entries": []`.
 
+### Read caps (before any parsing)
+
+`src-tauri/src/import_commands.rs` checks the file size from the metadata before it reads anything and answers `too_large` above the cap: **32 MiB** for an mRemoteNG file, **64 MiB** (`MAX_OTHER_BYTES`) for a connections export or a backup. An encrypted backup above 64 MiB therefore never reaches `open`. The connections importer has its own limit of 32 MiB, so a connections file between 32 and 64 MiB passes the reader and is refused by the importer as `invalid`.
+
 ### Error codes
 
 | Code | Meaning |
@@ -74,15 +78,42 @@ A backup made without a vault has `"entries": []`.
 
 Opening a backup never reveals why authentication failed: both a wrong password and a modified ciphertext give `wrong_password`.
 
+## Command-level errors
+
+Besides the format codes above, the backup, restore and import commands (`src-tauri/src/import_commands.rs`; importer codes in `crates/fernjo-import/src/error.rs`) answer with these codes. `import_inspect` keeps the picked file for a retry after `key_needed`, `wrong_key`, `wrong_password` and `password_needed`; any other error leaves the pending slot as it was.
+
+| Code | Meaning |
+|---|---|
+| `no_pending_import` | nothing was picked or is waiting, or the picked file was replaced or cancelled while it was being read |
+| `already_inspected` | `import_inspect` on a file that was already inspected |
+| `not_inspected` | `import_apply` on a file that was picked but not inspected |
+| `file_unreadable` | the file cannot be read, is not a regular file or the dialog returned a non-local path |
+| `too_large` | the file is above the read cap (see above), or the importer's own size limit for an mRemoteNG file |
+| `too_complex` | mRemoteNG file nested or branched beyond the limits |
+| `key_needed` | mRemoteNG file encrypted with a custom key and none was given |
+| `wrong_key` | the typed mRemoteNG key does not decrypt the file |
+| `unsupported_format` | not a ConfVersion 2.6 mRemoteNG file (message names what was found) |
+| `password_needed` | a backup was inspected without a password |
+| `vault_needed` | applying needs a vault that does not exist yet or is locked: create or unlock it, the pending slot waits |
+| `vault_locked` | the vault was locked when its entries were read or written (for example `export_backup`) |
+| `vault_unusable` | `vault.fernjo` is unreadable or from a newer version; it is never overwritten |
+| `import_incomplete` | an import failed and some of the entries it had added could not be removed again |
+| `restore_incomplete` | a restore failed and the vault could not be put back; the previous content is in `vault.fernjo.bak` |
+| `save_failed` | an export file or `connections.json` could not be written |
+| `restart_required` | a changed data folder waits for a restart; mutations are refused |
+| `internal` | the connection data is unavailable after an internal error |
+
+`damaged` (see above) is also what an inconsistent backup yields at inspect time (a duplicate or nameless entry), and `damaged` from the mRemoteNG reader covers malformed values (`KdfIterations` out of range, an undecryptable `Protected`). Errors from the vault (`changed_on_disk`, `duplicate_entry`, `empty_name`) and from the store (`duplicate_id` and the other tree codes, a store that failed to load) pass through with their own codes.
+
 ## Restoring
 
-- **A full backup replaces.** The whole tree and all vault entries are replaced after a confirmation that names what is lost (folders and connections, credentials, the backup's date). The master password, the data key and the `.bak` files stay. Open sessions are closed.
+- **A full backup replaces.** The whole tree and all vault entries are replaced after a confirmation that names what is lost (folders and connections, credentials, the backup's date). The master password and the data key stay; the `.bak` files are kept and afterwards hold the state from before the restore. Open sessions are closed.
 - **A vault that exists must be unlocked**, even for a backup without entries (replacing then empties the vault); without a vault file there is nothing to replace, and a backup with entries first needs a vault to be created. A vault that cannot be read (`vault_unusable`) is never overwritten.
 - Entries are written first, then the tree; when the tree step fails the previous entries are put back. If that fails too the error is `restore_incomplete`, and the previous vault content is in `vault.fernjo.bak`.
 
 ## Connections export (`.json`)
 
-Human-readable, pretty-printed JSON without any secret and without credential references (every `credential` is dropped; the preview says how many):
+Human-readable, pretty-printed JSON without any secret and without credential references (every `credential` is dropped; the count comes back after the file is written, as `ExportInfo.droppedCredentials`, and is shown in the done step):
 
 ```json
 {

@@ -62,14 +62,14 @@ Depends on `fernjo-core` and `fernjo-vault` (for `NewEntry` and `SecretString`),
 
 ### 4.3 fernjo connections JSON
 
-- File `fernjo-connections-YYYY-MM-DD.json`: `{ "format": "fernjo-connections", "exportedAt", "schemaVersion", "children": [ …nodes as in connections.json… ] }`. **No secrets and no credential references** (the export drops every `credential` and the preview says how many were dropped). Human-readable, documented in `Docs/backup-format.md`.
+- File `fernjo-connections-YYYY-MM-DD.json`: `{ "format": "fernjo-connections", "exportedAt", "schemaVersion", "children": [ …nodes as in connections.json… ] }`. **No secrets and no credential references** (the export drops every `credential`; the count of dropped references comes back after the file is written and is shown in the done step). Human-readable, documented in `Docs/backup-format.md`.
 - Import validates through the same node rules as loading `connections.json` (no rule is duplicated), assigns fresh ids and grafts the result into **"Imported from fernjo export (YYYY-MM-DD)"**. A newer `schemaVersion` is refused with a message. (Corrected after implementation: the first draft said `"version": 1`; the file carries the `connections.json` `schemaVersion`, so there is one version number, not two.)
 
 ### 4.4 Encrypted backup
 
 - File `fernjo-backup-YYYY-MM-DD.fjbk`: `magic "FERNJOBK" ‖ version u16 BE ‖ KDF params ‖ salt ‖ nonce ‖ ciphertext(JSON) ‖ tag`, key from the export password by Argon2id with `KdfParams::DEFAULT`, the header authenticated as associated data. Parameters read from a file are bounded like the vault's (a hostile file cannot demand gigabytes).
 - Body JSON: `{ "schemaVersion": 1, "createdAt", "app": "<version>", "connections": <the connections.json document>, "entries": [ { id, name, username, domain, secret, notes } ] }`. Entry ids and credential references are preserved, so a restore is identical.
-- The export password is at least 8 characters (enforced in Rust, NFC-normalised like the master password, typed twice in the UI) and never stored. A wrong password and a damaged file are different errors (`wrong_password`, `damaged`).
+- The export password is at least 8 characters (enforced in Rust, NFC-normalised like the master password, typed twice in the UI) and never stored. A failed authentication cannot be told from a modified file (code `wrong_password`, message "wrong password or the file is damaged"); `damaged` is only for structural problems (truncated file, KDF parameters out of range, invalid body). (Corrected after implementation: the first draft promised two distinct errors for a wrong password and a damaged file; an AEAD cannot distinguish them.)
 - Without a vault file, a backup holds the tree and no entries; with a vault, it must be unlocked (the error says so).
 
 ## 5. Additions to existing crates
