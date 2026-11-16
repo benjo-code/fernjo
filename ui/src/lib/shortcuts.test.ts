@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { routeKey } from "./shortcuts";
+import { isMac, routeKey } from "./shortcuts";
 
 const k = (
   key: string,
@@ -68,5 +68,15 @@ describe("routeKey", () => {
     expect(routeKey(k("v", { meta: true }), true, false)).toBeNull();
     // the other chords work outside the terminal too
     expect(routeKey(k("W", { ctrl: true, shift: true }), false, false)).toBe("closeTab");
+  });
+});
+
+describe("isMac", () => {
+  test("isMac_reads_userAgentData_then_platform_and_defaults_to_false", () => {
+    expect(isMac({ userAgentData: { platform: "macOS" }, platform: "Win32" })).toBe(true);
+    expect(isMac({ platform: "MacIntel" })).toBe(true);
+    expect(isMac({ platform: "Win32" })).toBe(false);
+    expect(isMac({})).toBe(false);
+    expect(isMac(undefined)).toBe(false);
   });
 });

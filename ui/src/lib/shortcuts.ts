@@ -28,3 +28,12 @@ export function routeKey(e: Key, mac: boolean, inTerminal: boolean): AppAction |
   if ((action === "copy" || action === "paste") && !inTerminal) return null;
   return action;
 }
+
+type NavLike = { platform?: string; userAgentData?: { platform?: string } };
+
+/** The one place that decides whether Cmd-style shortcuts apply; falls back to `false`. */
+export function isMac(nav?: NavLike): boolean {
+  const n: NavLike | undefined = nav ?? (typeof navigator === "undefined" ? undefined : navigator);
+  const platform = n?.userAgentData?.platform || n?.platform || "";
+  return /^mac/i.test(platform);
+}

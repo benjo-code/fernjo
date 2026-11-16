@@ -5,6 +5,7 @@ import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
+import { isMac, routeKey } from "../shortcuts";
 import { terminalTheme } from "./theme";
 
 export interface TerminalOptions {
@@ -26,6 +27,9 @@ export interface TerminalDeps {
 const DEFAULT_CONTRAST = 4.5;
 /** DESIGN.md: 13px text on a 19px line. */
 const LINE_HEIGHT = 19 / 13;
+
+/** How long a menu paste waits for the clipboard before giving up. */
+const PASTE_TIMEOUT_MS = 2500;
 
 const encoder = new TextEncoder();
 
@@ -60,6 +64,7 @@ export class TerminalController {
   #visible = false;
   #lastSent: { cols: number; rows: number } | null = null;
   #deps: TerminalDeps;
+  #mac = isMac();
 
   constructor(opts: TerminalOptions, deps: TerminalDeps) {
     this.#deps = deps;
@@ -172,8 +177,17 @@ export class TerminalController {
    * xterm handles without a prompt.
    */
   async paste(): Promise<void> {
-    const text = await navigator.clipboard.readText();
-    if (text) this.#term.paste(text);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), PASTE_TIMEOUT_MS);
+    });
+    try {
+      // A late answer after the timeout is dropped: it could land in whatever has focus by then.
+      const text = await Promise.race([navigator.clipboard.readText(), timeout]);
+      if (text) this.#term.paste(text);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   refreshTheme(): void {
@@ -187,17 +201,26 @@ export class TerminalController {
     this.#el = null;
   }
 
+  /**
+   * Key contract (shared with App's window handler, which must NOT dispatch copy, paste or
+   * terminalSearch): `routeKey(e, mac, true)` decides.
+   * - `copy` and `terminalSearch` are handled here (preventDefault + stopPropagation) and xterm
+   *   ignores them.
+   * - every other app action (tabs, close, filter, and paste) returns false WITHOUT
+   *   preventDefault, so xterm ignores it and the event bubbles to the window handler; for
+   *   paste the native paste event then reaches xterm's own handler.
+   * - everything else (plain Ctrl+C/W/B, Alt+letter, Escape) goes to the program.
+   */
   #onKey(e: KeyboardEvent): boolean {
-    if (e.type !== "keydown" || !e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey) return true;
-    const key = e.key.toLowerCase();
-    if (key === "c") {
-      void this.copySelection().catch(() => {});
-    } else if (key === "f" && this.#deps.onSearchRequest) {
-      this.#deps.onSearchRequest();
-    } else {
-      return true;
+    if (e.type !== "keydown") return true;
+    const action = routeKey(e, this.#mac, true);
+    if (action === null) return true;
+    if (action === "copy" || action === "terminalSearch") {
+      e.preventDefault();
+      e.stopPropagation();
+      if (action === "copy") void this.copySelection().catch(() => {});
+      else this.#deps.onSearchRequest?.();
     }
-    e.preventDefault();
     return false;
   }
 

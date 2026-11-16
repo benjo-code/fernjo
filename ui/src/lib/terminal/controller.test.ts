@@ -51,7 +51,10 @@ vi.mock("@xterm/xterm", () => {
     paste(s: string) {
       this.pasted.push(s);
     }
-    attachCustomKeyEventHandler() {}
+    keyHandler: (e: KeyboardEvent) => boolean = () => true;
+    attachCustomKeyEventHandler(cb: (e: KeyboardEvent) => boolean) {
+      this.keyHandler = cb;
+    }
     dispose() {
       this.disposed = true;
     }
@@ -113,6 +116,7 @@ interface FakeTerm {
   binaryCb: (s: string) => void;
   selection: string;
   pasted: string[];
+  keyHandler: (e: KeyboardEvent) => boolean;
 }
 interface FakeWebgl {
   disposed: boolean;
@@ -130,6 +134,7 @@ function sized(el: HTMLElement, w: number, hgt: number) {
 
 function setup(opts = { fontFamily: null as string | null, fontSize: 14, scrollback: 1000 }) {
   const deps = {
+    onSearchRequest: vi.fn<() => void>(),
     onData: vi.fn<(b: Uint8Array) => void>(),
     onResize: vi.fn<(c: number, r: number) => void>(),
     onAck: vi.fn<(n: number) => void>(),
@@ -151,6 +156,9 @@ beforeEach(() => {
   document.documentElement.style.setProperty("--terminal-min-contrast", "4.5");
 });
 afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  Reflect.deleteProperty(navigator, "clipboard");
   document.body.innerHTML = "";
   document.documentElement.removeAttribute("style");
 });
@@ -258,5 +266,106 @@ describe("TerminalController", () => {
     expect(writeText).toHaveBeenCalledWith("sel");
     await c.paste();
     expect(term().pasted).toEqual(["pasted"]);
+  });
+
+  test("paste_gives_up_after_the_timeout_and_ignores_a_late_clipboard_answer", async () => {
+    vi.useFakeTimers();
+    const { c, deps } = setup();
+    let late: (t: string) => void = () => {};
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { readText: () => new Promise<string>((r) => (late = r)) },
+    });
+    const done = c.paste();
+    await vi.advanceTimersByTimeAsync(3000);
+    await done;
+    late("too late");
+    await vi.advanceTimersByTimeAsync(10);
+    expect(term().pasted).toEqual([]);
+    expect(deps.onData).not.toHaveBeenCalled();
+  });
+});
+
+describe("TerminalController key handling", () => {
+  const key = (
+    k: string,
+    mods: Partial<Record<"ctrl" | "shift" | "alt" | "meta", boolean>> = {},
+  ) => {
+    const e = new KeyboardEvent("keydown", {
+      key: k,
+      ctrlKey: !!mods.ctrl,
+      shiftKey: !!mods.shift,
+      altKey: !!mods.alt,
+      metaKey: !!mods.meta,
+      cancelable: true,
+    });
+    const stop = vi.spyOn(e, "stopPropagation");
+    return { e, stop };
+  };
+
+  function press(k: string, mods: Parameters<typeof key>[1] = {}) {
+    const { e, stop } = key(k, mods);
+    const result = term().keyHandler(e);
+    return { result, prevented: e.defaultPrevented, stopped: stop.mock.calls.length > 0 };
+  }
+
+  function withClipboard() {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    term().selection = "sel";
+    return writeText;
+  }
+
+  test("keys_for_the_program_go_to_xterm", () => {
+    setup();
+    for (const [k, m] of [
+      ["c", { ctrl: true }],
+      ["w", { ctrl: true }],
+      ["b", { alt: true }],
+      ["Escape", {}],
+    ] as const) {
+      const r = press(k, m);
+      expect(r.result, k).toBe(true);
+      expect(r.prevented, k).toBe(false);
+    }
+  });
+
+  test("ctrl_shift_c_copies_and_ctrl_shift_f_searches_on_non_mac", () => {
+    const { deps } = setup();
+    const writeText = withClipboard();
+    const copy = press("C", { ctrl: true, shift: true });
+    expect(copy).toEqual({ result: false, prevented: true, stopped: true });
+    expect(writeText).toHaveBeenCalledWith("sel");
+    const search = press("F", { ctrl: true, shift: true });
+    expect(search).toEqual({ result: false, prevented: true, stopped: true });
+    expect(deps.onSearchRequest).toHaveBeenCalledTimes(1);
+  });
+
+  test("tab_close_filter_and_paste_chords_bubble_to_the_window", () => {
+    setup();
+    for (const [k, m] of [
+      ["Tab", { ctrl: true }],
+      ["W", { ctrl: true, shift: true }],
+      ["K", { ctrl: true, shift: true }],
+      ["V", { ctrl: true, shift: true }],
+    ] as const) {
+      const r = press(k, m);
+      expect(r, k).toEqual({ result: false, prevented: false, stopped: false });
+    }
+  });
+
+  test("on_mac_cmd_c_copies_cmd_f_searches_and_ctrl_shift_c_goes_to_the_program", () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    const { deps } = setup();
+    const writeText = withClipboard();
+    expect(press("c", { meta: true })).toMatchObject({ result: false, prevented: true });
+    expect(writeText).toHaveBeenCalledWith("sel");
+    expect(press("f", { meta: true })).toMatchObject({ result: false, prevented: true });
+    expect(deps.onSearchRequest).toHaveBeenCalledTimes(1);
+    expect(press("C", { ctrl: true, shift: true })).toEqual({
+      result: true,
+      prevented: false,
+      stopped: false,
+    });
   });
 });
