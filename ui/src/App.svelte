@@ -98,6 +98,9 @@
    * search belong to the terminal controller, which leaves the app chords unhandled so they get here.
    */
   function onkeydown(e: KeyboardEvent) {
+    // a modal (settings, any confirm dialog) owns the keyboard; so does anything that handled the key
+    if (e.defaultPrevented || folderOpen || sessions.closeRequest) return;
+    if (document.querySelector("[aria-modal='true']")) return;
     const inTerminal = e.target instanceof Element && e.target.closest(".xterm") !== null;
     const action = routeKey(e, isMac(), inTerminal);
     if (action === "nextTab" || action === "prevTab") {
@@ -106,6 +109,11 @@
       else sessions.previous();
     } else if (action === "closeTab") {
       if (sessions.activeId === null) return;
+      // a held key must not close one tab after the other
+      if (e.repeat) {
+        e.preventDefault();
+        return;
+      }
       sessions.requestClose(sessions.activeId);
     } else if (action === "focusFilter") {
       sidebar?.focusFilter();

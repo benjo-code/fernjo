@@ -272,6 +272,33 @@ describe("DataFolderDialog", () => {
     ]);
   });
 
+  test("values_that_do_not_fit_the_wire_type_are_sent_as_zero_and_unknown_errors_stay_generic", async () => {
+    const { calls } = await setup({
+      setTerminalSettings: async () => {
+        throw apiError("internal", "invalid type: floating point `13.5`, expected u16");
+      },
+    });
+    const cases: [string, string, number, number][] = [
+      ["13.5", "5000", 0, 5000],
+      ["-5", "5000", 0, 5000],
+      ["", "5000", 0, 5000],
+      ["70000", "5000", 0, 5000],
+      ["60000", "5000", 60000, 5000],
+      ["14", "5000000000", 14, 0],
+    ];
+    for (const [size, lines, wireSize, wireLines] of cases) {
+      type(field("Font size"), size);
+      type(field("Scrollback"), lines);
+      button("Save").click();
+      await settle();
+      expect(calls.setTerminalSettings.at(-1)).toEqual([
+        { fontFamily: null, fontSize: wireSize, scrollback: wireLines },
+      ]);
+    }
+    // never the raw serde text
+    expect(alert()?.textContent).toBe("Could not save the terminal settings");
+  });
+
   test("non_persistent_note_is_shown_when_persistent_is_false", async () => {
     const note = "Applies to this run only; settings are not saved while FERNJO_DATA_DIR is set";
     await setup({ getTerminalSettings: async () => terminalSettings({ persistent: false }) });

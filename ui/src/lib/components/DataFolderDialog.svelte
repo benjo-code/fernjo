@@ -61,8 +61,13 @@
     invalid_scrollback: "Scrollback must be between 1000 and 100000 lines.",
   };
 
-  /** An empty field is sent as 0: Rust is the one that judges the values. */
-  const toNumber = (n: number | null) => n ?? 0;
+  /**
+   * What Rust can even parse: a whole number within the wire type (`u16` / `u32`). Anything else is
+   * sent as 0 so that Rust answers with its coded error instead of a deserialisation message.
+   * Whether a number is a sensible size is Rust's call.
+   */
+  const toWire = (n: number | null, max: number) =>
+    n !== null && Number.isInteger(n) && n >= 0 && n <= max ? n : 0;
 
   async function saveTerminal() {
     if (saving) return;
@@ -71,11 +76,11 @@
     terminalError = null;
     const err = await terminal.save({
       fontFamily: fontFamily.trim() === "" ? null : fontFamily.trim(),
-      fontSize: toNumber(fontSize),
-      scrollback: toNumber(scrollback),
+      fontSize: toWire(fontSize, 65535),
+      scrollback: toWire(scrollback, 4294967295),
     });
     saving = false;
-    if (err) terminalError = TERMINAL_ERRORS[err.code] ?? err.message;
+    if (err) terminalError = TERMINAL_ERRORS[err.code] ?? "Could not save the terminal settings";
     else saved = true;
   }
 

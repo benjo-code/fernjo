@@ -388,3 +388,56 @@ test("saving_terminal_settings_reaches_open_terminals", async () => {
   await settle();
   expect(seen).toContain(20);
 });
+
+test("shortcuts_do_nothing_while_the_settings_dialog_is_open", async () => {
+  const { calls } = await startConnected();
+  doubleClick("web-01");
+  await settle();
+  doubleClick("db-01");
+  await settle();
+  document.querySelector<HTMLButtonElement>("button[aria-label='Settings']")!.click();
+  await settle();
+  const close = press({ key: "W", ctrlKey: true, shiftKey: true });
+  const filter = press({ key: "K", ctrlKey: true, shiftKey: true });
+  const next = press({ key: "Tab", ctrlKey: true });
+  await settle();
+  expect(close.defaultPrevented).toBe(false);
+  expect(filter.defaultPrevented).toBe(false);
+  expect(next.defaultPrevented).toBe(false);
+  expect(confirm()).toBeNull();
+  expect(activeTitle()).toBe("db-01");
+  expect(document.activeElement).not.toBe(
+    document.querySelector("input[aria-label='Filter connections']"),
+  );
+  expect(calls.closeSession).toHaveLength(0);
+});
+
+test("ctrl_tab_and_ctrl_shift_w_do_nothing_while_the_close_confirm_is_open", async () => {
+  await startConnected();
+  doubleClick("web-01");
+  await settle();
+  doubleClick("db-01");
+  await settle();
+  press({ key: "W", ctrlKey: true, shiftKey: true });
+  await settle();
+  expect(confirm()!.textContent).toContain("db-01");
+  press({ key: "Tab", ctrlKey: true });
+  press({ key: "W", ctrlKey: true, shiftKey: true });
+  await settle();
+  expect(activeTitle()).toBe("db-01");
+  expect(confirm()!.textContent).toContain("db-01");
+});
+
+test("a_held_ctrl_shift_w_closes_one_tab_only", async () => {
+  await start([conn("a"), conn("b"), conn("c")]);
+  for (const id of ["a", "b", "c"]) {
+    doubleClick(id);
+    await settle();
+  }
+  const first = press({ key: "W", ctrlKey: true, shiftKey: true });
+  const held = press({ key: "W", ctrlKey: true, shiftKey: true, repeat: true });
+  await settle();
+  expect(first.defaultPrevented).toBe(true);
+  expect(held.defaultPrevented).toBe(true);
+  expect(tabs()).toHaveLength(2);
+});
