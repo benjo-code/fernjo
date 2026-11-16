@@ -4,6 +4,7 @@ import { TerminalSettingsStore } from "../terminal-settings.svelte";
 import { apiError, dataFolder, deferred, mockApi, terminalSettings } from "../testing";
 import type { Api, DataFolderInfo } from "../types";
 import DataFolderDialog from "./DataFolderDialog.svelte";
+import dialogSource from "./DataFolderDialog.svelte?raw";
 
 let mounted: ReturnType<typeof mount> | null = null;
 
@@ -351,5 +352,16 @@ describe("DataFolderDialog", () => {
     mounted = null;
     await tick();
     expect(document.activeElement).toBe(opener);
+  });
+});
+
+describe("short windows", () => {
+  // jsdom has no layout, so the rule itself is checked: the dialog must scroll inside the window
+  // so that Close and Save stay reachable (verified in the real app at the 600 px minimum height).
+  test("the dialog is capped to the viewport and scrolls", () => {
+    const rule = /\.dialog\s*\{([^}]*)\}/.exec(dialogSource);
+    expect(rule).not.toBeNull();
+    expect(rule![1]).toMatch(/max-height:\s*calc\(100vh - var\(--space-6\)\)/);
+    expect(rule![1]).toMatch(/overflow-y:\s*auto/);
   });
 });

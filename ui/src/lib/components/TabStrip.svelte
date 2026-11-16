@@ -140,7 +140,7 @@
       ?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
   });
 
-  const last = $derived(sessions.tabs.at(-1)?.id ?? null);
+  const last = $derived(sessions.tabs[sessions.tabs.length - 1]?.id ?? null);
 </script>
 
 <svelte:window

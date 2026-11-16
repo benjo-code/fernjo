@@ -287,6 +287,9 @@
   .dialog {
     width: 440px;
     max-width: calc(100vw - var(--space-6));
+    /* short windows: the dialog scrolls inside, so Close and Save stay reachable */
+    max-height: calc(100vh - var(--space-6));
+    overflow-y: auto;
     padding: var(--space-5);
     background: var(--color-surface-raised);
     border: 1px solid var(--color-border);
