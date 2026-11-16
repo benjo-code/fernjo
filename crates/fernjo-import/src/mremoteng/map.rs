@@ -76,12 +76,7 @@ pub fn plan(doc: &RawDocument, today: &str, taken_names: &[String]) -> ImportPla
         .collect();
 
     let base = format!("{FOLDER_PREFIX} ({today})");
-    let mut name = base.clone();
-    let mut n = 2;
-    while taken_names.contains(&name) {
-        name = format!("{base} ({n})");
-        n += 1;
-    }
+    let name = crate::naming::unique_name(&base, taken_names);
     let folder = Node {
         id: NodeId::new_v4(),
         name,
