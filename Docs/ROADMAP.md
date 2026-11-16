@@ -27,7 +27,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 | 1 | UI design direction | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-15-milestone-01-design-direction.md) | 2026-11-15 |
 | 2 | Connection tree & data model | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-15-milestone-02-connection-tree.md) | 2026-11-15 |
 | 3 | Credential vault | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-15-milestone-03-credential-vault.md) | 2026-11-15 |
-| 4 | SSH sessions in tabs | 1 – fernjo app | ⬜ open | – | – |
+| 4 | SSH sessions in tabs | 1 – fernjo app | 🟡 planned | [Plan](superpowers/plans/2026-11-16-milestone-04-ssh-sessions.md) | – |
 | 5 | mRemoteNG import & export | 1 – fernjo app | ⬜ open | – | – |
 | 6 | Packaging & app settings | 1 – fernjo app | ⬜ open | – | – |
 | – | **Release `v0.1.0`** – Daily SSH driver (M0 to M6) | – | ⬜ open | – | – |
@@ -37,6 +37,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 ## Scope changes
 
 - **2026-11-15 (M1 planning):** M1 gains the task "App icon derived from the chosen direction". `Docs/DECISIONS.md` (entry "Project layout: one root pnpm package, Tauri identifier") already planned to replace the placeholder icon in M1, but the roadmap had no task for it; the owner chose M1 over M6 or the backlog.
+- **2026-11-16 (M4 planning):** M4 delivers the terminal font family, font size and scrollback settings (stored in `settings.json`, edited in a "Terminal" section of the existing gear dialog, applied live) because its task "font and scrollback settings" needs somewhere to live. M6's settings dialog keeps theme and data folder and absorbs this section instead of building it; its task "terminal font and size, scrollback" is therefore already done when M6 starts. M4 also keeps russh's `rsa` feature (owner decision) and so ships with a time-boxed `deny.toml` ignore for `RUSTSEC-2023-0071`, to be removed once russh depends on `rsa` 0.10.0 or later.
 
 ## Open manual checks (owner)
 
@@ -160,7 +161,7 @@ Goal: Passwords and SSH keys are stored encrypted, unlocked by a master password
 - [x] Build, test and lint are green – 2026-11-15 on Windows, branch head after the final review fixes: `pnpm install --frozen-lockfile`, `pnpm ui:build`, `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (app 57, core 98, vault 43 + 2 ignored, tauri_conf 3 passed), `pnpm lint` (0 errors, 0 warnings), `pnpm test` (243 passed in 16 files), `cargo deny check` (ok), `dotnet run tools/roadmap.cs -- check` (valid) all green
 
 ## Milestone 4 – SSH sessions in tabs
-**Status:** ⬜ open · **Plan:** – · **Prerequisites:** M3
+**Status:** 🟡 planned · **Plan:** [2026-11-16-milestone-04-ssh-sessions.md](superpowers/plans/2026-11-16-milestone-04-ssh-sessions.md) · **Prerequisites:** M3
 
 Goal: Any SSH connection in the tree opens as a terminal tab with stored credentials and verified host keys.
 

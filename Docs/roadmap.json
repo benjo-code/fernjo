@@ -7,6 +7,11 @@
       "date": "2026-11-15",
       "context": "M1 planning",
       "text": "M1 gains the task \"App icon derived from the chosen direction\". `Docs/DECISIONS.md` (entry \"Project layout: one root pnpm package, Tauri identifier\") already planned to replace the placeholder icon in M1, but the roadmap had no task for it; the owner chose M1 over M6 or the backlog."
+    },
+    {
+      "date": "2026-11-16",
+      "context": "M4 planning",
+      "text": "M4 delivers the terminal font family, font size and scrollback settings (stored in `settings.json`, edited in a \"Terminal\" section of the existing gear dialog, applied live) because its task \"font and scrollback settings\" needs somewhere to live. M6's settings dialog keeps theme and data folder and absorbs this section instead of building it; its task \"terminal font and size, scrollback\" is therefore already done when M6 starts. M4 also keeps russh's `rsa` feature (owner decision) and so ships with a time-boxed `deny.toml` ignore for `RUSTSEC-2023-0071`, to be removed once russh depends on `rsa` 0.10.0 or later."
     }
   ],
   "subprojects": [
@@ -121,7 +126,8 @@
         {
           "id": "4",
           "title": "SSH sessions in tabs",
-          "status": "open",
+          "status": "planned",
+          "plan": "superpowers/plans/2026-11-16-milestone-04-ssh-sessions.md",
           "prerequisites": ["3"],
           "goal": "Any SSH connection in the tree opens as a terminal tab with stored credentials and verified host keys.",
           "tasks": [
