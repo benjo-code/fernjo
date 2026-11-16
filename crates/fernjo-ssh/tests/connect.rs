@@ -236,7 +236,7 @@ async fn flood_blocks_when_receiver_is_slow() {
         }
     }
     eprintln!("flood: {queued} bytes in {entries} entries were queued after 2 s");
-    // window 512 KiB + 4 buffered packets + 4 queued events (about 264 KiB without the window), with margin
+    // window 512 KiB + 4 buffered packets + 4 queued events (about 256 KiB without the window), with margin
     assert!(queued < 1024 * 1024, "queued {queued} bytes");
 
     session.write(b"\x03".to_vec()).await.unwrap();
