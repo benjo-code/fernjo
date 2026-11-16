@@ -197,6 +197,31 @@ impl Tree {
         Ok(id)
     }
 
+    /// Appends a whole subtree (with its ids) at the end of `parent` (`None` = top level).
+    /// Refuses with `DuplicateId` when any id already exists in the tree or repeats inside
+    /// the subtree; nothing changes on error.
+    pub fn graft(&mut self, parent: Option<NodeId>, node: Node) -> Result<NodeId, TreeError> {
+        fn check(
+            node: &Node,
+            tree: &Tree,
+            seen: &mut std::collections::HashSet<NodeId>,
+        ) -> Result<(), TreeError> {
+            if tree.get(node.id).is_some() || !seen.insert(node.id) {
+                return Err(TreeError::DuplicateId(node.id));
+            }
+            if let NodeKind::Folder { children } = &node.kind {
+                for child in children {
+                    check(child, tree, seen)?;
+                }
+            }
+            Ok(())
+        }
+        // validate the parent first so a bad parent reports as such
+        self.siblings_mut(parent)?;
+        check(&node, self, &mut std::collections::HashSet::new())?;
+        self.insert(parent, None, node)
+    }
+
     pub fn create_folder(
         &mut self,
         parent: Option<NodeId>,
@@ -418,6 +443,77 @@ mod tests {
                 all_ids(children, out);
             }
         }
+    }
+
+    // ---- graft --------------------------------------------------------
+
+    fn leaf(name: &str) -> Node {
+        Node {
+            id: NodeId::new_v4(),
+            name: name.into(),
+            description: String::new(),
+            settings: Settings::default(),
+            kind: NodeKind::Connection {
+                protocol: Protocol::Ssh,
+                host: "h".into(),
+            },
+        }
+    }
+
+    fn branch(name: &str, children: Vec<Node>) -> Node {
+        Node {
+            kind: NodeKind::Folder { children },
+            ..leaf(name)
+        }
+    }
+
+    #[test]
+    fn graft_adds_subtree_at_end_of_parent() {
+        let mut t = Tree::new();
+        let f = folder(&mut t, None, "f");
+        ssh(&mut t, Some(f), "first");
+        let sub = branch("sub", vec![leaf("x"), leaf("y")]);
+        let sub_id = sub.id;
+        assert_eq!(t.graft(Some(f), sub).unwrap(), sub_id);
+        assert_eq!(names(children_of(&t, f)), ["first", "sub"]);
+        assert_eq!(names(children_of(&t, sub_id)), ["x", "y"]);
+        t.graft(None, leaf("top")).unwrap();
+        assert_eq!(names(t.children()), ["f", "top"]);
+    }
+
+    #[test]
+    fn graft_into_a_connection_is_not_a_folder() {
+        let mut t = Tree::new();
+        let c = ssh(&mut t, None, "c");
+        let before = t.clone();
+        let err = t.graft(Some(c), leaf("x")).unwrap_err();
+        assert_eq!(err, TreeError::NotAFolder);
+        assert_eq!(t, before);
+    }
+
+    #[test]
+    fn graft_with_an_existing_id_is_duplicate_id() {
+        let mut t = Tree::new();
+        let c = ssh(&mut t, None, "c");
+        let before = t.clone();
+        let mut inner = leaf("x");
+        inner.id = c;
+        let err = t.graft(None, branch("sub", vec![inner])).unwrap_err();
+        assert_eq!(err, TreeError::DuplicateId(c));
+        assert_eq!(err.code(), "duplicate_id");
+        assert_eq!(t, before);
+    }
+
+    #[test]
+    fn graft_with_a_repeated_id_inside_is_duplicate_id() {
+        let mut t = Tree::new();
+        let a = leaf("a");
+        let mut b = leaf("b");
+        b.id = a.id;
+        let id = a.id;
+        let err = t.graft(None, branch("sub", vec![a, b])).unwrap_err();
+        assert_eq!(err, TreeError::DuplicateId(id));
+        assert!(t.children().is_empty());
     }
 
     // ---- credential ---------------------------------------------------

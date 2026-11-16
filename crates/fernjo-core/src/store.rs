@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::{LoadError, StoreError, TreeError};
-use crate::model::{CredentialId, NodeId, Protocol};
+use crate::model::{CredentialId, Node, NodeId, Protocol};
 use crate::persist::{self, FILE_NAME, Notice};
 use crate::tree::{NodePatch, Tree};
 
@@ -59,6 +59,18 @@ impl Store {
         persist::save(&self.path, &next)?;
         self.tree = next;
         Ok(out)
+    }
+
+    /// Appends a whole subtree at the end of `parent` and saves it.
+    pub fn graft(&mut self, parent: Option<NodeId>, node: Node) -> Result<NodeId, StoreError> {
+        self.mutate(|t| t.graft(parent, node))
+    }
+
+    /// Replaces the whole tree and saves it (the previous file becomes the `.bak`).
+    pub fn replace_tree(&mut self, tree: Tree) -> Result<(), StoreError> {
+        persist::save(&self.path, &tree)?;
+        self.tree = tree;
+        Ok(())
     }
 
     pub fn create_folder(
@@ -281,6 +293,79 @@ mod tests {
         // a save would have copied the main file over the .bak
         assert_eq!(fs::read(store.path()).unwrap(), main_before);
         assert_eq!(fs::read(&bak).unwrap(), bak_before);
+    }
+
+    fn leaf(name: &str) -> crate::model::Node {
+        crate::model::Node {
+            id: NodeId::new_v4(),
+            name: name.into(),
+            description: String::new(),
+            settings: crate::model::Settings::default(),
+            kind: crate::model::NodeKind::Connection {
+                protocol: Protocol::Ssh,
+                host: "h".into(),
+            },
+        }
+    }
+
+    fn broken_store(tree: Tree) -> (tempfile::TempDir, Store) {
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("plain");
+        fs::write(&blocker, "x").unwrap();
+        let store = Store {
+            path: blocker.join(FILE_NAME),
+            tree,
+        };
+        (dir, store)
+    }
+
+    #[test]
+    fn graft_is_persisted() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = open(dir.path());
+        let f = store.create_folder(None, None, "f").unwrap();
+        let node = leaf("imported");
+        let id = node.id;
+        assert_eq!(store.graft(Some(f), node).unwrap(), id);
+        assert!(store.tree().get(id).is_some());
+        assert_eq!(open(dir.path()).tree(), store.tree());
+    }
+
+    #[test]
+    fn failed_save_rolls_back_graft() {
+        let mut tree = Tree::new();
+        tree.create_folder(None, None, "kept").unwrap();
+        let (_dir, mut store) = broken_store(tree.clone());
+        let err = store.graft(None, leaf("lost")).unwrap_err();
+        assert_eq!(err.code(), "save_failed");
+        assert_eq!(store.tree(), &tree);
+    }
+
+    #[test]
+    fn replace_tree_is_persisted_and_keeps_bak() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = open(dir.path());
+        store.create_folder(None, None, "old").unwrap();
+        let old_bytes = fs::read(store.path()).unwrap();
+        let mut next = Tree::new();
+        next.create_folder(None, None, "new").unwrap();
+        store.replace_tree(next.clone()).unwrap();
+        assert_eq!(store.tree(), &next);
+        assert_eq!(open(dir.path()).tree(), &next);
+        let bak = dir.path().join(format!("{FILE_NAME}.bak"));
+        assert_eq!(fs::read(bak).unwrap(), old_bytes);
+    }
+
+    #[test]
+    fn failed_save_rolls_back_replace_tree() {
+        let mut tree = Tree::new();
+        tree.create_folder(None, None, "kept").unwrap();
+        let (_dir, mut store) = broken_store(tree.clone());
+        let mut next = Tree::new();
+        next.create_folder(None, None, "lost").unwrap();
+        let err = store.replace_tree(next).unwrap_err();
+        assert_eq!(err.code(), "save_failed");
+        assert_eq!(store.tree(), &tree);
     }
 
     #[test]

@@ -19,6 +19,8 @@ pub enum TreeError {
     InvalidMove,
     #[error("the position is outside the folder")]
     IndexOutOfRange,
+    #[error("an item with the id {0} already exists")]
+    DuplicateId(NodeId),
 }
 
 impl TreeError {
@@ -32,6 +34,7 @@ impl TreeError {
             TreeError::InvalidPort => "invalid_port",
             TreeError::InvalidMove => "invalid_move",
             TreeError::IndexOutOfRange => "index_out_of_range",
+            TreeError::DuplicateId(_) => "duplicate_id",
         }
     }
 }
@@ -79,6 +82,28 @@ impl StoreError {
         match self {
             StoreError::Tree(e) => e.code(),
             StoreError::Save(_) => "save_failed",
+        }
+    }
+}
+
+/// A `connections.json` document (in memory, not read from a file) could not be turned
+/// into a tree.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum DocumentError {
+    #[error(
+        "the document was written by a newer version of fernjo (file format {found}, this version understands {supported})"
+    )]
+    NewerSchema { found: u32, supported: u32 },
+    #[error("invalid document: {0}")]
+    Invalid(String),
+}
+
+impl DocumentError {
+    /// Stable code shown to the UI and used in tests.
+    pub fn code(&self) -> &'static str {
+        match self {
+            DocumentError::NewerSchema { .. } => "newer_schema",
+            DocumentError::Invalid(_) => "invalid_document",
         }
     }
 }

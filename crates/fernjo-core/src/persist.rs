@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::error::{LoadError, SaveError};
+use crate::error::{DocumentError, LoadError, SaveError};
 use crate::model::{Node, NodeId, NodeKind};
 use crate::tree::Tree;
 
@@ -62,14 +62,19 @@ pub(crate) fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// Writes `tree` atomically: temp file in the same folder, flushed to disk, the current
-/// file copied to `.bak`, then the temp file renamed over the target.
-pub fn save(path: &Path, tree: &Tree) -> Result<(), SaveError> {
-    let json = serde_json::to_string_pretty(&FileOut {
+/// The JSON document `save` writes for `tree`: `schemaVersion` and `children`.
+pub fn document(tree: &Tree) -> Value {
+    serde_json::to_value(FileOut {
         schema_version: CURRENT_VERSION,
         children: tree.children(),
     })
-    .map_err(|e| SaveError {
+    .expect("a tree always serialises")
+}
+
+/// Writes `tree` atomically: temp file in the same folder, flushed to disk, the current
+/// file copied to `.bak`, then the temp file renamed over the target.
+pub fn save(path: &Path, tree: &Tree) -> Result<(), SaveError> {
+    let json = serde_json::to_string_pretty(&document(tree)).map_err(|e| SaveError {
         path: path.to_path_buf(),
         source: io::Error::other(e),
     })?;
@@ -164,27 +169,69 @@ fn read_file(path: &Path) -> Result<Read, LoadError> {
         Ok(v) => v,
         Err(e) => return Ok(Read::Bad(e.to_string())),
     };
+    match parse_document(value) {
+        Ok(tree) => Ok(Read::Parsed(tree)),
+        Err(DocumentError::NewerSchema { found, supported }) => Err(LoadError::NewerSchema {
+            found,
+            supported,
+            path: path.to_path_buf(),
+        }),
+        Err(DocumentError::Invalid(reason)) => Ok(Read::Bad(reason)),
+    }
+}
+
+/// Turns a parsed `connections.json` document into a tree: checks `schemaVersion`, migrates
+/// older versions and runs `sanitize`. Shared by loading a file and by importing a document.
+pub fn parse_document(value: Value) -> Result<Tree, DocumentError> {
     let Some(version) = value.get("schemaVersion").and_then(Value::as_u64) else {
-        return Ok(Read::Bad("missing or invalid schemaVersion".to_string()));
+        return Err(DocumentError::Invalid(
+            "missing or invalid schemaVersion".to_string(),
+        ));
     };
     let version = u32::try_from(version).unwrap_or(u32::MAX);
     if version > CURRENT_VERSION {
-        return Err(LoadError::NewerSchema {
+        return Err(DocumentError::NewerSchema {
             found: version,
             supported: CURRENT_VERSION,
-            path: path.to_path_buf(),
         });
     }
     if version == 0 {
-        return Ok(Read::Bad("invalid schemaVersion 0".to_string()));
+        return Err(DocumentError::Invalid(
+            "invalid schemaVersion 0".to_string(),
+        ));
     }
-    match serde_json::from_value::<FileIn>(migrate(value, version)) {
-        Ok(mut file) => match sanitize(&mut file.children, &mut HashSet::new()) {
-            Ok(()) => Ok(Read::Parsed(Tree::from_children(file.children))),
-            Err(reason) => Ok(Read::Bad(reason)),
-        },
-        Err(e) => Ok(Read::Bad(e.to_string())),
+    let mut file: FileIn = serde_json::from_value(migrate(value, version))
+        .map_err(|e| DocumentError::Invalid(e.to_string()))?;
+    sanitize(&mut file.children, &mut HashSet::new()).map_err(DocumentError::Invalid)?;
+    Ok(Tree::from_children(file.children))
+}
+
+/// Writes `bytes` to `path` exactly as given (no trailing newline, no `.bak`): temp file in
+/// the same folder, flushed to disk, renamed over the target. The temp file is removed on
+/// failure.
+pub fn write_exact(path: &Path, bytes: &[u8]) -> Result<(), SaveError> {
+    let fail = |source: io::Error| SaveError {
+        path: path.to_path_buf(),
+        source,
+    };
+    let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
+    if let Some(dir) = dir {
+        fs::create_dir_all(dir).map_err(fail)?;
     }
+    let tmp = with_suffix(path, ".tmp");
+    let result = (|| -> io::Result<()> {
+        let mut file = fs::File::create(&tmp)?;
+        file.write_all(bytes)?;
+        file.flush()?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&tmp, path)
+    })();
+    if let Err(source) = result {
+        let _ = fs::remove_file(&tmp);
+        return Err(fail(source));
+    }
+    Ok(())
 }
 
 /// Checks what hand-edited files can get wrong. A repeated id (a copied block) gets a fresh
@@ -653,6 +700,65 @@ mod tests {
         assert_eq!(loaded.tree, tree);
         assert_eq!(loaded.notice, None);
         assert_eq!(files(dir.path()).len(), 1);
+    }
+
+    #[test]
+    fn document_round_trips_through_parse_document() {
+        let tree = sample_tree("dc01");
+        let doc = document(&tree);
+        assert_eq!(doc["schemaVersion"], CURRENT_VERSION);
+        assert!(doc["children"].is_array());
+        assert_eq!(parse_document(doc).unwrap(), tree);
+    }
+
+    #[test]
+    fn document_is_what_save_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let tree = sample_tree("dc01");
+        save(&main_path(dir.path()), &tree).unwrap();
+        let on_disk: Value =
+            serde_json::from_slice(&fs::read(main_path(dir.path())).unwrap()).unwrap();
+        assert_eq!(on_disk, document(&tree));
+    }
+
+    #[test]
+    fn parse_document_refuses_newer_schema_with_found_and_supported() {
+        let err = parse_document(json!({ "schemaVersion": 99, "children": [] })).unwrap_err();
+        assert_eq!(
+            err,
+            DocumentError::NewerSchema {
+                found: 99,
+                supported: CURRENT_VERSION
+            }
+        );
+        assert_eq!(err.code(), "newer_schema");
+        let err = parse_document(json!({ "children": [] })).unwrap_err();
+        assert_eq!(err.code(), "invalid_document");
+    }
+
+    #[test]
+    fn parse_document_gives_repeated_ids_fresh_ids() {
+        let id = "11111111-1111-4111-8111-111111111111";
+        let node = |name: &str| json!({ "id": id, "type": "connection", "name": name, "protocol": "ssh", "host": "h" });
+        let tree = parse_document(json!({
+            "schemaVersion": 2,
+            "children": [node("a"), node("b")]
+        }))
+        .unwrap();
+        assert_eq!(tree.children().len(), 2);
+        assert_ne!(tree.children()[0].id, tree.children()[1].id);
+        assert_eq!(tree.children()[0].id.to_string(), id);
+    }
+
+    #[test]
+    fn write_exact_has_no_newline_no_bak_and_no_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.json");
+        write_exact(&path, b"one").unwrap();
+        write_exact(&path, b"two").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"two");
+        let names: Vec<_> = files(dir.path()).into_iter().map(|(n, _)| n).collect();
+        assert_eq!(names, ["out.json"]);
     }
 
     #[test]
