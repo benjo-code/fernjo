@@ -8,6 +8,17 @@ use crate::error::TreeError;
 use crate::model::{CredentialId, Node, NodeId, NodeKind, Protocol, ResolvedNode, Settings};
 use crate::resolve::resolve;
 
+/// Deepest nesting a whole subtree may have when it is added with [`Tree::graft`] or the tree
+/// is replaced: the top level is level 1, so a connection may sit at level 60.
+///
+/// `connections.json` is read with serde_json's recursion limit of 128 nested JSON levels. A
+/// node costs two levels (object and `children` array) and a connection's `settings` one more,
+/// so a connection at level 62 still loads from the file and from a backup body (which nests
+/// the document one object deeper; a test finds the edge by parsing). 60 keeps a margin of
+/// two levels. Creating or moving nodes by hand is not checked against it (see
+/// `Docs/DECISIONS.md`).
+pub const MAX_TREE_DEPTH: usize = 60;
+
 /// A change to one inheritable setting.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum Patch<T> {
@@ -122,6 +133,14 @@ fn count(node: &Node) -> usize {
     }
 }
 
+/// Levels of the subtree rooted at `node` (a connection is 1).
+pub fn subtree_depth(node: &Node) -> usize {
+    match &node.kind {
+        NodeKind::Folder { children } => 1 + children.iter().map(subtree_depth).max().unwrap_or(0),
+        NodeKind::Connection { .. } => 1,
+    }
+}
+
 fn assign_fresh_ids(node: &mut Node) {
     node.id = NodeId::new_v4();
     if let NodeKind::Folder { children } = &mut node.kind {
@@ -160,6 +179,11 @@ impl Tree {
 
     pub fn get(&self, id: NodeId) -> Option<&Node> {
         find(&self.children, id)
+    }
+
+    /// The deepest level any node sits at (the top level is 1, an empty tree is 0).
+    pub fn depth(&self) -> usize {
+        self.children.iter().map(subtree_depth).max().unwrap_or(0)
     }
 
     /// Number of nodes below `id` (the node itself is not counted).
@@ -201,22 +225,49 @@ impl Tree {
 
     /// Appends a whole subtree (with its ids) at the end of `parent` (`None` = top level).
     /// Refuses with `DuplicateId` when any id already exists in the tree or repeats inside
-    /// the subtree; nothing changes on error.
+    /// the subtree, and with `TooDeep` when a node would end up below `MAX_TREE_DEPTH`
+    /// levels; nothing changes on error.
     pub fn graft(&mut self, parent: Option<NodeId>, node: Node) -> Result<NodeId, TreeError> {
-        fn check(node: &Node, tree: &Tree, seen: &mut HashSet<NodeId>) -> Result<(), TreeError> {
-            if tree.get(node.id).is_some() || !seen.insert(node.id) {
+        fn collect(nodes: &[Node], ids: &mut HashSet<NodeId>) {
+            for node in nodes {
+                ids.insert(node.id);
+                if let NodeKind::Folder { children } = &node.kind {
+                    collect(children, ids);
+                }
+            }
+        }
+        fn check(
+            node: &Node,
+            existing: &HashSet<NodeId>,
+            seen: &mut HashSet<NodeId>,
+        ) -> Result<(), TreeError> {
+            if existing.contains(&node.id) || !seen.insert(node.id) {
                 return Err(TreeError::DuplicateId(node.id));
             }
             if let NodeKind::Folder { children } = &node.kind {
                 for child in children {
-                    check(child, tree, seen)?;
+                    check(child, existing, seen)?;
                 }
             }
             Ok(())
         }
         // validate the parent first so a bad parent reports as such
         self.siblings_mut(parent)?;
-        check(&node, self, &mut HashSet::new())?;
+        let parent_level = match parent {
+            None => 0,
+            Some(pid) => {
+                let mut trail = Vec::new();
+                ancestors(&self.children, pid, &mut trail);
+                trail.len() + 1
+            }
+        };
+        if parent_level + subtree_depth(&node) > MAX_TREE_DEPTH {
+            return Err(TreeError::TooDeep);
+        }
+        // one set of the existing ids: O(tree + subtree), not a tree search per grafted node
+        let mut existing = HashSet::new();
+        collect(&self.children, &mut existing);
+        check(&node, &existing, &mut HashSet::new())?;
         self.insert(parent, None, node)
     }
 
@@ -512,6 +563,74 @@ mod tests {
         let err = t.graft(None, branch("sub", vec![a, b])).unwrap_err();
         assert_eq!(err, TreeError::DuplicateId(id));
         assert!(t.children().is_empty());
+    }
+
+    /// A chain of `levels` nested folders, the innermost holding one connection (so the
+    /// connection sits at level `levels + 1`).
+    fn chain(levels: usize) -> Node {
+        let mut node = leaf("deepest");
+        for i in 0..levels {
+            node = branch(&format!("level-{i}"), vec![node]);
+        }
+        node
+    }
+
+    #[test]
+    fn graft_at_the_depth_limit_is_accepted_and_one_level_over_is_too_deep() {
+        let mut t = Tree::new();
+        // a connection at level MAX_TREE_DEPTH is the deepest allowed
+        t.graft(None, chain(MAX_TREE_DEPTH - 1)).unwrap();
+        assert_eq!(t.depth(), MAX_TREE_DEPTH);
+        let before = t.clone();
+        let err = t.graft(None, chain(MAX_TREE_DEPTH)).unwrap_err();
+        assert_eq!(err, TreeError::TooDeep);
+        assert_eq!(err.code(), "too_deep");
+        assert_eq!(t, before);
+    }
+
+    #[test]
+    fn graft_counts_the_levels_above_the_parent() {
+        let mut t = Tree::new();
+        let top = chain(MAX_TREE_DEPTH - 2); // folders at levels 1..=MAX-2, connection at MAX-1
+        let top_id = top.id;
+        t.graft(None, top).unwrap();
+        let mut inner = top_id;
+        loop {
+            let kids = children_of(&t, inner);
+            match kids.first() {
+                Some(Node {
+                    id,
+                    kind: NodeKind::Folder { .. },
+                    ..
+                }) => inner = *id,
+                _ => break,
+            }
+        }
+        let before = t.clone();
+        // innermost folder is at level MAX-2; a subtree of height 3 would end at MAX+1
+        let err = t.graft(Some(inner), chain(2)).unwrap_err();
+        assert_eq!(err, TreeError::TooDeep);
+        assert_eq!(t, before);
+        // height 2 ends at MAX
+        t.graft(Some(inner), chain(1)).unwrap();
+        assert_eq!(t.depth(), MAX_TREE_DEPTH);
+    }
+
+    #[test]
+    fn graft_duplicate_check_stays_linear_for_a_big_tree() {
+        // 20 000 existing nodes and a 20 000 node subtree: the old per-node tree search
+        // would need 4 * 10^8 node visits
+        let mut t = Tree::new();
+        t.graft(None, branch("a", (0..20_000).map(|_| leaf("x")).collect()))
+            .unwrap();
+        let start = std::time::Instant::now();
+        t.graft(None, branch("b", (0..20_000).map(|_| leaf("y")).collect()))
+            .unwrap();
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "graft took {:?}",
+            start.elapsed()
+        );
     }
 
     // ---- credential ---------------------------------------------------
@@ -1050,6 +1169,7 @@ mod tests {
             (TreeError::InvalidPort, "invalid_port"),
             (TreeError::InvalidMove, "invalid_move"),
             (TreeError::IndexOutOfRange, "index_out_of_range"),
+            (TreeError::TooDeep, "too_deep"),
         ];
         for (e, code) in all {
             assert_eq!(e.code(), code);

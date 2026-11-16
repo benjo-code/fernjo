@@ -27,7 +27,7 @@ pub use settings::{
     TerminalPrefs,
 };
 pub use store::{Opened, Store};
-pub use tree::{NodePatch, Patch, Tree};
+pub use tree::{MAX_TREE_DEPTH, NodePatch, Patch, Tree, subtree_depth};
 
 /// Returns the crate version.
 pub fn version() -> &'static str {

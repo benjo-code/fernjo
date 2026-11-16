@@ -21,6 +21,11 @@ pub enum TreeError {
     IndexOutOfRange,
     #[error("an item with the id {0} already exists")]
     DuplicateId(NodeId),
+    #[error(
+        "folders cannot be nested more than {} levels deep",
+        crate::tree::MAX_TREE_DEPTH
+    )]
+    TooDeep,
 }
 
 impl TreeError {
@@ -35,6 +40,7 @@ impl TreeError {
             TreeError::InvalidMove => "invalid_move",
             TreeError::IndexOutOfRange => "index_out_of_range",
             TreeError::DuplicateId(_) => "duplicate_id",
+            TreeError::TooDeep => "too_deep",
         }
     }
 }
