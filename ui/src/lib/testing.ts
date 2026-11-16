@@ -10,6 +10,7 @@ import type {
   Protocol,
   ResolvedNode,
   Snapshot,
+  TerminalSettings,
   TreeNode,
   VaultStatus,
 } from "./types";
@@ -79,6 +80,10 @@ export function dataFolder(partial: Partial<DataFolderInfo> = {}): DataFolderInf
   };
 }
 
+export function terminalSettings(partial: Partial<TerminalSettings> = {}): TerminalSettings {
+  return { fontFamily: null, fontSize: 14, scrollback: 10000, persistent: true, ...partial };
+}
+
 type Calls = Record<keyof Api, unknown[][]>;
 
 /** A scriptable `Api`: every method records its arguments; `impl` overrides behaviour. */
@@ -108,6 +113,17 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     getDataFolder: [],
     chooseDataFolder: [],
     restartApp: [],
+    openSession: [],
+    sessionInput: [],
+    sessionResize: [],
+    sessionAck: [],
+    closeSession: [],
+    reconnectSession: [],
+    answerPrompt: [],
+    resumeSession: [],
+    openExternalUrl: [],
+    getTerminalSettings: [],
+    setTerminalSettings: [],
   };
   let current = initial;
   const mutation = (id: string | null): Mutation => ({ id, snapshot: snapshot(current) });
@@ -216,6 +232,52 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     restartApp: async () => {
       calls.restartApp.push([]);
       if (impl.restartApp) await impl.restartApp();
+    },
+    openSession: async (...args) => {
+      calls.openSession.push(args);
+      return impl.openSession ? impl.openSession(...args) : "sid";
+    },
+    sessionInput: async (...args) => {
+      calls.sessionInput.push(args);
+      if (impl.sessionInput) await impl.sessionInput(...args);
+    },
+    sessionResize: async (...args) => {
+      calls.sessionResize.push(args);
+      if (impl.sessionResize) await impl.sessionResize(...args);
+    },
+    sessionAck: async (...args) => {
+      calls.sessionAck.push(args);
+      if (impl.sessionAck) await impl.sessionAck(...args);
+    },
+    closeSession: async (...args) => {
+      calls.closeSession.push(args);
+      if (impl.closeSession) await impl.closeSession(...args);
+    },
+    reconnectSession: async (...args) => {
+      calls.reconnectSession.push(args);
+      if (impl.reconnectSession) await impl.reconnectSession(...args);
+    },
+    answerPrompt: async (...args) => {
+      calls.answerPrompt.push(args);
+      if (impl.answerPrompt) await impl.answerPrompt(...args);
+    },
+    resumeSession: async (...args) => {
+      calls.resumeSession.push(args);
+      if (impl.resumeSession) await impl.resumeSession(...args);
+    },
+    openExternalUrl: async (...args) => {
+      calls.openExternalUrl.push(args);
+      if (impl.openExternalUrl) await impl.openExternalUrl(...args);
+    },
+    getTerminalSettings: async () => {
+      calls.getTerminalSettings.push([]);
+      return impl.getTerminalSettings ? impl.getTerminalSettings() : terminalSettings();
+    },
+    setTerminalSettings: async (...args) => {
+      calls.setTerminalSettings.push(args);
+      return impl.setTerminalSettings
+        ? impl.setTerminalSettings(...args)
+        : terminalSettings(args[0]);
     },
   };
   return {

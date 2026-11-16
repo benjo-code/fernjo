@@ -1,5 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
-import type { Api, ApiError } from "./types";
+import { Channel, invoke, type InvokeArgs, type InvokeOptions } from "@tauri-apps/api/core";
+import type { Api, ApiError, SessionEvent } from "./types";
 
 export type { Api } from "./types";
 
@@ -12,9 +12,9 @@ export function toApiError(e: unknown): ApiError {
   return { code: "internal", message: typeof e === "string" ? e : "Something went wrong" };
 }
 
-async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+async function call<T>(command: string, args?: InvokeArgs, options?: InvokeOptions): Promise<T> {
   try {
-    return await invoke<T>(command, args);
+    return await invoke<T>(command, args, options);
   } catch (e) {
     throw toApiError(e);
   }
@@ -47,4 +47,21 @@ export const tauriApi: Api = {
   getDataFolder: () => call("get_data_folder"),
   chooseDataFolder: () => call("choose_data_folder"),
   restartApp: () => call("restart_app"),
+  openSession: (nodeId, onEvent, cols, rows) => {
+    // Raw output arrives as an ArrayBuffer, JSON events as parsed objects.
+    const channel = new Channel<ArrayBuffer | SessionEvent>();
+    channel.onmessage = onEvent;
+    return call("open_session", { nodeId, onEvent: channel, cols, rows });
+  },
+  // the input is the raw request body, the session id travels in a header
+  sessionInput: (id, data) => call("session_input", data, { headers: { "x-fernjo-session": id } }),
+  sessionResize: (id, cols, rows) => call("session_resize", { id, cols, rows }),
+  sessionAck: (id, bytes) => call("session_ack", { id, bytes }),
+  closeSession: (id) => call("close_session", { id }),
+  reconnectSession: (id, cols, rows) => call("reconnect_session", { id, cols, rows }),
+  answerPrompt: (id, promptId, answer) => call("answer_prompt", { id, promptId, answer }),
+  resumeSession: (id, skipCredential) => call("resume_session", { id, skipCredential }),
+  openExternalUrl: (url) => call("open_external_url", { url }),
+  getTerminalSettings: () => call("get_terminal_settings"),
+  setTerminalSettings: (settings) => call("set_terminal_settings", { settings }),
 };
