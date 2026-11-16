@@ -1,6 +1,7 @@
 mod commands;
 mod connect_plan;
 mod data_folder;
+mod import_commands;
 mod session_commands;
 mod session_flow;
 mod sessions;
