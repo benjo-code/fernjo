@@ -59,7 +59,11 @@
   }
 
   // svelte-ignore state_referenced_locally
-  const importer = new ImportStore(api, (snapshot) => void store.applySnapshot(snapshot));
+  const importer = new ImportStore(api, (snapshot) => {
+    void store.applySnapshot(snapshot);
+    // an import adds credentials and a restore replaces the vault: reload its status and list
+    void vault.init();
+  });
 
   let folderOpen = $state(false);
   let importOpen = $state(false);

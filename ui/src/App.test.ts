@@ -132,3 +132,23 @@ test("choosing_a_folder_in_the_dialog_raises_the_persistent_restart_bar", async 
   expect(document.querySelector(".bar.restart")).not.toBeNull();
   unmount(app);
 });
+
+test("an_applied_import_reloads_the_vault_credential_list", async () => {
+  const { api, calls } = mockApi([], {
+    vaultStatus: async () => vaultStatus({ state: "unlocked" }),
+  });
+  const app = mount(App, { target: document.body, props: { api } });
+  await settle();
+  const listed = calls.listCredentials.length;
+  const click = async (label: string) => {
+    [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === label)!.click();
+    await settle();
+  };
+  document.querySelector<HTMLButtonElement>("button[aria-label='Import & backup']")!.click();
+  await settle();
+  await click("mRemoteNG file…");
+  await click("Import");
+  expect(calls.importApply).toHaveLength(1);
+  expect(calls.listCredentials.length).toBe(listed + 1);
+  unmount(app);
+});
