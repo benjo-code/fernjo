@@ -1,5 +1,5 @@
-//! Import, restore and export as plain functions over `AppState` (the `#[tauri::command]`
-//! wrappers come with the UI work).
+//! Import, restore and export as plain functions over `AppState` plus the thin
+//! `#[tauri::command]` wrappers in [`handlers`] (which also own the native file dialogs).
 //!
 //! One file at a time waits in `AppState.pending`: `import_begin` remembers the picked path,
 //! `import_inspect` reads it and replaces the path by a plan (or a decrypted backup), and
@@ -9,9 +9,6 @@
 //! report, the vault status and the tree snapshot.
 //!
 //! Lock order is the one of `delete_credential`: pending, then vault, then store.
-
-// Task 9 registers the commands that call these functions; until then only the tests do.
-#![allow(dead_code)]
 
 use std::collections::HashSet;
 use std::fs;
@@ -168,6 +165,44 @@ pub(crate) fn today_local() -> String {
 /// The current time as RFC 3339 in UTC with a `Z` (`exportedAt`, `createdAt`).
 fn now_utc_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+// ---- file dialogs -------------------------------------------------------------------------
+
+/// The path a debug build takes from `FERNJO_DIALOG_FILE` instead of showing a dialog (empty
+/// means unset). Kept separate from the environment read so both cases are testable.
+#[cfg(any(debug_assertions, test))]
+fn dialog_override_from(value: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    value.filter(|v| !v.is_empty()).map(PathBuf::from)
+}
+
+/// Debug builds only: lets a driven session (DevTools port) pick or save a file without OS
+/// input. Release builds compile this to `None`; the environment is not read there.
+#[cfg(debug_assertions)]
+fn dialog_override() -> Option<PathBuf> {
+    dialog_override_from(std::env::var_os("FERNJO_DIALOG_FILE"))
+}
+
+#[cfg(not(debug_assertions))]
+fn dialog_override() -> Option<PathBuf> {
+    None
+}
+
+/// Dialog filter name and file extensions per kind of file.
+fn filter_of(kind: ImportKind) -> (&'static str, &'static [&'static str]) {
+    match kind {
+        ImportKind::Mremoteng => ("mRemoteNG connections (confCons.xml)", &["xml"]),
+        ImportKind::Connections => ("fernjo connections", &["json"]),
+        ImportKind::Backup => ("fernjo backup", &["fjbk"]),
+    }
+}
+
+/// Default file name of an export.
+fn export_file_name(kind: ImportKind, today: &str) -> String {
+    match kind {
+        ImportKind::Backup => format!("fernjo-backup-{today}.fjbk"),
+        _ => format!("fernjo-connections-{today}.json"),
+    }
 }
 
 // ---- helpers ------------------------------------------------------------------------------
@@ -660,6 +695,125 @@ pub fn export_backup_to(
     })
 }
 
+/// The `#[tauri::command]` wrappers registered in `run()`. The native dialogs run on a worker
+/// thread (`spawn_blocking`), never on the main thread or the async runtime. Only the picked
+/// file's name goes back to the webview; the path stays here. The commands that derive an
+/// Argon2 key (`import_inspect`, `export_backup`) also stay off the main thread.
+pub mod handlers {
+    use super::*;
+    use tauri::{AppHandle, Manager, State};
+    use tauri_plugin_dialog::{DialogExt, FilePath};
+
+    async fn blocking<T: Send + 'static>(
+        job: impl FnOnce() -> T + Send + 'static,
+    ) -> Result<T, CommandError> {
+        tauri::async_runtime::spawn_blocking(job)
+            .await
+            .map_err(|_| CommandError::internal())
+    }
+
+    fn local_path(picked: FilePath) -> Result<PathBuf, CommandError> {
+        picked
+            .into_path()
+            .map_err(|_| error("file_unreadable", "the chosen file is not a local file"))
+    }
+
+    fn pick_blocking(app: &AppHandle, kind: ImportKind) -> Result<Option<PathBuf>, CommandError> {
+        if let Some(path) = dialog_override() {
+            return Ok(Some(path));
+        }
+        let (name, extensions) = filter_of(kind);
+        app.dialog()
+            .file()
+            .add_filter(name, extensions)
+            .blocking_pick_file()
+            .map(local_path)
+            .transpose()
+    }
+
+    fn save_blocking(app: &AppHandle, kind: ImportKind) -> Result<Option<PathBuf>, CommandError> {
+        if let Some(path) = dialog_override() {
+            return Ok(Some(path));
+        }
+        let (name, extensions) = filter_of(kind);
+        app.dialog()
+            .file()
+            .add_filter(name, extensions)
+            .set_file_name(export_file_name(kind, &today_local()))
+            .blocking_save_file()
+            .map(local_path)
+            .transpose()
+    }
+
+    /// Opens the native file picker and remembers the choice as the pending import. `None`
+    /// when the picker was cancelled.
+    #[tauri::command]
+    pub async fn import_pick(
+        app: AppHandle,
+        state: State<'_, AppState>,
+        kind: ImportKind,
+    ) -> Result<Option<PickedFile>, CommandError> {
+        let picker = app.clone();
+        let picked = blocking(move || pick_blocking(&picker, kind)).await??;
+        Ok(picked.map(|path| import_begin(&state, kind, path)))
+    }
+
+    #[tauri::command(async)]
+    pub fn import_inspect(
+        state: State<'_, AppState>,
+        secret: Option<String>,
+    ) -> Result<Preview, CommandError> {
+        super::import_inspect(&state, secret)
+    }
+
+    #[tauri::command]
+    pub fn import_apply(
+        state: State<'_, AppState>,
+        options: ApplyOptions,
+    ) -> Result<ApplyResult, CommandError> {
+        super::import_apply(&state, options)
+    }
+
+    #[tauri::command]
+    pub fn import_cancel(state: State<'_, AppState>) {
+        super::import_cancel(&state);
+    }
+
+    /// Asks where to save the connections file and writes it there. `None` when the dialog was
+    /// cancelled (nothing is written).
+    #[tauri::command]
+    pub async fn export_connections(
+        app: AppHandle,
+        state: State<'_, AppState>,
+    ) -> Result<Option<ExportInfo>, CommandError> {
+        let picker = app.clone();
+        let Some(path) =
+            blocking(move || save_blocking(&picker, ImportKind::Connections)).await??
+        else {
+            return Ok(None);
+        };
+        super::export_connections_to(&state, &path).map(Some)
+    }
+
+    /// Asks where to save the backup, then derives the key and writes it (both on a worker
+    /// thread). `None` when the dialog was cancelled (nothing is written). The state is taken
+    /// from the app handle inside the worker, since a `State` borrow cannot move into it.
+    #[tauri::command]
+    pub async fn export_backup(
+        app: AppHandle,
+        password: String,
+    ) -> Result<Option<ExportInfo>, CommandError> {
+        blocking(move || {
+            let Some(path) = save_blocking(&app, ImportKind::Backup)? else {
+                return Ok(None);
+            };
+            let state = app.state::<AppState>();
+            super::export_backup_to(&state, &path, password).map(Some)
+        })
+        .await?
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -803,13 +957,6 @@ mod tests {
         entries_json(&fresh)
     }
 
-    fn empty_snapshot() -> Snapshot {
-        Snapshot {
-            children: Vec::new(),
-            notices: Vec::new(),
-        }
-    }
-
     /// Makes the next save of the vault fail with `changed_on_disk`.
     fn spoil_vault_file(data: &Path) {
         fs::write(
@@ -822,6 +969,57 @@ mod tests {
     fn block_store_save(dir: &Path) {
         // the store writes `connections.json.tmp` first; a folder of that name fails the save
         fs::create_dir(dir.join("connections.json.tmp")).unwrap();
+    }
+
+    #[test]
+    fn dialog_override_reads_the_path_when_set_and_is_none_otherwise() {
+        use std::ffi::OsString;
+        assert_eq!(dialog_override_from(None), None);
+        assert_eq!(dialog_override_from(Some(OsString::new())), None);
+        assert_eq!(
+            dialog_override_from(Some(OsString::from("/tmp/x.xml"))),
+            Some(PathBuf::from("/tmp/x.xml"))
+        );
+    }
+
+    #[test]
+    fn dialog_filters_and_default_names_follow_the_kind() {
+        assert_eq!(filter_of(ImportKind::Mremoteng).1, ["xml"]);
+        assert_eq!(filter_of(ImportKind::Connections).1, ["json"]);
+        assert_eq!(filter_of(ImportKind::Backup).1, ["fjbk"]);
+        assert_eq!(
+            export_file_name(ImportKind::Connections, "2026-01-02"),
+            "fernjo-connections-2026-01-02.json"
+        );
+        assert_eq!(
+            export_file_name(ImportKind::Backup, "2026-01-02"),
+            "fernjo-backup-2026-01-02.fjbk"
+        );
+    }
+
+    #[test]
+    fn page_load_clears_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = st(&dir.path().join("d"));
+        let path = file(dir.path(), "c.xml", DEFAULT_KEY_XML);
+        inspect(&s, ImportKind::Mremoteng, &path, None).unwrap();
+        assert_eq!(pending_kind(&s), "mremoteng");
+        s.clear_pending();
+        assert_eq!(pending_kind(&s), "none");
+        assert_eq!(apply(&s).unwrap_err().code, "no_pending_import");
+        // a poisoned lock is recovered as well
+        import_begin(&s, ImportKind::Backup, path);
+        std::thread::scope(|scope| {
+            let _ = scope
+                .spawn(|| {
+                    let _g = s.pending.lock().unwrap();
+                    panic!("poison");
+                })
+                .join();
+        });
+        assert!(s.pending.is_poisoned());
+        s.clear_pending();
+        assert_eq!(pending_kind_poisoned(&s), "none");
     }
 
     #[test]

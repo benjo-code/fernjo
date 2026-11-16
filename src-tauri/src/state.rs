@@ -226,6 +226,12 @@ impl AppState {
             .store(value, std::sync::atomic::Ordering::SeqCst);
     }
 
+    /// Drops the pending import or restore (every page load does this, next to closing the
+    /// sessions); a poisoned lock is recovered.
+    pub fn clear_pending(&self) {
+        crate::import_commands::import_cancel(self);
+    }
+
     /// The vault's state as commands report it.
     ///
     /// # Errors
