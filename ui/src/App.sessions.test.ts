@@ -144,3 +144,85 @@ test("the_terminal_settings_come_from_the_api_with_a_fallback", async () => {
   await settle();
   expect(views()).toHaveLength(1);
 });
+
+const chip = () => document.querySelector<HTMLButtonElement>("button[aria-label^='Vault']")!;
+const manager = () => document.querySelector("section.manager");
+const tabButton = (i: number) =>
+  document.querySelectorAll<HTMLElement>("[data-tab-id] [role=tab]")[i]!;
+const visibleViews = () => views().filter((v) => !v.classList.contains("hidden"));
+
+async function openVault() {
+  chip().click();
+  await settle();
+  expect(manager()).not.toBeNull();
+}
+
+test("opening_a_connection_while_the_vault_manager_is_open_shows_the_new_tab", async () => {
+  await start();
+  await openVault();
+  doubleClick("web-01");
+  await settle();
+  expect(manager()).toBeNull();
+  expect(visibleViews()).toHaveLength(1);
+  expect(tabs()).toHaveLength(1);
+});
+
+test("activating_a_tab_or_reopening_the_active_one_leaves_the_vault_view", async () => {
+  await start([conn("web-01"), conn("db-01")]);
+  doubleClick("web-01");
+  await settle();
+  doubleClick("db-01");
+  await settle();
+  // a click on another tab
+  await openVault();
+  tabButton(0).click();
+  await settle();
+  expect(manager()).toBeNull();
+  expect(tabButton(0).getAttribute("aria-selected")).toBe("true");
+  expect(visibleViews()).toHaveLength(1);
+  // a click on the tab that is already active
+  await openVault();
+  tabButton(0).click();
+  await settle();
+  expect(manager()).toBeNull();
+  // double-click on a connection whose tab is already active
+  await openVault();
+  doubleClick("web-01");
+  await settle();
+  expect(manager()).toBeNull();
+  expect(tabs()).toHaveLength(2);
+});
+
+test("opening_the_vault_manager_with_tabs_hides_the_session_area_and_keeps_it_hidden", async () => {
+  await start();
+  doubleClick("web-01");
+  await settle();
+  await openVault();
+  await settle();
+  // the unchanged active tab must not close the manager again
+  expect(manager()).not.toBeNull();
+  expect(visibleViews()).toHaveLength(0);
+  expect(views()).toHaveLength(1);
+  expect(h.made[0]!.calls).not.toContain("dispose");
+});
+
+test("closing_a_tab_while_the_vault_manager_is_open_keeps_the_vault_view", async () => {
+  await start([conn("web-01"), conn("db-01")]);
+  doubleClick("web-01");
+  await settle();
+  doubleClick("db-01");
+  await settle();
+  await openVault();
+  // closing the active tab changes the active id, closing the other one does not
+  for (const label of ["db-01", "web-01"]) {
+    document.querySelector<HTMLButtonElement>(`button[aria-label='Close ${label}']`)!.click();
+    await settle();
+    // a connected tab asks first
+    [...document.querySelectorAll<HTMLButtonElement>("[role=alertdialog] button")]
+      .find((b) => b.textContent?.trim() === "Close")
+      ?.click();
+    await settle();
+    expect(manager()).not.toBeNull();
+  }
+  expect(tabs()).toHaveLength(0);
+});

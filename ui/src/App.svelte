@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { tauriApi, toApiError } from "./lib/api";
   import DataFolderDialog from "./lib/components/DataFolderDialog.svelte";
   import PropertiesPanel from "./lib/components/PropertiesPanel.svelte";
@@ -82,6 +82,15 @@
   // the manager only exists while the vault is unlocked
   $effect(() => {
     if (view === "vault" && vault.status?.state !== "unlocked") view = "empty";
+  });
+
+  // Opening or activating a tab brings the session area back; opening the manager or closing a
+  // tab does not count. `view` is read untracked so the effect only reacts to the counter.
+  $effect(() => {
+    void sessions.revealed;
+    untrack(() => {
+      if (view === "vault") view = "empty";
+    });
   });
 
   onMount(() => {

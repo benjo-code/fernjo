@@ -47,6 +47,12 @@ export class SessionStore {
   activeId = $state<string | null>(null);
   /** The last failure to start a session; shown by the app, replaced by the next one. */
   error = $state<string | null>(null);
+  /**
+   * Counts the moments a tab was asked to come to the front (open, activate, next, previous), even
+   * when it already was the active one. Closing a tab does not count. The app leaves other views
+   * (the vault manager) when it changes.
+   */
+  revealed = $state(0);
 
   #api: Api;
   #nameOf: (nodeId: string) => string;
@@ -65,6 +71,7 @@ export class SessionStore {
       const existing = this.tabs.find((t) => t.nodeId === nodeId);
       if (existing) {
         this.activeId = existing.id;
+        this.revealed++;
         return;
       }
     }
@@ -90,10 +97,13 @@ export class SessionStore {
       prompt: null,
     });
     this.activeId = id;
+    this.revealed++;
   }
 
   activate(id: string): void {
-    if (this.tabs.some((t) => t.id === id)) this.activeId = id;
+    if (!this.tabs.some((t) => t.id === id)) return;
+    this.activeId = id;
+    this.revealed++;
   }
 
   next(): void {
@@ -109,6 +119,7 @@ export class SessionStore {
     const at = this.tabs.findIndex((t) => t.id === this.activeId);
     const to = (at + delta + this.tabs.length) % this.tabs.length;
     this.activeId = this.tabs[to]!.id;
+    this.revealed++;
   }
 
   close(id: string): void {
