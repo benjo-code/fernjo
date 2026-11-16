@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Connections Name="Connections" Export="false" EncryptionEngine="AES" BlockCipherMode="GCM" KdfIterations="1000" FullFileEncryption="false" Protected="AAAA" ConfVersion="2.7">
+  <Node Name="new" Type="Connection" Hostname="new.example.com" Protocol="SSH2" Port="22" />
+</Connections>
