@@ -62,8 +62,8 @@ Depends on `fernjo-core` and `fernjo-vault` (for `NewEntry` and `SecretString`),
 
 ### 4.3 fernjo connections JSON
 
-- File `fernjo-connections-YYYY-MM-DD.json`: `{ "format": "fernjo-connections", "version": 1, "exportedAt", "children": [ …nodes as in connections.json… ] }`. **No secrets and no credential references** (the export drops every `credential` and the preview says how many were dropped). Human-readable, documented in `Docs/backup-format.md`.
-- Import validates through the same node rules as loading `connections.json` (no rule is duplicated), assigns fresh ids and grafts the result into **"Imported from fernjo export (YYYY-MM-DD)"**. A newer `version` is refused with a message.
+- File `fernjo-connections-YYYY-MM-DD.json`: `{ "format": "fernjo-connections", "exportedAt", "schemaVersion", "children": [ …nodes as in connections.json… ] }`. **No secrets and no credential references** (the export drops every `credential` and the preview says how many were dropped). Human-readable, documented in `Docs/backup-format.md`.
+- Import validates through the same node rules as loading `connections.json` (no rule is duplicated), assigns fresh ids and grafts the result into **"Imported from fernjo export (YYYY-MM-DD)"**. A newer `schemaVersion` is refused with a message. (Corrected after implementation: the first draft said `"version": 1`; the file carries the `connections.json` `schemaVersion`, so there is one version number, not two.)
 
 ### 4.4 Encrypted backup
 

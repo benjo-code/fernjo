@@ -12,7 +12,7 @@ All your connections live in one folder tree in the sidebar, sessions open as ta
 - SSH sessions in tabs with a full terminal (xterm.js), agent/key/password/keyboard-interactive login and host key verification
 - RDP sessions in tabs (IronRDP)
 - Encrypted credential vault (Argon2id + XChaCha20-Poly1305), optional unlock via the OS keychain
-- Import from mRemoteNG, export and encrypted backup
+- Import from mRemoteNG (`confCons.xml` 2.6, including saved passwords), export of the connections as JSON and an encrypted full backup with restore (formats in [Docs/backup-format.md](Docs/backup-format.md))
 - Data folder you can sync yourself (Syncthing, Nextcloud, iCloud) – the vault stays encrypted
 
 Design and scope: [Docs/superpowers/specs/2026-11-15-fernjo-design.md](Docs/superpowers/specs/2026-11-15-fernjo-design.md)
