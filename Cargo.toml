@@ -23,6 +23,8 @@ secrecy = "0.10.3"
 zeroize = "1.9.1"
 unicode-normalization = "0.1.26"
 getrandom = "0.4.3"
+russh = { version = "0.65.1", default-features = false, features = ["flate2", "ring", "rsa"] }
+tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros", "io-util"] }
 
 # Argon2 in an unoptimised dev build is about 30 times slower; keep the vault usable in `pnpm tauri dev`.
 [profile.dev.package.argon2]
