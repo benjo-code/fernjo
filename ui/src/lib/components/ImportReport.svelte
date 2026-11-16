@@ -39,7 +39,9 @@
           {list.title} ({list.lines.length})
         </button>
         {#if open[list.key]}
-          <ul id="{uid}-{list.key}">
+          <!-- a scroll area must be keyboard-reachable -->
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+          <ul id="{uid}-{list.key}" role="region" tabindex="0" aria-label="{list.title} lines">
             {#each list.lines as line, i (i)}
               <li><span class="path">{line.path}</span> <span>{line.text}</span></li>
             {/each}

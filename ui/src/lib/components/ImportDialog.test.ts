@@ -3,7 +3,16 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { ImportStore } from "../import.svelte";
 import { SessionStore } from "../sessions.svelte";
 import { TreeStore } from "../store.svelte";
-import { apiError, conn, deferred, mockApi, preview, report, vaultStatus } from "../testing";
+import {
+  apiError,
+  conn,
+  credential,
+  deferred,
+  mockApi,
+  preview,
+  report,
+  vaultStatus,
+} from "../testing";
 import type { Api, ApplyResult, ImportPreview, PickedFile, TreeNode } from "../types";
 import { VaultStore } from "../vault.svelte";
 import ImportDialog from "./ImportDialog.svelte";
@@ -76,7 +85,8 @@ const applied = (): ApplyResult => ({
 });
 
 describe("ImportDialog", () => {
-  test("dialog_lists_the_six_actions", async () => {
+  // the plan said "six actions"; the three groups hold five (2 + 2 + 1), plus Close
+  test("dialog_lists_the_five_actions_and_close", async () => {
     await setup();
     const dialog = document.querySelector("[role=dialog]")!;
     expect(dialog.getAttribute("aria-modal")).toBe("true");
@@ -198,7 +208,7 @@ describe("ImportDialog", () => {
     await click("Restore…");
     const confirm = document.querySelector("[role=alertdialog]")!;
     expect(confirm.textContent).toContain(
-      "This replaces 3 folders and connections and 0 credentials with the backup from 2026-11-01 (5 and 2). Open sessions are closed.",
+      "This replaces your current 3 folders and connections with the backup from 2026-11-01, which has 5 folders and connections and 2 credentials. Open sessions are closed.",
     );
     const buttons = [...confirm.querySelectorAll("button")];
     expect(document.activeElement).toBe(buttons[0]);
@@ -216,6 +226,111 @@ describe("ImportDialog", () => {
     await settle();
     expect(calls.importApply).toEqual([[{ withoutPasswords: false }]]);
     expect(document.body.textContent).toContain("Restored");
+  });
+
+  const backupPreview = (needsVault = false): ImportPreview =>
+    preview({
+      kind: "backup",
+      fileName: "b.fernjo",
+      report: null,
+      needsVault,
+      backup: {
+        createdAt: "2026-11-01T10:00:00Z",
+        app: "fernjo 0.5.0",
+        folders: 1,
+        connections: 1,
+        credentials: 1,
+      },
+    });
+  const restored = (): ApplyResult => ({
+    ...applied(),
+    report: null,
+    restored: { createdAt: "2026-11-01T10:00:00Z", folders: 1, connections: 1, credentials: 1 },
+  });
+
+  test("restore_confirmation_counts_current_credentials_only_when_the_vault_is_unlocked", async () => {
+    await setup({
+      vaultStatus: async () => vaultStatus({ state: "unlocked" }),
+      listCredentials: async () => [credential({ id: "c1" })],
+      importPick: async () => ({ fileName: "b.fernjo" }),
+      importInspect: async () => backupPreview(true),
+    });
+    await click("Backup file…");
+    await click("Restore…");
+    expect(document.querySelector("[role=alertdialog]")!.textContent).toContain(
+      "This replaces your current 0 folders and connections and 1 credential with the backup from 2026-11-01, which has 2 folders and connections and 1 credential.",
+    );
+  });
+
+  test("restore_confirmation_does_not_claim_zero_credentials_for_a_locked_vault", async () => {
+    await setup({
+      vaultStatus: async () => vaultStatus({ state: "locked" }),
+      importInspect: async () => backupPreview(false),
+    });
+    await click("Backup file…");
+    await click("Restore…");
+    const text = document.querySelector("[role=alertdialog]")!.textContent!;
+    expect(text).not.toContain("0 credentials");
+    expect(text).toContain("The credentials in the vault are replaced too.");
+  });
+
+  test("restore_preview_unlocks_the_vault_before_the_confirmation", async () => {
+    const { calls } = await setup({
+      vaultStatus: async () => vaultStatus({ state: "locked" }),
+      vaultUnlock: async () => vaultStatus({ state: "unlocked" }),
+      importInspect: async () => backupPreview(true),
+      importApply: async () => restored(),
+    });
+    await click("Backup file…");
+    expect(button("Restore…")).toBeUndefined();
+    expect(button("Import without passwords")).toBeUndefined();
+    type(input("import-vault-password"), "master");
+    await click("Unlock");
+    expect(calls.vaultUnlock[0][0]).toBe("master");
+    expect(calls.importApply).toHaveLength(0);
+    await click("Restore…");
+    expect(document.querySelector("[role=alertdialog]")!.textContent).toContain("1 credential");
+  });
+
+  test("restore_with_a_locked_vault_uses_restore_wording_unlocks_and_applies", async () => {
+    let attempts = 0;
+    const { calls } = await setup({
+      vaultStatus: async () => vaultStatus({ state: "locked" }),
+      vaultUnlock: async () => vaultStatus({ state: "unlocked" }),
+      importInspect: async () => backupPreview(false),
+      importApply: async () => {
+        attempts++;
+        if (attempts === 1) throw apiError("vault_needed", "Unlock the vault first.");
+        return restored();
+      },
+    });
+    await click("Backup file…");
+    await click("Restore…");
+    await click("Restore");
+    expect(calls.importApply).toHaveLength(1);
+    expect(document.body.textContent).toContain("A restore replaces the vault");
+    expect(document.body.textContent).not.toContain("Imported passwords");
+    expect(button("Import without passwords")).toBeUndefined();
+    type(input("import-vault-password"), "master");
+    await click("Unlock and restore");
+    expect(calls.importApply).toHaveLength(2);
+    expect(document.body.textContent).toContain("Restored 2 folders and connections");
+  });
+
+  test("import_without_passwords_sends_the_flag_and_is_hidden_without_needs_vault", async () => {
+    const { calls } = await setup({
+      importInspect: async () => preview({ report: withCounts(2), needsVault: true }),
+      importApply: async () => applied(),
+    });
+    await click("mRemoteNG file…");
+    await click("Import without passwords");
+    expect(calls.importApply).toEqual([[{ withoutPasswords: true }]]);
+    unmount(mounted!);
+    mounted = null;
+    document.body.innerHTML = "";
+    await setup({ importInspect: async () => preview({ report: withCounts(0) }) });
+    await click("mRemoteNG file…");
+    expect(button("Import without passwords")).toBeUndefined();
   });
 
   test("export_backup_needs_matching_passwords_of_8_chars", async () => {
@@ -375,6 +490,81 @@ describe("ImportDialog", () => {
     expect(button("New folder")).toBeTruthy();
     button("Import from mRemoteNG…").click();
     expect(onimport).toHaveBeenCalledTimes(1);
+  });
+
+  // a browser focuses a clicked button; the next step then removes it and focus falls to body
+  const focusClick = async (label: string) => {
+    const b = button(label);
+    b.focus();
+    b.click();
+    await settle();
+  };
+  const dialogEl = () => document.querySelector<HTMLElement>("[role=dialog]")!;
+  const tab = () =>
+    document.activeElement!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }),
+    );
+
+  test("focus_stays_in_the_dialog_when_a_clicked_button_is_removed", async () => {
+    const d = deferred<ApplyResult>();
+    const { calls, onclose } = await setup({
+      importInspect: async () => preview({ report: withCounts() }),
+      importApply: () => d.promise,
+    });
+    await focusClick("mRemoteNG file…");
+    expect(dialogEl().contains(document.activeElement)).toBe(true);
+    tab();
+    expect(dialogEl().contains(document.activeElement)).toBe(true);
+    await focusClick("Import");
+    // applying: focus stays, Escape is ignored (the apply cannot be cancelled)
+    expect(dialogEl().contains(document.activeElement)).toBe(true);
+    escape();
+    await settle();
+    expect(onclose).not.toHaveBeenCalled();
+    expect(calls.importCancel).toHaveLength(0);
+    d.resolve(applied());
+    await settle();
+    expect(document.body.textContent).toContain("2 folders, 4 connections");
+    expect(dialogEl().contains(document.activeElement)).toBe(true);
+    tab();
+    expect(dialogEl().contains(document.activeElement)).toBe(true);
+    escape();
+    expect(onclose).toHaveBeenCalledTimes(1);
+  });
+
+  test("escape_cancels_the_pending_import_after_a_focused_click", async () => {
+    const { calls, onclose } = await setup({
+      importInspect: async () => preview({ report: withCounts() }),
+    });
+    await focusClick("mRemoteNG file…");
+    escape();
+    await settle();
+    expect(calls.importCancel).toHaveLength(1);
+    expect(onclose).toHaveBeenCalledTimes(1);
+  });
+
+  test("focus_stays_in_the_dialog_around_the_restore_confirmation", async () => {
+    const { calls, onclose } = await setup({
+      importInspect: async () => backupPreview(false),
+      importApply: async () => restored(),
+    });
+    await focusClick("Backup file…");
+    await focusClick("Restore…");
+    expect(document.querySelector("[role=alertdialog]")).not.toBeNull();
+    const cancel = document.querySelector<HTMLButtonElement>("[role=alertdialog] button")!;
+    cancel.focus();
+    cancel.click();
+    await settle();
+    expect(document.querySelector("[role=alertdialog]")).toBeNull();
+    expect(dialogEl().contains(document.activeElement)).toBe(true);
+    tab();
+    expect(dialogEl().contains(document.activeElement)).toBe(true);
+    await focusClick("Restore…");
+    await focusClick("Restore");
+    expect(calls.importApply).toHaveLength(1);
+    expect(dialogEl().contains(document.activeElement)).toBe(true);
+    escape();
+    expect(onclose).toHaveBeenCalledTimes(1);
   });
 
   test("focus_returns_to_the_opener_on_close", async () => {

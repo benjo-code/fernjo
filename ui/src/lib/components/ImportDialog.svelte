@@ -66,12 +66,33 @@
 
   const dateOf = (iso: string) => iso.slice(0, 10);
 
+  const nodes = (n: number) =>
+    n === 1 ? "1 folder or connection" : `${n} folders and connections`;
+  const creds = (n: number) => (n === 1 ? "1 credential" : `${n} credentials`);
+
+  // the current credential count is only known while the vault is unlocked and its list loaded
+  const credentialsKnown = $derived(
+    vault.status?.state === "unlocked" && vault.credentialsState === "loaded",
+  );
+
   const restoreText = $derived.by(() => {
     const b = store.preview?.backup;
     if (!b) return "";
-    const now = collectIds(tree.children).all.size;
-    return `This replaces ${now} folders and connections and ${vault.credentials.length} credentials with the backup from ${dateOf(b.createdAt)} (${b.folders + b.connections} and ${b.credentials}). Open sessions are closed.`;
+    const now = nodes(collectIds(tree.children).all.size);
+    const current = credentialsKnown ? `${now} and ${creds(vault.credentials.length)}` : now;
+    const unknown =
+      !credentialsKnown && vault.status?.state !== "none"
+        ? " The credentials in the vault are replaced too."
+        : "";
+    return `This replaces your current ${current} with the backup from ${dateOf(b.createdAt)}, which has ${nodes(b.folders + b.connections)} and ${creds(b.credentials)}.${unknown} Open sessions are closed.`;
   });
+
+  /** The backup preview must unlock (or create) the vault before the confirmation can be exact. */
+  const restoreNeedsVault = $derived(
+    store.preview?.backup != null &&
+      store.preview.needsVault &&
+      (vault.status?.state === "locked" || vault.status?.state === "none"),
+  );
 
   $effect(() => {
     const root = dialog;
@@ -84,12 +105,23 @@
     };
   });
 
+  // A clicked button that the next step removes drops focus to <body>, where Escape and the Tab
+  // trap would not reach the dialog: put it back on the dialog when it left.
+  $effect(() => {
+    void step;
+    void confirming;
+    void tick().then(() => {
+      if (confirming || !dialog || dialog.contains(document.activeElement)) return;
+      dialog.focus();
+    });
+  });
+
   // the field is empty when asked for again after a wrong secret: put the cursor back in it
   $effect(() => {
     if (step === "key") void tick().then(() => secretField?.focus());
   });
   $effect(() => {
-    if (step === "vault") void tick().then(() => vaultField?.focus());
+    if (step === "vault" || restoreNeedsVault) void tick().then(() => vaultField?.focus());
   });
 
   // While busy the buttons use aria-disabled (handlers ignore the click) instead of disabled:
@@ -120,7 +152,8 @@
     }
   }
 
-  async function unlockAndApply(e: SubmitEvent) {
+  /** `resume`: the apply was refused for the vault, so apply again once it is open. */
+  async function submitVault(e: SubmitEvent, resume: boolean) {
     e.preventDefault();
     if (vaultBusy || locked) return;
     const none = vault.status?.state === "none";
@@ -145,7 +178,7 @@
       return;
     }
     vaultError = null;
-    await apply(false);
+    if (resume) await apply(false);
   }
 
   async function saveBackup(e: SubmitEvent) {
@@ -169,6 +202,8 @@
   }
 
   function close() {
+    // a running apply cannot be cancelled: closing would hide its result
+    if (step === "applying") return;
     secret = "";
     backupPassword = "";
     backupRepeat = "";
@@ -202,6 +237,44 @@
     }
   }
 </script>
+
+{#snippet vaultForm(resume: boolean, withoutOption: boolean)}
+  {@const none = vault.status?.state === "none"}
+  <form onsubmit={(e) => void submitVault(e, resume)}>
+    <PasswordField
+      bind:this={vaultField}
+      id="import-vault-password"
+      label="Master password"
+      bind:value={vaultPassword}
+      error={vaultError}
+      onedit={() => (vaultError = null)}
+    />
+    {#if none}
+      <PasswordField
+        id="import-vault-repeat"
+        label="Repeat master password"
+        bind:value={vaultRepeat}
+        onedit={() => (vaultError = null)}
+      />
+      <p class="note">There is no way to recover a forgotten master password.</p>
+    {/if}
+    <div class="actions">
+      <button type="button" class="btn" onclick={cancelPending}>Cancel</button>
+      {#if withoutOption}
+        <button type="button" class="btn" aria-disabled={locked} onclick={() => void apply(true)}
+          >Import without passwords</button
+        >
+      {/if}
+      <button type="submit" class="btn primary" aria-disabled={vaultBusy || locked}
+        >{none ? "Create vault" : "Unlock"}{resume
+          ? store.kind === "backup"
+            ? " and restore"
+            : " and import"
+          : ""}</button
+      >
+    </div>
+  </form>
+{/snippet}
 
 <div class="overlay">
   <div
@@ -261,53 +334,41 @@
           {b.connections === 1 ? "connection" : "connections"}, {b.credentials}
           {b.credentials === 1 ? "credential" : "credentials"}.
         </p>
-        <div class="actions">
-          <button type="button" class="btn" onclick={cancelPending}>Cancel</button>
-          <button
-            type="button"
-            class="btn danger"
-            aria-disabled={locked}
-            onclick={() => (confirming = true)}>Restore…</button
-          >
-        </div>
+        {#if restoreNeedsVault}
+          <p class="note">
+            {vault.status?.state === "none"
+              ? "The backup holds credentials. Create the vault they are restored into."
+              : "A restore replaces the vault, so unlock it first."}
+          </p>
+          {@render vaultForm(false, false)}
+        {:else}
+          <div class="actions">
+            <button type="button" class="btn" onclick={cancelPending}>Cancel</button>
+            <button
+              type="button"
+              class="btn danger"
+              aria-disabled={locked}
+              onclick={() => (confirming = true)}>Restore…</button
+            >
+          </div>
+        {/if}
       {/if}
     {:else if step === "vault"}
       <p class="file">{store.fileName}</p>
-      <p class="note">
-        {vault.status?.state === "none"
-          ? "Imported passwords are stored in the vault. Create one with a master password, or import without passwords."
-          : "Imported passwords are stored in the vault. Unlock it, or import without passwords."}
-      </p>
-      <form onsubmit={unlockAndApply}>
-        <PasswordField
-          bind:this={vaultField}
-          id="import-vault-password"
-          label="Master password"
-          bind:value={vaultPassword}
-          error={vaultError}
-          onedit={() => (vaultError = null)}
-        />
-        {#if vault.status?.state === "none"}
-          <PasswordField
-            id="import-vault-repeat"
-            label="Repeat master password"
-            bind:value={vaultRepeat}
-            onedit={() => (vaultError = null)}
-          />
-          <p class="note">There is no way to recover a forgotten master password.</p>
-        {/if}
-        <div class="actions">
-          <button type="button" class="btn" onclick={cancelPending}>Cancel</button>
-          <button type="button" class="btn" aria-disabled={locked} onclick={() => void apply(true)}
-            >Import without passwords</button
-          >
-          <button type="submit" class="btn primary" aria-disabled={vaultBusy || locked}
-            >{vault.status?.state === "none"
-              ? "Create vault and import"
-              : "Unlock and import"}</button
-          >
-        </div>
-      </form>
+      {#if store.kind === "backup"}
+        <p class="note">
+          {vault.status?.state === "none"
+            ? "The backup holds credentials. Create the vault they are restored into."
+            : "A restore replaces the vault, so it must be unlocked first."}
+        </p>
+      {:else}
+        <p class="note">
+          {vault.status?.state === "none"
+            ? "Imported passwords are stored in the vault. Create one with a master password, or import without passwords."
+            : "Imported passwords are stored in the vault. Unlock it, or import without passwords."}
+        </p>
+      {/if}
+      {@render vaultForm(true, store.kind !== "backup")}
     {:else if step === "applying"}
       <p class="note" role="status">Working…</p>
     {:else}
