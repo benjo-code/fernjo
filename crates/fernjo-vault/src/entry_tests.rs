@@ -494,3 +494,110 @@ fn consecutive_saves_by_the_same_handle_are_not_refused() {
     vault.unlock(&secret(NEW_PW)).unwrap();
     vault.add(password_entry("c", "pw")).unwrap();
 }
+
+// --- backup primitives: add with id, export and replace ---
+
+#[test]
+fn add_with_id_keeps_the_id_and_rejects_a_duplicate() {
+    let dir = TempDir::new().unwrap();
+    let (mut vault, path) = new_vault(&dir);
+    let id = uuid::Uuid::from_u128(42);
+    vault
+        .add_with_id(id, password_entry("fixed", "pw"))
+        .unwrap();
+    assert_eq!(vault.get(id).unwrap().name, "fixed");
+    assert_eq!(
+        code(vault.add_with_id(id, password_entry("again", "pw2"))),
+        "duplicate_entry"
+    );
+    assert_eq!(vault.list().unwrap().len(), 1);
+    drop(vault);
+    let mut reopened = Vault::open(&path).unwrap().unwrap();
+    reopened.unlock(&secret(PW)).unwrap();
+    assert_eq!(password_of(&reopened.reveal(id).unwrap()), "pw");
+}
+
+#[test]
+fn export_entries_requires_unlocked() {
+    let dir = TempDir::new().unwrap();
+    let (mut vault, _) = new_vault(&dir);
+    let a = vault.add(password_entry("web", "pw-one")).unwrap();
+    let b = vault.add(key_entry("git", "KEYDATA", Some("pp"))).unwrap();
+    let exported = vault.export_entries().unwrap();
+    assert_eq!(exported.len(), 2);
+    let (_, web) = exported.iter().find(|(id, _)| *id == a).unwrap();
+    assert_eq!(web.name, "web");
+    assert_eq!(password_of(&web.secret), "pw-one");
+    let (_, git) = exported.iter().find(|(id, _)| *id == b).unwrap();
+    assert_eq!(
+        key_of(&git.secret),
+        ("KEYDATA".to_owned(), Some("pp".to_owned()))
+    );
+    vault.lock();
+    assert_eq!(code(vault.export_entries()), "vault_locked");
+}
+
+#[test]
+fn replace_entries_swaps_all_in_one_save_and_keeps_bak() {
+    let dir = TempDir::new().unwrap();
+    let (mut vault, path) = new_vault(&dir);
+    let old = vault.add(password_entry("old", "pw-old")).unwrap();
+    let before = fs::read(&path).unwrap();
+    let n1 = uuid::Uuid::from_u128(1);
+    let n2 = uuid::Uuid::from_u128(2);
+    vault
+        .replace_entries(vec![
+            (n1, password_entry("one", "pw1")),
+            (n2, key_entry("two", "K2", None)),
+        ])
+        .unwrap();
+    assert_eq!(code(vault.get(old)), "not_found");
+    assert_eq!(vault.list().unwrap().len(), 2);
+    let bak = fs::read(path.with_file_name(format!("{FILE_NAME}.bak"))).unwrap();
+    assert_eq!(
+        bak, before,
+        "exactly one save: .bak is the pre-replace file"
+    );
+    drop(vault);
+    let mut reopened = Vault::open(&path).unwrap().unwrap();
+    reopened.unlock(&secret(PW)).unwrap();
+    assert_eq!(password_of(&reopened.reveal(n1).unwrap()), "pw1");
+    assert_eq!(key_of(&reopened.reveal(n2).unwrap()).0, "K2");
+}
+
+#[test]
+fn replace_entries_with_duplicate_ids_changes_nothing() {
+    let dir = TempDir::new().unwrap();
+    let (mut vault, path) = new_vault(&dir);
+    let keep = vault.add(password_entry("keep", "pw")).unwrap();
+    let before = fs::read(&path).unwrap();
+    let id = uuid::Uuid::from_u128(9);
+    assert_eq!(
+        code(vault.replace_entries(vec![
+            (id, password_entry("a", "x")),
+            (id, password_entry("b", "y")),
+        ])),
+        "duplicate_entry"
+    );
+    assert_eq!(vault.list().unwrap().len(), 1);
+    assert_eq!(password_of(&vault.reveal(keep).unwrap()), "pw");
+    assert_eq!(fs::read(&path).unwrap(), before);
+}
+
+#[test]
+fn failed_save_in_replace_entries_keeps_old_entries() {
+    let dir = TempDir::new().unwrap();
+    let (mut vault, sub, _) = vault_with_broken_target(&dir);
+    let keep = vault.add(password_entry("keep", "pw")).unwrap();
+    break_target(&sub);
+    assert_eq!(
+        code(vault.replace_entries(vec![(
+            uuid::Uuid::from_u128(5),
+            password_entry("new", "pw2")
+        )])),
+        "save_failed"
+    );
+    let list = vault.list().unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].id, keep);
+}

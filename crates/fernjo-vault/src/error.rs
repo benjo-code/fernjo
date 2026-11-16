@@ -24,6 +24,8 @@ pub enum VaultError {
     InvalidKdfParams,
     #[error("a vault file already exists")]
     AlreadyExists,
+    #[error("an entry with this id already exists")]
+    DuplicateEntry,
     #[error("the name must not be empty")]
     EmptyName,
     #[error("the vault file could not be written: {0}")]
@@ -48,6 +50,7 @@ impl VaultError {
             Self::Unreadable(_) => "unreadable",
             Self::InvalidKdfParams => "invalid_kdf_params",
             Self::AlreadyExists => "already_exists",
+            Self::DuplicateEntry => "duplicate_entry",
             Self::EmptyName => "empty_name",
             Self::SaveFailed(_) => "save_failed",
             Self::ChangedOnDisk => "changed_on_disk",

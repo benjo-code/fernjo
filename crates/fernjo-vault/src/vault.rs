@@ -57,7 +57,7 @@ impl fmt::Debug for Vault {
 }
 
 /// NFC-normalises the password and does nothing else (no trimming, byte-exact).
-fn normalise(password: &SecretString) -> Zeroizing<String> {
+pub(crate) fn normalise(password: &SecretString) -> Zeroizing<String> {
     Zeroizing::new(password.expose_secret().nfc().collect::<String>())
 }
 
@@ -292,17 +292,74 @@ impl Vault {
         let name = checked_name(&new.name)?;
         let id = Uuid::new_v4();
         self.mutate(|entries| {
-            entries.push(Entry {
-                id,
-                name,
-                username: non_empty(new.username),
-                domain: non_empty(new.domain),
-                secret: new.secret,
-                notes: new.notes,
-            });
+            entries.push(entry_from(id, name, new));
             Ok(())
         })?;
         Ok(id)
+    }
+
+    /// Adds an entry under a given id (restore from a backup) and saves.
+    ///
+    /// # Errors
+    /// `vault_locked`, `empty_name`, `duplicate_entry`, `changed_on_disk`, `save_failed`
+    /// (memory unchanged).
+    pub fn add_with_id(&mut self, id: EntryId, new: NewEntry) -> Result<(), VaultError> {
+        let name = checked_name(&new.name)?;
+        self.mutate(|entries| {
+            if entries.iter().any(|e| e.id == id) {
+                return Err(VaultError::DuplicateEntry);
+            }
+            entries.push(entry_from(id, name, new));
+            Ok(())
+        })
+    }
+
+    /// Every entry with its secret, for an encrypted backup. Secret material leaves the
+    /// vault here: the caller must seal it immediately.
+    ///
+    /// # Errors
+    /// `vault_locked`.
+    pub fn export_entries(&self) -> Result<Vec<(EntryId, NewEntry)>, VaultError> {
+        Ok(self
+            .unlocked()?
+            .body
+            .entries
+            .iter()
+            .map(|e| {
+                (
+                    e.id,
+                    NewEntry {
+                        name: e.name.clone(),
+                        username: e.username.clone(),
+                        domain: e.domain.clone(),
+                        secret: e.secret.clone(),
+                        notes: e.notes.clone(),
+                    },
+                )
+            })
+            .collect())
+    }
+
+    /// Replaces all entries by `entries` with one save (restore from a backup).
+    ///
+    /// # Errors
+    /// `vault_locked`, `empty_name`, `duplicate_entry`, `changed_on_disk`, `save_failed`
+    /// (memory unchanged).
+    pub fn replace_entries(&mut self, entries: Vec<(EntryId, NewEntry)>) -> Result<(), VaultError> {
+        self.unlocked()?;
+        let mut seen = std::collections::HashSet::new();
+        let mut list = Vec::with_capacity(entries.len());
+        for (id, new) in entries {
+            let name = checked_name(&new.name)?;
+            if !seen.insert(id) {
+                return Err(VaultError::DuplicateEntry);
+            }
+            list.push(entry_from(id, name, new));
+        }
+        self.mutate(|current| {
+            *current = list;
+            Ok(())
+        })
     }
 
     /// Applies a partial update and saves.
@@ -465,6 +522,17 @@ impl Vault {
         *self.disk_header = header_bytes;
         self.header = header;
         Ok(())
+    }
+}
+
+fn entry_from(id: EntryId, name: String, new: NewEntry) -> Entry {
+    Entry {
+        id,
+        name,
+        username: non_empty(new.username),
+        domain: non_empty(new.domain),
+        secret: new.secret,
+        notes: new.notes,
     }
 }
 
