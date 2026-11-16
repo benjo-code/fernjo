@@ -1420,6 +1420,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "fernjo-import"
+version = "0.0.0"
+dependencies = [
+ "aes-gcm",
+ "base64 0.23.1",
+ "fernjo-core",
+ "fernjo-vault",
+ "pbkdf2",
+ "roxmltree",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "sha1",
+ "thiserror 2.0.21",
+ "zeroize",
+]
+
+[[package]]
 name = "fernjo-ssh"
 version = "0.0.0"
 dependencies = [
@@ -3891,6 +3909,15 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "roxmltree"
+version = "0.21.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9da7f59328b09405b181fee1018925fad50f157afb43c0c0f5c522c256dd5907"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]
