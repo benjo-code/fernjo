@@ -63,18 +63,23 @@ pub(crate) fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
 }
 
 /// The JSON document `save` writes for `tree`: `schemaVersion` and `children`.
-pub fn document(tree: &Tree) -> Value {
-    serde_json::to_value(FileOut {
+fn file_out(tree: &Tree) -> FileOut<'_> {
+    FileOut {
         schema_version: CURRENT_VERSION,
         children: tree.children(),
-    })
-    .expect("a tree always serialises")
+    }
+}
+
+/// For in-memory consumers only: `Value` objects are key-sorted, so `save` serialises
+/// `FileOut` directly to keep the on-disk key order.
+pub fn document(tree: &Tree) -> Value {
+    serde_json::to_value(file_out(tree)).expect("a tree always serialises")
 }
 
 /// Writes `tree` atomically: temp file in the same folder, flushed to disk, the current
 /// file copied to `.bak`, then the temp file renamed over the target.
 pub fn save(path: &Path, tree: &Tree) -> Result<(), SaveError> {
-    let json = serde_json::to_string_pretty(&document(tree)).map_err(|e| SaveError {
+    let json = serde_json::to_string_pretty(&file_out(tree)).map_err(|e| SaveError {
         path: path.to_path_buf(),
         source: io::Error::other(e),
     })?;
@@ -719,6 +724,55 @@ mod tests {
         let on_disk: Value =
             serde_json::from_slice(&fs::read(main_path(dir.path())).unwrap()).unwrap();
         assert_eq!(on_disk, document(&tree));
+    }
+
+    #[test]
+    fn saved_file_keeps_schema_version_first_and_declaration_key_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut tree = Tree::new();
+        let c = tree
+            .create_connection(None, None, "c", Protocol::Ssh, "h")
+            .unwrap();
+        tree.update(
+            c,
+            NodePatch {
+                username: Patch::Set("u".into()),
+                ..NodePatch::default()
+            },
+        )
+        .unwrap();
+        save(&main_path(dir.path()), &tree).unwrap();
+        let text = fs::read_to_string(main_path(dir.path())).unwrap();
+        assert!(
+            text.starts_with("{\n  \"schemaVersion\": 2,\n  \"children\": ["),
+            "{text}"
+        );
+        let pos = |key: &str| text.find(&format!("\"{key}\"")).unwrap();
+        let order = [
+            "id",
+            "name",
+            "description",
+            "settings",
+            "type",
+            "protocol",
+            "host",
+        ];
+        let positions: Vec<_> = order.iter().map(|k| pos(k)).collect();
+        assert!(positions.windows(2).all(|w| w[0] < w[1]), "{text}");
+    }
+
+    #[test]
+    fn write_exact_removes_temp_file_on_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        fs::create_dir(&target).unwrap();
+        assert!(write_exact(&target, b"x").is_err());
+        // `files` cannot read a directory, so list names only
+        let names: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["target"]);
     }
 
     #[test]

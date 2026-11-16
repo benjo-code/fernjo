@@ -1,5 +1,7 @@
 //! The tree of folders and connections with all of its rules (no I/O).
 
+use std::collections::HashSet;
+
 use serde::{Deserialize, Deserializer};
 
 use crate::error::TreeError;
@@ -201,11 +203,7 @@ impl Tree {
     /// Refuses with `DuplicateId` when any id already exists in the tree or repeats inside
     /// the subtree; nothing changes on error.
     pub fn graft(&mut self, parent: Option<NodeId>, node: Node) -> Result<NodeId, TreeError> {
-        fn check(
-            node: &Node,
-            tree: &Tree,
-            seen: &mut std::collections::HashSet<NodeId>,
-        ) -> Result<(), TreeError> {
+        fn check(node: &Node, tree: &Tree, seen: &mut HashSet<NodeId>) -> Result<(), TreeError> {
             if tree.get(node.id).is_some() || !seen.insert(node.id) {
                 return Err(TreeError::DuplicateId(node.id));
             }
@@ -218,7 +216,7 @@ impl Tree {
         }
         // validate the parent first so a bad parent reports as such
         self.siblings_mut(parent)?;
-        check(&node, self, &mut std::collections::HashSet::new())?;
+        check(&node, self, &mut HashSet::new())?;
         self.insert(parent, None, node)
     }
 
