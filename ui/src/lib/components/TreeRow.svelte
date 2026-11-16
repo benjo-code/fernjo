@@ -2,6 +2,7 @@
   import type { DropPosition } from "../drop-target";
   import type { Row } from "../rows";
   import Icon from "./Icon.svelte";
+  import Lamp from "./Lamp.svelte";
 
   let {
     row,
@@ -10,6 +11,7 @@
     renaming,
     drop = null,
     dragging = false,
+    lamp = null,
     onrename,
     oncancel,
   }: {
@@ -21,6 +23,8 @@
     drop?: DropPosition | null;
     /** This row is the one being dragged. */
     dragging?: boolean;
+    /** The strongest session state of this connection; `null` draws no lamp. */
+    lamp?: "live" | "connecting" | "dropped" | null;
     onrename: (value: string) => void;
     oncancel: () => void;
   } = $props();
@@ -100,6 +104,9 @@
     />
   {:else}
     <span class="name">{row.node.name}</span>
+  {/if}
+  {#if lamp}
+    <span class="lamp-col"><Lamp state={lamp} /></span>
   {/if}
 </div>
 
@@ -193,6 +200,12 @@
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .lamp-col {
+    display: flex;
+    flex: none;
+    margin-left: auto;
   }
 
   .rename {

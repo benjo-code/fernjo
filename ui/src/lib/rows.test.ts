@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { conn, folder } from "./testing";
-import { countDescendants, flattenRows, matchesFilter } from "./rows";
+import { countDescendants, findNode, flattenRows, matchesFilter } from "./rows";
 
 const tree = () => [
   folder("Homelab", [conn("pve-01"), conn("DC01", "rdp", { description: "domain controller" })]),
@@ -100,4 +100,12 @@ test("count_descendants_counts_nested_nodes_excluding_self", () => {
   expect(countDescendants(f)).toBe(3);
   expect(countDescendants(conn("x"))).toBe(0);
   expect(countDescendants(folder("empty"))).toBe(0);
+});
+
+describe("findNode", () => {
+  test("finds_nodes_at_any_depth_and_returns_undefined_for_unknown_ids", () => {
+    expect(findNode(tree(), "DC01")?.name).toBe("DC01");
+    expect(findNode(tree(), "web-01")?.name).toBe("web-01");
+    expect(findNode(tree(), "nope")).toBeUndefined();
+  });
 });

@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
+  import type { SessionStore } from "../sessions.svelte";
   import type { TreeStore } from "../store.svelte";
   import type { VaultStore } from "../vault.svelte";
   import FilterBox from "./FilterBox.svelte";
@@ -12,6 +13,7 @@
   let {
     store,
     vault,
+    sessions,
     onOpenVault,
     onsettings,
     restartPending = false,
@@ -20,6 +22,7 @@
   }: {
     store: TreeStore;
     vault: VaultStore;
+    sessions: SessionStore;
     /** The chip was clicked while the vault is unlocked. */
     onOpenVault: () => void;
     /** The settings (data folder) button was clicked. */
@@ -40,7 +43,7 @@
   </div>
   <VaultNote bind:this={note} bind:open={noteOpen} {vault} />
   <NoticeBar {store} {restartPending} {onRestart} />
-  <div class="tree-slot"><TreeView {store} /></div>
+  <div class="tree-slot"><TreeView {store} {sessions} /></div>
   {@render children?.()}
   <div class="foot">
     <button

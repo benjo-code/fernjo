@@ -75,7 +75,18 @@
     const c = controller;
     if (!c) return;
     c.setVisible(visible);
-    if (visible) c.focus();
+  });
+
+  // The keyboard moves to the terminal when this tab becomes the one in front and nothing else
+  // (an inline prompt, the vault wait) wants it. A derived value, so a state change that keeps
+  // the answer at `true` (connecting to connected) does not pull focus back from elsewhere.
+  const wantsFocus = $derived(
+    visible && (tab.state === "connecting" || tab.state === "connected") && tab.prompt === null,
+  );
+
+  $effect(() => {
+    const c = controller;
+    if (c && wantsFocus) c.focus();
   });
 
   $effect(() => {

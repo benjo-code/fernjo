@@ -35,6 +35,18 @@ export function countDescendants(node: TreeNode): number {
   return node.children.reduce((sum, child) => sum + 1 + countDescendants(child), 0);
 }
 
+/** The node with `id` anywhere in the tree, or `undefined`. */
+export function findNode(children: TreeNode[], id: string): TreeNode | undefined {
+  for (const node of children) {
+    if (node.id === id) return node;
+    if (node.type === "folder") {
+      const found = findNode(node.children, id);
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
+
 /** Ids of every node and of every folder in the tree. */
 export function collectIds(children: TreeNode[]): { all: Set<string>; folders: Set<string> } {
   const all = new Set<string>();
