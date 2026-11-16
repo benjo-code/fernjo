@@ -1,4 +1,5 @@
 use fernjo_import::error::ImportError;
+use fernjo_import::mremoteng::file::{MAX_DEPTH, MAX_PBKDF2_ITERATIONS};
 use fernjo_import::mremoteng::{RawDocument, RawKind, RawNode, read};
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -85,6 +86,15 @@ fn default_key_file_reads_names_hosts_and_passwords() {
         doc_json(&doc),
         expected(include_str!("fixtures/default-key.expected.json"))
     );
+}
+
+#[test]
+fn key_errors_say_key_because_the_field_is_labelled_custom_key() {
+    for e in [ImportError::KeyNeeded, ImportError::WrongKey] {
+        let text = e.to_string();
+        assert!(text.contains("key"), "{text}");
+        assert!(!text.contains("password"), "{text}");
+    }
 }
 
 #[test]
@@ -223,25 +233,32 @@ fn file_over_32_mib_is_too_large() {
 }
 
 #[test]
-fn depth_65_is_too_complex_and_depth_64_is_fine() {
-    let ok = read(nested(64).as_bytes(), None).unwrap();
+fn the_depth_limit_leaves_room_for_the_import_folder() {
+    // the plan puts everything below one new top-level folder, so the file may be one level
+    // shallower than the deepest tree the core accepts
+    assert_eq!(MAX_DEPTH + 1, fernjo_core::MAX_TREE_DEPTH);
+}
+
+#[test]
+fn one_level_over_the_depth_limit_is_too_complex_and_the_limit_itself_is_fine() {
+    let ok = read(nested(MAX_DEPTH).as_bytes(), None).unwrap();
     let mut n = &ok.nodes[0];
     let mut depth = 1;
     while let Some(c) = n.children.first() {
         n = c;
         depth += 1;
     }
-    assert_eq!(depth, 64);
-    assert_eq!(
-        read(nested(65).as_bytes(), None).unwrap_err(),
-        ImportError::TooComplex
-    );
+    assert_eq!(depth, MAX_DEPTH);
+    assert!(matches!(
+        read(nested(MAX_DEPTH + 1).as_bytes(), None).unwrap_err(),
+        ImportError::TooComplex(_)
+    ));
     // Far deeper than the parser itself allows: still a typed error.
     let err = read(nested(5000).as_bytes(), None).unwrap_err();
     assert!(
         matches!(
             err,
-            ImportError::TooComplex | ImportError::UnsupportedFormat(_)
+            ImportError::TooComplex(_) | ImportError::UnsupportedFormat(_)
         ),
         "{err:?}"
     );
@@ -254,10 +271,10 @@ fn ten_thousand_siblings_are_fine_and_more_than_100_000_nodes_is_too_complex() {
     assert_eq!(ok.nodes.len(), 10_000);
     let at_cap = read(small_ok(&node.repeat(100_000)).as_bytes(), None).unwrap();
     assert_eq!(at_cap.nodes.len(), 100_000);
-    assert_eq!(
+    assert!(matches!(
         read(small_ok(&node.repeat(100_001)).as_bytes(), None).unwrap_err(),
-        ImportError::TooComplex
-    );
+        ImportError::TooComplex(_)
+    ));
 }
 
 #[test]
@@ -386,4 +403,118 @@ fn raw_node_debug_hides_the_password() {
         assert!(!dump.contains(secret), "{secret} leaked: {dump}");
     }
     assert!(dump.contains("web1"));
+}
+
+// ---- work budget -----------------------------------------------------------------------------
+
+/// The `Password` attribute of the default-key fixture's `web1` (decrypts at 1000 iterations).
+fn web1_password() -> String {
+    let text = std::str::from_utf8(DEFAULT_KEY_XML).unwrap();
+    let doc = roxmltree::Document::parse(text).unwrap();
+    doc.descendants()
+        .find(|n| n.attribute("Name") == Some("web1"))
+        .and_then(|n| n.attribute("Password"))
+        .unwrap()
+        .to_owned()
+}
+
+/// `count` connections that each carry a (garbage) `Password`.
+fn with_passwords(iterations: u32, count: usize) -> String {
+    let node = r#"<Node Name="n" Type="Connection" Protocol="SSH2" Password="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"/>"#;
+    small(
+        &format!(r#"KdfIterations="{iterations}""#),
+        &node.repeat(count),
+    )
+}
+
+#[test]
+fn a_hostile_password_count_is_too_complex_before_any_derivation() {
+    // 1 key check + 19 passwords = 20 derivations of 1 000 000 iterations = the budget;
+    // one more password is over it. The root's `Protected` was made for 1000 iterations, so
+    // a derivation that reached it would end as `key_needed`, never as `too_complex`.
+    let start = std::time::Instant::now();
+    let err = read(with_passwords(1_000_000, 25).as_bytes(), None).unwrap_err();
+    let ImportError::TooComplex(message) = &err else {
+        panic!("{err:?}");
+    };
+    assert!(message.contains("25"), "{message}");
+    assert!(message.contains("1000000"), "{message}");
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(1),
+        "the check must not derive anything ({:?})",
+        start.elapsed()
+    );
+    assert_eq!(err.code(), "too_complex");
+}
+
+#[test]
+fn the_budget_edge_is_inclusive() {
+    let per = u64::from(1_000_000u32);
+    let allowed = (MAX_PBKDF2_ITERATIONS / per) as usize - 1; // minus the key check
+    // within the budget: the file gets as far as the key check (which fails for 1000-iteration
+    // `Protected`)
+    assert_eq!(
+        read(with_passwords(1_000_000, allowed).as_bytes(), None).unwrap_err(),
+        ImportError::KeyNeeded
+    );
+    assert!(matches!(
+        read(with_passwords(1_000_000, allowed + 1).as_bytes(), None).unwrap_err(),
+        ImportError::TooComplex(_)
+    ));
+}
+
+#[test]
+fn a_realistic_file_with_500_passwords_is_unaffected_by_the_budget() {
+    let node = format!(
+        r#"<Node Name="n" Type="Connection" Protocol="SSH2" Password="{}"/>"#,
+        web1_password()
+    );
+    let doc = read(small_ok(&node.repeat(500)).as_bytes(), None).unwrap();
+    assert_eq!(doc.nodes.len(), 500);
+    assert!(doc.nodes.iter().all(|n| n.password.is_some()));
+}
+
+/// Encrypts like mRemoteNG does (test helper; fixed salt and nonce are fine here).
+fn encrypt(plain: &str, password: &str, iterations: u32) -> String {
+    use aes_gcm::aead::consts::U16;
+    use aes_gcm::aead::{Aead, KeyInit, Payload};
+    use aes_gcm::aes::Aes256;
+    use base64::Engine;
+    let salt = [7u8; 16];
+    let nonce = [9u8; 16];
+    let mut derived = [0u8; 32];
+    pbkdf2::pbkdf2_hmac::<sha1::Sha1>(password.as_bytes(), &salt, iterations, &mut derived);
+    let cipher = aes_gcm::AesGcm::<Aes256, U16>::new_from_slice(&derived).unwrap();
+    let sealed = cipher
+        .encrypt(
+            (&nonce).into(),
+            Payload {
+                msg: plain.as_bytes(),
+                aad: &salt,
+            },
+        )
+        .unwrap();
+    let mut raw = salt.to_vec();
+    raw.extend_from_slice(&nonce);
+    raw.extend_from_slice(&sealed);
+    base64::engine::general_purpose::STANDARD.encode(raw)
+}
+
+fn full_file(inner: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="utf-8"?><Connections Name="Connections" Export="false" EncryptionEngine="AES" BlockCipherMode="GCM" KdfIterations="1000" FullFileEncryption="true" Protected="{}" ConfVersion="2.6">{}</Connections>"#,
+        encrypt("ThisIsNotProtected", "mR3m", 1000),
+        encrypt(inner, "mR3m", 1000)
+    )
+}
+
+#[test]
+fn full_file_encryption_is_counted_after_the_body_is_decrypted() {
+    let node = r#"<Node Name="n" Type="Connection" Protocol="SSH2" Password="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"/>"#;
+    // 1000 iterations: key check + body + n passwords must stay within 20 000 000 / 1000
+    let limit = (MAX_PBKDF2_ITERATIONS / 1000) as usize;
+    let ok = read(full_file(&node.repeat(limit - 2)).as_bytes(), None).unwrap();
+    assert_eq!(ok.nodes.len(), limit - 2);
+    let err = read(full_file(&node.repeat(limit - 1)).as_bytes(), None).unwrap_err();
+    assert!(matches!(err, ImportError::TooComplex(_)), "{err:?}");
 }

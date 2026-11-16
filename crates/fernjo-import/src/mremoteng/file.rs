@@ -1,7 +1,8 @@
 //! Reading a mRemoteNG `confCons.xml` (ConfVersion 2.6) into a raw, unmapped document.
 //!
 //! Order of checks: size, UTF-8 and BOM, XML parse (no DTD), root element and version, encryption
-//! engine, `KdfIterations` range, key check through `Protected`, optional full-file decryption, then a
+//! engine, `KdfIterations` range, the work budget (stored passwords x iterations), key check through
+//! `Protected`, optional full-file decryption (and the budget again for the decrypted body), then a
 //! depth-limited walk with a node cap. Error messages never contain secrets.
 
 use std::fmt;
@@ -14,10 +15,16 @@ use crate::error::ImportError;
 
 /// Files above this size are refused before parsing.
 pub const MAX_FILE_BYTES: usize = 32 * 1024 * 1024;
-/// Maximum container nesting (the root's children are level 1).
-pub const MAX_DEPTH: usize = 64;
+/// Maximum container nesting (the root's children are level 1). One less than the core's
+/// `MAX_TREE_DEPTH`, because the plan puts everything below one new top-level folder.
+pub const MAX_DEPTH: usize = fernjo_core::MAX_TREE_DEPTH - 1;
 /// Maximum number of `Node` elements.
 pub const MAX_NODES: usize = 100_000;
+/// Most PBKDF2 iterations one file may cost in all: the key check, a full-file body, and one
+/// derivation per stored `Password` (each has its own salt). The normal case is hundreds of
+/// passwords at 1000 iterations (well below a million); the cap keeps a hostile file from
+/// occupying the importer for hours (it is checked before any password is decrypted).
+pub const MAX_PBKDF2_ITERATIONS: u64 = 20_000_000;
 /// mRemoteNG's own default when `KdfIterations` is absent.
 const DEFAULT_ITERATIONS: u32 = 1000;
 /// The plaintext of the `Protected` attribute when the key is right.
@@ -107,7 +114,9 @@ fn parse(text: &str) -> Result<roxmltree::Document<'_>, ImportError> {
         ..Default::default()
     };
     roxmltree::Document::parse_with_options(text, opts).map_err(|e| match e {
-        roxmltree::Error::NodesLimitReached => ImportError::TooComplex,
+        roxmltree::Error::NodesLimitReached => {
+            ImportError::TooComplex("the XML holds too many elements".to_owned())
+        }
         _ => unsupported(
             "the file is not a readable XML document (pre-2.6 mRemoteNG files and other formats are not supported)",
         ),
@@ -146,6 +155,32 @@ fn malformed(e: CryptoError) -> ImportError {
             ImportError::Damaged("an encrypted value cannot be decrypted".to_owned())
         }
     }
+}
+
+/// Number of stored passwords below `root` (every `Node` element with a non-empty `Password`;
+/// a cheap pass that over-counts rather than under-counts).
+fn count_passwords(root: roxmltree::Node) -> u64 {
+    root.descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "Node")
+        .filter(|n| {
+            n.attribute("Password")
+                .is_some_and(|v| !v.trim().is_empty())
+        })
+        .count() as u64
+}
+
+/// Refuses a file whose decryption would cost more than `MAX_PBKDF2_ITERATIONS`: `key_checks`
+/// derivations (the `Protected` check and a full-file body) plus one per stored password.
+fn check_budget(iterations: u32, key_checks: u64, passwords: u64) -> Result<(), ImportError> {
+    let iterations = u64::from(iterations);
+    let total = (key_checks + passwords).saturating_mul(iterations);
+    if total > MAX_PBKDF2_ITERATIONS {
+        return Err(ImportError::TooComplex(format!(
+            "decrypting it would take {total} PBKDF2 iterations ({passwords} stored passwords and {key_checks} key check{s}, {iterations} iterations each), more than the {MAX_PBKDF2_ITERATIONS} this importer allows",
+            s = if key_checks == 1 { "" } else { "s" }
+        )));
+    }
+    Ok(())
 }
 
 struct Ctx<'a> {
@@ -215,6 +250,11 @@ pub fn read(bytes: &[u8], key: Option<&SecretString>) -> Result<RawDocument, Imp
         },
     };
 
+    let full_file = flag(root, "FullFileEncryption");
+    // Before anything is derived: a file without full-file encryption shows its passwords now.
+    let key_checks = if full_file { 2 } else { 1 };
+    check_budget(iterations, key_checks, count_passwords(root))?;
+
     let protected = root
         .attribute("Protected")
         .ok_or_else(|| ImportError::Damaged("the file has no Protected attribute".to_owned()))?;
@@ -234,7 +274,7 @@ pub fn read(bytes: &[u8], key: Option<&SecretString>) -> Result<RawDocument, Imp
         iterations,
     };
     let mut counter = 0usize;
-    if !flag(root, "FullFileEncryption") {
+    if !full_file {
         let nodes = walk(root, 1, &mut counter, &ctx)?;
         return Ok(RawDocument { nodes });
     }
@@ -255,6 +295,12 @@ pub fn read(bytes: &[u8], key: Option<&SecretString>) -> Result<RawDocument, Imp
         }
         other => other,
     })?;
+    // The passwords of the decrypted body, counted before the first one is derived.
+    check_budget(
+        iterations,
+        key_checks,
+        count_passwords(inner_xml.root_element()),
+    )?;
     let nodes = walk(inner_xml.root_element(), 1, &mut counter, &ctx)?;
     Ok(RawDocument { nodes })
 }
@@ -273,8 +319,15 @@ fn walk(
         .filter(|c| c.is_element() && c.tag_name().name() == "Node")
     {
         *counter += 1;
-        if depth > MAX_DEPTH || *counter > MAX_NODES {
-            return Err(ImportError::TooComplex);
+        if depth > MAX_DEPTH {
+            return Err(ImportError::TooComplex(format!(
+                "folders are nested more than {MAX_DEPTH} levels deep"
+            )));
+        }
+        if *counter > MAX_NODES {
+            return Err(ImportError::TooComplex(format!(
+                "it holds more than {MAX_NODES} folders and connections"
+            )));
         }
         out.push(read_node(el, depth, counter, ctx)?);
     }

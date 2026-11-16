@@ -36,3 +36,12 @@ base64 = "0.23.1"
 opt-level = 3
 [profile.dev.package.blake2]
 opt-level = 3
+# The mRemoteNG import derives one PBKDF2-HMAC-SHA1 key per stored password. The hash loop is
+# generic code that is compiled into the crate that uses it, so `fernjo-import` itself is optimised
+# (a million iterations take about 0.3 s instead of minutes in an unoptimised dev build); `sha1`
+# holds the compression function. Without this the tests of the work budget and the import dialog
+# in `pnpm tauri dev` would hang on files with a few hundred passwords.
+[profile.dev.package.fernjo-import]
+opt-level = 3
+[profile.dev.package.sha1]
+opt-level = 3
