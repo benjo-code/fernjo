@@ -58,7 +58,8 @@ Bytes 0..62 are the header. A reader checks, in this order: magic (otherwise not
 
 - at most 64 MiB of JSON,
 - at most 100 000 entries,
-- at most 100 000 folders and connections in `connections` (counted without recursion).
+- at most 100 000 folders and connections in `connections` (counted without recursion),
+- nesting of at most 60 levels (`MAX_TREE_DEPTH` of `fernjo-core`, the top level is level 1; `connections.json` itself loads down to level 62, see `Docs/DECISIONS.md` "M5 final review fixes"). A deeper tree makes the backup `damaged`.
 
 A backup made without a vault has `"entries": []`.
 
@@ -72,9 +73,9 @@ A backup made without a vault has `"entries": []`.
 |---|---|
 | `password_too_short` | writing: the password has fewer than 8 characters |
 | `not_a_backup` | the magic is not `FERNJOBK` (or the file is shorter than the 10 bytes up to the version) |
-| `newer_version` | container or body version above 1 |
+| `newer_version` | container or body version above 1, or a `connections` document with a newer `schemaVersion` than this build understands (the message names the found number) |
 | `wrong_password` | authentication failed. A wrong password cannot be told from a damaged or modified file, so the message says "wrong password or the file is damaged" |
-| `damaged` | truncated file, KDF parameters out of range, body not valid, too large, duplicate or nameless entry, invalid connections |
+| `damaged` | truncated file, KDF parameters out of range, body not valid, too large, duplicate or nameless entry, invalid connections, a tree nested deeper than 60 levels |
 
 Opening a backup never reveals why authentication failed: both a wrong password and a modified ciphertext give `wrong_password`.
 
@@ -89,7 +90,9 @@ Besides the format codes above, the backup, restore and import commands (`src-ta
 | `not_inspected` | `import_apply` on a file that was picked but not inspected |
 | `file_unreadable` | the file cannot be read, is not a regular file or the dialog returned a non-local path |
 | `too_large` | the file is above the read cap (see above), or the importer's own size limit for an mRemoteNG file |
-| `too_complex` | mRemoteNG file nested or branched beyond the limits |
+| `too_complex` | mRemoteNG file nested deeper than 59 levels (the new import folder is level 1 of 60), holding more than 100 000 folders and connections, or costing more than 20 000 000 PBKDF2 iterations in all: the key check, a full-file body and one derivation per stored password, each of `KdfIterations` iterations. The check runs before any password is decrypted and the message names the numbers; hundreds of passwords at 1000 iterations use about 2 % of the budget |
+| `too_deep` | an import or restore would nest folders deeper than 60 levels (`Store::graft`, `Store::replace_tree`); nothing is written. Readers refuse such files earlier (`too_complex`, `invalid`, `damaged`), so this only shows when the plan itself is too deep |
+| `export_target_not_allowed` | the chosen export file lies inside fernjo's data folder (where it could replace `vault.fernjo` or `connections.json`); choose another folder. Links and `..` are resolved before comparing |
 | `key_needed` | mRemoteNG file encrypted with a custom key and none was given |
 | `wrong_key` | the typed mRemoteNG key does not decrypt the file |
 | `unsupported_format` | not a ConfVersion 2.6 mRemoteNG file (message names what was found) |
@@ -97,8 +100,8 @@ Besides the format codes above, the backup, restore and import commands (`src-ta
 | `vault_needed` | applying needs a vault that does not exist yet or is locked: create or unlock it, the pending slot waits |
 | `vault_locked` | the vault was locked when its entries were read or written (for example `export_backup`) |
 | `vault_unusable` | `vault.fernjo` is unreadable or from a newer version; it is never overwritten |
-| `import_incomplete` | an import failed and some of the entries it had added could not be removed again |
-| `restore_incomplete` | a restore failed and the vault could not be put back; the previous content is in `vault.fernjo.bak` |
+| `import_incomplete` | an import failed and the entries it had added (all of them, in one save) could not be removed again |
+| `restore_incomplete` | a restore failed and the vault could not be put back: it may hold the backup's credentials while the connections are the old ones. The previous content may still be in `vault.fernjo.bak` (not if the failed save got as far as replacing it), so the message tells you to look there before changing the vault again |
 | `save_failed` | an export file or `connections.json` could not be written |
 | `restart_required` | a changed data folder waits for a restart; mutations are refused |
 | `internal` | the connection data is unavailable after an internal error |
@@ -109,7 +112,8 @@ Besides the format codes above, the backup, restore and import commands (`src-ta
 
 - **A full backup replaces.** The whole tree and all vault entries are replaced after a confirmation that names what is lost (folders and connections, credentials, the backup's date). The master password and the data key stay; the `.bak` files are kept and afterwards hold the state from before the restore. Open sessions are closed.
 - **A vault that exists must be unlocked**, even for a backup without entries (replacing then empties the vault); without a vault file there is nothing to replace, and a backup with entries first needs a vault to be created. A vault that cannot be read (`vault_unusable`) is never overwritten.
-- Entries are written first, then the tree; when the tree step fails the previous entries are put back. If that fails too the error is `restore_incomplete`, and the previous vault content is in `vault.fernjo.bak`.
+- Entries are written first, then the tree; when the tree step fails the previous entries are put back. If that fails too the error is `restore_incomplete`; the previous vault content may still be in `vault.fernjo.bak`.
+- An mRemoteNG import adds its credentials with one vault save, so `vault.fernjo.bak` afterwards holds the vault as it was before the import (after a rolled-back import it holds the vault with the imported entries in it, because the rollback is a second save).
 
 ## Connections export (`.json`)
 
@@ -126,7 +130,7 @@ Human-readable, pretty-printed JSON without any secret and without credential re
 
 - `schemaVersion` is the version of `connections.json` (currently 2); there is no second version number. `children` are the nodes exactly as in `connections.json`.
 - Import checks `format`, then validates through the `connections.json` loader (migration and node rules, no rule is duplicated). Every node gets a fresh id and the nodes go into a new top-level folder **"Imported from fernjo export (YYYY-MM-DD)"** (local date, a second one the same day gets " (2)", " (3)", …). Importing **merges**; it never replaces.
-- Limits: at most 32 MiB, 100 000 nodes, nesting depth 64 (JSON nesting itself is limited by the parser to 128 levels). A UTF-8 BOM is accepted.
+- Limits: at most 32 MiB, 100 000 nodes, nesting depth 59 (the new import folder is level 1 and the tree may be 60 levels deep; JSON nesting itself is limited by the parser to 128 levels). A UTF-8 BOM is accepted.
 
 | Code | Meaning |
 |---|---|
