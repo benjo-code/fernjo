@@ -108,13 +108,13 @@ fn rebuild(
     total: &mut usize,
     counts: &mut Counts,
 ) -> Result<usize, ConnectionsError> {
-    if depth > MAX_DEPTH {
-        return Err(ConnectionsError::Invalid(
-            "the file is nested too deeply".to_owned(),
-        ));
-    }
     let mut dropped = 0;
     for node in nodes {
+        if depth > MAX_DEPTH {
+            return Err(ConnectionsError::Invalid(format!(
+                "the file is nested too deeply (at most {MAX_DEPTH} levels)"
+            )));
+        }
         *total += 1;
         if *total > MAX_NODES {
             return Err(ConnectionsError::Invalid(

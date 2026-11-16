@@ -132,9 +132,74 @@ fn damaged_body_json_is_damaged() {
     // A well-formed body whose tree is not valid.
     let body = serde_json::json!({
         "schemaVersion": 1, "createdAt": "x", "app": "y",
-        "connections": {"schemaVersion": 99, "children": []}, "entries": []
+        "connections": {"schemaVersion": 2, "children": "not a list"}, "entries": []
     });
     let err = backup::open(&seal(body.to_string().as_bytes()), &pw(PW)).unwrap_err();
+    assert!(matches!(err, BackupError::Damaged(_)), "{err:?}");
+}
+
+#[test]
+fn a_newer_connections_schema_is_newer_version_not_damaged() {
+    let body = serde_json::json!({
+        "schemaVersion": 1, "createdAt": "x", "app": "y",
+        "connections": {"schemaVersion": 3, "children": []}, "entries": []
+    });
+    let err = backup::open(&seal(body.to_string().as_bytes()), &pw(PW)).unwrap_err();
+    assert_eq!(err, BackupError::NewerVersion { found: 3 });
+    assert_eq!(err.code(), "newer_version");
+    assert!(err.to_string().contains('3'), "{err}");
+}
+
+/// `levels` nested folders around one connection, as a `connections` document.
+fn nested_document(levels: usize) -> serde_json::Value {
+    let mut node = serde_json::json!({
+        "id": uuid::Uuid::new_v4().to_string(), "name": "leaf", "type": "connection",
+        "protocol": "ssh", "host": "h"
+    });
+    for i in 0..levels {
+        node = serde_json::json!({
+            "id": uuid::Uuid::new_v4().to_string(), "name": format!("f{i}"),
+            "type": "folder", "children": [node]
+        });
+    }
+    serde_json::json!({"schemaVersion": 2, "children": [node]})
+}
+
+fn body_with(connections: serde_json::Value) -> Vec<u8> {
+    serde_json::json!({
+        "schemaVersion": 1, "createdAt": "x", "app": "y",
+        "connections": connections, "entries": []
+    })
+    .to_string()
+    .into_bytes()
+}
+
+#[test]
+fn a_tree_deeper_than_the_core_limit_is_damaged_and_the_limit_itself_opens() {
+    let limit = fernjo_core::MAX_TREE_DEPTH;
+    // the connection at level `limit`
+    let ok = backup::open(&seal(&body_with(nested_document(limit - 1))), &pw(PW)).unwrap();
+    assert_eq!(ok.tree.depth(), limit);
+    // one level over, still within what the JSON parser accepts
+    let err = backup::open(&seal(&body_with(nested_document(limit))), &pw(PW)).unwrap_err();
+    assert!(matches!(err, BackupError::Damaged(_)), "{err:?}");
+    assert!(err.to_string().contains("nested"), "{err}");
+}
+
+#[test]
+fn a_body_nested_beyond_the_json_parsers_limit_is_damaged_without_overflowing_the_stack() {
+    // built as text: a `Value` this deep would overflow the stack of the test itself
+    let open =
+        r#"{"id":"6f0c1c2a-0000-4000-8000-000000000001","name":"f","type":"folder","children":["#;
+    let document = format!(
+        r#"{{"schemaVersion":2,"children":[{}{}]}}"#,
+        open.repeat(5000),
+        "]}".repeat(5000)
+    );
+    let body = format!(
+        r#"{{"schemaVersion":1,"createdAt":"x","app":"y","connections":{document},"entries":[]}}"#
+    );
+    let err = backup::open(&seal(body.as_bytes()), &pw(PW)).unwrap_err();
     assert!(matches!(err, BackupError::Damaged(_)), "{err:?}");
 }
 

@@ -243,3 +243,28 @@ fn plan_refuses_more_than_the_node_limit() {
     let r = plan(doc.to_string().as_bytes(), TODAY, &[]);
     assert!(matches!(r, Err(ConnectionsError::Invalid(_))), "{r:?}");
 }
+
+/// A connections document with `levels` nested folders (the innermost one empty).
+fn folders(levels: usize) -> Value {
+    let mut node = json!({"id": uuid::Uuid::new_v4().to_string(), "name": "f0", "type": "folder", "children": []});
+    for i in 1..levels {
+        node = json!({"id": uuid::Uuid::new_v4().to_string(), "name": format!("f{i}"), "type": "folder", "children": [node]});
+    }
+    json!({"format": "fernjo-connections", "schemaVersion": 2, "children": [node]})
+}
+
+#[test]
+fn the_file_may_be_nested_to_the_limit_that_still_fits_below_the_import_folder() {
+    use fernjo_import::mremoteng::file::MAX_DEPTH;
+    // the import folder adds one level, so the plan reaches exactly the core's limit
+    let ok = plan(folders(MAX_DEPTH).to_string().as_bytes(), TODAY, &[]).unwrap();
+    assert_eq!(
+        fernjo_core::subtree_depth(&ok.folder),
+        fernjo_core::MAX_TREE_DEPTH
+    );
+    let err = plan(folders(MAX_DEPTH + 1).to_string().as_bytes(), TODAY, &[]).unwrap_err();
+    assert!(
+        matches!(&err, ConnectionsError::Invalid(m) if m.contains("nested")),
+        "{err:?}"
+    );
+}

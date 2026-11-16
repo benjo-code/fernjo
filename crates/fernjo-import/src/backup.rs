@@ -7,8 +7,8 @@
 
 use std::fmt;
 
-use fernjo_core::Tree;
 use fernjo_core::persist::{document, parse_document};
+use fernjo_core::{DocumentError, MAX_TREE_DEPTH, Tree};
 use fernjo_vault::{
     EntryId, KdfParams, NewEntry, SealedError, Secret, open_with_password, seal_with_password,
 };
@@ -51,7 +51,9 @@ pub enum BackupError {
     PasswordTooShort,
     #[error("this is not a fernjo backup")]
     NotABackup,
-    #[error("the backup was written by a newer version of fernjo (backup format {found})")]
+    /// The container, the body or the `connections` document comes from a newer fernjo; `found`
+    /// is that format's version number.
+    #[error("the backup was written by a newer version of fernjo (format {found})")]
     NewerVersion { found: u16 },
     #[error("wrong password or the file is damaged")]
     WrongPassword,
@@ -158,7 +160,8 @@ fn too_many_nodes(document: &Value) -> bool {
 /// Opens a backup.
 ///
 /// # Errors
-/// See [`BackupError`]. A body `schemaVersion` above 1 is reported as `NewerVersion`.
+/// See [`BackupError`]. A body `schemaVersion` above 1, or a `connections` document from a
+/// newer fernjo, is reported as `NewerVersion`.
 pub fn open(bytes: &[u8], password: &SecretString) -> Result<BackupContents, BackupError> {
     let plain = open_with_password(MAGIC, VERSION, password, bytes).map_err(|e| match e {
         SealedError::NotThisFormat => BackupError::NotABackup,
@@ -186,8 +189,19 @@ pub fn open(bytes: &[u8], password: &SecretString) -> Result<BackupContents, Bac
     if too_many_nodes(&body.connections) {
         return Err(damaged("the backup holds too many connections and folders"));
     }
-    let tree = parse_document(body.connections)
-        .map_err(|_| damaged("the connections in the backup are not valid"))?;
+    let tree = parse_document(body.connections).map_err(|e| match e {
+        DocumentError::NewerSchema { found, .. } => BackupError::NewerVersion {
+            found: u16::try_from(found).unwrap_or(u16::MAX),
+        },
+        DocumentError::Invalid(_) => damaged("the connections in the backup are not valid"),
+    })?;
+    // A tree that is nested deeper than the core accepts could not be restored (and might not
+    // load again): report it here, where it can only mean a damaged or foreign file.
+    if tree.depth() > MAX_TREE_DEPTH {
+        return Err(BackupError::Damaged(format!(
+            "the connections in the backup are nested deeper than {MAX_TREE_DEPTH} levels"
+        )));
+    }
     let entries = body
         .entries
         .into_iter()
