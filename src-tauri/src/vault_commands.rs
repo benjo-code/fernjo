@@ -643,9 +643,21 @@ mod tests {
     // Wrongly typed keys and passwords are secrets too: an error that echoes one is a leak.
     const WRONG_KEY: &str = "SENTINEL-wrongkey-8a1f";
     const WRONG_PW: &str = "SENTINEL-wrongpw-2b7c";
-    const IMPORT_SECRETS: [&str; 6] = [
+    // The other passwords of the fixtures: the one with XML and shell metacharacters, whole and
+    // as the part that no escaping changes (JSON and `Debug` escape the quote and the
+    // backslash), and the Unicode one the same way. `vnc-pw` sits on a VNC node, which is
+    // skipped, so it is never imported; the three others are, and the flow test proves it.
+    const META_PW: &str = "p@ss<&>\"'\\";
+    const META_PW_PART: &str = "p@ss<&>";
+    const UNICODE_PW: &str = "Gr\u{fc}\u{df}e, \u{4e16}\u{754c} \u{2013} \u{1f510}";
+    const UNICODE_PW_PART: &str = "Gr\u{fc}\u{df}e, \u{4e16}\u{754c}";
+    const IMPORT_SECRETS: [&str; 10] = [
         "folder-pw-1",
         "vnc-pw",
+        META_PW,
+        META_PW_PART,
+        UNICODE_PW,
+        UNICODE_PW_PART,
         CUSTOM_KEY,
         EXPORT_PW,
         WRONG_KEY,
@@ -1448,7 +1460,7 @@ mod tests {
                 fs::write(&xml, CUSTOM_KEY_XML).unwrap();
                 import_begin(&w.st, ImportKind::Mremoteng, xml);
                 let none = j(import_inspect(&w.st, None));
-                let wrong = j(import_inspect(&w.st, Some("SENTINEL-wrongkey".into())));
+                let wrong = j(import_inspect(&w.st, Some(WRONG_KEY.into())));
                 let ok = j(import_inspect(&w.st, Some(CUSTOM_KEY.into())));
                 format!("{none}{wrong}{ok}")
             }),
@@ -1472,13 +1484,21 @@ mod tests {
                 let p = import_begin(&w.st, ImportKind::Backup, w._dir.path().join("x.fjbk"));
                 format!("{p:?}{}", serde_json::to_string(&p).unwrap())
             }),
+            // exports go outside the data folder, which they may not write into
             entry("export_connections_to", |w| {
-                let out = w._dir.path().join("c.json");
-                j(export_connections_to(&w.st, &out))
+                let elsewhere = tempfile::tempdir().unwrap();
+                let out = elsewhere.path().join("c.json");
+                let r = j(export_connections_to(&w.st, &out));
+                assert!(out.exists(), "{r}");
+                r
             }),
             entry("export_backup_to", |w| {
-                let out = w._dir.path().join("b.fjbk");
-                j(export_backup_to(&w.st, &out, EXPORT_PW.into()))
+                let elsewhere = tempfile::tempdir().unwrap();
+                let out = elsewhere.path().join("b.fjbk");
+                let r = j(export_backup_to(&w.st, &out, &sec(EXPORT_PW)));
+                // locked vault: refused with a code; otherwise the file exists
+                assert!(out.exists() || r.contains("vault_locked"), "{r}");
+                r
             }),
             entry("apply_data_folder", |w| {
                 // not an IPC command (see `NOT_A_COMMAND`), but called here as a plain
@@ -1532,6 +1552,8 @@ mod tests {
         }
         let w = world(true);
         let dir = w._dir.path().to_path_buf();
+        // exported files go outside the data folder (which the commands refuse)
+        let out_dir = tempfile::tempdir().unwrap();
         let mut seen: Vec<(String, String)> = Vec::new();
         let mut note = |what: &str, text: String| seen.push((what.to_string(), text));
         let credentials = || list_credentials(&w.st).unwrap().len();
@@ -1574,8 +1596,8 @@ mod tests {
         assert_eq!(credentials(), total);
 
         // exports; the backup holds the secrets (positive control) and the file hides them
-        let backup = dir.join("out.fjbk");
-        let info = export_backup_to(&w.st, &backup, EXPORT_PW.into()).unwrap();
+        let backup = out_dir.path().join("out.fjbk");
+        let info = export_backup_to(&w.st, &backup, &sec(EXPORT_PW)).unwrap();
         note("export backup", shown(&info));
         let bytes = fs::read(&backup).unwrap();
         let opened = fernjo_import::backup::open(&bytes, &sec(EXPORT_PW)).unwrap();
@@ -1585,10 +1607,12 @@ mod tests {
             .iter()
             .map(|(_, e)| serde_json::to_string(&e.secret).unwrap())
             .collect();
-        for secret in [PW, KEY, PASS, "folder-pw-1"] {
+        // positive control: the fixtures' passwords really were imported (the metacharacter
+        // one is stored with JSON escapes, so its escape-free part is searched)
+        for secret in [PW, KEY, PASS, "folder-pw-1", META_PW_PART, UNICODE_PW_PART] {
             assert!(inside.contains(secret), "{secret} is not in the backup");
         }
-        let connections = dir.join("out.json");
+        let connections = out_dir.path().join("out.json");
         let info = export_connections_to(&w.st, &connections).unwrap();
         note("export connections", shown(&info));
 

@@ -106,6 +106,18 @@ fn damaged(text: &str) -> BackupError {
     BackupError::Damaged(text.to_owned())
 }
 
+/// The password rule of a new backup: at least 8 characters after NFC normalisation. `create`
+/// applies it; callers can run it earlier (before asking where to save the file).
+///
+/// # Errors
+/// `PasswordTooShort`.
+pub fn check_password(password: &SecretString) -> Result<(), BackupError> {
+    if password.expose_secret().nfc().count() < MIN_PASSWORD_CHARS {
+        return Err(BackupError::PasswordTooShort);
+    }
+    Ok(())
+}
+
 /// Seals `contents` under `password`.
 ///
 /// # Errors
@@ -115,9 +127,7 @@ pub fn create(
     password: &SecretString,
     kdf: KdfParams,
 ) -> Result<Vec<u8>, BackupError> {
-    if password.expose_secret().nfc().count() < MIN_PASSWORD_CHARS {
-        return Err(BackupError::PasswordTooShort);
-    }
+    check_password(password)?;
     let body = Body {
         schema_version: 1,
         created_at: contents.created_at.clone(),

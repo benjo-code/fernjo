@@ -11,6 +11,7 @@
 //! Lock order is the one of `delete_credential`: pending, then vault, then store.
 
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -21,7 +22,7 @@ use fernjo_import::backup::{self, BackupContents, BackupError};
 use fernjo_import::connections::{self, ConnectionsError, ConnectionsPlan};
 use fernjo_import::error::ImportError;
 use fernjo_import::mremoteng::{self, ImportPlan, PlannedEntry};
-use fernjo_import::report::{Report, ReportLine};
+use fernjo_import::report::Report;
 use fernjo_vault::{EntryId, FILE_NAME as VAULT_FILE_NAME, NewEntry, Vault};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
@@ -491,24 +492,13 @@ fn apply_mremoteng(
     without_passwords: bool,
 ) -> Result<ApplyResult, CommandError> {
     let mut folder = plan.folder.clone();
-    let mut report = plan.report.clone();
-    let entries: &[PlannedEntry] = if without_passwords {
-        let dropped = strip_references(&mut folder);
-        report.counts.credentials = 0;
-        report.counts.shared_credentials = 0;
-        if dropped > 0 {
-            let s = if dropped == 1 { "" } else { "s" };
-            report.partial.push(ReportLine::new(
-                "",
-                format!(
-                    "{dropped} stored password reference{s} left out (imported without passwords)"
-                ),
-            ));
-            report.counts.partial += 1;
-        }
-        &[]
+    // The report of the chosen variant was worked out with the plan (before the line caps), so
+    // it has no line that is untrue without the credentials.
+    let (report, entries): (Report, &[PlannedEntry]) = if without_passwords {
+        strip_references(&mut folder);
+        (plan.report_without_passwords.clone(), &[])
     } else {
-        &plan.entries
+        (plan.report.clone(), &plan.entries)
     };
 
     let snap = if entries.is_empty() {
@@ -534,40 +524,30 @@ fn apply_mremoteng(
     })
 }
 
-/// Adds the planned entries, then runs `graft`. When an add or the graft fails, the entries
-/// added so far are deleted again; if one of those deletes fails too, the error is
+/// Adds all planned entries in one vault save (so `vault.fernjo.bak` afterwards holds the vault
+/// as it was before the import), then runs `graft`. A refused batch changes nothing. When the
+/// graft fails, the entries are removed again in one more save; if that fails too, the error is
 /// `import_incomplete`, naming how many entries could not be removed.
 fn add_then_graft(
     vault: &mut Vault,
     entries: &[PlannedEntry],
     graft: impl FnOnce(&mut Vault) -> Result<Snapshot, CommandError>,
 ) -> Result<Snapshot, CommandError> {
-    let mut added: Vec<EntryId> = Vec::new();
-    let mut failure = None;
-    for planned in entries {
-        match vault.add_with_id(planned.id, planned.entry.clone()) {
-            Ok(()) => added.push(planned.id),
-            Err(e) => {
-                failure = Some(CommandError::from(e));
-                break;
-            }
-        }
-    }
-    let failure = match failure {
-        Some(e) => e,
-        None => match graft(vault) {
-            Ok(snapshot) => return Ok(snapshot),
-            Err(e) => e,
-        },
+    let ids: Vec<EntryId> = entries.iter().map(|p| p.id).collect();
+    vault.add_entries_with_ids(
+        entries
+            .iter()
+            .map(|p| (p.id, p.entry.clone()))
+            .collect::<Vec<_>>(),
+    )?;
+    let failure = match graft(vault) {
+        Ok(snapshot) => return Ok(snapshot),
+        Err(e) => e,
     };
-    let stuck = added
-        .iter()
-        .rev()
-        .filter(|id| vault.delete(**id).is_err())
-        .count();
-    if stuck == 0 {
+    if vault.remove_entries(&ids).is_ok() {
         return Err(failure);
     }
+    let stuck = ids.len();
     let s = if stuck == 1 { "y" } else { "ies" };
     Err(error(
         "import_incomplete",
@@ -580,7 +560,8 @@ fn add_then_graft(
 
 /// Puts the backup's entries in the vault, then runs `tree_step`. When that fails, the
 /// previous entries are put back; if that fails too the error is `restore_incomplete`: the
-/// vault then holds the backup's entries while the tree is the old one.
+/// vault then holds the backup's entries while the tree is the old one. The previous content
+/// is in `vault.fernjo.bak` unless the failed rollback save got as far as replacing it.
 fn replace_entries_then(
     vault: &mut Vault,
     new: Vec<(EntryId, NewEntry)>,
@@ -595,7 +576,7 @@ fn replace_entries_then(
             Err(_) => Err(error(
                 "restore_incomplete",
                 format!(
-                    "the restore failed ({}) and the vault could not be put back to its previous state; its previous content is in {VAULT_FILE_NAME}.bak next to the vault file",
+                    "the restore failed ({}) and the vault could not be put back to its previous state: it may now hold the backup's credentials while the connections are the old ones. Its previous content may still be in {VAULT_FILE_NAME}.bak next to the vault file (look there before changing the vault again)",
                     failure.message
                 ),
             )),
@@ -647,9 +628,59 @@ fn write_file(path: &Path, bytes: &[u8]) -> Result<(), CommandError> {
     write_exact(path, bytes).map_err(|e| error("save_failed", e.to_string()))
 }
 
+/// `path` made absolute with symbolic links and `..` resolved as far as it exists; the part
+/// that does not exist yet (an export creates missing folders) is appended lexically.
+fn resolved(path: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().map_or_else(|_| path.to_path_buf(), |d| d.join(path))
+    };
+    let mut existing = absolute.clone();
+    let mut rest: Vec<OsString> = Vec::new();
+    loop {
+        if let Ok(mut out) = fs::canonicalize(&existing) {
+            for part in rest.into_iter().rev() {
+                if part == ".." {
+                    out.pop();
+                } else if part != "." {
+                    out.push(part);
+                }
+            }
+            return out;
+        }
+        let Some(last) = existing.components().next_back() else {
+            return absolute;
+        };
+        rest.push(last.as_os_str().to_owned());
+        if !existing.pop() {
+            return absolute;
+        }
+    }
+}
+
+/// An export must never be written into the data folder: it could replace `vault.fernjo` or
+/// `connections.json` with something that is not them.
+fn ensure_export_target_allowed(state: &AppState, path: &Path) -> Result<(), CommandError> {
+    let Some(data) = &state.data_dir else {
+        return Ok(());
+    };
+    if resolved(path).starts_with(resolved(data)) {
+        return Err(error(
+            "export_target_not_allowed",
+            format!(
+                "the file would be inside fernjo's data folder ({}), where it could overwrite the vault or the connections; choose another folder",
+                data.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Writes the connection tree to `path` as a fernjo connections file (no credential
 /// references).
 pub fn export_connections_to(state: &AppState, path: &Path) -> Result<ExportInfo, CommandError> {
+    ensure_export_target_allowed(state, path)?;
     let tree = with_store(state, |s| Ok(s.tree().clone()))?;
     let out = connections::export(&tree, &now_utc_rfc3339());
     write_file(path, &out.bytes)?;
@@ -659,14 +690,35 @@ pub fn export_connections_to(state: &AppState, path: &Path) -> Result<ExportInfo
     })
 }
 
+/// The checks that need neither the target file nor any time: the password rule, a usable and
+/// unlocked vault (when one exists) and a loaded store. The command runs them before it opens
+/// the save dialog, so nobody picks a path and is then told the vault was locked.
+pub fn export_backup_precheck(
+    state: &AppState,
+    password: &SecretString,
+) -> Result<(), CommandError> {
+    backup::check_password(password)?;
+    match state.vault_status()? {
+        State::None | State::Unlocked => {}
+        State::Locked => return Err(fernjo_vault::VaultError::VaultLocked.into()),
+        State::Unusable { reason, path } => {
+            return Err(error(
+                "vault_unusable",
+                format!("the vault file {} cannot be used: {reason}", path.display()),
+            ));
+        }
+    }
+    with_store(state, |_| Ok(()))
+}
+
 /// Writes an encrypted backup of the tree and the vault entries to `path`. A vault that
 /// exists must be unlocked; without a vault the backup holds the tree only.
 pub fn export_backup_to(
     state: &AppState,
     path: &Path,
-    password: String,
+    password: &SecretString,
 ) -> Result<ExportInfo, CommandError> {
-    let password = SecretString::from(password);
+    ensure_export_target_allowed(state, path)?;
     let vault_guard = state.vault.lock().map_err(|_| CommandError::internal())?;
     let entries = match &*vault_guard {
         crate::state::VaultState::None => Vec::new(),
@@ -687,7 +739,7 @@ pub fn export_backup_to(
         tree,
         entries,
     };
-    let bytes = backup::create(&contents, &password, state.kdf)?;
+    let bytes = backup::create(&contents, password, state.kdf)?;
     write_file(path, &bytes)?;
     Ok(ExportInfo {
         file_name: file_name_of(path),
@@ -766,12 +818,19 @@ pub mod handlers {
         super::import_inspect(&state, secret)
     }
 
+    /// Applies the pending import or restore on a worker thread: a big import is real disk work
+    /// (a vault save and a tree save) and must not freeze the window. The state is taken from
+    /// the app handle inside the worker, since a `State` borrow cannot move into it.
     #[tauri::command]
-    pub fn import_apply(
-        state: State<'_, AppState>,
+    pub async fn import_apply(
+        app: AppHandle,
         options: ApplyOptions,
     ) -> Result<ApplyResult, CommandError> {
-        super::import_apply(&state, options)
+        blocking(move || {
+            let state = app.state::<AppState>();
+            super::import_apply(&state, options)
+        })
+        .await?
     }
 
     #[tauri::command]
@@ -795,20 +854,23 @@ pub mod handlers {
         super::export_connections_to(&state, &path).map(Some)
     }
 
-    /// Asks where to save the backup, then derives the key and writes it (both on a worker
-    /// thread). `None` when the dialog was cancelled (nothing is written). The state is taken
+    /// Checks the password and the vault, asks where to save the backup, then derives the key
+    /// and writes it (all on a worker thread). `None` when the dialog was cancelled (nothing is
+    /// written). The password is wrapped at once, before anything else. The state is taken
     /// from the app handle inside the worker, since a `State` borrow cannot move into it.
     #[tauri::command]
     pub async fn export_backup(
         app: AppHandle,
         password: String,
     ) -> Result<Option<ExportInfo>, CommandError> {
+        let password = SecretString::from(password);
         blocking(move || {
+            let state = app.state::<AppState>();
+            super::export_backup_precheck(&state, &password)?;
             let Some(path) = save_blocking(&app, ImportKind::Backup)? else {
                 return Ok(None);
             };
-            let state = app.state::<AppState>();
-            super::export_backup_to(&state, &path, password).map(Some)
+            super::export_backup_to(&state, &path, &password).map(Some)
         })
         .await?
     }
@@ -946,7 +1008,7 @@ mod tests {
         inspect(&src, ImportKind::Mremoteng, &xml, None).unwrap();
         apply(&src).unwrap();
         let out = dir.join("b.fjbk");
-        export_backup_to(&src, &out, BACKUP_PW.to_string()).unwrap();
+        export_backup_to(&src, &out, &sec(BACKUP_PW)).unwrap();
         (src, out)
     }
 
@@ -1212,11 +1274,15 @@ mod tests {
         let report = r.report.unwrap();
         assert_eq!(report.counts.credentials, 0);
         assert_eq!(report.counts.shared_credentials, 0);
-        let last = report.partial.last().unwrap();
+        let left_out = report
+            .partial
+            .iter()
+            .find(|l| l.text.contains("left out"))
+            .unwrap();
         assert!(
-            last.text.contains(&before.len().to_string()),
+            left_out.text.contains(&before.len().to_string()),
             "{}",
-            last.text
+            left_out.text
         );
         assert!(matches!(
             s.vault_status().unwrap(),
@@ -1325,7 +1391,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_entry_add_rolls_back_the_earlier_ones() {
+    fn a_failed_entry_add_refuses_the_whole_batch() {
         let dir = tempfile::tempdir().unwrap();
         let s = st(&dir.path().join("d"));
         unlocked(&s);
@@ -1357,6 +1423,8 @@ mod tests {
         .unwrap();
         assert_eq!(e.code, "restore_incomplete");
         assert!(e.message.contains("vault.fernjo.bak"), "{}", e.message);
+        // the .bak may already hold the backup's entries if the rollback save broke half-way
+        assert!(e.message.contains("may still be in"), "{}", e.message);
         assert!(e.message.contains("tree"), "{}", e.message);
     }
 
@@ -1394,7 +1462,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let a = st(&dir.path().join("a"));
         let out = dir.path().join("b.fjbk");
-        export_backup_to(&a, &out, BACKUP_PW.to_string()).unwrap(); // no entries
+        export_backup_to(&a, &out, &sec(BACKUP_PW)).unwrap(); // no entries
         let none = st(&dir.path().join("none"));
         let p = inspect(&none, ImportKind::Backup, &out, Some(BACKUP_PW)).unwrap();
         assert!(!p.needs_vault);
@@ -1703,7 +1771,7 @@ mod tests {
         let a = st(&dir.path().join("a"));
         commands::create_folder(&a, None, None, "Lab".into()).unwrap();
         let out = dir.path().join("b.fjbk");
-        export_backup_to(&a, &out, BACKUP_PW.to_string()).unwrap();
+        export_backup_to(&a, &out, &sec(BACKUP_PW)).unwrap();
 
         let dst = st(&dir.path().join("dst"));
         unlocked(&dst);
@@ -1723,7 +1791,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let a = st(&dir.path().join("a"));
         let out = dir.path().join("b.fjbk");
-        export_backup_to(&a, &out, BACKUP_PW.to_string()).unwrap();
+        export_backup_to(&a, &out, &sec(BACKUP_PW)).unwrap();
         let dst = st(&dir.path().join("dst"));
         unlocked(&dst);
         vault_commands::vault_lock(&dst).unwrap();
@@ -1760,11 +1828,11 @@ mod tests {
         let out = dir.path().join("b.fjbk");
         // no vault: fine, no entries
         let none = st(&dir.path().join("none"));
-        let info = export_backup_to(&none, &out, BACKUP_PW.to_string()).unwrap();
+        let info = export_backup_to(&none, &out, &sec(BACKUP_PW)).unwrap();
         assert_eq!(info.file_name, "b.fjbk");
         // too short a password is refused before anything is written
         let short = dir.path().join("short.fjbk");
-        let e = export_backup_to(&none, &short, "short".to_string()).unwrap_err();
+        let e = export_backup_to(&none, &short, &sec("short")).unwrap_err();
         assert_eq!(e.code, "password_too_short");
         assert!(!short.exists());
         // locked
@@ -1772,7 +1840,7 @@ mod tests {
         unlocked(&locked);
         vault_commands::vault_lock(&locked).unwrap();
         let blocked = dir.path().join("locked.fjbk");
-        let e = export_backup_to(&locked, &blocked, BACKUP_PW.to_string()).unwrap_err();
+        let e = export_backup_to(&locked, &blocked, &sec(BACKUP_PW)).unwrap_err();
         assert_eq!(e.code, "vault_locked");
         assert!(!blocked.exists());
         // unusable
@@ -1780,7 +1848,7 @@ mod tests {
         fs::create_dir_all(&data).unwrap();
         fs::write(data.join(fernjo_vault::FILE_NAME), b"garbage").unwrap();
         let bad = st(&data);
-        let e = export_backup_to(&bad, &blocked, BACKUP_PW.to_string()).unwrap_err();
+        let e = export_backup_to(&bad, &blocked, &sec(BACKUP_PW)).unwrap_err();
         assert_eq!(e.code, "vault_unusable");
     }
 
@@ -1829,7 +1897,7 @@ mod tests {
         )
         .unwrap();
         let out = dir.path().join("b.fjbk");
-        export_backup_to(&a, &out, BACKUP_PW.to_string()).unwrap();
+        export_backup_to(&a, &out, &sec(BACKUP_PW)).unwrap();
         let dst = st(&dir.path().join("dst"));
         inspect(&dst, ImportKind::Backup, &out, Some(BACKUP_PW)).unwrap();
         let r = apply(&dst).unwrap();
@@ -1847,5 +1915,229 @@ mod tests {
         assert_eq!(apply(&s).unwrap_err().code, "restart_required");
         assert_eq!(pending_kind(&s), "mremoteng");
         assert_eq!(credential_count(&s), 0);
+    }
+
+    // ---- fix wave: depth, one vault save, export targets, wording --------------------------
+
+    /// `levels` nested folders; the innermost one is at level `levels`.
+    fn deep_folder(levels: usize) -> Node {
+        let mut node = Node {
+            id: uuid::Uuid::new_v4(),
+            name: "level-0".into(),
+            description: String::new(),
+            settings: Default::default(),
+            kind: NodeKind::Folder { children: vec![] },
+        };
+        for i in 1..levels {
+            node = Node {
+                id: uuid::Uuid::new_v4(),
+                name: format!("level-{i}"),
+                description: String::new(),
+                settings: Default::default(),
+                kind: NodeKind::Folder {
+                    children: vec![node],
+                },
+            };
+        }
+        node
+    }
+
+    /// A mRemoteNG file (default key) with `levels` nested containers.
+    fn nested_xml(levels: usize) -> Vec<u8> {
+        let text = std::str::from_utf8(DEFAULT_KEY_XML).unwrap();
+        let start = text.find("Protected=\"").unwrap() + "Protected=\"".len();
+        let protected = &text[start..start + text[start..].find('"').unwrap()];
+        let mut body = String::new();
+        for i in 0..levels {
+            body.push_str(&format!(r#"<Node Name="c{i}" Type="Container">"#));
+        }
+        body.push_str(&"</Node>".repeat(levels));
+        format!(
+            r#"<?xml version="1.0" encoding="utf-8"?><Connections Name="Connections" Export="false" EncryptionEngine="AES" BlockCipherMode="GCM" KdfIterations="1000" FullFileEncryption="false" Protected="{protected}" ConfVersion="2.6">{body}</Connections>"#
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn an_import_at_the_depth_limit_reloads_and_one_level_over_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("d");
+        let s = st(&data);
+        // the deepest file the reader takes; the import folder makes it exactly the core limit
+        let at_limit = file(
+            dir.path(),
+            "limit.xml",
+            &nested_xml(fernjo_import::mremoteng::file::MAX_DEPTH),
+        );
+        inspect(&s, ImportKind::Mremoteng, &at_limit, None).unwrap();
+        let applied = apply(&s).unwrap();
+        // another run of the app loads the very same tree, with no fallback notice
+        let again = st(&data);
+        assert_eq!(
+            commands::list_tree(&again).unwrap().children,
+            applied.snapshot.children
+        );
+        assert!(again.notices.lock().unwrap().is_empty());
+        let saved = fs::read(data.join(fernjo_core::FILE_NAME)).unwrap();
+
+        let over = file(
+            dir.path(),
+            "over.xml",
+            &nested_xml(fernjo_import::mremoteng::file::MAX_DEPTH + 1),
+        );
+        let e = inspect(&s, ImportKind::Mremoteng, &over, None).unwrap_err();
+        assert_eq!(e.code, "too_complex");
+        assert!(e.message.contains("levels"), "{}", e.message);
+        assert_eq!(fs::read(data.join(fernjo_core::FILE_NAME)).unwrap(), saved);
+    }
+
+    #[test]
+    fn a_plan_that_is_too_deep_is_refused_as_too_deep_and_rolls_its_entries_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("d");
+        let s = st(&data);
+        unlocked(&s);
+        let mut p = fernjo_import::mremoteng::plan(
+            &fernjo_import::mremoteng::read(DEFAULT_KEY_XML, None).unwrap(),
+            TODAY,
+            &[],
+        );
+        assert!(!p.entries.is_empty());
+        p.folder = deep_folder(fernjo_core::MAX_TREE_DEPTH + 1);
+        *s.pending.lock().unwrap() = Some(Pending::MRemoteNg(p));
+        let e = apply(&s).unwrap_err();
+        assert_eq!(e.code, "too_deep");
+        assert!(e.message.contains("60"), "{}", e.message);
+        assert_eq!(credential_count(&s), 0);
+        assert!(!data.join(fernjo_core::FILE_NAME).exists());
+        assert_eq!(pending_kind(&s), "mremoteng");
+
+        // a connections plan as well
+        *s.pending.lock().unwrap() = Some(Pending::Connections(ConnectionsPlan {
+            folder: deep_folder(fernjo_core::MAX_TREE_DEPTH + 1),
+            report: Report::default(),
+        }));
+        assert_eq!(apply(&s).unwrap_err().code, "too_deep");
+        assert!(!data.join(fernjo_core::FILE_NAME).exists());
+    }
+
+    #[test]
+    fn an_import_saves_the_vault_once_and_bak_is_the_vault_before_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("d");
+        let s = st(&data);
+        unlocked(&s);
+        vault_commands::with_vault(&s, |v| Ok(v.add(new_entry("old", "x"))?)).unwrap();
+        let before = fs::read(data.join(fernjo_vault::FILE_NAME)).unwrap();
+        let path = file(dir.path(), "c.xml", DEFAULT_KEY_XML);
+        let p = inspect(&s, ImportKind::Mremoteng, &path, None).unwrap();
+        assert!(p.report.unwrap().counts.credentials >= 2);
+        apply(&s).unwrap();
+        let bak = fs::read(data.join(format!("{}.bak", fernjo_vault::FILE_NAME))).unwrap();
+        assert_eq!(bak, before, "one save: .bak is the pre-import vault");
+    }
+
+    #[test]
+    fn an_export_into_the_data_folder_is_refused_and_nothing_is_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("d");
+        let s = st(&data);
+        unlocked(&s);
+        commands::create_folder(&s, None, None, "keep".into()).unwrap();
+        let tree_before = fs::read(data.join(fernjo_core::FILE_NAME)).unwrap();
+        let vault_before = fs::read(data.join(fernjo_vault::FILE_NAME)).unwrap();
+        let sub = data.join("sub");
+        fs::create_dir_all(&sub).unwrap();
+        for target in [
+            data.join(fernjo_core::FILE_NAME),
+            data.join(fernjo_vault::FILE_NAME),
+            data.join("new-file.json"),
+            sub.join("x.json"),
+            // spelled with a detour through the folder itself
+            data.join("sub").join("..").join(fernjo_core::FILE_NAME),
+        ] {
+            let e = export_connections_to(&s, &target).unwrap_err();
+            assert_eq!(e.code, "export_target_not_allowed", "{target:?}");
+            let e = export_backup_to(&s, &target, &sec(BACKUP_PW)).unwrap_err();
+            assert_eq!(e.code, "export_target_not_allowed", "{target:?}");
+        }
+        assert_eq!(
+            fs::read(data.join(fernjo_core::FILE_NAME)).unwrap(),
+            tree_before
+        );
+        assert_eq!(
+            fs::read(data.join(fernjo_vault::FILE_NAME)).unwrap(),
+            vault_before
+        );
+        assert!(!data.join("new-file.json").exists() && !sub.join("x.json").exists());
+        // a sibling folder is fine, also one whose name starts like the data folder's
+        let sibling = dir.path().join("d2");
+        fs::create_dir_all(&sibling).unwrap();
+        export_connections_to(&s, &sibling.join("c.json")).unwrap();
+        export_backup_to(&s, &sibling.join("b.fjbk"), &sec(BACKUP_PW)).unwrap();
+    }
+
+    #[test]
+    fn the_without_passwords_report_has_no_stale_inherit_lines_and_keeps_its_references_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = st(&dir.path().join("d"));
+        let path = file(dir.path(), "c.xml", DEFAULT_KEY_XML);
+        inspect(&s, ImportKind::Mremoteng, &path, None).unwrap();
+        // worked out with the plan; the stale-line cases themselves are tested in fernjo-import
+        let bare = match &*s.pending.lock().unwrap() {
+            Some(Pending::MRemoteNg(p)) => p.report_without_passwords.clone(),
+            _ => panic!("plan expected"),
+        };
+        let r = import_apply(
+            &s,
+            ApplyOptions {
+                without_passwords: true,
+            },
+        )
+        .unwrap();
+        let report = r.report.unwrap();
+        assert_eq!(report, bare);
+        assert!(
+            report
+                .partial
+                .iter()
+                .all(|l| !l.text.contains("now uses the credential"))
+        );
+        assert!(
+            report
+                .partial
+                .iter()
+                .any(|l| l.text.contains("stored password reference"))
+        );
+    }
+
+    #[test]
+    fn the_export_prechecks_run_without_a_target_and_name_what_is_wrong() {
+        let dir = tempfile::tempdir().unwrap();
+        // no vault: fine
+        let none = st(&dir.path().join("none"));
+        export_backup_precheck(&none, &sec(BACKUP_PW)).unwrap();
+        let e = export_backup_precheck(&none, &sec("short")).unwrap_err();
+        assert_eq!(e.code, "password_too_short");
+        // locked
+        let locked = st(&dir.path().join("locked"));
+        unlocked(&locked);
+        export_backup_precheck(&locked, &sec(BACKUP_PW)).unwrap();
+        vault_commands::vault_lock(&locked).unwrap();
+        let e = export_backup_precheck(&locked, &sec(BACKUP_PW)).unwrap_err();
+        assert_eq!(e.code, "vault_locked");
+        // unusable
+        let data = dir.path().join("bad");
+        fs::create_dir_all(&data).unwrap();
+        fs::write(data.join(fernjo_vault::FILE_NAME), b"garbage").unwrap();
+        let e = export_backup_precheck(&st(&data), &sec(BACKUP_PW)).unwrap_err();
+        assert_eq!(e.code, "vault_unusable");
+        // nothing was written anywhere by any of them
+        assert!(
+            !dir.path()
+                .join("locked")
+                .join(fernjo_core::FILE_NAME)
+                .exists()
+        );
     }
 }
