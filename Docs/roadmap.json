@@ -17,6 +17,11 @@
       "date": "2026-11-16",
       "context": "M4 implementation",
       "text": "Three small additions that came up while building the tab area, none of them a later milestone's work. Double-clicking a folder in the tree expands or collapses it (a connection opens as before). The sidebar's gear dialog is titled \"Settings\" (it holds the terminal section planned above next to the data folder), which M6's settings dialog builds on. `ui/vite.config.ts` raises `build.chunkSizeWarningLimit` to 700 kB because the terminal stays in the main chunk on purpose (`Docs/DECISIONS.md`, \"M4 terminal: xterm.js versions, WebGL policy, no lazy import\"). Deferred to the backlog: confirming quit with live sessions, restoring tabs after a restart, native clipboard commands (needs a BSL-1.0 licence decision) and a separate timeout for agents that need a confirmation."
+    },
+    {
+      "date": "2026-11-16",
+      "context": "M5 planning",
+      "text": "M5 supports mRemoteNG files of ConfVersion 2.6 only, which is what the stable 1.76 line writes (the owner runs it). The legacy AES-CBC format (below 2.6) is not cheap and stays in the backlog; the pre-release formats 2.7 and 2.8 (credentials in a separate repository) are refused with a clear message. The first check on the owner's sanitised fixture is its `ConfVersion`: if it is not 2.6 the work stops and this entry is revised. Restore semantics (owner decision): a full backup replaces tree and vault entries after a confirmation, the connections-only JSON merges into a new top-level folder. M5 also adds small primitives to `fernjo-core` and `fernjo-vault` (graft and replace tree, password-sealed blob, add, export and replace entries) and a debug-build-only `FERNJO_DIALOG_FILE` override for the native file dialogs, so the flows can be checked without OS input."
     }
   ],
   "subprojects": [
@@ -154,7 +159,8 @@
         {
           "id": "5",
           "title": "mRemoteNG import & export",
-          "status": "open",
+          "status": "planned",
+          "plan": "superpowers/plans/2026-11-16-milestone-05-mremoteng-import.md",
           "prerequisites": ["3"],
           "goal": "The owner's existing mRemoteNG connection file, passwords included, moves into fernjo in one step, and fernjo data can be backed up and restored.",
           "tasks": [
