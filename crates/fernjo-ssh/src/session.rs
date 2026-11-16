@@ -7,14 +7,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use russh::client::{self, KeyboardInteractiveAuthResponse, Msg};
-use russh::keys::Algorithm;
-use russh::keys::ssh_key::HashAlg;
+use russh::keys::agent::AgentIdentity;
+use russh::keys::ssh_key::{HashAlg, PublicKey};
+use russh::keys::{Algorithm, PrivateKey, PrivateKeyWithHashAlg};
 use russh::{ChannelMsg, ChannelWriteHalf, Disconnect};
 use secrecy::{ExposeSecret, SecretString};
 use tokio::net::TcpStream;
 use tokio::sync::{Notify, mpsc};
 
 use crate::SshError;
+use crate::agent::{self, Agent};
 use crate::auth_plan::{Attempt, AuthPlanner, Available, Offered};
 use crate::handler::{ClientHandler, Rejection};
 use crate::interaction::{Interaction, KiPrompt, KiRound};
@@ -91,11 +93,22 @@ enum Outcome {
     Success,
     /// Rejected; the methods that may still continue.
     Rejected(Offered),
+    /// Nothing reached the server (identity not signable, key unreadable): the server's methods
+    /// are as before.
+    Skipped,
 }
 
 fn auth_failed() -> SshError {
     SshError::AuthFailed {
         key_unreadable: false,
+    }
+}
+
+/// An `AuthFailed` raised inside an attempt does not know about an unreadable key; add that.
+fn with_key_flag(error: SshError, key_unreadable: bool) -> SshError {
+    match error {
+        SshError::AuthFailed { .. } => SshError::AuthFailed { key_unreadable },
+        other => other,
     }
 }
 
@@ -133,18 +146,60 @@ async fn password_attempt<H: client::Handler>(
     }
 }
 
+/// The server side of a keyboard-interactive exchange, so the round loop can be tested without a
+/// server.
+trait KiTransport: Send {
+    fn respond(
+        &mut self,
+        answers: Vec<String>,
+    ) -> impl Future<Output = Result<KeyboardInteractiveAuthResponse, SshError>> + Send;
+}
+
+struct HandleKi<'a, H: client::Handler> {
+    handle: &'a mut client::Handle<H>,
+    limit: Duration,
+}
+
+impl<H: client::Handler> KiTransport for HandleKi<'_, H> {
+    async fn respond(
+        &mut self,
+        answers: Vec<String>,
+    ) -> Result<KeyboardInteractiveAuthResponse, SshError> {
+        bounded(
+            self.limit,
+            self.handle
+                .authenticate_keyboard_interactive_respond(answers),
+        )
+        .await
+    }
+}
+
 async fn keyboard_interactive_attempt<H: client::Handler, I: Interaction>(
     handle: &mut client::Handle<H>,
     user: &str,
     interaction: &I,
     limit: Duration,
 ) -> Result<Outcome, SshError> {
-    let mut response = bounded(
+    let first = bounded(
         limit,
         handle.authenticate_keyboard_interactive_start(user, None),
     )
     .await?;
-    for _ in 0..MAX_KI_ROUNDS {
+    keyboard_interactive_rounds(first, &mut HandleKi { handle, limit }, interaction).await
+}
+
+/// Works through the server's `InfoRequest` rounds. The user prompts (`interaction`) are never
+/// inside a bounded wait; only `transport.respond` is.
+async fn keyboard_interactive_rounds<T: KiTransport, I: Interaction>(
+    first: KeyboardInteractiveAuthResponse,
+    transport: &mut T,
+    interaction: &I,
+) -> Result<Outcome, SshError> {
+    let mut response = first;
+    // Answers sent so far. The reply to the last allowed answer is still judged below; only a
+    // further request for input is refused.
+    let mut answered = 0;
+    loop {
         match response {
             KeyboardInteractiveAuthResponse::Success => return Ok(Outcome::Success),
             KeyboardInteractiveAuthResponse::Failure {
@@ -155,6 +210,14 @@ async fn keyboard_interactive_attempt<H: client::Handler, I: Interaction>(
                 instructions,
                 prompts,
             } => {
+                if answered == MAX_KI_ROUNDS {
+                    return Ok(Outcome::Rejected(Offered {
+                        publickey: false,
+                        password: false,
+                        keyboard_interactive: false,
+                    }));
+                }
+                answered += 1;
                 let answers: Vec<String> = if prompts.is_empty() {
                     Vec::new()
                 } else {
@@ -183,19 +246,126 @@ async fn keyboard_interactive_attempt<H: client::Handler, I: Interaction>(
                         .map(|a| a.expose_secret().to_owned())
                         .collect()
                 };
-                response = bounded(
-                    limit,
-                    handle.authenticate_keyboard_interactive_respond(answers),
-                )
-                .await?;
+                response = transport.respond(answers).await?;
             }
         }
     }
-    Ok(Outcome::Rejected(Offered {
-        publickey: false,
-        password: false,
-        keyboard_interactive: false,
-    }))
+}
+
+/// Why a stored key could not be turned into a usable key. Carries no key text.
+enum KeyProblem {
+    Encrypted,
+    Unreadable,
+}
+
+fn decode_key(
+    text: &SecretString,
+    passphrase: Option<&SecretString>,
+) -> Result<PrivateKey, KeyProblem> {
+    match russh::keys::decode_secret_key(
+        text.expose_secret(),
+        passphrase.map(ExposeSecret::expose_secret),
+    ) {
+        Ok(key) => Ok(key),
+        Err(russh::keys::Error::KeyIsEncrypted) => Err(KeyProblem::Encrypted),
+        Err(_) => Err(KeyProblem::Unreadable),
+    }
+}
+
+/// Decodes the credential key; an encrypted key without a stored passphrase asks the user once.
+/// A wrong stored passphrase, a cancelled prompt and garbage all count as unreadable (`None`).
+async fn load_key<I: Interaction>(
+    text: &SecretString,
+    stored_passphrase: Option<&SecretString>,
+    interaction: &I,
+) -> Option<PrivateKey> {
+    match decode_key(text, stored_passphrase) {
+        Ok(key) => Some(key),
+        Err(KeyProblem::Unreadable) => None,
+        Err(KeyProblem::Encrypted) if stored_passphrase.is_some() => None,
+        Err(KeyProblem::Encrypted) => {
+            let typed = interaction.key_passphrase().await?;
+            decode_key(text, Some(&typed)).ok()
+        }
+    }
+}
+
+/// Reads the agent's plain public keys (certificates are not offered). Bounded; any failure means
+/// no identities.
+async fn agent_identities(agent: &mut Agent, limit: Duration) -> Vec<PublicKey> {
+    match tokio::time::timeout(limit, agent.request_identities()).await {
+        Ok(Ok(all)) => all
+            .into_iter()
+            .filter_map(|id| match id {
+                AgentIdentity::PublicKey { key, .. } => Some(key),
+                AgentIdentity::Certificate { .. } => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Hash for RSA signatures: what the server supports best (SHA-512, then SHA-256), SHA-256 when it
+/// did not announce its algorithms. Never SHA-1 unless the server offers nothing else.
+async fn rsa_hash<H: client::Handler>(
+    handle: &client::Handle<H>,
+    limit: Duration,
+) -> Result<Option<HashAlg>, SshError> {
+    Ok(bounded(limit, handle.best_supported_rsa_hash())
+        .await?
+        .unwrap_or(Some(HashAlg::Sha256)))
+}
+
+fn outcome_of(result: russh::client::AuthResult) -> Outcome {
+    match result {
+        russh::client::AuthResult::Success => Outcome::Success,
+        russh::client::AuthResult::Failure {
+            remaining_methods, ..
+        } => Outcome::Rejected(offered_from(&remaining_methods)),
+    }
+}
+
+async fn agent_attempt<H: client::Handler>(
+    handle: &mut client::Handle<H>,
+    user: &str,
+    agent: &mut Agent,
+    key: &PublicKey,
+    limit: Duration,
+) -> Result<Outcome, SshError> {
+    let hash = if key.algorithm().is_rsa() {
+        rsa_hash(handle, limit).await?
+    } else {
+        None
+    };
+    // The agent signs inside this call, so its answer time is bounded together with the server's.
+    match tokio::time::timeout(
+        limit,
+        handle.authenticate_publickey_with(user, key.clone(), hash, agent),
+    )
+    .await
+    {
+        Err(_) => Err(SshError::Timeout),
+        Ok(Ok(result)) => Ok(outcome_of(result)),
+        // The agent refused or failed to sign: this identity is out, the connection is fine.
+        Ok(Err(_)) => Ok(Outcome::Skipped),
+    }
+}
+
+async fn key_attempt<H: client::Handler>(
+    handle: &mut client::Handle<H>,
+    user: &str,
+    key: PrivateKey,
+    limit: Duration,
+) -> Result<Outcome, SshError> {
+    let hash = if key.algorithm().is_rsa() {
+        rsa_hash(handle, limit).await?
+    } else {
+        None
+    };
+    let key = PrivateKeyWithHashAlg::new(Arc::new(key), hash);
+    Ok(outcome_of(
+        bounded(limit, handle.authenticate_publickey(user, key)).await?,
+    ))
 }
 
 /// Probes the server's methods with `none`, then works through the planner's attempts.
@@ -224,37 +394,85 @@ async fn authenticate<H: client::Handler, I: Interaction>(
         Some(Credential::Password(p)) => Some(p),
         _ => None,
     };
-    // Task 5 adds agent identities and the private key here and handles their attempts below.
+    let (key_text, stored_passphrase) = match &params.credential {
+        Some(Credential::PrivateKey { key, passphrase }) => (Some(key), passphrase.as_ref()),
+        _ => (None, None),
+    };
+
+    // The credential key, when it decodes without asking, goes first among the agent's identities
+    // (the user's explicit choice); an encrypted key without stored passphrase is only decoded at
+    // its own attempt, after the agent had its chance.
+    let mut key: Option<PrivateKey> = key_text.and_then(|t| decode_key(t, stored_passphrase).ok());
+    let preferred = key.as_ref().map(|k| k.public_key().clone());
+    let mut agent = None;
+    let mut identities = Vec::new();
+    if offered.publickey
+        && let Some(mut connected) = tokio::time::timeout(limit, agent::connect())
+            .await
+            .ok()
+            .flatten()
+    {
+        identities = agent::order_identities(
+            agent_identities(&mut connected, limit).await,
+            preferred.as_ref(),
+        );
+        agent = Some(connected);
+    }
+
     let mut planner = AuthPlanner::new(Available {
-        agent_identities: 0,
-        has_key: false,
+        agent_identities: identities.len(),
+        has_key: key_text.is_some(),
         has_password: stored_password.is_some(),
     });
+    let mut key_unreadable = false;
     while let Some(attempt) = planner.next(offered) {
         let outcome = match attempt {
+            Attempt::Agent(i) => match (agent.as_mut(), identities.get(i)) {
+                (Some(agent), Some(identity)) => {
+                    agent_attempt(handle, &user, agent, identity, limit).await?
+                }
+                _ => Outcome::Skipped,
+            },
+            Attempt::CredentialKey => {
+                let loaded = match (key.take(), key_text) {
+                    (Some(already), _) => Some(already),
+                    (None, Some(text)) => load_key(text, stored_passphrase, interaction).await,
+                    (None, None) => None,
+                };
+                match loaded {
+                    Some(k) => key_attempt(handle, &user, k, limit).await?,
+                    None => {
+                        key_unreadable = true;
+                        Outcome::Skipped
+                    }
+                }
+            }
             Attempt::CredentialPassword => match stored_password {
                 Some(password) => password_attempt(handle, &user, password, limit).await?,
-                None => continue,
+                None => Outcome::Skipped,
             },
+            // A cancelled prompt ends authentication, but the final error must still say that the
+            // key was unreadable.
             Attempt::KeyboardInteractive => {
-                keyboard_interactive_attempt(handle, &user, interaction, limit).await?
+                keyboard_interactive_attempt(handle, &user, interaction, limit)
+                    .await
+                    .map_err(|e| with_key_flag(e, key_unreadable))?
             }
             Attempt::TypedPassword => {
                 let password = interaction
                     .password(&user, &params.host)
                     .await
-                    .ok_or_else(auth_failed)?;
+                    .ok_or(SshError::AuthFailed { key_unreadable })?;
                 password_attempt(handle, &user, &password, limit).await?
             }
-            // Not planned yet (see above).
-            Attempt::Agent(_) | Attempt::CredentialKey => continue,
         };
         match outcome {
             Outcome::Success => return Ok(()),
             Outcome::Rejected(next) => offered = next,
+            Outcome::Skipped => {}
         }
     }
-    Err(auth_failed())
+    Err(SshError::AuthFailed { key_unreadable })
 }
 
 /// How often the handshake deadline is checked.
@@ -413,6 +631,15 @@ impl Session {
     }
 }
 
+impl Drop for Session {
+    /// A dropped handle ends the connection even when the consumer keeps the receiver (it then
+    /// still gets `Closed(ClosedByUser)`). `close` only sets a flag and stores a wake-up permit, so
+    /// it never blocks and calling it again after an explicit `close` is harmless.
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
 enum Flow {
     Continue,
     UserClose,
@@ -481,6 +708,95 @@ async fn pump<H: client::Handler>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::interaction::{
+        HostKeyChangedDecision, HostKeyChangedPrompt, HostKeyDecision, HostKeyPrompt,
+    };
+    use russh::client::Prompt;
+    use std::collections::VecDeque;
+
+    /// Answers every keyboard-interactive prompt with "x"; nothing else is asked in these tests.
+    struct Answering;
+
+    impl Interaction for Answering {
+        async fn host_key(&self, _: HostKeyPrompt) -> HostKeyDecision {
+            HostKeyDecision::Reject
+        }
+        async fn host_key_changed(&self, _: HostKeyChangedPrompt) -> HostKeyChangedDecision {
+            HostKeyChangedDecision::Reject
+        }
+        async fn keyboard_interactive(&self, round: KiRound) -> Option<Vec<SecretString>> {
+            Some(
+                round
+                    .prompts
+                    .iter()
+                    .map(|_| SecretString::from("x"))
+                    .collect(),
+            )
+        }
+        async fn password(&self, _: &str, _: &str) -> Option<SecretString> {
+            None
+        }
+        async fn username(&self, _: &str) -> Option<String> {
+            None
+        }
+        async fn key_passphrase(&self) -> Option<SecretString> {
+            None
+        }
+    }
+
+    /// Replies from a queue and counts the answers it received.
+    struct Scripted {
+        replies: VecDeque<KeyboardInteractiveAuthResponse>,
+        calls: usize,
+    }
+
+    impl KiTransport for Scripted {
+        async fn respond(
+            &mut self,
+            _answers: Vec<String>,
+        ) -> Result<KeyboardInteractiveAuthResponse, SshError> {
+            self.calls += 1;
+            Ok(self.replies.pop_front().expect("more replies than rounds"))
+        }
+    }
+
+    fn info() -> KeyboardInteractiveAuthResponse {
+        KeyboardInteractiveAuthResponse::InfoRequest {
+            name: String::new(),
+            instructions: String::new(),
+            prompts: vec![Prompt {
+                prompt: "Password: ".into(),
+                echo: false,
+            }],
+        }
+    }
+
+    /// The server asks `rounds` times in total, then (if `then_success`) accepts.
+    async fn run(rounds: usize, then_success: bool) -> (Result<Outcome, SshError>, usize) {
+        let mut replies: VecDeque<_> = (1..rounds).map(|_| info()).collect();
+        if then_success {
+            replies.push_back(KeyboardInteractiveAuthResponse::Success);
+        }
+        let mut transport = Scripted { replies, calls: 0 };
+        let out = keyboard_interactive_rounds(info(), &mut transport, &Answering).await;
+        (out, transport.calls)
+    }
+
+    #[tokio::test]
+    async fn keyboard_interactive_accepts_a_success_after_the_last_allowed_round() {
+        // The reply to the 5th answer is Success: it must be honoured, not dropped with the loop.
+        let (out, calls) = run(MAX_KI_ROUNDS, true).await;
+        assert!(matches!(out, Ok(Outcome::Success)), "{:?}", out.map(|_| ()));
+        assert_eq!(calls, MAX_KI_ROUNDS);
+    }
+
+    #[tokio::test]
+    async fn keyboard_interactive_gives_up_after_too_many_rounds() {
+        // A 6th request is refused: MAX_KI_ROUNDS answers were sent, no more.
+        let (out, calls) = run(MAX_KI_ROUNDS + 1, false).await;
+        assert!(matches!(out, Ok(Outcome::Rejected(_))));
+        assert_eq!(calls, MAX_KI_ROUNDS);
+    }
 
     #[test]
     fn client_config_sets_keepalive_or_none() {

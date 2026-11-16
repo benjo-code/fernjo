@@ -1,5 +1,6 @@
 //! SSH client sessions for fernjo. No dependency on Tauri, `fernjo-core` or `fernjo-vault`.
 
+mod agent;
 mod auth_plan;
 mod error;
 mod handler;

@@ -1,6 +1,9 @@
 //! Shared helpers for the integration tests: the OpenSSH test server and a scripted `Interaction`.
 //! Start the server with `eval "$(tools/ssh-test-server.sh start)"` (see that script).
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "every test binary compiles this module but uses a different subset of it (auth, connect, timeout and agent each need other helpers); an item is unused in at least one of them"
+)]
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -30,9 +33,7 @@ fn var(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| panic!("{name} is not set"))
 }
 
-/// `None` (with a message) when no server is configured; panics in CI, where a missing server
-/// would otherwise let every test pass by skipping.
-pub fn server() -> Option<TestServer> {
+fn server_from_env() -> Option<TestServer> {
     let Ok(addr) = std::env::var("FERNJO_TEST_SSH_ADDR") else {
         assert!(
             std::env::var_os("CI").is_none(),
@@ -54,6 +55,35 @@ pub fn server() -> Option<TestServer> {
         key_passphrase: var("FERNJO_TEST_SSH_KEY_PASSPHRASE"),
         key_unauthorised: var("FERNJO_TEST_SSH_KEY_UNAUTHORISED").into(),
     })
+}
+
+/// `None` (with a message) when no server is configured; panics in CI, where a missing server
+/// would otherwise let every test pass by skipping. Also hides the SSH agent from this test
+/// process: the agent holds the authorised key, so it would otherwise log in for tests that mean
+/// to exercise another method. Only the `agent` test binary uses `agent_server` instead.
+pub fn server() -> Option<TestServer> {
+    static HIDE_AGENT: std::sync::Once = std::sync::Once::new();
+    HIDE_AGENT.call_once(|| {
+        // SAFETY: runs once, before this process connects anywhere; the tests only read the
+        // environment through std, which serialises access with this call.
+        unsafe { std::env::remove_var("SSH_AUTH_SOCK") };
+    });
+    server_from_env()
+}
+
+/// Like `server`, but keeps `SSH_AUTH_SOCK` and also needs the agent the script started
+/// (`FERNJO_TEST_SSH_AGENT`): skips locally without it, panics when `CI` is set.
+pub fn agent_server() -> Option<TestServer> {
+    let server = server_from_env()?;
+    if std::env::var_os("FERNJO_TEST_SSH_AGENT").is_none() {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "FERNJO_TEST_SSH_AGENT is not set but CI is: the test ssh-agent must be running"
+        );
+        eprintln!("skipped: FERNJO_TEST_SSH_AGENT is not set (no agent on this machine)");
+        return None;
+    }
+    Some(server)
 }
 
 #[derive(Default)]

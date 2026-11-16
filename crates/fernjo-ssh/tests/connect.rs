@@ -286,3 +286,26 @@ async fn time_spent_on_the_host_key_prompt_does_not_count_towards_the_connect_ti
     let (session, _rx) = Session::connect(p, ia).await.unwrap();
     session.close();
 }
+
+#[tokio::test]
+async fn dropping_the_session_closes_the_connection_even_if_the_receiver_stays() {
+    let Some(s) = support::server() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let ia = Arc::new(ScriptedInteraction::new().host_key(HostKeyDecision::TrustOnce));
+    let (session, mut rx) = Session::connect(params(&s, &dir.path().join("kh")), ia)
+        .await
+        .unwrap();
+    drop(session);
+    let end = timeout(WAIT, async {
+        loop {
+            match rx.recv().await {
+                Some(SessionEvent::Closed(r)) => return Some(r),
+                Some(_) => {}
+                None => return None,
+            }
+        }
+    })
+    .await
+    .expect("connection stayed open after the session was dropped");
+    assert_eq!(end, Some(CloseReason::ClosedByUser));
+}

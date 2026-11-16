@@ -4,7 +4,10 @@
 #   tools/ssh-test-server.sh start   prints `export NAME=value` lines (use: eval "$(... start)")
 #   tools/ssh-test-server.sh stop    removes the container and the temporary key directory
 #
-# Needs docker and ssh-keygen. Never touches ~/.ssh. Values contain no spaces or quotes.
+# Needs docker and ssh-keygen; ssh-agent/ssh-add are optional. Never touches ~/.ssh. Values contain
+# no spaces or quotes. The agent (unauthorised key first, authorised Ed25519 key second) is started
+# where it can work: not in Git Bash on Windows, where the Rust client talks to the OpenSSH named
+# pipe instead of a Unix socket, so FERNJO_TEST_SSH_AGENT and SSH_AUTH_SOCK are not printed there.
 set -euo pipefail
 
 # Pinned by digest (resolved with `docker buildx imagetools inspect ...:latest`).
@@ -34,6 +37,34 @@ wait_for_banner() {
   docker logs "$NAME" >&2 || true
   echo "ssh test server did not come up" >&2
   exit 1
+}
+
+agent_supported() {
+  case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*) return 1 ;;
+  esac
+  command -v ssh-agent >/dev/null 2>&1 && command -v ssh-add >/dev/null 2>&1
+}
+
+# Starts a private agent on a socket in the state dir and loads the two keys. The agent's pid is
+# kept in a file so `stop` can kill it. Best effort: on any failure no agent variables are printed.
+start_agent() {
+  local dir="$1" sock="$1/agent.sock" out
+  agent_supported || return 1
+  out="$(ssh-agent -a "$sock" -s)" || return 1
+  printf '%s\n' "$out" | sed -n 's/^SSH_AGENT_PID=\([0-9]*\).*/\1/p' >"$dir/agent.pid"
+  if ! SSH_AUTH_SOCK="$sock" ssh-add -q "$dir/unauthorised" "$dir/ed25519" 2>/dev/null; then
+    kill_agent
+    return 1
+  fi
+  echo "export FERNJO_TEST_SSH_AGENT=1"
+  echo "export SSH_AUTH_SOCK=$sock"
+}
+
+kill_agent() {
+  if [ -f "$STATE_DIR/agent.pid" ]; then
+    kill "$(cat "$STATE_DIR/agent.pid")" >/dev/null 2>&1 || true
+  fi
 }
 
 start() {
@@ -86,9 +117,12 @@ start() {
   echo "export FERNJO_TEST_SSH_KEY_ENCRYPTED=$(native_path "$dir/encrypted")"
   echo "export FERNJO_TEST_SSH_KEY_PASSPHRASE=$pass"
   echo "export FERNJO_TEST_SSH_KEY_UNAUTHORISED=$(native_path "$dir/unauthorised")"
+  # Not fatal when it fails: the agent test then skips locally (and fails in CI, where it must work).
+  start_agent "$dir" || true
 }
 
 stop_quiet() {
+  kill_agent
   docker rm -f "$NAME" >/dev/null 2>&1 || true
   rm -rf "$STATE_DIR"
 }

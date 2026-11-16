@@ -11,7 +11,7 @@ pub enum SshError {
     HostKeyRejected,
     #[error("The host key has changed and was rejected.")]
     HostKeyChangedRejected,
-    #[error("Authentication failed.")]
+    #[error("Authentication failed{}.", unreadable_note(*key_unreadable))]
     AuthFailed { key_unreadable: bool },
     #[error("The connection was lost.")]
     ConnectionLost,
@@ -21,6 +21,14 @@ pub enum SshError {
     Protocol,
     #[error("I/O error.")]
     Io,
+}
+
+fn unreadable_note(key_unreadable: bool) -> &'static str {
+    if key_unreadable {
+        ": the stored private key could not be read"
+    } else {
+        ""
+    }
 }
 
 impl SshError {
@@ -75,6 +83,20 @@ mod tests {
                 "protocol",
                 "io"
             ]
+        );
+        assert_eq!(
+            SshError::AuthFailed {
+                key_unreadable: false
+            }
+            .to_string(),
+            "Authentication failed."
+        );
+        assert_eq!(
+            SshError::AuthFailed {
+                key_unreadable: true
+            }
+            .to_string(),
+            "Authentication failed: the stored private key could not be read."
         );
         for e in &all {
             let s = e.to_string();
