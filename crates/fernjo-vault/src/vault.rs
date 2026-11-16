@@ -314,6 +314,51 @@ impl Vault {
         })
     }
 
+    /// Adds many entries under given ids with ONE save (an import): the ids and names are
+    /// validated first, so a bad batch changes nothing, and `.bak` afterwards holds the vault
+    /// as it was before the call.
+    ///
+    /// # Errors
+    /// `vault_locked`, `empty_name`, `duplicate_entry` (an id repeated in `entries` or already
+    /// in the vault), `changed_on_disk`, `save_failed` (memory unchanged).
+    pub fn add_entries_with_ids(
+        &mut self,
+        entries: Vec<(EntryId, NewEntry)>,
+    ) -> Result<(), VaultError> {
+        self.unlocked()?;
+        let mut list = Vec::with_capacity(entries.len());
+        for (id, new) in entries {
+            let name = checked_name(&new.name)?;
+            list.push(entry_from(id, name, new));
+        }
+        self.mutate(|current| {
+            let mut seen: std::collections::HashSet<EntryId> =
+                current.iter().map(|e| e.id).collect();
+            if list.iter().any(|e| !seen.insert(e.id)) {
+                return Err(VaultError::DuplicateEntry);
+            }
+            current.extend(list);
+            Ok(())
+        })
+    }
+
+    /// Deletes many entries with ONE save (rolling back an import). Every id must exist;
+    /// otherwise nothing changes.
+    ///
+    /// # Errors
+    /// `vault_locked`, `not_found`, `changed_on_disk`, `save_failed` (memory unchanged).
+    pub fn remove_entries(&mut self, ids: &[EntryId]) -> Result<(), VaultError> {
+        self.mutate(|entries| {
+            let doomed: std::collections::HashSet<EntryId> = ids.iter().copied().collect();
+            let before = entries.len();
+            entries.retain(|e| !doomed.contains(&e.id));
+            if before - entries.len() != doomed.len() {
+                return Err(VaultError::NotFound);
+            }
+            Ok(())
+        })
+    }
+
     /// Every entry with its secret, for an encrypted backup. Secret material leaves the
     /// vault here: the caller must seal it immediately.
     ///
