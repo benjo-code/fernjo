@@ -2,3 +2,4 @@
 
 pub mod error;
 pub mod mremoteng;
+pub mod report;

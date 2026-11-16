@@ -2,5 +2,7 @@
 
 pub mod crypto;
 pub mod file;
+pub mod map;
 
 pub use file::{Inherit, RawDocument, RawKind, RawNode, read};
+pub use map::{ImportPlan, PlannedEntry, plan};

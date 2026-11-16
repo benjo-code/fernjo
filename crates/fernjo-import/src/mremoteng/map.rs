@@ -1,0 +1,359 @@
+//! Mapping a raw mRemoteNG document to an import plan: a folder subtree, the vault entries it
+//! references and the report. Pure and synchronous; nothing is written anywhere.
+//!
+//! Inheritance is mapped faithfully: an `Inherit*` flag decides local or unset for every setting,
+//! folders included. The "inherits now" report lines are computed while descending (the nearest
+//! folder above that sets a credential or username), which gives the same answer as
+//! `Tree::resolve_node` without searching the tree once per node.
+
+use std::collections::{HashMap, HashSet};
+
+use fernjo_core::{CredentialId, Node, NodeId, NodeKind, Protocol, Settings};
+use fernjo_vault::{EntryId, NewEntry, Secret};
+use secrecy::{ExposeSecret, SecretString};
+
+use super::file::{RawDocument, RawKind, RawNode};
+use crate::report::{Counts, Report, ReportLine, cap};
+
+const UNNAMED: &str = "Unnamed";
+const DEFAULT_PUTTY_SESSION: &str = "Default Settings";
+const FOLDER_PREFIX: &str = "Imported from mRemoteNG";
+
+/// A vault entry the import wants to create, under the id the tree already references.
+#[derive(Debug, Clone)]
+pub struct PlannedEntry {
+    pub id: EntryId,
+    pub entry: NewEntry,
+}
+
+/// Everything an import adds: one top-level folder, the entries its nodes reference, the report.
+#[derive(Debug, Clone)]
+pub struct ImportPlan {
+    pub folder: Node,
+    pub entries: Vec<PlannedEntry>,
+    pub report: Report,
+}
+
+/// The nearest folders above a node that set a credential / a username (their names).
+#[derive(Clone, Default)]
+struct Above {
+    credential: Option<String>,
+    username: Option<String>,
+}
+
+#[derive(Default)]
+struct Builder {
+    entries: Vec<PlannedEntry>,
+    uses: Vec<usize>,
+    /// (entry username, entry domain) -> indexes into `entries`; passwords are compared
+    /// afterwards, so no secret is ever hashed.
+    by_identity: HashMap<(Option<String>, Option<String>), Vec<usize>>,
+    entry_names: HashSet<String>,
+    counts: Counts,
+    skipped: Vec<ReportLine>,
+    partial: Vec<ReportLine>,
+    problems: Vec<ReportLine>,
+}
+
+/// Builds the plan. `today` is `YYYY-MM-DD`; `taken_names` are the existing top-level names, used
+/// for the ` (2)`, ` (3)` suffix of the new folder.
+pub fn plan(doc: &RawDocument, today: &str, taken_names: &[String]) -> ImportPlan {
+    let mut b = Builder::default();
+    let above = Above::default();
+    let children: Vec<Node> = doc
+        .nodes
+        .iter()
+        .filter_map(|n| b.convert(n, "", &above))
+        .collect();
+
+    let base = format!("{FOLDER_PREFIX} ({today})");
+    let mut name = base.clone();
+    let mut n = 2;
+    while taken_names.contains(&name) {
+        name = format!("{base} ({n})");
+        n += 1;
+    }
+    let folder = Node {
+        id: NodeId::new_v4(),
+        name,
+        description: String::new(),
+        settings: Settings::default(),
+        kind: NodeKind::Folder { children },
+    };
+    let report = b.finish();
+    ImportPlan {
+        folder,
+        entries: b.entries,
+        report,
+    }
+}
+
+fn join(prefix: &str, name: &str) -> String {
+    if prefix.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{prefix} / {name}")
+    }
+}
+
+impl Builder {
+    fn finish(&mut self) -> Report {
+        // One aggregate line instead of one per RDP connection; first so the cap never drops it.
+        if self.counts.rdp > 0 {
+            let n = self.counts.rdp;
+            let s = if n == 1 { "" } else { "s" };
+            self.partial.insert(
+                0,
+                ReportLine::new(
+                    "",
+                    format!(
+                        "RDP display, redirection and gateway settings are not carried over ({n} RDP connection{s})"
+                    ),
+                ),
+            );
+        }
+        let mut counts = self.counts.clone();
+        counts.credentials = self.entries.len();
+        counts.skipped = self.skipped.len();
+        counts.partial = self.partial.len();
+        counts.problems = self.problems.len();
+        Report {
+            counts,
+            skipped: cap(std::mem::take(&mut self.skipped)),
+            partial: cap(std::mem::take(&mut self.partial)),
+            problems: cap(std::mem::take(&mut self.problems)),
+        }
+    }
+
+    fn skip(&mut self, path: &str, text: String) {
+        self.skipped.push(ReportLine::new(path, text));
+    }
+    fn partly(&mut self, path: &str, text: String) {
+        self.partial.push(ReportLine::new(path, text));
+    }
+    fn problem(&mut self, path: &str, text: String) {
+        self.problems.push(ReportLine::new(path, text));
+    }
+
+    /// Maps one raw node (and below). `None` when the node is skipped.
+    fn convert(&mut self, raw: &RawNode, prefix: &str, above: &Above) -> Option<Node> {
+        let trimmed = raw.name.trim();
+        let name = if trimmed.is_empty() { UNNAMED } else { trimmed };
+        let path = join(prefix, name);
+
+        let protocol = match &raw.kind {
+            RawKind::Unknown(t) => {
+                self.skip(
+                    &path,
+                    format!(
+                        "node type \"{t}\" is not supported; it and everything below it were skipped"
+                    ),
+                );
+                return None;
+            }
+            RawKind::Container => None,
+            RawKind::Connection => {
+                let p = raw.protocol.trim();
+                if p.eq_ignore_ascii_case("SSH2") {
+                    Some(Protocol::Ssh)
+                } else if p.eq_ignore_ascii_case("RDP") {
+                    Some(Protocol::Rdp)
+                } else {
+                    let shown = if p.is_empty() { "(none)" } else { p };
+                    self.skip(&path, format!("protocol {shown} is not supported"));
+                    return None;
+                }
+            }
+        };
+
+        if trimmed.is_empty() {
+            self.problem(&path, "has no name; imported as \"Unnamed\"".to_owned());
+        }
+        let (settings, credential_set, username_set) = self.settings(raw, &path, above);
+
+        let kind = match protocol {
+            Some(protocol) => {
+                let host = raw.hostname.trim().to_owned();
+                if host.is_empty() {
+                    self.problem(&path, "has no host; imported with an empty host".to_owned());
+                }
+                match protocol {
+                    Protocol::Ssh => self.counts.ssh += 1,
+                    Protocol::Rdp => self.counts.rdp += 1,
+                }
+                let putty = raw.putty_session.trim();
+                if !putty.is_empty() && putty != DEFAULT_PUTTY_SESSION {
+                    self.partly(
+                        &path,
+                        format!("PuTTY session \"{putty}\" is not carried over"),
+                    );
+                }
+                NodeKind::Connection { protocol, host }
+            }
+            None => {
+                self.counts.folders += 1;
+                let below = Above {
+                    credential: if credential_set {
+                        Some(name.to_owned())
+                    } else {
+                        above.credential.clone()
+                    },
+                    username: if username_set {
+                        Some(name.to_owned())
+                    } else {
+                        above.username.clone()
+                    },
+                };
+                let children = raw
+                    .children
+                    .iter()
+                    .filter_map(|c| self.convert(c, &path, &below))
+                    .collect();
+                NodeKind::Folder { children }
+            }
+        };
+
+        Some(Node {
+            id: NodeId::new_v4(),
+            name: name.to_owned(),
+            description: raw.description.clone(),
+            settings,
+            kind,
+        })
+    }
+
+    /// The node's own settings. Also returns whether it sets a credential and a username (so a
+    /// folder can tell its children where they inherit from).
+    fn settings(&mut self, raw: &RawNode, path: &str, above: &Above) -> (Settings, bool, bool) {
+        let mut s = Settings::default();
+
+        if !raw.inherit.port {
+            if let Some(p) = raw.port {
+                match u16::try_from(p).ok().filter(|p| *p != 0) {
+                    Some(p) => s.port = Some(p),
+                    None => self.problem(
+                        path,
+                        format!("port {p} is out of range; the port is left unset"),
+                    ),
+                }
+            } else if let Some(text) = &raw.port_invalid {
+                self.problem(
+                    path,
+                    format!("port \"{text}\" is not a number; the port is left unset"),
+                );
+            }
+        }
+
+        let own_username =
+            (!raw.inherit.username && !raw.username.is_empty()).then(|| raw.username.clone());
+        let own_domain =
+            (!raw.inherit.domain && !raw.domain.is_empty()).then(|| raw.domain.clone());
+        s.username.clone_from(&own_username);
+
+        if !raw.inherit.password {
+            match &raw.password {
+                Some(password) => {
+                    s.credential =
+                        Some(self.entry_for(own_username, own_domain.clone(), password, path));
+                }
+                None => {
+                    if raw.password_error {
+                        self.problem(
+                            path,
+                            "its password could not be decrypted; imported without one".to_owned(),
+                        );
+                    }
+                    if let Some(folder) = &above.credential {
+                        self.partly(
+                            path,
+                            format!(
+                                "has no password of its own in mRemoteNG; it now uses the credential of folder \"{folder}\""
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+        if let Some(domain) = own_domain
+            && s.credential.is_none()
+        {
+            self.partly(
+                path,
+                format!("domain \"{domain}\" is not imported (no password to attach it to)"),
+            );
+        }
+        if !raw.inherit.username
+            && raw.username.is_empty()
+            && let Some(folder) = &above.username
+        {
+            self.partly(
+                path,
+                format!(
+                    "has no username of its own in mRemoteNG; it now uses the username of folder \"{folder}\""
+                ),
+            );
+        }
+
+        let credential_set = s.credential.is_some();
+        let username_set = s.username.is_some();
+        (s, credential_set, username_set)
+    }
+
+    /// The id of the entry for this (username, domain, password), creating it when it is new.
+    fn entry_for(
+        &mut self,
+        username: Option<String>,
+        domain: Option<String>,
+        password: &str,
+        path: &str,
+    ) -> CredentialId {
+        let key = (username.clone(), domain.clone());
+        if let Some(indexes) = self.by_identity.get(&key) {
+            for &i in indexes {
+                if let Secret::Password { password: stored } = &self.entries[i].entry.secret
+                    && stored.expose_secret() == password
+                {
+                    self.uses[i] += 1;
+                    if self.uses[i] == 2 {
+                        self.counts.shared_credentials += 1;
+                    }
+                    return self.entries[i].id;
+                }
+            }
+        }
+
+        let base = match (&username, &domain) {
+            (Some(u), Some(d)) => format!("{u}@{d}"),
+            (Some(u), None) => u.clone(),
+            // No username: named after the first node that uses the entry.
+            _ => path.rsplit(" / ").next().unwrap_or(path).to_owned(),
+        };
+        let mut name = base.clone();
+        let mut n = 2;
+        while self.entry_names.contains(&name) {
+            name = format!("{base} ({n})");
+            n += 1;
+        }
+        self.entry_names.insert(name.clone());
+
+        let id = EntryId::new_v4();
+        self.by_identity
+            .entry(key)
+            .or_default()
+            .push(self.entries.len());
+        self.entries.push(PlannedEntry {
+            id,
+            entry: NewEntry {
+                name,
+                username,
+                domain,
+                secret: Secret::Password {
+                    password: SecretString::from(password.to_owned()),
+                },
+                notes: String::new(),
+            },
+        });
+        self.uses.push(1);
+        id
+    }
+}
