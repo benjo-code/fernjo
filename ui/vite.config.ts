@@ -14,6 +14,9 @@ export default defineConfig({
     emptyOutDir: true,
     // Never inline assets as data: URIs: the CSP (src-tauri/tauri.conf.json) only allows fonts from 'self'.
     assetsInlineLimit: 0,
+    // The terminal (xterm.js and its addons) lives in the main chunk on purpose: the bundle is loaded from disk,
+    // so lazy loading gains nothing (Docs/DECISIONS.md, "M4 terminal"). About 632 kB is the known size.
+    chunkSizeWarningLimit: 700,
     target: process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome105" : "safari13",
     minify: process.env.TAURI_ENV_DEBUG === "true" ? false : "oxc",
     sourcemap: process.env.TAURI_ENV_DEBUG === "true",
