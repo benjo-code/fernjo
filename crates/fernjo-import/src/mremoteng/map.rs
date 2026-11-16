@@ -33,6 +33,10 @@ pub struct ImportPlan {
     pub folder: Node,
     pub entries: Vec<PlannedEntry>,
     pub report: Report,
+    /// The report of "import without passwords" (the entries and the credential references
+    /// are dropped): no credentials, no "now uses the credential of folder X" lines, and one line
+    /// saying how many stored password references were left out.
+    pub report_without_passwords: Report,
 }
 
 /// The nearest folders above a node that set a credential / a username (their names).
@@ -40,6 +44,21 @@ pub struct ImportPlan {
 struct Above {
     credential: Option<String>,
     username: Option<String>,
+}
+
+/// How a report line reads when the import runs without passwords.
+#[derive(Clone)]
+enum WithoutPasswords {
+    Same,
+    /// The line is not true without credentials (a node inheriting a folder's credential).
+    Drop,
+    /// The line reads differently.
+    Text(String),
+}
+
+struct Line {
+    line: ReportLine,
+    without_passwords: WithoutPasswords,
 }
 
 /// (entry username, entry domain, keyed hash of the password).
@@ -58,9 +77,11 @@ struct Builder {
     /// Base entry name -> the next ` (n)` suffix to try, so numbering never restarts at 2.
     next_suffix: HashMap<String, usize>,
     counts: Counts,
+    /// Nodes that reference an entry (what "import without passwords" leaves out).
+    references: usize,
     skipped: Vec<ReportLine>,
-    partial: Vec<ReportLine>,
-    problems: Vec<ReportLine>,
+    partial: Vec<Line>,
+    problems: Vec<Line>,
 }
 
 /// Builds the plan. `today` is `YYYY-MM-DD`; `taken_names` are the existing top-level names, used
@@ -84,11 +105,12 @@ pub fn plan(doc: &RawDocument, today: &str, taken_names: &[String]) -> ImportPla
         settings: Settings::default(),
         kind: NodeKind::Folder { children },
     };
-    let report = b.finish();
+    let (report, report_without_passwords) = b.finish();
     ImportPlan {
         folder,
         entries: b.entries,
         report,
+        report_without_passwords,
     }
 }
 
@@ -98,42 +120,90 @@ fn path(trail: &[&str]) -> String {
 }
 
 impl Builder {
-    fn finish(&mut self) -> Report {
-        // One aggregate line instead of one per RDP connection; first so the cap never drops it.
+    /// The report and the report of an import without passwords.
+    fn finish(&mut self) -> (Report, Report) {
+        let skipped = std::mem::take(&mut self.skipped);
+        let partial = std::mem::take(&mut self.partial);
+        let problems = std::mem::take(&mut self.problems);
+
+        // Aggregate lines go first so the cap never drops them.
+        let mut head = Vec::new();
         if self.counts.rdp > 0 {
             let n = self.counts.rdp;
             let s = if n == 1 { "" } else { "s" };
-            self.partial.insert(
-                0,
-                ReportLine::new(
-                    "",
-                    format!(
-                        "RDP display, redirection and gateway settings are not carried over ({n} RDP connection{s})"
-                    ),
+            head.push(ReportLine::new(
+                "",
+                format!(
+                    "RDP display, redirection and gateway settings are not carried over ({n} RDP connection{s})"
                 ),
-            );
+            ));
         }
+
+        let mut normal_partial = head.clone();
+        normal_partial.extend(partial.iter().map(|l| l.line.clone()));
+        let mut bare_partial = head;
+        if self.references > 0 {
+            let n = self.references;
+            let s = if n == 1 { "" } else { "s" };
+            bare_partial.push(ReportLine::new(
+                "",
+                format!("{n} stored password reference{s} left out (imported without passwords)"),
+            ));
+        }
+        bare_partial.extend(partial.iter().filter_map(|l| match &l.without_passwords {
+            WithoutPasswords::Same => Some(l.line.clone()),
+            WithoutPasswords::Drop => None,
+            WithoutPasswords::Text(text) => Some(ReportLine::new(l.line.path.clone(), text)),
+        }));
+        let normal_problems: Vec<ReportLine> = problems.iter().map(|l| l.line.clone()).collect();
+        let bare_problems: Vec<ReportLine> = problems
+            .iter()
+            .map(|l| match &l.without_passwords {
+                WithoutPasswords::Text(text) => ReportLine::new(l.line.path.clone(), text),
+                _ => l.line.clone(),
+            })
+            .collect();
+
         let mut counts = self.counts.clone();
         counts.credentials = self.entries.len();
-        counts.skipped = self.skipped.len();
-        counts.partial = self.partial.len();
-        counts.problems = self.problems.len();
-        Report {
-            counts,
-            skipped: cap(std::mem::take(&mut self.skipped)),
-            partial: cap(std::mem::take(&mut self.partial)),
-            problems: cap(std::mem::take(&mut self.problems)),
-        }
+        counts.skipped = skipped.len();
+        counts.partial = normal_partial.len();
+        counts.problems = normal_problems.len();
+        let mut bare_counts = counts.clone();
+        bare_counts.credentials = 0;
+        bare_counts.shared_credentials = 0;
+        bare_counts.partial = bare_partial.len();
+        bare_counts.problems = bare_problems.len();
+        (
+            Report {
+                counts,
+                skipped: cap(skipped.clone()),
+                partial: cap(normal_partial),
+                problems: cap(normal_problems),
+            },
+            Report {
+                counts: bare_counts,
+                skipped: cap(skipped),
+                partial: cap(bare_partial),
+                problems: cap(bare_problems),
+            },
+        )
     }
 
     fn skip(&mut self, trail: &[&str], text: String) {
         self.skipped.push(ReportLine::new(path(trail), text));
     }
     fn partly(&mut self, trail: &[&str], text: String) {
-        self.partial.push(ReportLine::new(path(trail), text));
+        self.partial.push(Line {
+            line: ReportLine::new(path(trail), text),
+            without_passwords: WithoutPasswords::Same,
+        });
     }
     fn problem(&mut self, trail: &[&str], text: String) {
-        self.problems.push(ReportLine::new(path(trail), text));
+        self.problems.push(Line {
+            line: ReportLine::new(path(trail), text),
+            without_passwords: WithoutPasswords::Same,
+        });
     }
 
     /// Maps one raw node (and below). `None` when the node is skipped. `trail` holds the display
@@ -283,17 +353,32 @@ impl Builder {
                 }
                 None => {
                     if raw.password_error {
-                        self.problem(
-                            trail,
-                            "its password could not be decrypted; imported without one".to_owned(),
-                        );
+                        const PLAIN: &str =
+                            "its password could not be decrypted; imported without one";
+                        match &above.credential {
+                            // the node inherits the folder's credential, so "without one" would
+                            // be untrue (unless nothing is imported with a password at all)
+                            Some(folder) => self.problems.push(Line {
+                                line: ReportLine::new(
+                                    path(trail),
+                                    format!(
+                                        "its password could not be decrypted; it now uses the credential of folder \"{folder}\""
+                                    ),
+                                ),
+                                without_passwords: WithoutPasswords::Text(PLAIN.to_owned()),
+                            }),
+                            None => self.problem(trail, PLAIN.to_owned()),
+                        }
                     } else if let Some(folder) = &above.credential {
-                        self.partly(
-                            trail,
-                            format!(
-                                "has no password of its own in mRemoteNG; it now uses the credential of folder \"{folder}\""
+                        self.partial.push(Line {
+                            line: ReportLine::new(
+                                path(trail),
+                                format!(
+                                    "has no password of its own in mRemoteNG; it now uses the credential of folder \"{folder}\""
+                                ),
                             ),
-                        );
+                            without_passwords: WithoutPasswords::Drop,
+                        });
                     }
                 }
             }
@@ -332,6 +417,7 @@ impl Builder {
         password: &str,
         node_name: &str,
     ) -> CredentialId {
+        self.references += 1;
         let key = (
             username.clone(),
             domain.clone(),

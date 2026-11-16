@@ -638,3 +638,97 @@ fn default_key_fixture_maps_end_to_end() {
     assert!(tree.get(servers.id).is_some());
     assert_eq!(p.report.counts.credentials, p.entries.len());
 }
+
+// ---- password problem line, import without passwords -------------------------------------------
+
+#[test]
+fn undecryptable_password_under_a_folder_credential_does_not_claim_to_be_imported_without_one() {
+    let mut c = ssh("db");
+    c.password_error = true;
+    let prod = pw(folder("Prod", vec![c]), "admin", "", "folder-pw");
+    let p = run(vec![prod]);
+    let line = &p.report.problems[0];
+    assert_eq!(line.path, "Prod / db");
+    assert!(
+        line.text.contains("folder \"Prod\""),
+        "the node inherits the folder's credential: {}",
+        line.text
+    );
+    assert!(!line.text.contains("imported without one"), "{}", line.text);
+    // and without any folder credential the plain wording stays
+    let mut alone = ssh("db");
+    alone.password_error = true;
+    let p = run(vec![alone]);
+    assert!(p.report.problems[0].text.contains("imported without one"));
+}
+
+#[test]
+fn the_report_without_passwords_matches_what_the_import_then_does() {
+    // Prod sets a credential (reference 1); web has its own password (reference 2); empty
+    // inherits it; broken has an undecryptable password under Prod.
+    let empty = ssh("empty");
+    let mut broken = ssh("broken");
+    broken.password_error = true;
+    let web = pw(ssh("web"), "root", "", "web-pw");
+    let prod = pw(
+        folder("Prod", vec![empty, broken, web]),
+        "admin",
+        "",
+        "folder-pw",
+    );
+    let p = run(vec![prod]);
+
+    // with passwords: the inherit line and the "now uses" problem line
+    assert!(find(&p.report.partial, "Prod / empty", "now uses the credential").is_some());
+    assert_eq!(p.report.counts.credentials, 2);
+
+    let bare = &p.report_without_passwords;
+    assert_eq!(bare.counts.credentials, 0);
+    assert_eq!(bare.counts.shared_credentials, 0);
+    assert!(
+        bare.partial
+            .iter()
+            .all(|l| !l.text.contains("now uses the credential")),
+        "{:?}",
+        bare.partial
+    );
+    let left_out = bare
+        .partial
+        .iter()
+        .find(|l| l.text.contains("left out"))
+        .expect("the references line");
+    assert!(
+        left_out.text.starts_with("2 stored password references"),
+        "{}",
+        left_out.text
+    );
+    assert_eq!(bare.counts.partial, bare.partial.len());
+    // the undecryptable password now really is imported without one
+    assert_eq!(bare.problems.len(), 1);
+    assert!(bare.problems[0].text.contains("imported without one"));
+    // lines that stay true are the same
+    assert_eq!(bare.skipped, p.report.skipped);
+}
+
+#[test]
+fn the_references_line_counts_before_the_cap_and_is_never_cut() {
+    let mut nodes: Vec<RawNode> = (0..250)
+        .map(|i| {
+            let mut n = ssh(&format!("c{i}"));
+            n.putty_session = "custom".to_owned();
+            n
+        })
+        .collect();
+    nodes.push(pw(ssh("with-password"), "root", "", "pw"));
+    let p = run(nodes);
+    let bare = &p.report_without_passwords;
+    // 250 PuTTY lines + the references line, capped to 200 and "and N more"
+    assert_eq!(bare.counts.partial, 251);
+    assert_eq!(bare.partial.len(), 201);
+    assert!(
+        bare.partial[0]
+            .text
+            .contains("1 stored password reference ")
+    );
+    assert_eq!(bare.partial[200].text, "and 51 more");
+}
