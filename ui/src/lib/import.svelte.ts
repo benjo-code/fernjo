@@ -33,12 +33,17 @@ export class ImportStore {
   error = $state<ApiError | null>(null);
 
   #api: Api;
-  #onSnapshot: (snapshot: Snapshot) => void;
+  #onSnapshot: (snapshot: Snapshot, restored: boolean) => void;
   #busy = $state(false);
   /** Bumped by `reset()`: an async call that started before it drops its result. */
   #generation = 0;
 
-  constructor(api: Api, onSnapshot: (snapshot: Snapshot) => void) {
+  /**
+   * `onSnapshot` runs after Rust applied an import or restore, with the new tree and whether it
+   * was a restore (Rust then closed every session without telling the page, so the owner of the
+   * tabs must drop them).
+   */
+  constructor(api: Api, onSnapshot: (snapshot: Snapshot, restored: boolean) => void) {
     this.#api = api;
     this.#onSnapshot = onSnapshot;
   }
@@ -58,7 +63,12 @@ export class ImportStore {
     this.#busy = true;
     try {
       const picked = await this.#api.importPick(kind);
-      if (gen !== this.#generation || picked === null) return;
+      if (gen !== this.#generation) {
+        // cancelled while the picker was open: Rust now remembers a path nobody wants
+        if (picked !== null) this.#dropLate();
+        return;
+      }
+      if (picked === null) return;
       this.#clear();
       this.kind = kind;
       this.fileName = picked.fileName;
@@ -94,7 +104,10 @@ export class ImportStore {
       result = await this.#api.importApply(options);
     } catch (e) {
       this.#release(gen);
-      if (gen !== this.#generation) return;
+      if (gen !== this.#generation) {
+        this.#dropLate();
+        return;
+      }
       const err = toApiError(e);
       if (err.code === "vault_needed") {
         this.error = err;
@@ -111,7 +124,7 @@ export class ImportStore {
     }
     // Rust applied it, so the tree must follow, even when the dialog was cancelled meanwhile.
     // Outside the try: a failing callback is not an api error and cannot undo "done".
-    this.#onSnapshot(result.snapshot);
+    this.#onSnapshot(result.snapshot, result.restored !== null);
   }
 
   /** Drops the pending plan in Rust and returns to `idle`, also while a call is in flight. */
@@ -154,15 +167,33 @@ export class ImportStore {
     if (gen === this.#generation) this.#busy = false;
   }
 
+  /**
+   * A call that was cancelled while it ran has finished: Rust may have picked, inspected or kept
+   * something after `cancel()` told it to drop everything (the plan holds decrypted secrets), so
+   * tell it again. Not when something newer is going on: that owns the pending slot now.
+   */
+  #dropLate(): void {
+    if (this.#busy || this.step !== "idle") return;
+    void this.#api.importCancel().catch(() => {
+      // nothing is pending either way
+    });
+  }
+
   async #inspect(secret: string | null, gen: number): Promise<void> {
     this.error = null;
     try {
       const preview = await this.#api.importInspect(secret);
-      if (gen !== this.#generation) return;
+      if (gen !== this.#generation) {
+        this.#dropLate();
+        return;
+      }
       this.preview = preview;
       this.step = "preview";
     } catch (e) {
-      if (gen !== this.#generation) return;
+      if (gen !== this.#generation) {
+        this.#dropLate();
+        return;
+      }
       const err = toApiError(e);
       if (!ASKS_FOR_SECRET.has(err.code)) {
         this.#fail(err);

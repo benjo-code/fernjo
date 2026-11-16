@@ -1,7 +1,7 @@
 import { mount, unmount } from "svelte";
 import { afterEach, expect, test, vi } from "vitest";
 import App from "./App.svelte";
-import { apiError, conn, mockApi, vaultStatus } from "./lib/testing";
+import { apiError, conn, mockApi, preview, snapshot, vaultStatus } from "./lib/testing";
 import type { Api, SessionEvent, TreeNode } from "./lib/types";
 
 const h = vi.hoisted(() => ({ made: [] as { calls: string[] }[] }));
@@ -440,4 +440,50 @@ test("a_held_ctrl_shift_w_closes_one_tab_only", async () => {
   expect(first.defaultPrevented).toBe(true);
   expect(held.defaultPrevented).toBe(true);
   expect(tabs()).toHaveLength(2);
+});
+
+test("a_restore_closes_every_tab_and_the_lamps_go_out", async () => {
+  // Rust closed the sessions without telling the page; the tabs must not stay "connected"
+  const { calls } = await start([conn("web-01")], {
+    importPick: async () => ({ fileName: "b.fjbk" }),
+    importInspect: async () =>
+      preview({
+        kind: "backup",
+        fileName: "b.fjbk",
+        report: null,
+        backup: {
+          createdAt: "2026-11-01T10:00:00Z",
+          app: "fernjo 0.5.0",
+          folders: 0,
+          connections: 1,
+          credentials: 0,
+        },
+      }),
+    importApply: async () => ({
+      // the restored tree still has the connection, so a stale lamp would show next to it
+      snapshot: snapshot([conn("web-01")]),
+      report: null,
+      restored: { createdAt: "2026-11-01T10:00:00Z", folders: 0, connections: 1, credentials: 0 },
+    }),
+  });
+  doubleClick("web-01");
+  await settle();
+  expect(tabs()).toHaveLength(1);
+  expect(row("web-01").querySelector(".lamp")).not.toBeNull();
+  expect(calls.closeSession).toHaveLength(0);
+
+  const click = async (label: string) => {
+    [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === label)!.click();
+    await settle();
+  };
+  document.querySelector<HTMLButtonElement>("button[aria-label='Import & backup']")!.click();
+  await settle();
+  await click("Backup file…");
+  await click("Restore…");
+  await click("Restore");
+
+  expect(calls.importApply).toHaveLength(1);
+  expect(tabs()).toHaveLength(0);
+  expect(row("web-01").querySelector(".lamp")).toBeNull();
+  expect(calls.closeSession).toEqual([["sid"]]);
 });

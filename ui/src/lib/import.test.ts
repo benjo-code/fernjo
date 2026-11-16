@@ -6,8 +6,12 @@ import type { ApplyResult, ImportPreview, Snapshot } from "./types";
 function setup(impl: Parameters<typeof mockApi>[1] = {}) {
   const mock = mockApi([], impl);
   const snapshots: Snapshot[] = [];
-  const store = new ImportStore(mock.api, (s) => snapshots.push(s));
-  return { store, snapshots, ...mock };
+  const restores: boolean[] = [];
+  const store = new ImportStore(mock.api, (s, restored) => {
+    snapshots.push(s);
+    restores.push(restored);
+  });
+  return { store, snapshots, restores, ...mock };
 }
 
 /** Every public field of the store as JSON (to prove no secret is kept). */
@@ -307,6 +311,77 @@ describe("ImportStore", () => {
     await store.exportConnections();
     expect(calls.exportConnections).toHaveLength(1);
     expect(store.exportResult).not.toBeNull();
+  });
+
+  test("the_snapshot_callback_says_whether_the_apply_was_a_restore", async () => {
+    const restoredResult: ApplyResult = {
+      snapshot: { children: [], notices: [] },
+      report: null,
+      restored: { createdAt: "2026-11-01T10:00:00Z", folders: 0, connections: 0, credentials: 0 },
+    };
+    const { store, restores } = setup();
+    await store.start("mremoteng");
+    await store.apply({ withoutPasswords: false });
+    expect(restores).toEqual([false]);
+
+    const restore = setup({ importApply: async () => restoredResult });
+    await restore.store.start("backup");
+    await restore.store.apply({ withoutPasswords: false });
+    expect(restore.restores).toEqual([true]);
+  });
+
+  test("a_late_inspect_after_cancel_is_cancelled_again_in_rust", async () => {
+    // cancel() while the file is being inspected: Rust may install the plan after the cancel
+    const inspecting = deferred<ImportPreview>();
+    const { store, calls } = setup({ importInspect: () => inspecting.promise });
+    const started = store.start("mremoteng");
+    await Promise.resolve();
+    await Promise.resolve();
+    await store.cancel();
+    expect(calls.importCancel).toHaveLength(1);
+    inspecting.resolve(preview());
+    await started;
+    expect(store.step).toBe("idle");
+    expect(store.preview).toBeNull();
+    expect(calls.importCancel).toHaveLength(2);
+  });
+
+  test("a_late_failed_inspect_after_cancel_is_cancelled_again_too", async () => {
+    const inspecting = deferred<ImportPreview>();
+    const { store, calls } = setup({ importInspect: () => inspecting.promise });
+    const started = store.start("mremoteng");
+    await Promise.resolve();
+    await Promise.resolve();
+    await store.cancel();
+    inspecting.reject(apiError("key_needed", "needs a key"));
+    await started;
+    expect(store.step).toBe("idle");
+    expect(calls.importCancel).toHaveLength(2);
+  });
+
+  test("a_late_result_does_not_cancel_a_newer_import", async () => {
+    const first = deferred<ImportPreview>();
+    let calledOnce = false;
+    const { store, calls } = setup({
+      importInspect: () => {
+        if (!calledOnce) {
+          calledOnce = true;
+          return first.promise;
+        }
+        return Promise.resolve(preview());
+      },
+    });
+    const old = store.start("mremoteng");
+    await Promise.resolve();
+    await Promise.resolve();
+    await store.cancel();
+    await store.start("mremoteng"); // a newer import reaches the preview
+    expect(store.step).toBe("preview");
+    const cancels = calls.importCancel.length;
+    first.resolve(preview());
+    await old;
+    expect(store.step).toBe("preview");
+    expect(calls.importCancel).toHaveLength(cancels);
   });
 
   test("a_throwing_snapshot_callback_does_not_turn_a_successful_apply_into_an_error", async () => {

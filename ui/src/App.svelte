@@ -59,7 +59,10 @@
   }
 
   // svelte-ignore state_referenced_locally
-  const importer = new ImportStore(api, (snapshot) => {
+  const importer = new ImportStore(api, (snapshot, restored) => {
+    // a restore ended every session in Rust without an event: drop the tabs, or they would
+    // stay "connected" over a frozen terminal
+    if (restored) sessions.closeAll();
     void store.applySnapshot(snapshot);
     // an import adds credentials and a restore replaces the vault: reload its status and list
     void vault.init();
