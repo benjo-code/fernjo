@@ -26,10 +26,13 @@ const PROTECTED_PLAINTEXT: &str = "ThisIsNotProtected";
 const XML_NODES_LIMIT: u32 = 2_000_000;
 const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RawKind {
     Container,
     Connection,
+    /// A `Type` that is neither `Container` nor `Connection` (the raw text, shortened). The node and
+    /// its children are read; the mapping decides what to do with them.
+    Unknown(String),
 }
 
 /// Which settings the node takes from its parent (`Inherit*` attributes).
@@ -49,6 +52,8 @@ pub struct RawNode {
     pub hostname: String,
     pub protocol: String,
     pub port: Option<u32>,
+    /// The raw `Port` text (shortened) when it is present but not a valid `u32`; `port` is `None` then.
+    pub port_invalid: Option<String>,
     pub username: String,
     pub domain: String,
     pub password: Option<Zeroizing<String>>,
@@ -67,6 +72,7 @@ impl fmt::Debug for RawNode {
             .field("hostname", &self.hostname)
             .field("protocol", &self.protocol)
             .field("port", &self.port)
+            .field("port_invalid", &self.port_invalid)
             .field("username", &self.username)
             .field("has_password", &self.password.is_some())
             .field("password_error", &self.password_error)
@@ -108,6 +114,20 @@ fn parse(text: &str) -> Result<roxmltree::Document<'_>, ImportError> {
     })
 }
 
+fn version_hint(version: &str) -> &'static str {
+    let mut parts = version.split('.');
+    let major = parts.next().and_then(|m| m.parse::<u32>().ok());
+    let minor = parts.next().and_then(|m| m.parse::<u32>().ok());
+    match (major, minor) {
+        (Some(2), Some(m)) if m >= 7 => {
+            "mRemoteNG 2.7 and later are pre-release formats with a separate credential repository and are not supported"
+        }
+        (Some(m), _) if m < 2 => "legacy files (AES-CBC) are on the backlog",
+        (Some(2), Some(m)) if m < 6 => "legacy files (AES-CBC) are on the backlog",
+        _ => "this file is not a known mRemoteNG version",
+    }
+}
+
 fn flag(node: roxmltree::Node, name: &str) -> bool {
     node.attribute(name)
         .is_some_and(|v| v.trim().eq_ignore_ascii_case("true"))
@@ -138,6 +158,11 @@ pub fn read(bytes: &[u8], key: Option<&SecretString>) -> Result<RawDocument, Imp
     if bytes.len() > MAX_FILE_BYTES {
         return Err(ImportError::TooLarge);
     }
+    if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
+        return Err(unsupported(
+            "the file is UTF-16, please re-save it as UTF-8",
+        ));
+    }
     let bytes = bytes.strip_prefix(UTF8_BOM).unwrap_or(bytes);
     let text = std::str::from_utf8(bytes)
         .map_err(|_| unsupported("the file is not UTF-8 text (it may be binary or encrypted)"))?;
@@ -155,8 +180,9 @@ pub fn read(bytes: &[u8], key: Option<&SecretString>) -> Result<RawDocument, Imp
     })?;
     if version.trim() != "2.6" {
         return Err(unsupported(format!(
-            "ConfVersion {} is not supported, only 2.6 (older files and the 2.7/2.8 pre-release files are on the backlog)",
-            shown(version)
+            "ConfVersion {} is not supported, only 2.6 ({})",
+            shown(version),
+            version_hint(version.trim())
         )));
     }
     let engine = root.attribute("EncryptionEngine").unwrap_or_default();
@@ -265,23 +291,14 @@ fn read_node(
     let kind = match el.attribute("Type").map(str::trim) {
         Some("Container") => RawKind::Container,
         Some("Connection") | None => RawKind::Connection,
-        Some(other) => {
-            return Err(ImportError::Damaged(format!(
-                "node '{}' has the unknown type '{}'",
-                shown(&name),
-                shown(other)
-            )));
-        }
+        Some(other) => RawKind::Unknown(shown(other)),
     };
-    let port = match el.attribute("Port").map(str::trim) {
-        None | Some("") => None,
-        Some(p) => Some(p.parse::<u32>().map_err(|_| {
-            ImportError::Damaged(format!(
-                "node '{}' has the invalid port '{}'",
-                shown(&name),
-                shown(p)
-            ))
-        })?),
+    let (port, port_invalid) = match el.attribute("Port").map(str::trim) {
+        None | Some("") => (None, None),
+        Some(p) => match p.parse::<u32>() {
+            Ok(n) => (Some(n), None),
+            Err(_) => (None, Some(shown(p))),
+        },
     };
     let (password, password_error) = match el.attribute("Password").map(str::trim) {
         None | Some("") => (None, false),
@@ -292,8 +309,8 @@ fn read_node(
         },
     };
     let children = match kind {
-        RawKind::Container => walk(el, depth + 1, counter, ctx)?,
         RawKind::Connection => Vec::new(),
+        RawKind::Container | RawKind::Unknown(_) => walk(el, depth + 1, counter, ctx)?,
     };
     Ok(RawNode {
         kind,
@@ -301,6 +318,7 @@ fn read_node(
         hostname: attr(el, "Hostname"),
         protocol: attr(el, "Protocol"),
         port,
+        port_invalid,
         username: attr(el, "Username"),
         domain: attr(el, "Domain"),
         password,

@@ -16,7 +16,7 @@ fn key(s: &str) -> SecretString {
 
 fn node_json(n: &RawNode) -> Value {
     json!({
-        "kind": match n.kind { RawKind::Container => "container", RawKind::Connection => "connection" },
+        "kind": match &n.kind { RawKind::Container => "container", RawKind::Connection => "connection", RawKind::Unknown(_) => "unknown" },
         "name": n.name,
         "description": n.description,
         "hostname": n.hostname,
@@ -203,7 +203,13 @@ fn a_json_or_binary_file_is_unsupported_not_a_panic() {
         ImportError::UnsupportedFormat(_)
     ));
     // DOCTYPE is refused instead of expanded.
-    let dtd = r#"<?xml version="1.0"?><!DOCTYPE Connections [<!ENTITY a "aaaa"><!ENTITY b "&a;&a;&a;&a;">]><Connections ConfVersion="2.6">&b;</Connections>"#;
+    let valid = small_ok("");
+    let dtd = valid.replacen(
+        "<Connections",
+        r#"<!DOCTYPE Connections [<!ENTITY a "aaaa"><!ENTITY b "&a;&a;&a;&a;">]><Connections"#,
+        1,
+    );
+    assert!(read(valid.as_bytes(), None).is_ok());
     assert!(matches!(
         read(dtd.as_bytes(), None).unwrap_err(),
         ImportError::UnsupportedFormat(_)
@@ -271,20 +277,36 @@ fn missing_attributes_read_as_defaults() {
 }
 
 #[test]
-fn invalid_node_type_or_port_is_damaged() {
-    for body in [
-        r#"<Node Name="x" Type="Folder"/>"#,
-        r#"<Node Name="x" Type="Connection" Port="twenty"/>"#,
-        r#"<Node Name="x" Type="Connection" Port="-1"/>"#,
-    ] {
-        assert!(
-            matches!(
-                read(small_ok(body).as_bytes(), None).unwrap_err(),
-                ImportError::Damaged(_)
-            ),
-            "{body}"
-        );
+fn odd_ports_are_reported_per_node_and_the_rest_still_reads() {
+    let body = r#"<Node Name="a" Type="Connection" Port="twenty" Hostname="a.example"/>
+        <Node Name="b" Type="Connection" Port="99999999999" Hostname="b.example"/>
+        <Node Name="c" Type="Connection" Port="-1" Hostname="c.example"/>
+        <Node Name="d" Type="Connection" Port="22" Hostname="d.example"/>
+        <Node Name="e" Type="Connection" Port="" Hostname="e.example"/>"#;
+    let doc = read(small_ok(body).as_bytes(), None).unwrap();
+    assert_eq!(doc.nodes.len(), 5);
+    let bad = ["twenty", "99999999999", "-1"];
+    for (n, text) in doc.nodes.iter().zip(bad) {
+        assert_eq!(n.port, None);
+        assert_eq!(n.port_invalid.as_deref(), Some(text));
     }
+    assert_eq!(doc.nodes[3].port, Some(22));
+    assert_eq!(doc.nodes[3].port_invalid, None);
+    assert_eq!(doc.nodes[4].port, None);
+    assert_eq!(doc.nodes[4].port_invalid, None);
+    assert_eq!(doc.nodes[3].hostname, "d.example");
+}
+
+#[test]
+fn unknown_node_type_is_kept_with_its_children() {
+    let body = r#"<Node Name="odd" Type="Folder"><Node Name="inner" Type="Connection" Hostname="h"/></Node>
+        <Node Name="after" Type="Connection" Hostname="h2"/>"#;
+    let doc = read(small_ok(body).as_bytes(), None).unwrap();
+    assert_eq!(doc.nodes.len(), 2);
+    assert_eq!(doc.nodes[0].kind, RawKind::Unknown("Folder".to_owned()));
+    assert_eq!(doc.nodes[0].children.len(), 1);
+    assert_eq!(doc.nodes[0].children[0].name, "inner");
+    assert_eq!(doc.nodes[1].name, "after");
 }
 
 #[test]
@@ -329,6 +351,24 @@ fn missing_protected_is_damaged() {
         read(changed.as_bytes(), None).unwrap_err(),
         ImportError::Damaged(_)
     ));
+}
+
+#[test]
+fn utf16_files_are_unsupported_with_a_hint() {
+    for bom in [[0xFFu8, 0xFE], [0xFE, 0xFF]] {
+        let mut bytes = bom.to_vec();
+        for u in "<Connections ConfVersion=\"2.6\"/>".encode_utf16() {
+            bytes.extend(if bom[0] == 0xFF {
+                u.to_le_bytes()
+            } else {
+                u.to_be_bytes()
+            });
+        }
+        match read(&bytes, None).unwrap_err() {
+            ImportError::UnsupportedFormat(m) => assert!(m.contains("UTF-16"), "{m}"),
+            e => panic!("{e:?}"),
+        }
+    }
 }
 
 #[test]
