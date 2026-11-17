@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+# Tests for tools/check-workflows.sh, tools/check-release-version.sh and tools/verify-installers.sh.
+# Plain bash, temp dirs, no dependencies. Run: bash tools/test-release-scripts.sh
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+failures=0
+total=0
+
+# assert_exit <name> <expected exit> <expected output substring or ""> <command...>
+assert_exit() {
+  local name="$1" want="$2" needle="$3"
+  shift 3
+  total=$((total + 1))
+  local out got
+  out="$("$@" 2>&1)"
+  got=$?
+  if [ "$got" -ne "$want" ]; then
+    echo "FAIL $name: exit $got, expected $want"
+    echo "$out" | sed 's/^/     | /'
+    failures=$((failures + 1))
+    return
+  fi
+  if [ -n "$needle" ] && [[ "$out" != *"$needle"* ]]; then
+    echo "FAIL $name: output lacks '$needle'"
+    echo "$out" | sed 's/^/     | /'
+    failures=$((failures + 1))
+    return
+  fi
+  echo "ok   $name"
+}
+
+sha=0123456789abcdef0123456789abcdef01234567
+
+# A workflow that satisfies every rule; bad fixtures are derived from it.
+good_workflow() {
+  cat <<YML
+name: T
+on: push
+permissions:
+  contents: read
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@$sha # v1
+      - uses: ./local-action
+      - name: step
+        env:
+          TAG: \${{ github.event.release.tag_name }}
+        run: |
+          echo "\$TAG"
+YML
+}
+
+# bad_fixture <name> <sed expression applied to the good workflow>
+bad_fixture() {
+  local d="$tmp/wf-$1"
+  mkdir -p "$d"
+  good_workflow | sed -e "$2" >"$d/w.yml"
+  echo "$d"
+}
+
+# --- check-workflows.sh ---
+check_workflows="$root/tools/check-workflows.sh"
+
+assert_exit check_workflows_passes_on_the_real_workflows 0 "" bash "$check_workflows"
+
+d="$tmp/wf-good"
+mkdir -p "$d"
+good_workflow >"$d/w.yml"
+assert_exit check_workflows_passes_on_the_good_fixture 0 "" bash "$check_workflows" "$d"
+
+d="$(bad_fixture unpinned "s|actions/checkout@$sha # v1|actions/checkout@v4|")"
+assert_exit check_workflows_rejects_an_unpinned_action 1 "w.yml:9: " bash "$check_workflows" "$d"
+assert_exit check_workflows_names_the_reason_for_an_unpinned_action 1 "commit SHA" bash "$check_workflows" "$d"
+
+d="$(bad_fixture selfhosted "s|runs-on: ubuntu-latest|runs-on: [self-hosted, linux]|")"
+assert_exit check_workflows_rejects_self_hosted 1 "self-hosted" bash "$check_workflows" "$d"
+
+d="$(bad_fixture prt "s|on: push|on: pull_request_target|")"
+assert_exit check_workflows_rejects_pull_request_target 1 "pull_request_target" bash "$check_workflows" "$d"
+
+d="$(bad_fixture noperm "/^permissions:/,/^  contents: read/d")"
+assert_exit check_workflows_rejects_missing_permissions 1 "permissions" bash "$check_workflows" "$d"
+
+expr_event='s|echo "\$TAG"|echo "${{ github.event.release.tag_name }}"|'
+d="$(bad_fixture inline "$expr_event")"
+assert_exit check_workflows_rejects_inline_github_event_in_run 1 "github.event" bash "$check_workflows" "$d"
+
+expr_input='s|echo "\$TAG"|echo "${{ inputs.tag }}"|'
+d="$(bad_fixture inlineinput "$expr_input")"
+assert_exit check_workflows_rejects_inline_inputs_in_run 1 "inputs" bash "$check_workflows" "$d"
+
+# --- check-release-version.sh ---
+check_version="$root/tools/check-release-version.sh"
+cur="$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version *= *"\(.*\)"/\1/p;}' "$root/Cargo.toml" | head -n 1)"
+
+assert_exit check_release_version_accepts_the_matching_tag 0 "" bash "$check_version" "v$cur"
+assert_exit check_release_version_accepts_the_tag_without_v 0 "" bash "$check_version" "$cur"
+assert_exit check_release_version_rejects_a_mismatching_tag 1 "does not match" bash "$check_version" "v99.99.99"
+
+marker="$tmp/pwned"
+assert_exit check_release_version_rejects_a_tag_with_shell_metacharacters 1 "not a valid" \
+  bash "$check_version" "v1.0.0; touch $marker"
+assert_exit check_release_version_rejects_command_substitution 1 "not a valid" \
+  bash "$check_version" '$(touch '"$marker"')'
+total=$((total + 1))
+if [ -e "$marker" ]; then
+  echo "FAIL check_release_version_does_not_evaluate_the_tag: marker file exists"
+  failures=$((failures + 1))
+else
+  echo "ok   check_release_version_does_not_evaluate_the_tag"
+fi
+
+# --- verify-installers.sh ---
+verify="$root/tools/verify-installers.sh"
+ver=1.2.3
+names=(
+  "fernjo_${ver}_x64-setup.exe"
+  "fernjo_${ver}_aarch64.dmg"
+  "fernjo_${ver}_x64.dmg"
+  "fernjo_${ver}_amd64.AppImage"
+  "fernjo_${ver}_amd64.deb"
+)
+
+d="$tmp/inst-ok"
+mkdir -p "$d"
+for n in "${names[@]}"; do : >"$d/$n"; done
+assert_exit verify_installers_passes_on_the_complete_set 0 "" bash "$verify" "$ver" "$d"
+
+d="$tmp/inst-missing"
+mkdir -p "$d"
+for n in "${names[@]}"; do : >"$d/$n"; done
+rm "$d/fernjo_${ver}_x64.dmg"
+assert_exit verify_installers_fails_naming_the_missing_file 1 "missing: fernjo_${ver}_x64.dmg" bash "$verify" "$ver" "$d"
+
+d="$tmp/inst-extra"
+mkdir -p "$d"
+for n in "${names[@]}"; do : >"$d/$n"; done
+: >"$d/surprise.zip"
+assert_exit verify_installers_fails_on_an_unexpected_extra_file 1 "unexpected: surprise.zip" bash "$verify" "$ver" "$d"
+
+echo
+echo "$((total - failures))/$total passed"
+[ "$failures" -eq 0 ]
