@@ -120,10 +120,14 @@ pub fn open_with_password(
         parallelism: be_u32(bytes, OFF_PARALLELISM),
     };
     kdf.validate().map_err(|_| SealedError::Damaged)?;
-    let mut salt = [0u8; SALT_LEN];
-    salt.copy_from_slice(&bytes[OFF_SALT..OFF_SALT + SALT_LEN]);
-    let mut nonce = [0u8; NONCE_LEN];
-    nonce.copy_from_slice(&bytes[OFF_NONCE..OFF_NONCE + NONCE_LEN]);
+    // Both come from the header that was length-checked above; `try_into` keeps the lengths
+    // checked by the compiler instead of filling a zeroed buffer.
+    let salt: [u8; SALT_LEN] = bytes[OFF_SALT..OFF_SALT + SALT_LEN]
+        .try_into()
+        .map_err(|_| SealedError::Damaged)?;
+    let nonce: [u8; NONCE_LEN] = bytes[OFF_NONCE..OFF_NONCE + NONCE_LEN]
+        .try_into()
+        .map_err(|_| SealedError::Damaged)?;
     let password = normalise(password);
     let key =
         crypto::derive_key(password.as_bytes(), kdf, &salt).map_err(|_| SealedError::Damaged)?;
