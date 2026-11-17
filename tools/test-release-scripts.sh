@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for tools/check-workflows.sh, tools/check-release-version.sh and tools/verify-installers.sh.
+# Tests for tools/check-workflows.sh, check-release-version.sh, verify-installers.sh and third-party-notices.mjs.
 # Plain bash, temp dirs, no dependencies. Run: bash tools/test-release-scripts.sh
 set -uo pipefail
 
@@ -182,6 +182,27 @@ mkdir -p "$d"
 for n in "${names[@]}"; do : >"$d/$n"; done
 : >"$d/surprise.zip"
 assert_exit verify_installers_fails_on_an_unexpected_extra_file 1 "unexpected: surprise.zip" bash "$verify" "$ver" "$d"
+
+# --- third-party-notices.mjs (pure checks through --fixture; the full run needs cargo-about) ---
+notices="$root/tools/third-party-notices.mjs"
+
+d="$tmp/notices"
+mkdir -p "$d"
+cat >"$d/ok.json" <<'JSON'
+[{"name":"svelte","version":"5.0.0","license":"MIT","licenseText":"MIT License text"},
+ {"name":"@xterm/xterm","version":"6.0.0","license":"MIT","licenseText":"Copyright xterm"}]
+JSON
+cat >"$d/missing.json" <<'JSON'
+[{"name":"svelte","version":"5.0.0","license":"MIT","licenseText":"MIT License text"},
+ {"name":"@xterm/xterm","version":"6.0.0","license":"MIT"}]
+JSON
+cat >"$d/blank.json" <<'JSON'
+[{"name":"svelte","version":"5.0.0","license":"MIT","licenseText":"   "}]
+JSON
+assert_exit notices_accept_a_package_list_with_licence_texts 0 "### svelte 5.0.0 (MIT)" node "$notices" --fixture "$d/ok.json"
+assert_exit notices_fail_when_a_bundled_package_has_no_licence_text 1 "no licence text for: @xterm/xterm@6.0.0" node "$notices" --fixture "$d/missing.json"
+assert_exit notices_fail_when_a_licence_text_is_blank 1 "no licence text for: svelte@5.0.0" node "$notices" --fixture "$d/blank.json"
+assert_exit notices_fail_without_an_output_argument 1 "usage" node "$notices"
 
 echo
 echo "$((total - failures))/$total passed"

@@ -96,3 +96,20 @@ fn no_updater_and_no_signing_material() {
         assert!(!text.contains(key), "{key} must not appear in the conf");
     }
 }
+
+#[test]
+fn notices_are_a_bundle_resource() {
+    let conf = load("tauri.conf.json");
+    let resources = conf["bundle"]["resources"]
+        .as_array()
+        .expect("bundle.resources must be an array");
+    let relative = "resources/THIRD-PARTY-NOTICES.md";
+    assert!(
+        resources.iter().any(|r| r.as_str() == Some(relative)),
+        "bundle.resources must list {relative}: {resources:?}"
+    );
+    // tauri-build checks resource paths at compile time, so a committed placeholder must exist
+    // (the release build overwrites it with the generated notices).
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative);
+    assert!(path.is_file(), "missing resource {}", path.display());
+}

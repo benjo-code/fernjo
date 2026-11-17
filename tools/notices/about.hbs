@@ -1,0 +1,24 @@
+## Rust crates
+
+These crates are compiled into fernjo. Each licence text is followed by the crates that use it.
+
+### Licences used by Rust crates
+
+{{#each overview}}
+- [{{{name}}}](#{{id}}) ({{count}} crates)
+{{/each}}
+
+{{#each licenses}}
+### {{{name}}} <a id="{{id}}"></a>
+
+Used by:
+
+{{#each used_by}}
+- {{crate.name}} {{crate.version}}{{#if crate.repository}} ({{crate.repository}}){{/if}}
+{{/each}}
+
+```text
+{{{text}}}
+```
+
+{{/each}}

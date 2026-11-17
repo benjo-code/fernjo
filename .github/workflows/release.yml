@@ -21,6 +21,7 @@ on:
       - Cargo.toml
       - tools/**
       - about.toml
+      - src-tauri/resources/**
 
 # Untrusted values (the tag, release text, inputs) reach scripts only through env:. Jobs get
 # read access by default; only the publish job below raises it.
@@ -105,6 +106,17 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: ${{ matrix.name }}
+
+      # Pinned and --locked: a release must not pick up a newer, unreviewed tool. Cached by rust-cache.
+      - name: Install cargo-about
+        shell: bash
+        run: cargo install --locked cargo-about@0.9.3 --features cli
+
+      # Overwrites the committed placeholder; the file is bundled as a resource (see tauri.conf.json).
+      # Fails when a bundled package has no licence text or a crate has a licence outside deny.toml.
+      - name: Generate the third-party notices
+        shell: bash
+        run: node tools/third-party-notices.mjs src-tauri/resources/THIRD-PARTY-NOTICES.md
 
       # beforeBuildCommand in tauri.conf.json builds the UI.
       - name: Build the installers
