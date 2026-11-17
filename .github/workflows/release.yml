@@ -160,6 +160,25 @@ jobs:
             exit 1
           fi
 
+      # Installs or mounts the installer just built and proves it is usable (see the scripts).
+      - name: Smoke-test the installer (Linux and macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          arch=""
+          case "$TARGET" in
+            aarch64-apple-darwin) arch=arm64 ;;
+            x86_64-apple-darwin) arch=x86_64 ;;
+          esac
+          bash tools/smoke-installed.sh installers "$arch"
+
+      - name: Smoke-test the installer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./tools/smoke-installed.ps1 -Installers installers
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: installers-${{ matrix.name }}

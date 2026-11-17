@@ -208,6 +208,20 @@ assert_exit notices_accept_cargo_about_output_with_licence_sections 0 "" node "$
 assert_exit notices_fail_when_cargo_about_output_has_no_licence_section 1 "cargo about produced no licence sections" node "$notices" --check-rust "$d/rust-empty.md"
 assert_exit notices_fail_without_an_output_argument 1 "usage" node "$notices"
 
+# smoke-installed.*: only the safety stops are tested here; the installs run on the hosted runner.
+assert_exit smoke_sh_refuses_outside_github_actions 1 "refusing to run outside GitHub Actions" env -u GITHUB_ACTIONS bash "$root/tools/smoke-installed.sh" "$tmp"
+assert_exit smoke_sh_refuses_when_github_actions_is_not_true 1 "refusing to run outside GitHub Actions" env GITHUB_ACTIONS=false bash "$root/tools/smoke-installed.sh" "$tmp"
+assert_exit smoke_sh_needs_an_installers_dir_in_ci 2 "usage" env GITHUB_ACTIONS=true bash "$root/tools/smoke-installed.sh"
+ps=""
+for candidate in pwsh powershell; do
+  if command -v "$candidate" >/dev/null 2>&1; then ps="$candidate"; break; fi
+done
+if [ -n "$ps" ]; then
+  assert_exit smoke_ps1_refuses_outside_github_actions 1 "refusing to run outside GitHub Actions" env -u GITHUB_ACTIONS "$ps" -NoProfile -File "$root/tools/smoke-installed.ps1" -Installers "$tmp"
+else
+  echo "skip smoke_ps1_refuses_outside_github_actions: no PowerShell on PATH"
+fi
+
 echo
 echo "$((total - failures))/$total passed"
 [ "$failures" -eq 0 ]
