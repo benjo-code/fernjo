@@ -35,22 +35,42 @@ for f in "${files[@]}"; do
       return 0
     }
     # Flags every expression in text that mentions anything outside the allowlist, wherever
-    # in the expression it appears (also inside functions, and github[...] indexing).
-    function check_exprs(text,   e, s, id) {
-      while (match(text, /\$\{\{[^}]*\}\}/)) {
-        e = substr(text, RSTART + 3, RLENGTH - 5)
-        text = substr(text, RSTART + RLENGTH)
-        s = e
-        gsub(/\047[^\047]*\047/, "", s)
-        while (match(s, /[A-Za-z_][A-Za-z0-9_.-]*\[?/)) {
-          id = substr(s, RSTART, RLENGTH)
-          s = substr(s, RSTART + RLENGTH)
-          if (id ~ /\[$/ || !allowed(id)) {
-            gsub(/^[ ]+|[ ]+$/, "", e)
-            report("expression \"${{ " e " }}\" is not allowed inside run: pass it through env: instead")
-            break
-          }
+    # in the expression it appears (also inside functions, and github[...] indexing). The
+    # closing }} is found by walking the text with quote state, so a } inside a string literal
+    # (format(\047{0}\047, ...)) cannot hide an expression; an expression that never closes
+    # on the line is itself a violation (fail closed). Literals are blanked before the
+    # identifier scan; only format/contains/startsWith/endsWith may be called.
+    function check_exprs(text,   p, i, n, c, q, e, s, id, rest, nx, done, why) {
+      while ((p = index(text, "${{")) > 0) {
+        text = substr(text, p + 3)
+        n = length(text); q = 0; e = ""; s = ""; done = 0
+        for (i = 1; i <= n; i++) {
+          c = substr(text, i, 1)
+          if (c == "\047") { q = !q; e = e c; continue }
+          if (q) { e = e c; continue }
+          if (c == "}" && substr(text, i + 1, 1) == "}") { done = 1; break }
+          e = e c; s = s c
         }
+        gsub(/^[ ]+|[ ]+$/, "", e)
+        if (!done) {
+          report("expression \"${{ " e "\" is not closed on this line, cannot be checked; keep expressions in run: on one line or use env:")
+          return
+        }
+        text = substr(text, i + 2)
+        why = ""
+        while (match(s, /[A-Za-z_][A-Za-z0-9_.-]*/)) {
+          id = substr(s, RSTART, RLENGTH)
+          rest = substr(s, RSTART + RLENGTH)
+          s = rest
+          sub(/^[ ]+/, "", rest)
+          nx = substr(rest, 1, 1)
+          if (nx == "[") why = "indexing"
+          else if (nx == "(") { if (id !~ /^(format|contains|startsWith|endsWith)$/) why = "function" }
+          else if (!allowed(id)) why = "context"
+          if (why != "") break
+        }
+        if (why != "")
+          report("expression \"${{ " e " }}\" is not allowed inside run: pass it through env: instead")
       }
     }
     BEGIN { in_run = 0; has_perm = 0 }

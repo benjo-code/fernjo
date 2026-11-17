@@ -118,6 +118,22 @@ mkdir -p "$d"
 good_workflow | awk '/echo "\$TAG"/ { print "          echo \"${{ matrix.os }} ${{ runner.os }} ${{ env.X }} ${{ secrets.S }} ${{ github.event_name }} ${{ github.sha }} ${{ github.repository }} ${{ github.workspace }}\""; next } { print }' >"$d/w.yml"
 assert_exit check_workflows_allows_safe_run_expressions 0 "" bash "$check_workflows" "$d"
 
+# A } inside a quoted literal must not hide the expression; unterminated expressions fail closed.
+run_expr_case format_literal_brace "format('{0}', github.ref_name)"
+run_expr_case format_literal_brace_text "format('x{0}y', github.ref_name)"
+run_expr_case disallowed_function "toJSON(matrix)"
+run_expr_case index_after_space "github ['event']"
+
+d="$tmp/wf-expr-unterminated"
+mkdir -p "$d"
+good_workflow | awk '/echo "\$TAG"/ { print "          echo ${{ github.head_ref"; next } { print }' >"$d/w.yml"
+assert_exit check_workflows_rejects_an_unterminated_run_expression 1 "not closed on this line" bash "$check_workflows" "$d"
+
+d="$tmp/wf-expr-allowed-literal"
+mkdir -p "$d"
+good_workflow | awk '/echo "\$TAG"/ { print "          echo \"${{ format('"'"'{0}-{1}'"'"', matrix.os, runner.arch) }} ${{ contains(matrix.os, '"'"'win}}'"'"') }} ${{ startsWith(runner.os, '"'"'L'"'"') }}\""; next } { print }' >"$d/w.yml"
+assert_exit check_workflows_allows_functions_and_literals_over_allowed_identifiers 0 "" bash "$check_workflows" "$d"
+
 # --- check-release-version.sh ---
 check_version="$root/tools/check-release-version.sh"
 cur="$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version *= *"\(.*\)"/\1/p;}' "$root/Cargo.toml" | head -n 1)"
