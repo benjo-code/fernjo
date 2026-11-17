@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from "svelte";
   import { tauriApi, toApiError } from "./lib/api";
-  import DataFolderDialog from "./lib/components/DataFolderDialog.svelte";
+  import SettingsDialog from "./lib/components/SettingsDialog.svelte";
   import ImportDialog from "./lib/components/ImportDialog.svelte";
   import PropertiesPanel from "./lib/components/PropertiesPanel.svelte";
   import SessionArea from "./lib/components/SessionArea.svelte";
@@ -178,7 +178,7 @@
 </div>
 
 {#if folderOpen}
-  <DataFolderDialog
+  <SettingsDialog
     {api}
     {terminal}
     onclose={() => (folderOpen = false)}

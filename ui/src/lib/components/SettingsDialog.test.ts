@@ -3,8 +3,8 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { TerminalSettingsStore } from "../terminal-settings.svelte";
 import { apiError, dataFolder, deferred, mockApi, terminalSettings } from "../testing";
 import type { Api, DataFolderInfo } from "../types";
-import DataFolderDialog from "./DataFolderDialog.svelte";
-import dialogSource from "./DataFolderDialog.svelte?raw";
+import SettingsDialog from "./SettingsDialog.svelte";
+import dialogSource from "./SettingsDialog.svelte?raw";
 
 let mounted: ReturnType<typeof mount> | null = null;
 
@@ -24,7 +24,7 @@ async function setup(impl: Partial<Api> = {}) {
   const m = mockApi([], impl);
   const onclose = vi.fn();
   const onchange = vi.fn();
-  mounted = mount(DataFolderDialog, {
+  mounted = mount(SettingsDialog, {
     target: document.body,
     props: { api: m.api, terminal: new TerminalSettingsStore(m.api), onclose, onchange },
   });
@@ -37,7 +37,7 @@ const button = (label: string) =>
 const primaries = () => document.querySelectorAll("button.primary");
 const alert = () => document.querySelector("[role=alert]");
 
-describe("DataFolderDialog", () => {
+describe("SettingsDialog", () => {
   test("shows_current_path_and_source", async () => {
     const { calls } = await setup({
       getDataFolder: async () => dataFolder({ path: "C:\\data\\fernjo", source: "settings" }),
@@ -123,7 +123,7 @@ describe("DataFolderDialog", () => {
   test("loading_state_is_neutral_until_the_info_arrives", async () => {
     const d = deferred<DataFolderInfo>();
     const m = mockApi([], { getDataFolder: () => d.promise });
-    mounted = mount(DataFolderDialog, {
+    mounted = mount(SettingsDialog, {
       target: document.body,
       props: {
         api: m.api,
