@@ -95,6 +95,29 @@ expr_input='s|echo "\$TAG"|echo "${{ inputs.tag }}"|'
 d="$(bad_fixture inlineinput "$expr_input")"
 assert_exit check_workflows_rejects_inline_inputs_in_run 1 "inputs" bash "$check_workflows" "$d"
 
+# Every form below must be rejected inside run:, whatever the expression starts with.
+run_expr_case() { # <name> <expression>
+  local e="$2"
+  local d="$tmp/wf-expr-$1"
+  mkdir -p "$d"
+  good_workflow | awk -v e="$e" '/echo "\$TAG"/ { sub(/echo "\$TAG"/, "echo \"${{ " e " }}\"") } { print }' >"$d/w.yml"
+  assert_exit "check_workflows_rejects_run_expression_$1" 1 "not allowed inside run:" bash "$check_workflows" "$d"
+}
+run_expr_case head_ref 'github.head_ref'
+run_expr_case ref_name 'github.ref_name'
+run_expr_case ref 'github.ref'
+run_expr_case base_ref 'github.base_ref'
+run_expr_case tojson_event 'toJSON(github.event)'
+run_expr_case bracket "github['event']['release']['tag_name']"
+run_expr_case needs_output 'needs.x.outputs.y'
+run_expr_case steps_output 'steps.x.outputs.y'
+run_expr_case nested_event 'format(x, github.event.release.body)'
+
+d="$tmp/wf-expr-allowed"
+mkdir -p "$d"
+good_workflow | awk '/echo "\$TAG"/ { print "          echo \"${{ matrix.os }} ${{ runner.os }} ${{ env.X }} ${{ secrets.S }} ${{ github.event_name }} ${{ github.sha }} ${{ github.repository }} ${{ github.workspace }}\""; next } { print }' >"$d/w.yml"
+assert_exit check_workflows_allows_safe_run_expressions 0 "" bash "$check_workflows" "$d"
+
 # --- check-release-version.sh ---
 check_version="$root/tools/check-release-version.sh"
 cur="$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version *= *"\(.*\)"/\1/p;}' "$root/Cargo.toml" | head -n 1)"

@@ -5,8 +5,10 @@
 #   - mentions self-hosted runners,
 #   - triggers on pull_request_target,
 #   - has no top-level `permissions:`,
-#   - interpolates ${{ github.event.* }} or ${{ inputs.* }} inside a `run:` script
-#     (such values must go through `env:`).
+#   - uses a ${{ }} expression inside a `run:` script that mentions, anywhere in it, anything but
+#     matrix.*, runner.*, env.*, secrets.*, github.event_name, github.sha, github.repository or
+#     github.workspace (so github.event.*, inputs.*, github.head_ref, github.ref_name, github.ref,
+#     steps.* / needs.* outputs and github[...] indexing must go through `env:`).
 set -euo pipefail
 
 dir="${1:-.github/workflows}"
@@ -21,6 +23,36 @@ status=0
 for f in "${files[@]}"; do
   out="$(awk -v file="$f" '
     function report(msg) { printf "%s:%d: %s\n", file, NR, msg; bad = 1 }
+    function pinned(v,   h) {
+      if (v !~ /@[0-9a-f]+$/) return 0
+      h = v; sub(/^.*@/, "", h)
+      return length(h) == 40
+    }
+    function allowed(id) {
+      if (id ~ /^(matrix|runner|env|secrets)\.[A-Za-z0-9_.-]+$/) return 1
+      if (id == "github.event_name" || id == "github.sha" || id == "github.repository" || id == "github.workspace") return 1
+      if (id == "true" || id == "false" || id == "null") return 1
+      return 0
+    }
+    # Flags every expression in text that mentions anything outside the allowlist, wherever
+    # in the expression it appears (also inside functions, and github[...] indexing).
+    function check_exprs(text,   e, s, id) {
+      while (match(text, /\$\{\{[^}]*\}\}/)) {
+        e = substr(text, RSTART + 3, RLENGTH - 5)
+        text = substr(text, RSTART + RLENGTH)
+        s = e
+        gsub(/\047[^\047]*\047/, "", s)
+        while (match(s, /[A-Za-z_][A-Za-z0-9_.-]*\[?/)) {
+          id = substr(s, RSTART, RLENGTH)
+          s = substr(s, RSTART + RLENGTH)
+          if (id ~ /\[$/ || !allowed(id)) {
+            gsub(/^[ ]+|[ ]+$/, "", e)
+            report("expression \"${{ " e " }}\" is not allowed inside run: pass it through env: instead")
+            break
+          }
+        }
+      }
+    }
     BEGIN { in_run = 0; has_perm = 0 }
     {
       line = $0
@@ -36,7 +68,7 @@ for f in "${files[@]}"; do
         sub(/^[ ]*(- )?uses:[ ]*/, "", v)
         gsub(/["\047]/, "", v)
         sub(/[ ]+#.*$/, "", v)
-        if (v !~ /^\.\// && v !~ /@[0-9a-f]{40}$/)
+        if (v !~ /^\.\// && !pinned(v))
           report("action \"" v "\" is not pinned to a 40-character commit SHA")
       }
       if (line ~ /self-hosted/) report("self-hosted runners are not allowed")
@@ -48,12 +80,10 @@ for f in "${files[@]}"; do
         rest = line
         sub(/^[ ]*(- )?run:[ ]*/, "", rest)
         if (rest ~ /^[|>][-+0-9]*[ ]*$/) in_run = 1
-        else if (rest ~ /\$\{\{[ ]*(github\.event\.|inputs\.)/)
-          report("${{ github.event.* }} / ${{ inputs.* }} inside run: pass it through env: instead")
+        else check_exprs(rest)
         next
       }
-      if (in_run && line ~ /\$\{\{[ ]*(github\.event\.|inputs\.)/)
-        report("${{ github.event.* }} / ${{ inputs.* }} inside run: pass it through env: instead")
+      if (in_run) check_exprs(line)
     }
     END { if (!has_perm) { printf "%s:1: no top-level permissions: block\n", file; bad = 1 } exit bad }
   ' "$f")" || status=1
