@@ -3,6 +3,7 @@
 //
 //   node tools/third-party-notices.mjs <out-file>
 //   node tools/third-party-notices.mjs --fixture <packages.json>   (checks a package list only)
+//   node tools/third-party-notices.mjs --check-rust <file.md>       (checks cargo-about output has sections)
 //
 // The Rust part comes from `cargo about generate tools/notices/about.hbs` (about.toml accepts only
 // the licences deny.toml allows; cargo-about fails on anything else). The UI part covers the npm
@@ -58,6 +59,12 @@ export function renderUiNotices(packages) {
   return parts.join("\n");
 }
 
+// Pure: the cargo-about output must contain at least one licence section.
+export function checkRustNotices(text) {
+  if (!/^### /m.test(text)) throw new Error("cargo about produced no licence sections");
+  return text;
+}
+
 function licenseFiles(dir) {
   return readdirSync(dir)
     .filter((f) => /^(licen[cs]e|copying)([-_.].*)?$/i.test(f) && !/\.spdx$/i.test(f))
@@ -108,6 +115,11 @@ function main(argv) {
     process.stdout.write(renderUiNotices(JSON.parse(readFileSync(argv[1], "utf8"))));
     return;
   }
+  if (argv[0] === "--check-rust") {
+    if (!argv[1]) throw new Error("usage: third-party-notices.mjs --check-rust <cargo-about-output.md>");
+    checkRustNotices(readFileSync(argv[1], "utf8"));
+    return;
+  }
   if (argv.length !== 1 || argv[0].startsWith("-")) {
     throw new Error("usage: third-party-notices.mjs <out-file> | --fixture <packages.json>");
   }
@@ -119,7 +131,7 @@ function main(argv) {
   try {
     const file = join(tmp, "rust.md");
     run("cargo", ["about", "generate", "--workspace", "--locked", "--fail", "-o", file, "tools/notices/about.hbs"]);
-    rust = readFileSync(file, "utf8");
+    rust = checkRustNotices(readFileSync(file, "utf8"));
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

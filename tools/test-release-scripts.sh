@@ -202,6 +202,10 @@ JSON
 assert_exit notices_accept_a_package_list_with_licence_texts 0 "### svelte 5.0.0 (MIT)" node "$notices" --fixture "$d/ok.json"
 assert_exit notices_fail_when_a_bundled_package_has_no_licence_text 1 "no licence text for: @xterm/xterm@6.0.0" node "$notices" --fixture "$d/missing.json"
 assert_exit notices_fail_when_a_licence_text_is_blank 1 "no licence text for: svelte@5.0.0" node "$notices" --fixture "$d/blank.json"
+printf '## Rust crates\n\n### MIT License\n' >"$d/rust-ok.md"
+printf '## Rust crates\n\nnothing\n' >"$d/rust-empty.md"
+assert_exit notices_accept_cargo_about_output_with_licence_sections 0 "" node "$notices" --check-rust "$d/rust-ok.md"
+assert_exit notices_fail_when_cargo_about_output_has_no_licence_section 1 "cargo about produced no licence sections" node "$notices" --check-rust "$d/rust-empty.md"
 assert_exit notices_fail_without_an_output_argument 1 "usage" node "$notices"
 
 echo
