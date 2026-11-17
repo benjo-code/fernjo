@@ -49,3 +49,50 @@ fn default_capability_is_core_only() {
     assert_eq!(cap["permissions"], serde_json::json!(["core:default"]));
     assert_eq!(cap["windows"], serde_json::json!(["main"]));
 }
+
+#[test]
+fn bundle_is_active_with_exactly_the_planned_targets() {
+    let conf = load("tauri.conf.json");
+    assert_eq!(conf["bundle"]["active"], Value::Bool(true));
+    assert_eq!(
+        conf["bundle"]["targets"],
+        serde_json::json!(["nsis", "dmg", "appimage", "deb"])
+    );
+}
+
+#[test]
+fn bundle_icons_exist_on_disk() {
+    let conf = load("tauri.conf.json");
+    let icons = conf["bundle"]["icon"]
+        .as_array()
+        .expect("bundle.icon must be an array");
+    assert!(!icons.is_empty(), "bundle.icon must not be empty");
+    for icon in icons {
+        let relative = icon.as_str().expect("bundle.icon entries are strings");
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative);
+        assert!(path.is_file(), "missing icon {}", path.display());
+    }
+}
+
+#[test]
+fn version_comes_from_cargo_not_from_the_conf() {
+    let conf = load("tauri.conf.json");
+    assert!(
+        conf.get("version").is_none(),
+        "tauri.conf.json must not set a version; Cargo.toml is the single source"
+    );
+}
+
+#[test]
+fn no_updater_and_no_signing_material() {
+    let conf = load("tauri.conf.json");
+    assert!(conf["plugins"]["updater"].is_null(), "no updater plugin");
+    assert!(
+        conf["bundle"]["createUpdaterArtifacts"].is_null(),
+        "no updater artifacts"
+    );
+    let text = serde_json::to_string(&conf).unwrap();
+    for key in ["signCommand", "signingIdentity", "certificateThumbprint"] {
+        assert!(!text.contains(key), "{key} must not appear in the conf");
+    }
+}
