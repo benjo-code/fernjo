@@ -11,12 +11,14 @@ export class TerminalSettingsStore {
     this.#api = api;
   }
 
-  /** Reads the settings from Rust; a failure leaves `info` as it was. */
-  async load(): Promise<void> {
+  /** Reads the settings from Rust; a failure leaves `info` as it was. `false` when it failed. */
+  async load(): Promise<boolean> {
     try {
       this.info = await this.#api.getTerminalSettings();
+      return true;
     } catch {
       // callers fall back to defaults
+      return false;
     }
   }
 

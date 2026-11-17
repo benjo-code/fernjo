@@ -15,6 +15,8 @@ import type {
   SessionEvent,
   Snapshot,
   TerminalSettings,
+  Theme,
+  ThemeInfo,
   TreeNode,
   VaultStatus,
 } from "./types";
@@ -87,6 +89,10 @@ export function dataFolder(partial: Partial<DataFolderInfo> = {}): DataFolderInf
 
 export function terminalSettings(partial: Partial<TerminalSettings> = {}): TerminalSettings {
   return { fontFamily: null, fontSize: 14, scrollback: 10000, persistent: true, ...partial };
+}
+
+export function themeInfo(partial: Partial<ThemeInfo> = {}): ThemeInfo {
+  return { theme: "system", persistent: true, ...partial };
 }
 
 export function report(partial: Partial<Report> = {}): Report {
@@ -164,6 +170,8 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     openExternalUrl: [],
     getTerminalSettings: [],
     setTerminalSettings: [],
+    getTheme: [],
+    setTheme: [],
     importPick: [],
     importInspect: [],
     importApply: [],
@@ -324,6 +332,14 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
       return impl.setTerminalSettings
         ? impl.setTerminalSettings(...args)
         : terminalSettings(args[0]);
+    },
+    getTheme: async () => {
+      calls.getTheme.push([]);
+      return impl.getTheme ? impl.getTheme() : themeInfo();
+    },
+    setTheme: async (...args) => {
+      calls.setTheme.push(args);
+      return impl.setTheme ? impl.setTheme(...args) : themeInfo({ theme: args[0] as Theme });
     },
     importPick: async (...args) => {
       calls.importPick.push(args);

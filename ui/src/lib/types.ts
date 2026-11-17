@@ -215,6 +215,8 @@ export interface Api {
     fontSize: number;
     scrollback: number;
   }): Promise<TerminalSettings>;
+  getTheme(): Promise<ThemeInfo>;
+  setTheme(theme: Theme): Promise<ThemeInfo>;
   /** Opens the native file picker; `null` when it was cancelled. */
   importPick(kind: ImportKind): Promise<PickedFile | null>;
   /** The secret is an mRemoteNG key or a backup password; the only secret that goes in. */
@@ -330,6 +332,14 @@ export type PromptAnswer =
   | { kind: "secrets"; values: string[] }
   | { kind: "text"; value: string }
   | { kind: "cancel" };
+
+export type Theme = "system" | "light" | "dark";
+
+export interface ThemeInfo {
+  theme: Theme;
+  /** `false` when the choice only lives in memory. */
+  persistent: boolean;
+}
 
 export interface TerminalSettings {
   /** `null` means the default monospace stack. */

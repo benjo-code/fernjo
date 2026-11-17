@@ -1,12 +1,18 @@
 import { flushSync, mount, tick, unmount } from "svelte";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { TerminalSettingsStore } from "../terminal-settings.svelte";
-import { apiError, dataFolder, deferred, mockApi, terminalSettings } from "../testing";
+import { ThemeStore } from "../theme.svelte";
+import { apiError, dataFolder, deferred, mockApi, terminalSettings, themeInfo } from "../testing";
 import type { Api, DataFolderInfo } from "../types";
 import SettingsDialog from "./SettingsDialog.svelte";
 import dialogSource from "./SettingsDialog.svelte?raw";
 
 let mounted: ReturnType<typeof mount> | null = null;
+
+beforeEach(() => {
+  delete document.documentElement.dataset.theme;
+  localStorage.clear();
+});
 
 afterEach(() => {
   if (mounted) unmount(mounted);
@@ -26,7 +32,13 @@ async function setup(impl: Partial<Api> = {}) {
   const onchange = vi.fn();
   mounted = mount(SettingsDialog, {
     target: document.body,
-    props: { api: m.api, terminal: new TerminalSettingsStore(m.api), onclose, onchange },
+    props: {
+      api: m.api,
+      terminal: new TerminalSettingsStore(m.api),
+      theme: new ThemeStore(m.api),
+      onclose,
+      onchange,
+    },
   });
   await settle();
   return { ...m, onclose, onchange };
@@ -128,6 +140,7 @@ describe("SettingsDialog", () => {
       props: {
         api: m.api,
         terminal: new TerminalSettingsStore(m.api),
+        theme: new ThemeStore(m.api),
         onclose: () => {},
         onchange: () => {},
       },
@@ -352,6 +365,112 @@ describe("SettingsDialog", () => {
     mounted = null;
     await tick();
     expect(document.activeElement).toBe(opener);
+  });
+});
+
+describe("appearance", () => {
+  const radios = () => [...document.querySelectorAll<HTMLInputElement>("input[type=radio]")];
+  const radio = (label: string) => radios().find((r) => r.value === label)!;
+
+  test("appearance_shows_system_light_dark_as_a_radio_group_with_the_current_choice", async () => {
+    await setup({ getTheme: async () => themeInfo({ theme: "light" }) });
+    const group = document.querySelector("[role=radiogroup]")!;
+    expect(group.getAttribute("aria-label")).toBe("Theme");
+    expect(radios().map((r) => r.value)).toEqual(["system", "light", "dark"]);
+    expect(radio("light").checked).toBe(true);
+    expect(radio("dark").checked).toBe(false);
+    expect(document.body.textContent).toContain("Appearance");
+  });
+
+  test("choosing_a_theme_applies_it_at_once", async () => {
+    const { calls } = await setup();
+    radio("dark").click();
+    await settle();
+    expect(calls.setTheme).toEqual([["dark"]]);
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(radio("dark").checked).toBe(true);
+  });
+
+  test("a_rejected_theme_shows_an_error_and_keeps_the_old_choice", async () => {
+    await setup({
+      getTheme: async () => themeInfo({ theme: "light" }),
+      setTheme: async () => {
+        throw apiError("settings_write_failed", "rust text");
+      },
+    });
+    radio("dark").click();
+    await settle();
+    expect(alert()?.textContent).toBe("Could not save the theme");
+    expect(document.documentElement.dataset.theme).toBe("light");
+    expect(radio("light").checked).toBe(true);
+  });
+
+  test("a_memory_only_theme_says_it_is_not_remembered", async () => {
+    const note = "Applies to this run only; settings are not saved while FERNJO_DATA_DIR is set";
+    await setup({ getTheme: async () => themeInfo({ persistent: false }) });
+    // the terminal section is persistent here, so the note comes from the appearance section
+    expect(document.body.textContent).toContain(note);
+    unmount(mounted!);
+    mounted = null;
+    document.body.innerHTML = "";
+    await setup();
+    expect(document.body.textContent).not.toContain(note);
+  });
+});
+
+describe("terminal section follow-ups", () => {
+  const field = (label: string) =>
+    document.querySelector<HTMLInputElement>(`input[aria-label='${label}']`)!;
+  const type = (el: HTMLInputElement, value: string) => {
+    el.value = value;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+
+  test("saved_note_disappears_when_a_terminal_field_is_edited", async () => {
+    await setup();
+    button("Save").click();
+    await settle();
+    expect(document.querySelector("[role=status]")?.textContent).toBe("Saved");
+    type(field("Font size"), "16");
+    await settle();
+    expect(document.querySelector("[role=status]")).toBeNull();
+  });
+
+  test("a_late_load_does_not_overwrite_what_the_user_already_typed", async () => {
+    const d = deferred<ReturnType<typeof terminalSettings>>();
+    await setup({ getTerminalSettings: () => d.promise });
+    type(field("Font size"), "21");
+    d.resolve(terminalSettings({ fontSize: 15, scrollback: 4000 }));
+    await settle();
+    expect(field("Font size").value).toBe("21");
+    // untouched fields still take the loaded value
+    expect(field("Scrollback").value).toBe("4000");
+  });
+
+  test("a_failed_load_shows_an_error_and_keeps_save_disabled", async () => {
+    const { calls } = await setup({
+      getTerminalSettings: async () => {
+        throw apiError("internal", "boom");
+      },
+    });
+    expect(alert()?.textContent).toBe("Could not load the terminal settings");
+    expect(button("Save").getAttribute("aria-disabled")).toBe("true");
+    button("Save").click();
+    await settle();
+    expect(calls.setTerminalSettings).toHaveLength(0);
+  });
+
+  test("enter_during_ime_composition_does_not_submit", async () => {
+    const { calls } = await setup();
+    const input = field("Font family");
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true }),
+    );
+    await settle();
+    expect(calls.setTerminalSettings).toHaveLength(0);
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await settle();
+    expect(calls.setTerminalSettings).toHaveLength(1);
   });
 });
 
