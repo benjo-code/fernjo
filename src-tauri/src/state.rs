@@ -13,6 +13,7 @@ use fernjo_vault::{
 };
 
 use crate::commands::CommandError;
+use crate::import_commands::Pending;
 use crate::sessions::SessionManager;
 
 /// Why the data could not be opened. Every command reports this until the app restarts.
@@ -67,6 +68,8 @@ pub struct AppState {
     pub terminal: Mutex<TerminalPrefs>,
     /// The open terminal sessions.
     pub sessions: SessionManager,
+    /// The import or restore that waits for inspect/apply (one at a time).
+    pub pending: Mutex<Option<Pending>>,
 }
 
 /// Debug output never includes the vault, the key store or the connection data.
@@ -213,6 +216,7 @@ impl AppState {
             pending_data_dir: Mutex::new(None),
             terminal: Mutex::new(TerminalPrefs::default()),
             sessions: SessionManager::default(),
+            pending: Mutex::new(None),
         }
     }
 
@@ -220,6 +224,15 @@ impl AppState {
     pub(crate) fn set_restart_required(&self, value: bool) {
         self.restart_required
             .store(value, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Drops the pending import or restore (every page load does this, next to closing the
+    /// sessions); a poisoned lock is recovered.
+    pub fn clear_pending(&self) {
+        *self
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 
     /// The vault's state as commands report it.

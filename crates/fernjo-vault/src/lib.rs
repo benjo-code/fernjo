@@ -8,6 +8,7 @@ mod entry;
 mod error;
 mod format;
 mod keystore;
+mod sealed;
 mod vault;
 
 pub use crypto::DataKey;
@@ -17,4 +18,5 @@ pub use format::{FILE_NAME, KdfParams};
 pub use keystore::{
     AutoUnlock, KeyStore, KeyStoreError, MemoryKeyStore, OsKeyStore, try_auto_unlock,
 };
+pub use sealed::{SealedError, open_with_password, seal_with_password};
 pub use vault::{Vault, VaultId};

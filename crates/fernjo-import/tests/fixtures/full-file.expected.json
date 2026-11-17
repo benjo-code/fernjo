@@ -1,0 +1,144 @@
+[
+  {
+    "kind": "container",
+    "name": "Servers",
+    "description": "All the servers",
+    "hostname": "",
+    "protocol": "",
+    "port": 3389,
+    "username": "admin",
+    "domain": "CORP",
+    "password": "folder-pw-1",
+    "passwordError": false,
+    "inherit": {
+      "username": false,
+      "password": false,
+      "domain": false,
+      "port": false
+    },
+    "puttySession": "",
+    "children": [
+      {
+        "kind": "connection",
+        "name": "web1",
+        "description": "Front \u003Cweb\u003E \u0026 \u0022proxy\u0022",
+        "hostname": "web1.example.com",
+        "protocol": "SSH2",
+        "port": 22,
+        "username": "root",
+        "domain": "",
+        "password": "p@ss\u003C\u0026\u003E\u0022\u0027\\",
+        "passwordError": false,
+        "inherit": {
+          "username": false,
+          "password": false,
+          "domain": false,
+          "port": false
+        },
+        "puttySession": "Default Settings",
+        "children": []
+      },
+      {
+        "kind": "connection",
+        "name": "rdp1",
+        "description": "",
+        "hostname": "10.0.0.5",
+        "protocol": "RDP",
+        "port": 3389,
+        "username": "",
+        "domain": "",
+        "password": null,
+        "passwordError": false,
+        "inherit": {
+          "username": true,
+          "password": true,
+          "domain": true,
+          "port": true
+        },
+        "puttySession": "",
+        "children": []
+      },
+      {
+        "kind": "container",
+        "name": "Nested",
+        "description": "",
+        "hostname": "",
+        "protocol": "",
+        "port": 3389,
+        "username": "",
+        "domain": "",
+        "password": null,
+        "passwordError": false,
+        "inherit": {
+          "username": true,
+          "password": true,
+          "domain": true,
+          "port": true
+        },
+        "puttySession": "",
+        "children": [
+          {
+            "kind": "connection",
+            "name": "db",
+            "description": "database",
+            "hostname": "db.example.com",
+            "protocol": "SSH2",
+            "port": 2222,
+            "username": "dbadmin",
+            "domain": "EXAMPLE",
+            "password": null,
+            "passwordError": false,
+            "inherit": {
+              "username": false,
+              "password": true,
+              "domain": false,
+              "port": false
+            },
+            "puttySession": "MySession",
+            "children": []
+          },
+          {
+            "kind": "connection",
+            "name": "vnc1",
+            "description": "",
+            "hostname": "10.0.0.9",
+            "protocol": "VNC",
+            "port": 5900,
+            "username": "",
+            "domain": "",
+            "password": "vnc-pw",
+            "passwordError": false,
+            "inherit": {
+              "username": false,
+              "password": false,
+              "domain": false,
+              "port": false
+            },
+            "puttySession": "",
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "kind": "connection",
+    "name": "jump",
+    "description": "",
+    "hostname": "jump.example.com",
+    "protocol": "SSH2",
+    "port": 22,
+    "username": "jumper",
+    "domain": "",
+    "password": "Gr\u00FC\u00DFe, \u4E16\u754C \u2013 \uD83D\uDD10",
+    "passwordError": false,
+    "inherit": {
+      "username": false,
+      "password": false,
+      "domain": false,
+      "port": false
+    },
+    "puttySession": "",
+    "children": []
+  }
+]

@@ -1,6 +1,7 @@
 mod commands;
 mod connect_plan;
 mod data_folder;
+mod import_commands;
 mod session_commands;
 mod session_flow;
 mod sessions;
@@ -40,7 +41,10 @@ pub fn run() {
             if webview.label() == "main"
                 && matches!(payload.event(), tauri::webview::PageLoadEvent::Started)
             {
-                webview.state::<AppState>().sessions.close_all();
+                let state = webview.state::<AppState>();
+                state.sessions.close_all();
+                // a picked or inspected import must not outlive the page that asked for it
+                state.clear_pending();
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -79,6 +83,12 @@ pub fn run() {
             session_commands::handlers::answer_prompt,
             session_commands::handlers::resume_session,
             session_commands::handlers::open_external_url,
+            import_commands::handlers::import_pick,
+            import_commands::handlers::import_inspect,
+            import_commands::handlers::import_apply,
+            import_commands::handlers::import_cancel,
+            import_commands::handlers::export_connections,
+            import_commands::handlers::export_backup,
         ])
         .run(tauri::generate_context!())
         .expect("error while running fernjo");

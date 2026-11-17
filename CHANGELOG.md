@@ -23,6 +23,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 - Host key verification (M4): fernjo's own OpenSSH-format `known_hosts` in the data folder; a first-contact fingerprint prompt (trust always or once) and a blocking warning when a stored key changes.
 - Terminal settings (M4): font family, font size and scrollback in the Settings dialog (the gear in the sidebar), applied live and stored in `settings.json`.
 - App shortcuts (M4): tab switching, close tab, filter, terminal search, copy and paste that leave the terminal's own keys alone; listed in the README.
+- Import and backup (M5): import connections and passwords from mRemoteNG (confCons.xml, version 2.6); export connections as JSON; encrypted full backup and restore (formats in `Docs/backup-format.md`).
 - Double-clicking a folder in the tree expands or collapses it (M4).
 
 ### Changed

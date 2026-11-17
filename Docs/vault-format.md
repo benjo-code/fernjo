@@ -1,6 +1,6 @@
 # `vault.fernjo` file format
 
-Format version **1**. The vault is one binary file in the data folder (`vault.fernjo`, plus `vault.fernjo.bak` from the previous save). This page is enough to write a reader without the fernjo source (no lock-in). Implementation: `crates/fernjo-vault`.
+Format version **1**. The vault is one binary file in the data folder (`vault.fernjo`, plus `vault.fernjo.bak` from the previous save). This page is enough to write a reader without the fernjo source (no lock-in). Implementation: `crates/fernjo-vault`. The encrypted backup of Milestone 5 uses the same primitives in a separate, simpler container (`seal_with_password` in `crates/fernjo-vault`, no wrapped data key); it is described in [backup-format.md](backup-format.md).
 
 ## Primitives
 

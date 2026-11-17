@@ -11,20 +11,23 @@ pub mod store;
 pub mod tree;
 
 pub use conflicts::find_conflicts;
-pub use error::{LoadError, SaveError, StoreError, TreeError};
+pub use error::{DocumentError, LoadError, SaveError, StoreError, TreeError};
 pub use model::{
     CredentialId, DEFAULT_KEEPALIVE_SECS, DEFAULT_RDP_PORT, DEFAULT_SSH_PORT, Field, Node, NodeId,
     NodeKind, NodeType, Protocol, ResolvedNode, Settings, Source,
 };
 pub use paths::{DATA_DIR_ENV, DataDirSource, Location, locate, locate_from};
-pub use persist::{CURRENT_VERSION, FILE_NAME, Loaded, Notice, load, migrate_with, save};
+pub use persist::{
+    CURRENT_VERSION, FILE_NAME, Loaded, Notice, document, load, migrate_with, parse_document, save,
+    write_exact,
+};
 pub use resolve::resolve;
 pub use settings::{
     AppSettings, DEFAULT_FONT_SIZE, DEFAULT_SCROLLBACK, FONT_SIZE_RANGE, SCROLLBACK_RANGE,
     TerminalPrefs,
 };
 pub use store::{Opened, Store};
-pub use tree::{NodePatch, Patch, Tree};
+pub use tree::{MAX_TREE_DEPTH, NodePatch, Patch, Tree, subtree_depth};
 
 /// Returns the crate version.
 pub fn version() -> &'static str {

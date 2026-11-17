@@ -614,6 +614,10 @@ pub mod handlers {
 mod tests {
     use super::*;
     use crate::commands::{self, CommandError};
+    use crate::import_commands::{
+        ApplyOptions, ImportKind, export_backup_to, export_connections_to, import_apply,
+        import_begin, import_cancel, import_inspect,
+    };
     use fernjo_core::{NodeId, Protocol};
     use fernjo_vault::{AutoUnlock, DataKey, KeyStore, KeyStoreError, Vault, VaultId};
     use secrecy::SecretString;
@@ -628,6 +632,37 @@ mod tests {
     const KEY: &str = "SENTINEL-privatekey-9c1b2d";
     const PASS: &str = "SENTINEL-passphrase-4d2e8f";
     const SENTINELS: [&str; 5] = [MASTER, NEW_MASTER, PW, KEY, PASS];
+    // Import and export: the passwords inside the mRemoteNG fixtures (stored encrypted in the
+    // files), the custom file key and the backup password.
+    const DEFAULT_KEY_XML: &[u8] =
+        include_bytes!("../../crates/fernjo-import/tests/fixtures/default-key.xml");
+    const CUSTOM_KEY_XML: &[u8] =
+        include_bytes!("../../crates/fernjo-import/tests/fixtures/custom-key.xml");
+    const CUSTOM_KEY: &str = "fixture-key-ünï";
+    const EXPORT_PW: &str = "SENTINEL-exportpw-3c9d1e";
+    // Wrongly typed keys and passwords are secrets too: an error that echoes one is a leak.
+    const WRONG_KEY: &str = "SENTINEL-wrongkey-8a1f";
+    const WRONG_PW: &str = "SENTINEL-wrongpw-2b7c";
+    // The other passwords of the fixtures: the one with XML and shell metacharacters, whole and
+    // as the part that no escaping changes (JSON and `Debug` escape the quote and the
+    // backslash), and the Unicode one the same way. `vnc-pw` sits on a VNC node, which is
+    // skipped, so it is never imported; the three others are, and the flow test proves it.
+    const META_PW: &str = "p@ss<&>\"'\\";
+    const META_PW_PART: &str = "p@ss<&>";
+    const UNICODE_PW: &str = "Gr\u{fc}\u{df}e, \u{4e16}\u{754c} \u{2013} \u{1f510}";
+    const UNICODE_PW_PART: &str = "Gr\u{fc}\u{df}e, \u{4e16}\u{754c}";
+    const IMPORT_SECRETS: [&str; 10] = [
+        "folder-pw-1",
+        "vnc-pw",
+        META_PW,
+        META_PW_PART,
+        UNICODE_PW,
+        UNICODE_PW_PART,
+        CUSTOM_KEY,
+        EXPORT_PW,
+        WRONG_KEY,
+        WRONG_PW,
+    ];
 
     fn sec(s: &str) -> SecretString {
         SecretString::from(s)
@@ -1420,6 +1455,51 @@ mod tests {
                 let r = j(crate::session_commands::resume_session(&w.st, &id, true));
                 format!("{r}{}", dump(&events))
             }),
+            entry("import_inspect", |w| {
+                let xml = w._dir.path().join("table.xml");
+                fs::write(&xml, CUSTOM_KEY_XML).unwrap();
+                import_begin(&w.st, ImportKind::Mremoteng, xml);
+                let none = j(import_inspect(&w.st, None));
+                let wrong = j(import_inspect(&w.st, Some(WRONG_KEY.into())));
+                let ok = j(import_inspect(&w.st, Some(CUSTOM_KEY.into())));
+                format!("{none}{wrong}{ok}")
+            }),
+            entry("import_apply", |w| {
+                let xml = w._dir.path().join("table.xml");
+                fs::write(&xml, DEFAULT_KEY_XML).unwrap();
+                import_begin(&w.st, ImportKind::Mremoteng, xml);
+                let inspected = j(import_inspect(&w.st, None));
+                let applied = j(import_apply(&w.st, ApplyOptions::default()));
+                format!("{inspected}{applied}")
+            }),
+            entry("import_cancel", |w| {
+                let picked = import_begin(&w.st, ImportKind::Backup, w._dir.path().join("x.fjbk"));
+                assert!(w.st.pending.lock().unwrap().is_some());
+                import_cancel(&w.st);
+                assert!(w.st.pending.lock().unwrap().is_none());
+                format!("{picked:?}")
+            }),
+            // not IPC commands (see `NOT_A_COMMAND`), but called as plain functions
+            entry("import_begin", |w| {
+                let p = import_begin(&w.st, ImportKind::Backup, w._dir.path().join("x.fjbk"));
+                format!("{p:?}{}", serde_json::to_string(&p).unwrap())
+            }),
+            // exports go outside the data folder, which they may not write into
+            entry("export_connections_to", |w| {
+                let elsewhere = tempfile::tempdir().unwrap();
+                let out = elsewhere.path().join("c.json");
+                let r = j(export_connections_to(&w.st, &out));
+                assert!(out.exists(), "{r}");
+                r
+            }),
+            entry("export_backup_to", |w| {
+                let elsewhere = tempfile::tempdir().unwrap();
+                let out = elsewhere.path().join("b.fjbk");
+                let r = j(export_backup_to(&w.st, &out, &sec(EXPORT_PW)));
+                // locked vault: refused with a code; otherwise the file exists
+                assert!(out.exists() || r.contains("vault_locked"), "{r}");
+                r
+            }),
             entry("apply_data_folder", |w| {
                 // not an IPC command (see `NOT_A_COMMAND`), but called here as a plain
                 // function: the state has no config folder, so this is refused; the response
@@ -1430,7 +1510,7 @@ mod tests {
     }
 
     fn assert_no_sentinel(what: &str, text: &str) {
-        for s in SENTINELS {
+        for s in SENTINELS.iter().chain(&IMPORT_SECRETS) {
             assert!(!text.contains(s), "{what} leaked {s}: {text}");
         }
     }
@@ -1460,6 +1540,114 @@ mod tests {
         }
     }
 
+    /// The whole import and restore path with sentinel secrets in every input: an mRemoteNG file
+    /// with a custom key, the key itself, wrongly typed keys and passwords, the export password
+    /// and a backup holding the entries. No response, error, `Debug` output, exported file or
+    /// `connections.json` shows one. Every step that must succeed is unwrapped and every step
+    /// that must fail has its error code asserted, so the scan never runs over empty output.
+    #[test]
+    fn import_and_export_flow_leaks_no_secret() {
+        fn shown<T: Serialize + std::fmt::Debug>(v: &T) -> String {
+            format!("{}{:?}", serde_json::to_string(v).unwrap(), v)
+        }
+        let w = world(true);
+        let dir = w._dir.path().to_path_buf();
+        // exported files go outside the data folder (which the commands refuse)
+        let out_dir = tempfile::tempdir().unwrap();
+        let mut seen: Vec<(String, String)> = Vec::new();
+        let mut note = |what: &str, text: String| seen.push((what.to_string(), text));
+        let credentials = || list_credentials(&w.st).unwrap().len();
+        let at_start = credentials();
+        assert_eq!(at_start, 2);
+
+        // mRemoteNG file with a custom key
+        let custom = dir.join("custom.xml");
+        fs::write(&custom, CUSTOM_KEY_XML).unwrap();
+        note(
+            "begin",
+            format!("{:?}", import_begin(&w.st, ImportKind::Mremoteng, custom)),
+        );
+        let e = import_inspect(&w.st, None).unwrap_err();
+        assert_eq!(e.code, "key_needed");
+        note("inspect without key", j::<()>(Err(e)));
+        let e = import_inspect(&w.st, Some(WRONG_KEY.into())).unwrap_err();
+        assert_eq!(e.code, "wrong_key");
+        note("inspect wrong key", j::<()>(Err(e)));
+        let preview = import_inspect(&w.st, Some(CUSTOM_KEY.into())).unwrap();
+        let planned_custom = preview.report.as_ref().unwrap().counts.credentials;
+        assert!(planned_custom > 0);
+        note("inspect", shown(&preview));
+        note("pending Debug", format!("{:?}", w.st.pending));
+        let applied = import_apply(&w.st, ApplyOptions::default()).unwrap();
+        note("apply", shown(&applied));
+        assert_eq!(credentials(), at_start + planned_custom);
+
+        // mRemoteNG file with the default key
+        let plain = dir.join("plain.xml");
+        fs::write(&plain, DEFAULT_KEY_XML).unwrap();
+        import_begin(&w.st, ImportKind::Mremoteng, plain);
+        let preview = import_inspect(&w.st, None).unwrap();
+        let planned_plain = preview.report.as_ref().unwrap().counts.credentials;
+        assert!(planned_plain > 0);
+        note("inspect default key", shown(&preview));
+        let applied = import_apply(&w.st, ApplyOptions::default()).unwrap();
+        note("apply default key", shown(&applied));
+        let total = at_start + planned_custom + planned_plain;
+        assert_eq!(credentials(), total);
+
+        // exports; the backup holds the secrets (positive control) and the file hides them
+        let backup = out_dir.path().join("out.fjbk");
+        let info = export_backup_to(&w.st, &backup, &sec(EXPORT_PW)).unwrap();
+        note("export backup", shown(&info));
+        let bytes = fs::read(&backup).unwrap();
+        let opened = fernjo_import::backup::open(&bytes, &sec(EXPORT_PW)).unwrap();
+        assert_eq!(opened.entries.len(), total);
+        let inside: String = opened
+            .entries
+            .iter()
+            .map(|(_, e)| serde_json::to_string(&e.secret).unwrap())
+            .collect();
+        // positive control: the fixtures' passwords really were imported (the metacharacter
+        // one is stored with JSON escapes, so its escape-free part is searched)
+        for secret in [PW, KEY, PASS, "folder-pw-1", META_PW_PART, UNICODE_PW_PART] {
+            assert!(inside.contains(secret), "{secret} is not in the backup");
+        }
+        let connections = out_dir.path().join("out.json");
+        let info = export_connections_to(&w.st, &connections).unwrap();
+        note("export connections", shown(&info));
+
+        // restore
+        import_begin(&w.st, ImportKind::Backup, backup.clone());
+        let e = import_inspect(&w.st, None).unwrap_err();
+        assert_eq!(e.code, "password_needed");
+        note("backup without password", j::<()>(Err(e)));
+        let e = import_inspect(&w.st, Some(WRONG_PW.into())).unwrap_err();
+        assert_eq!(e.code, "wrong_password");
+        note("backup wrong password", j::<()>(Err(e)));
+        let preview = import_inspect(&w.st, Some(EXPORT_PW.into())).unwrap();
+        assert_eq!(preview.backup.as_ref().unwrap().credentials, total);
+        note("backup inspect", shown(&preview));
+        note("pending backup Debug", format!("{:?}", w.st.pending));
+        let restored = import_apply(&w.st, ApplyOptions::default()).unwrap();
+        assert_eq!(restored.restored.as_ref().unwrap().credentials, total);
+        note("restore", shown(&restored));
+        assert_eq!(credentials(), total);
+        note("AppState Debug", format!("{:?}", w.st));
+
+        for (what, text) in &seen {
+            assert_no_sentinel(what, text);
+        }
+        // the exported files and the saved tree hold none
+        for file in [
+            backup.as_path(),
+            connections.as_path(),
+            &dir.join(fernjo_core::FILE_NAME),
+        ] {
+            let text = String::from_utf8_lossy(&fs::read(file).unwrap()).into_owned();
+            assert_no_sentinel(&file.display().to_string(), &text);
+        }
+    }
+
     #[test]
     fn drafts_and_updates_and_revealed_secrets_are_redacted_in_debug() {
         let d = draft(json!({
@@ -1478,19 +1666,39 @@ mod tests {
     /// Commands that need an `AppHandle` cannot be called without a running app, so they have
     /// no `table()` entry. Each is exempt for the stated reason: no secret type appears in
     /// its signature (`choose_data_folder` returns `DataFolderInfo`, `restart_app` nothing).
-    const APP_HANDLE_EXEMPT: [(&str, &str); 3] = [
+    const APP_HANDLE_EXEMPT: [(&str, &str); 6] = [
         (
             "choose_data_folder",
             "takes an AppHandle; returns only DataFolderInfo",
         ),
         ("restart_app", "takes an AppHandle; returns nothing"),
         ("open_external_url", "takes an AppHandle; returns nothing"),
+        (
+            "import_pick",
+            "native dialog needs an AppHandle; returns only the picked file's name",
+        ),
+        (
+            "export_connections",
+            "native dialog needs an AppHandle; returns only ExportInfo",
+        ),
+        (
+            "export_backup",
+            "native dialog needs an AppHandle; returns only ExportInfo",
+        ),
     ];
 
     /// Plain functions that `table()` calls but that are deliberately not IPC commands:
     /// `apply_data_folder` takes a path, so exposing it would let the webview point the data
     /// folder anywhere. Only the native picker (`choose_data_folder`) may reach it.
-    const NOT_A_COMMAND: [&str; 1] = ["apply_data_folder"];
+    ///
+    /// `import_begin`, `export_connections_to` and `export_backup_to` take a path as well: the
+    /// webview must never choose the file to read or write, only the native dialogs do.
+    const NOT_A_COMMAND: [&str; 4] = [
+        "apply_data_folder",
+        "import_begin",
+        "export_connections_to",
+        "export_backup_to",
+    ];
 
     #[test]
     fn command_table_covers_every_tauri_command() {
@@ -1501,6 +1709,7 @@ mod tests {
             include_str!("vault_commands.rs"),
             include_str!("data_folder.rs"),
             include_str!("session_commands.rs"),
+            include_str!("import_commands.rs"),
         ];
         // Only lines that start with the attribute count (not doc comments or strings), so
         // `#[tauri::command(async)]` and similar forms are counted too.

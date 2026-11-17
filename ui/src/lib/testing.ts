@@ -2,12 +2,15 @@
 import type {
   Api,
   ApiError,
+  ApplyResult,
   ConnectionNode,
   CredentialInfo,
   DataFolderInfo,
   FolderNode,
+  ImportPreview,
   Mutation,
   Protocol,
+  Report,
   ResolvedNode,
   SessionEvent,
   Snapshot,
@@ -86,6 +89,41 @@ export function terminalSettings(partial: Partial<TerminalSettings> = {}): Termi
   return { fontFamily: null, fontSize: 14, scrollback: 10000, persistent: true, ...partial };
 }
 
+export function report(partial: Partial<Report> = {}): Report {
+  return {
+    counts: {
+      folders: 0,
+      ssh: 0,
+      rdp: 0,
+      credentials: 0,
+      sharedCredentials: 0,
+      skipped: 0,
+      partial: 0,
+      problems: 0,
+    },
+    skipped: [],
+    partial: [],
+    problems: [],
+    ...partial,
+  };
+}
+
+export function preview(partial: Partial<ImportPreview> = {}): ImportPreview {
+  return {
+    kind: "mremoteng",
+    fileName: "confCons.xml",
+    report: report(),
+    backup: null,
+    needsVault: false,
+    vault: vaultStatus(),
+    ...partial,
+  };
+}
+
+function applyResult(children: TreeNode[]): ApplyResult {
+  return { snapshot: snapshot(children), report: report(), restored: null };
+}
+
 type Calls = Record<keyof Api, unknown[][]>;
 
 /** A scriptable `Api`: every method records its arguments; `impl` overrides behaviour. */
@@ -126,6 +164,12 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     openExternalUrl: [],
     getTerminalSettings: [],
     setTerminalSettings: [],
+    importPick: [],
+    importInspect: [],
+    importApply: [],
+    importCancel: [],
+    exportConnections: [],
+    exportBackup: [],
   };
   let current = initial;
   const mutation = (id: string | null): Mutation => ({ id, snapshot: snapshot(current) });
@@ -280,6 +324,34 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
       return impl.setTerminalSettings
         ? impl.setTerminalSettings(...args)
         : terminalSettings(args[0]);
+    },
+    importPick: async (...args) => {
+      calls.importPick.push(args);
+      return impl.importPick ? impl.importPick(...args) : { fileName: "confCons.xml" };
+    },
+    importInspect: async (...args) => {
+      calls.importInspect.push(args);
+      return impl.importInspect ? impl.importInspect(...args) : preview();
+    },
+    importApply: async (...args) => {
+      calls.importApply.push(args);
+      return impl.importApply ? impl.importApply(...args) : applyResult(current);
+    },
+    importCancel: async () => {
+      calls.importCancel.push([]);
+      if (impl.importCancel) await impl.importCancel();
+    },
+    exportConnections: async () => {
+      calls.exportConnections.push([]);
+      return impl.exportConnections
+        ? impl.exportConnections()
+        : { fileName: "fernjo-connections.json", droppedCredentials: 0 };
+    },
+    exportBackup: async (...args) => {
+      calls.exportBackup.push(args);
+      return impl.exportBackup
+        ? impl.exportBackup(...args)
+        : { fileName: "fernjo-backup.fjbk", droppedCredentials: 0 };
     },
   };
   return {

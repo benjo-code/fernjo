@@ -64,4 +64,10 @@ export const tauriApi: Api = {
   openExternalUrl: (url) => call("open_external_url", { url }),
   getTerminalSettings: () => call("get_terminal_settings"),
   setTerminalSettings: (settings) => call("set_terminal_settings", { settings }),
+  importPick: (kind) => call("import_pick", { kind }),
+  importInspect: (secret) => call("import_inspect", { secret }),
+  importApply: (options) => call("import_apply", { options }),
+  importCancel: () => call("import_cancel"),
+  exportConnections: () => call("export_connections"),
+  exportBackup: (password) => call("export_backup", { password }),
 };
