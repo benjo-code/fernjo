@@ -22,6 +22,11 @@
       "date": "2026-11-16",
       "context": "M5 planning",
       "text": "M5 supports mRemoteNG files of ConfVersion 2.6 only, which is what the stable 1.76 line writes (the owner runs it). The legacy AES-CBC format (below 2.6) is not cheap and stays in the backlog; the pre-release formats 2.7 and 2.8 (credentials in a separate repository) are refused with a clear message. The first check on the owner's sanitised fixture is its `ConfVersion`: if it is not 2.6 the work stops and this entry is revised. Restore semantics (owner decision): a full backup replaces tree and vault entries after a confirmation, the connections-only JSON merges into a new top-level folder. M5 also adds small primitives to `fernjo-core` and `fernjo-vault` (graft and replace tree, password-sealed blob, add, export and replace entries) and a debug-build-only `FERNJO_DIALOG_FILE` override for the native file dialogs, so the flows can be checked without OS input."
+    },
+    {
+      "date": "2026-11-17",
+      "context": "M6 planning",
+      "text": "Owner request: M6 ends with a release-readiness and security check, so the milestone is renamed \"Packaging, app settings & release readiness\" and gains two tasks (a security audit of the release candidate and a release-readiness gate that prepares v0.1.0 without releasing it) and two acceptance criteria (security review without an open High finding; a go/no-go verdict with every known gap named in `Docs/release-checklist.md`). Three more additions belong to the same goal and are not later milestones' work: third-party licence notices inside the installers (shipping MIT, Apache, OFL and MPL dependencies in binaries needs them), installer smoke tests in the release workflow (an installer that was never installed proves little), and a dry run of the release workflow on pull requests (`workflow_dispatch` only exists once the file is on the default branch `dev`). The four settings-dialog follow-ups parked in the backlog (\"Saved\" stays after editing, async load overwrites typing, failed load leaves empty fields, no IME check) are fixed because M6 rebuilds that dialog. Open decision carried into the milestone: if the measured idle memory misses the spec's ~150 MB, the target or its definition moves only with the owner's answer, recorded here. The attach step of the release workflow can only be rehearsed against a real (draft) release after the pull request is on `dev`; creating it needs the owner's go-ahead."
     }
   ],
   "subprojects": [
@@ -182,21 +187,28 @@
         },
         {
           "id": "6",
-          "title": "Packaging & app settings",
-          "status": "open",
+          "title": "Packaging, app settings & release readiness",
+          "status": "planned",
+          "plan": "superpowers/plans/2026-11-17-milestone-06-packaging-release-readiness.md",
           "prerequisites": ["4", "5"],
-          "goal": "fernjo installs from a GitHub release on Windows, macOS and Linux and can replace mRemoteNG for daily SSH work.",
+          "goal": "fernjo installs from a GitHub release on Windows, macOS and Linux, can replace mRemoteNG for daily SSH work, and ends the milestone with a recorded security review and a release-readiness report for v0.1.0.",
           "tasks": [
-            { "text": "Settings dialog: theme (light/dark/system), terminal font and size, scrollback, data folder", "done": false },
+            { "text": "Settings dialog: theme (light/dark/system), terminal font and size, scrollback, data folder (terminal font, size and scrollback already shipped in M4, see Scope changes)", "done": false },
             { "text": "Tauri bundler: Windows NSIS, macOS `.dmg` (Apple Silicon and Intel), Linux AppImage and `.deb` (minimum Ubuntu 22.04)", "done": false },
             { "text": "Release workflow on GitHub-hosted Windows, macOS and Ubuntu runners attaches the installers to the GitHub release", "done": false },
+            { "text": "Third-party licence notices shipped inside the installers", "done": false },
+            { "text": "Installer smoke tests in the release workflow (install, start, uninstall leaves the data folder alone)", "done": false },
             { "text": "README: installation and first-launch workarounds for unsigned builds", "done": false },
-            { "text": "Measure the performance targets from the spec (§6)", "done": false }
+            { "text": "Measure the performance targets from the spec (§6)", "done": false },
+            { "text": "Security audit of the release candidate (secrets, webview and IPC surface, release-binary hygiene, network behaviour, data at rest, SSH algorithm policy, supply chain, pipeline, independent review); findings triaged in `Docs/release-checklist.md`", "done": false },
+            { "text": "Release-readiness gate: version and metadata, documentation against reality, evidence on the final head, known gaps, verdict for the owner (prepares v0.1.0, does not release it)", "done": false }
           ],
           "acceptance": [
-            { "text": "A release workflow run produces all installers", "done": false },
+            { "text": "A release workflow run produces all installers (the dry run on the pull request builds the five installers and uploads them as artifacts)", "done": false },
             { "text": "Manual: installers install and start on Windows, macOS and Linux (Wayland); unavailable machines marked open", "done": false },
             { "text": "Cold start under 2 s and idle memory under ~150 MB measured", "done": false },
+            { "text": "Security review done: no open High finding, every Medium and Low finding fixed or recorded with the owner's decision", "done": false },
+            { "text": "`Docs/release-checklist.md` holds a go/no-go verdict for v0.1.0 with every known gap named", "done": false },
             { "text": "Build, test and lint are green", "done": false }
           ]
         },

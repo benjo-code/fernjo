@@ -29,7 +29,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 | 3 | Credential vault | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-15-milestone-03-credential-vault.md) | 2026-11-15 |
 | 4 | SSH sessions in tabs | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-16-milestone-04-ssh-sessions.md) | 2026-11-16 |
 | 5 | mRemoteNG import & export | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-16-milestone-05-mremoteng-import.md) | 2026-11-17 |
-| 6 | Packaging & app settings | 1 – fernjo app | ⬜ open | – | – |
+| 6 | Packaging, app settings & release readiness | 1 – fernjo app | 🟡 planned | [Plan](superpowers/plans/2026-11-17-milestone-06-packaging-release-readiness.md) | – |
 | – | **Release `v0.1.0`** – Daily SSH driver (M0 to M6) | – | ⬜ open | – | – |
 | 7 | RDP sessions | 1 – fernjo app | ⬜ open | – | – |
 | – | **Release `v0.2.0`** – RDP (M7) | – | ⬜ open | – | – |
@@ -40,6 +40,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 - **2026-11-16 (M4 planning):** M4 delivers the terminal font family, font size and scrollback settings (stored in `settings.json`, edited in a "Terminal" section of the existing gear dialog, applied live) because its task "font and scrollback settings" needs somewhere to live. M6's settings dialog keeps theme and data folder and absorbs this section instead of building it; its task "terminal font and size, scrollback" is therefore already done when M6 starts. M4 also keeps russh's `rsa` feature (owner decision) and so ships with a time-boxed `deny.toml` ignore for `RUSTSEC-2023-0071`, to be removed once russh depends on `rsa` 0.10.0 or later.
 - **2026-11-16 (M4 implementation):** Three small additions that came up while building the tab area, none of them a later milestone's work. Double-clicking a folder in the tree expands or collapses it (a connection opens as before). The sidebar's gear dialog is titled "Settings" (it holds the terminal section planned above next to the data folder), which M6's settings dialog builds on. `ui/vite.config.ts` raises `build.chunkSizeWarningLimit` to 700 kB because the terminal stays in the main chunk on purpose (`Docs/DECISIONS.md`, "M4 terminal: xterm.js versions, WebGL policy, no lazy import"). Deferred to the backlog: confirming quit with live sessions, restoring tabs after a restart, native clipboard commands (needs a BSL-1.0 licence decision) and a separate timeout for agents that need a confirmation.
 - **2026-11-16 (M5 planning):** M5 supports mRemoteNG files of ConfVersion 2.6 only, which is what the stable 1.76 line writes (the owner runs it). The legacy AES-CBC format (below 2.6) is not cheap and stays in the backlog; the pre-release formats 2.7 and 2.8 (credentials in a separate repository) are refused with a clear message. The first check on the owner's sanitised fixture is its `ConfVersion`: if it is not 2.6 the work stops and this entry is revised. Restore semantics (owner decision): a full backup replaces tree and vault entries after a confirmation, the connections-only JSON merges into a new top-level folder. M5 also adds small primitives to `fernjo-core` and `fernjo-vault` (graft and replace tree, password-sealed blob, add, export and replace entries) and a debug-build-only `FERNJO_DIALOG_FILE` override for the native file dialogs, so the flows can be checked without OS input.
+- **2026-11-17 (M6 planning):** Owner request: M6 ends with a release-readiness and security check, so the milestone is renamed "Packaging, app settings & release readiness" and gains two tasks (a security audit of the release candidate and a release-readiness gate that prepares v0.1.0 without releasing it) and two acceptance criteria (security review without an open High finding; a go/no-go verdict with every known gap named in `Docs/release-checklist.md`). Three more additions belong to the same goal and are not later milestones' work: third-party licence notices inside the installers (shipping MIT, Apache, OFL and MPL dependencies in binaries needs them), installer smoke tests in the release workflow (an installer that was never installed proves little), and a dry run of the release workflow on pull requests (`workflow_dispatch` only exists once the file is on the default branch `dev`). The four settings-dialog follow-ups parked in the backlog ("Saved" stays after editing, async load overwrites typing, failed load leaves empty fields, no IME check) are fixed because M6 rebuilds that dialog. Open decision carried into the milestone: if the measured idle memory misses the spec's ~150 MB, the target or its definition moves only with the owner's answer, recorded here. The attach step of the release workflow can only be rehearsed against a real (draft) release after the pull request is on `dev`; creating it needs the owner's go-ahead.
 
 ## Open manual checks (owner)
 
@@ -214,22 +215,28 @@ Goal: The owner's existing mRemoteNG connection file, passwords included, moves 
 - [x] Test: backup → restore round trip yields identical tree and vault – 2026-11-17, `cargo test --workspace` green: `crates/fernjo-import/tests/backup.rs::round_trip_gives_identical_tree_and_entries` (the container returns the tree and every entry with its secret unchanged), `import_commands::tests::restore_replaces_tree_and_entries_exactly` (a restore into a second state gives an identical tree snapshot and identical vault entries, also after reopening the data folder) and `import_commands::tests::export_backup_round_trips_through_inspect_and_apply`. Real app, Windows, 2026-11-16 (flow f of the task 14 check): after a restore into a second scratch data folder, `cmp` of the restored `connections.json` with the source's was identical and the vault entries (id, name, kind, username, domain, notes, hash of the revealed secret) of both folders were identical.
 - [x] Build, test and lint are green – 2026-11-17 on Windows 11, after the final-review fix wave, at the head `docs: record the M5 final review fixes (depth rule, work budget, one vault save, export targets)` (only the roadmap changed afterwards): `cargo fmt --all --check` (clean), `cargo clippy --workspace --all-targets -- -D warnings` (clean), `cargo test --workspace` with the `FERNJO_TEST_SSH_*` variables from `tools/ssh-test-server.sh start` and the container stopped afterwards (app 155 + 3 tauri_conf, core 122, import 7 + backup 14 + connections 11 + map 35 + read 26, ssh 26 unit + agent 1 + auth 7 + connect 13 + timeout 2, vault 61 + 2 ignored; all passed), `pnpm lint` (0 errors, 0 warnings, Prettier clean), `pnpm test` (426 passed in 35 files), `pnpm ui:build` (built), `cargo deny check` (advisories, bans, licenses, sources ok), `dotnet run tools/roadmap.cs -- check` (valid). Not repeated after the fix wave: `pnpm tauri build --no-bundle` and the real-app run of 2026-11-16 (release binary, CSP and `FERNJO_DIALOG_FILE` checks; the fix wave touched the import dialog, the import commands and the dev profile, not the CSP or the dialog override). CI for the PR has not run yet.
 
-## Milestone 6 – Packaging & app settings
-**Status:** ⬜ open · **Plan:** – · **Prerequisites:** M4, M5
+## Milestone 6 – Packaging, app settings & release readiness
+**Status:** 🟡 planned · **Plan:** [2026-11-17-milestone-06-packaging-release-readiness.md](superpowers/plans/2026-11-17-milestone-06-packaging-release-readiness.md) · **Prerequisites:** M4, M5
 
-Goal: fernjo installs from a GitHub release on Windows, macOS and Linux and can replace mRemoteNG for daily SSH work.
+Goal: fernjo installs from a GitHub release on Windows, macOS and Linux, can replace mRemoteNG for daily SSH work, and ends the milestone with a recorded security review and a release-readiness report for v0.1.0.
 
 **Tasks**
-- [ ] Settings dialog: theme (light/dark/system), terminal font and size, scrollback, data folder
+- [ ] Settings dialog: theme (light/dark/system), terminal font and size, scrollback, data folder (terminal font, size and scrollback already shipped in M4, see Scope changes)
 - [ ] Tauri bundler: Windows NSIS, macOS `.dmg` (Apple Silicon and Intel), Linux AppImage and `.deb` (minimum Ubuntu 22.04)
 - [ ] Release workflow on GitHub-hosted Windows, macOS and Ubuntu runners attaches the installers to the GitHub release
+- [ ] Third-party licence notices shipped inside the installers
+- [ ] Installer smoke tests in the release workflow (install, start, uninstall leaves the data folder alone)
 - [ ] README: installation and first-launch workarounds for unsigned builds
 - [ ] Measure the performance targets from the spec (§6)
+- [ ] Security audit of the release candidate (secrets, webview and IPC surface, release-binary hygiene, network behaviour, data at rest, SSH algorithm policy, supply chain, pipeline, independent review); findings triaged in `Docs/release-checklist.md`
+- [ ] Release-readiness gate: version and metadata, documentation against reality, evidence on the final head, known gaps, verdict for the owner (prepares v0.1.0, does not release it)
 
 **Acceptance criteria**
-- [ ] A release workflow run produces all installers
+- [ ] A release workflow run produces all installers (the dry run on the pull request builds the five installers and uploads them as artifacts)
 - [ ] Manual: installers install and start on Windows, macOS and Linux (Wayland); unavailable machines marked open
 - [ ] Cold start under 2 s and idle memory under ~150 MB measured
+- [ ] Security review done: no open High finding, every Medium and Low finding fixed or recorded with the owner's decision
+- [ ] `Docs/release-checklist.md` holds a go/no-go verdict for v0.1.0 with every known gap named
 - [ ] Build, test and lint are green
 
 ## Release `v0.1.0` – Acceptance
