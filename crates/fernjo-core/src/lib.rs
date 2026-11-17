@@ -24,7 +24,7 @@ pub use persist::{
 pub use resolve::resolve;
 pub use settings::{
     AppSettings, DEFAULT_FONT_SIZE, DEFAULT_SCROLLBACK, FONT_SIZE_RANGE, SCROLLBACK_RANGE,
-    TerminalPrefs,
+    TerminalPrefs, Theme,
 };
 pub use store::{Opened, Store};
 pub use tree::{MAX_TREE_DEPTH, NodePatch, Patch, Tree, subtree_depth};

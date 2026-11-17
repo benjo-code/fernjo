@@ -1,3 +1,4 @@
+mod app_settings;
 mod commands;
 mod connect_plan;
 mod data_folder;
@@ -72,6 +73,8 @@ pub fn run() {
             data_folder::handlers::get_data_folder,
             data_folder::handlers::choose_data_folder,
             data_folder::handlers::restart_app,
+            app_settings::handlers::get_theme,
+            app_settings::handlers::set_theme,
             session_commands::handlers::get_terminal_settings,
             session_commands::handlers::set_terminal_settings,
             session_commands::handlers::open_session,

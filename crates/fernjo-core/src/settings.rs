@@ -8,7 +8,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use crate::error::{LoadError, SaveError};
@@ -29,6 +29,31 @@ pub struct AppSettings {
     /// Terminal appearance; unset means the built-in defaults.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal: Option<TerminalPrefs>,
+    /// Colour theme; unset means follow the system. An unknown value loads as unset.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_theme"
+    )]
+    pub theme: Option<Theme>,
+}
+
+/// The colour theme choice.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    /// Follow the operating system.
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+/// Reads the theme, mapping an unknown string or a wrong JSON type to `None` so a hand-edited
+/// or newer value never makes the whole file unusable.
+fn lenient_theme<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Theme>, D::Error> {
+    let value = Value::deserialize(d)?;
+    Ok(serde_json::from_value::<Theme>(value).ok())
 }
 
 /// Default terminal font size in pixels.
@@ -186,10 +211,15 @@ mod tests {
         dir.join(FILE_NAME)
     }
 
+    fn read_json(dir: &Path) -> serde_json::Value {
+        serde_json::from_slice(&fs::read(path(dir)).unwrap()).unwrap()
+    }
+
     fn with_dir(p: &str) -> AppSettings {
         AppSettings {
             data_dir: Some(PathBuf::from(p)),
             terminal: None,
+            theme: None,
         }
     }
 
@@ -224,6 +254,7 @@ mod tests {
                 font_size: Some(15),
                 scrollback: Some(5000),
             }),
+            theme: None,
         };
         save(&path(dir.path()), &settings).unwrap();
         assert_eq!(load(&path(dir.path())).unwrap(), settings);
@@ -319,5 +350,53 @@ mod tests {
         let err = load(&path(dir.path())).unwrap_err();
         assert!(matches!(err, LoadError::Unreadable { .. }), "{err:?}");
         assert_eq!(fs::read_to_string(path(dir.path())).unwrap(), "garbage");
+    }
+
+    #[test]
+    fn theme_round_trips_through_the_settings_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = AppSettings {
+            theme: Some(Theme::Dark),
+            ..AppSettings::default()
+        };
+        save(&path(dir.path()), &settings).unwrap();
+        assert_eq!(load(&path(dir.path())).unwrap(), settings);
+        assert_eq!(
+            read_json(dir.path()),
+            json!({"schemaVersion": 1, "theme": "dark"})
+        );
+    }
+
+    #[test]
+    fn unset_theme_is_not_written() {
+        let dir = tempfile::tempdir().unwrap();
+        save(&path(dir.path()), &AppSettings::default()).unwrap();
+        assert_eq!(read_json(dir.path()), json!({"schemaVersion": 1}));
+    }
+
+    #[test]
+    fn unknown_theme_value_loads_as_unset_and_keeps_other_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            path(dir.path()),
+            r#"{"schemaVersion":1,"dataDir":"/x","theme":"banana"}"#,
+        )
+        .unwrap();
+        let loaded = load(&path(dir.path())).unwrap();
+        assert_eq!(loaded.theme, None);
+        assert_eq!(loaded.data_dir.as_deref(), Some(Path::new("/x")));
+    }
+
+    #[test]
+    fn theme_of_the_wrong_type_loads_as_unset() {
+        for bad in ["3", "null", "{}"] {
+            let dir = tempfile::tempdir().unwrap();
+            fs::write(
+                path(dir.path()),
+                format!(r#"{{"schemaVersion":1,"theme":{bad}}}"#),
+            )
+            .unwrap();
+            assert_eq!(load(&path(dir.path())).unwrap().theme, None, "{bad}");
+        }
     }
 }

@@ -1403,6 +1403,13 @@ mod tests {
                     },
                 ))
             }),
+            entry("get_theme", |w| j(crate::app_settings::get_theme(&w.st))),
+            entry("set_theme", |w| {
+                j(crate::app_settings::set_theme(
+                    &w.st,
+                    fernjo_core::Theme::Dark,
+                ))
+            }),
             entry("open_session", |w| {
                 let (id, events) = opened(w);
                 format!("{id}{}", dump(&events))
@@ -1710,6 +1717,7 @@ mod tests {
             include_str!("data_folder.rs"),
             include_str!("session_commands.rs"),
             include_str!("import_commands.rs"),
+            include_str!("app_settings.rs"),
         ];
         // Only lines that start with the attribute count (not doc comments or strings), so
         // `#[tauri::command(async)]` and similar forms are counted too.

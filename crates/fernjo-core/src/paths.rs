@@ -133,6 +133,7 @@ mod tests {
             &AppSettings {
                 data_dir: Some(target.clone()),
                 terminal: None,
+                theme: None,
             },
         )
         .unwrap();

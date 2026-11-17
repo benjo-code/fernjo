@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 
 use fernjo_core::{
-    DataDirSource, Location, Notice, Store, TerminalPrefs, find_conflicts, settings,
+    DataDirSource, Location, Notice, Store, TerminalPrefs, Theme, find_conflicts, settings,
 };
 use fernjo_vault::{
     FILE_NAME as VAULT_FILE_NAME, KdfParams, KeyStore, MemoryKeyStore, OsKeyStore, Vault,
@@ -66,6 +66,8 @@ pub struct AppState {
     /// Terminal preferences: loaded from `settings.json` at startup, in memory only while
     /// `FERNJO_DATA_DIR` is set.
     pub terminal: Mutex<TerminalPrefs>,
+    /// Colour theme: loaded from `settings.json` at startup (same rule as `terminal`).
+    pub theme: Mutex<Theme>,
     /// The open terminal sessions.
     pub sessions: SessionManager,
     /// The import or restore that waits for inspect/apply (one at a time).
@@ -114,13 +116,13 @@ impl AppState {
             Some(l) => {
                 // `settings.json` is neither read nor written while the variable is set, and
                 // an unusable file yields the defaults.
-                let terminal = if l.source == DataDirSource::Env || l.settings_error.is_some() {
+                let loaded = if l.source == DataDirSource::Env || l.settings_error.is_some() {
                     None
                 } else {
-                    settings::load(&l.config_dir.join(settings::FILE_NAME))
-                        .ok()
-                        .and_then(|s| s.terminal)
+                    settings::load(&l.config_dir.join(settings::FILE_NAME)).ok()
                 };
+                let terminal = loaded.as_ref().and_then(|s| s.terminal.clone());
+                let theme = loaded.and_then(|s| s.theme);
                 let state = Self::build(
                     Some(l.data_dir),
                     Some(l.config_dir),
@@ -134,6 +136,9 @@ impl AppState {
                 );
                 if let (Some(prefs), Ok(mut slot)) = (terminal, state.terminal.lock()) {
                     *slot = prefs;
+                }
+                if let (Some(theme), Ok(mut slot)) = (theme, state.theme.lock()) {
+                    *slot = theme;
                 }
                 state
             }
@@ -215,6 +220,7 @@ impl AppState {
             restart_required: AtomicBool::new(false),
             pending_data_dir: Mutex::new(None),
             terminal: Mutex::new(TerminalPrefs::default()),
+            theme: Mutex::new(Theme::default()),
             sessions: SessionManager::default(),
             pending: Mutex::new(None),
         }
