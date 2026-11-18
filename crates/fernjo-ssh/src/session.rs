@@ -50,7 +50,19 @@ pub struct Session {
 }
 
 pub(crate) fn client_config(keepalive_secs: u32) -> client::Config {
+    // russh's default host key list ends with plain `ssh-rsa` (RSA over SHA-1), which OpenSSH
+    // stopped offering in 8.8. It would only be used for a host seen for the first time, but a
+    // SHA-1 signature is not worth the compatibility with servers that sign nothing better.
+    let mut preferred = client::Config::default().preferred;
+    let host_keys: Vec<Algorithm> = preferred
+        .key
+        .iter()
+        .filter(|alg| **alg != Algorithm::Rsa { hash: None })
+        .cloned()
+        .collect();
+    preferred.key = Cow::Owned(host_keys);
     client::Config {
+        preferred,
         keepalive_interval: (keepalive_secs > 0)
             .then(|| Duration::from_secs(u64::from(keepalive_secs))),
         keepalive_max: 3,
@@ -809,6 +821,46 @@ mod tests {
         assert_eq!(c.keepalive_interval, Some(Duration::from_secs(30)));
         assert_eq!(c.keepalive_max, 3);
         assert_eq!(client_config(0).keepalive_interval, None);
+    }
+
+    /// The offered algorithms are pinned: a russh upgrade that adds a weak one fails here and has
+    /// to be looked at (Docs/DECISIONS.md, "M6 security review: SSH algorithm policy").
+    #[test]
+    fn client_config_offers_no_weak_algorithms() {
+        let p = client_config(30).preferred;
+        let names = |list: Vec<&str>| list.join(",");
+        let kex = names(p.kex.iter().map(AsRef::as_ref).collect());
+        let cipher = names(p.cipher.iter().map(AsRef::as_ref).collect());
+        let mac = names(p.mac.iter().map(AsRef::as_ref).collect());
+        for weak in [
+            "sha1",
+            "group1-",
+            "group14-sha1",
+            "diffie-hellman-group-exchange-sha1",
+        ] {
+            assert!(!kex.contains(weak), "kex {kex} offers {weak}");
+        }
+        for weak in ["cbc", "3des", "arcfour", "none"] {
+            assert!(!cipher.contains(weak), "cipher {cipher} offers {weak}");
+        }
+        assert!(!mac.contains("sha1") && !mac.contains("md5"), "mac {mac}");
+        // plain `ssh-rsa` (an RSA signature over SHA-1) is no longer offered by OpenSSH either
+        assert!(
+            !p.key.contains(&Algorithm::Rsa { hash: None }),
+            "host key algorithms: {:?}",
+            p.key
+        );
+        for wanted in [
+            Algorithm::Ed25519,
+            Algorithm::Rsa {
+                hash: Some(HashAlg::Sha256),
+            },
+            Algorithm::Rsa {
+                hash: Some(HashAlg::Sha512),
+            },
+        ] {
+            assert!(p.key.contains(&wanted), "{wanted:?} missing");
+        }
     }
 
     #[test]
