@@ -23,6 +23,13 @@
 //! 128 KiB unacknowledged and at most one more batch (`MAX_BATCH` 32 KiB). Details and
 //! measurements: `Docs/DECISIONS.md`, "M4 flow control numbers".
 //!
+//! Host keys: `hostKey` is a host that is not in `known_hosts`, `hostKeyChanged` a stored key that
+//! differs, and `hostKeySynced` a key that `known_hosts` has but this device has not confirmed
+//! (another device or a file added it; it carries `previous`, the fingerprints this device
+//! confirmed before for that host, port and key type). `hostKey` and `hostKeySynced` are answered
+//! with `{kind:"hostKey", decision:"once"|"always"|"reject"}`; for the synced one "always" confirms
+//! the key on this device and "once" records nothing.
+//!
 //! No event carries a secret: prompts describe what is asked, answers travel UI to Rust only.
 
 use std::collections::HashMap;
@@ -35,7 +42,7 @@ use std::time::Duration;
 use fernjo_core::NodeId;
 use fernjo_ssh::{
     CloseReason, ConnectParams, HostKeyChangedDecision, HostKeyChangedPrompt, HostKeyDecision,
-    HostKeyPrompt, Interaction, KiRound, Session, SessionEvent,
+    HostKeyPrompt, HostKeySyncedPrompt, Interaction, KiRound, KnownHosts, Session, SessionEvent,
 };
 use secrecy::SecretString;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -117,6 +124,13 @@ pub enum PromptView {
         port: u16,
         key_type: String,
         fingerprint: String,
+    },
+    HostKeySynced {
+        host: String,
+        port: u16,
+        key_type: String,
+        fingerprint: String,
+        previous: Vec<String>,
     },
     HostKeyChanged {
         host: String,
@@ -354,6 +368,24 @@ impl Interaction for TauriInteraction {
         }
     }
 
+    async fn host_key_synced(&self, prompt: HostKeySyncedPrompt) -> HostKeyDecision {
+        let view = PromptView::HostKeySynced {
+            host: prompt.host,
+            port: prompt.port,
+            key_type: prompt.key_type,
+            fingerprint: prompt.fingerprint,
+            previous: prompt.previous,
+        };
+        match self.ask(view).await {
+            Some(PromptAnswer::HostKey { decision }) => match decision {
+                HostKeyAnswer::Once => HostKeyDecision::TrustOnce,
+                HostKeyAnswer::Always => HostKeyDecision::TrustAlways,
+                HostKeyAnswer::Reject => HostKeyDecision::Reject,
+            },
+            _ => HostKeyDecision::Reject,
+        }
+    }
+
     async fn host_key_changed(&self, prompt: HostKeyChangedPrompt) -> HostKeyChangedDecision {
         let view = PromptView::HostKeyChanged {
             host: prompt.host,
@@ -475,10 +507,31 @@ struct Entry {
 }
 
 /// All sessions of the app, by id.
-#[derive(Default)]
 pub struct SessionManager {
     entries: Mutex<HashMap<String, Arc<Entry>>>,
+    /// Hosts confirmed during this run, used when the device has no folder for the persistent
+    /// file (see `confirmed_layer`).
+    confirmed_in_memory: KnownHosts,
 }
+
+impl Default for SessionManager {
+    fn default() -> Self {
+        Self {
+            entries: Mutex::default(),
+            confirmed_in_memory: KnownHosts::in_memory(),
+        }
+    }
+}
+
+/// Where a connect looks for the hosts this device confirmed.
+struct HostFiles {
+    known_hosts: PathBuf,
+    confirmed_hosts: Option<PathBuf>,
+    confirmed_in_memory: Option<KnownHosts>,
+}
+
+/// Name of the device-local file of confirmed hosts inside `AppState::device_dir`.
+const CONFIRMED_HOSTS_FILE: &str = "known_hosts.confirmed";
 
 const GONE: &str = "the connection no longer exists";
 
@@ -492,6 +545,25 @@ fn close_text(reason: CloseReason) -> String {
 }
 
 impl SessionManager {
+    /// The known hosts file in the synced data folder and this device's own layer: the file in
+    /// the device folder, or, without one, a store that lives as long as the app runs (a host
+    /// then asks once per run; a connect never fails because of it).
+    fn host_files(&self, state: &AppState) -> Result<HostFiles, CommandError> {
+        let known_hosts = known_hosts_path(state)?;
+        Ok(match &state.device_dir {
+            Some(dir) => HostFiles {
+                known_hosts,
+                confirmed_hosts: Some(dir.join(CONFIRMED_HOSTS_FILE)),
+                confirmed_in_memory: None,
+            },
+            None => HostFiles {
+                known_hosts,
+                confirmed_hosts: None,
+                confirmed_in_memory: Some(self.confirmed_in_memory.clone()),
+            },
+        })
+    }
+
     fn entry(&self, id: &str) -> Result<Arc<Entry>, CommandError> {
         lock(&self.entries)?.get(id).cloned().ok_or_else(not_found)
     }
@@ -515,7 +587,7 @@ impl SessionManager {
         rows: u32,
     ) -> Result<String, CommandError> {
         let plan = connect_plan::resolve(state, node_id, false)?;
-        let known_hosts = known_hosts_path(state)?;
+        let hosts = self.host_files(state)?;
         let shared = Arc::new(Shared {
             sink: Arc::new(Sink::new(channel)),
             hub: Arc::new(PromptHub::default()),
@@ -532,7 +604,7 @@ impl SessionManager {
         });
         let id = uuid::Uuid::new_v4().to_string();
         lock(&self.entries)?.insert(id.clone(), Arc::clone(&entry));
-        start(&entry, plan, known_hosts);
+        start(&entry, plan, hosts);
         Ok(id)
     }
 
@@ -583,8 +655,8 @@ impl SessionManager {
         skip_vault: bool,
     ) -> Result<(), CommandError> {
         let plan = connect_plan::resolve(state, entry.node_id, skip_vault);
-        match (plan, known_hosts_path(state)) {
-            (Ok(plan), Ok(known_hosts)) => start(entry, plan, known_hosts),
+        match (plan, self.host_files(state)) {
+            (Ok(plan), Ok(hosts)) => start(entry, plan, hosts),
             (Err(e), _) | (_, Err(e)) => {
                 let text = if e.code == "not_found" {
                     GONE.to_string()
@@ -712,7 +784,7 @@ fn known_hosts_path(state: &AppState) -> Result<PathBuf, CommandError> {
 
 /// Starts (or restarts) the connect task for a resolved plan, or parks the session until the
 /// vault is unlocked.
-fn start(entry: &Arc<Entry>, plan: ConnectPlan, known_hosts: PathBuf) {
+fn start(entry: &Arc<Entry>, plan: ConnectPlan, hosts: HostFiles) {
     let shared = &entry.shared;
     let note = match &plan.credential {
         CredentialPlan::NeedsVault => {
@@ -726,7 +798,9 @@ fn start(entry: &Arc<Entry>, plan: ConnectPlan, known_hosts: PathBuf) {
     shared.set_phase(Phase::Connecting);
     shared.sink.state(ConnState::Connecting, note);
     let (cols, rows) = shared.size.lock().map_or((80, 24), |s| *s);
-    let mut params = ConnectParams::new(plan.host, plan.port, known_hosts);
+    let mut params = ConnectParams::new(plan.host, plan.port, hosts.known_hosts);
+    params.confirmed_hosts = hosts.confirmed_hosts;
+    params.confirmed_in_memory = hosts.confirmed_in_memory;
     params.username = plan.username;
     params.keepalive_secs = plan.keepalive_secs;
     params.cols = cols;

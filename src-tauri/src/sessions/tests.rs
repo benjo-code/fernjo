@@ -262,6 +262,16 @@ fn session_event_json_has_no_secret_field() {
             id: 6,
             prompt: PromptView::KeyPassphrase {},
         },
+        UiEvent::Prompt {
+            id: 7,
+            prompt: PromptView::HostKeySynced {
+                host: "h".into(),
+                port: 22,
+                key_type: "ssh-ed25519".into(),
+                fingerprint: "SHA256:x".into(),
+                previous: vec!["SHA256:a".into()],
+            },
+        },
     ];
     let json: Vec<Value> = events
         .iter()
@@ -288,6 +298,11 @@ fn session_event_json_has_no_secret_field() {
     );
     assert_eq!(json[8]["prompt"], json!({"kind": "username", "host": "h"}));
     assert_eq!(json[9]["prompt"], json!({"kind": "keyPassphrase"}));
+    assert_eq!(
+        json[10]["prompt"],
+        json!({"kind": "hostKeySynced", "host": "h", "port": 22, "keyType": "ssh-ed25519",
+            "fingerprint": "SHA256:x", "previous": ["SHA256:a"]})
+    );
     // no key anywhere in the serialised events names a secret
     fn keys(v: &Value, out: &mut Vec<String>) {
         match v {
@@ -722,7 +737,7 @@ async fn drive(r: &Rig, rec: &mut Rec, id: &str, s: &Srv, always: bool) {
         let pid = ev["id"].as_u64().unwrap();
         let decision = if always { "always" } else { "once" };
         let a = match ev["prompt"]["kind"].as_str().unwrap() {
-            "hostKey" => json!({"kind": "hostKey", "decision": decision}),
+            "hostKey" | "hostKeySynced" => json!({"kind": "hostKey", "decision": decision}),
             "username" => json!({"kind": "text", "value": s.user}),
             "password" | "keyboardInteractive" => {
                 json!({"kind": "secrets", "values": [s.password]})
@@ -1029,4 +1044,67 @@ async fn server_drop_ends_in_disconnected_with_a_reason() {
         code(session_input(&r.st, &id, b"x".to_vec())),
         "session_not_connected"
     );
+}
+
+#[tokio::test]
+async fn synced_host_key_prompt_maps_answers_and_falls_back_to_reject() {
+    use fernjo_ssh::{HostKeyDecision, HostKeySyncedPrompt, Interaction};
+    let (ia, mut rec) = interaction();
+    let hub = Arc::clone(&ia.hub);
+    let prompt = || HostKeySyncedPrompt {
+        host: "h".into(),
+        port: 22,
+        key_type: "ssh-ed25519".into(),
+        fingerprint: "SHA256:x".into(),
+        previous: vec!["SHA256:a".into()],
+    };
+    for (wire, expected) in [
+        (
+            json!({"kind": "hostKey", "decision": "always"}),
+            HostKeyDecision::TrustAlways,
+        ),
+        (
+            json!({"kind": "hostKey", "decision": "once"}),
+            HostKeyDecision::TrustOnce,
+        ),
+        (
+            json!({"kind": "hostKey", "decision": "reject"}),
+            HostKeyDecision::Reject,
+        ),
+        (json!({"kind": "cancel"}), HostKeyDecision::Reject),
+        (
+            json!({"kind": "hostKeyChanged", "decision": "replace"}),
+            HostKeyDecision::Reject,
+        ),
+    ] {
+        let (d, _) = tokio::join!(ia.host_key_synced(prompt()), async {
+            let (id, p) = rec.wait_prompt().await;
+            assert_eq!(p["kind"], "hostKeySynced");
+            assert_eq!(p["previous"], json!(["SHA256:a"]));
+            hub.answer(id, answer(wire)).unwrap();
+        });
+        assert_eq!(d, expected);
+    }
+    hub.close();
+    assert_eq!(ia.host_key_synced(prompt()).await, HostKeyDecision::Reject);
+}
+
+#[test]
+fn the_confirmed_hosts_layer_is_the_device_file_or_memory_for_the_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut st = AppState::open(Some(dir.path().to_path_buf()));
+    let mgr = SessionManager::default();
+    let none = mgr.host_files(&st).unwrap();
+    assert_eq!(none.known_hosts, dir.path().join("known_hosts"));
+    assert!(none.confirmed_hosts.is_none() && none.confirmed_in_memory.is_some());
+    let device = tempfile::tempdir().unwrap();
+    st.device_dir = Some(device.path().to_path_buf());
+    let some = mgr.host_files(&st).unwrap();
+    assert_eq!(
+        some.confirmed_hosts,
+        Some(device.path().join("known_hosts.confirmed"))
+    );
+    assert!(some.confirmed_in_memory.is_none());
+    // The synced data folder never holds the confirmed file.
+    assert!(!some.confirmed_hosts.unwrap().starts_with(dir.path()));
 }
