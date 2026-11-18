@@ -601,19 +601,61 @@ fn open_body(
     serde_json::from_slice(&plain).map_err(|_| VaultError::Tampered)
 }
 
+/// Creates (truncating) `path` readable and writable by its owner only on Unix (mode 0600, also
+/// when a stale file of that name already exists); elsewhere the folder's inherited ACL applies.
+fn create_private_file(path: &Path) -> io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(path)?;
+    owner_only(path)?;
+    Ok(file)
+}
+
+/// Creates `dir` and its missing parents; on Unix with mode 0700 (folders that already exist
+/// keep theirs).
+fn create_private_dir_all(dir: &Path) -> io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(dir)
+}
+
+/// Unix: mode 0600. Other platforms: no change.
+fn owner_only(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
 fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(dir) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        fs::create_dir_all(dir)?;
+        create_private_dir_all(dir)?;
     }
     let tmp = with_suffix(path, ".tmp");
     let result = (|| -> io::Result<()> {
-        let mut file = fs::File::create(&tmp)?;
+        let mut file = create_private_file(&tmp)?;
         file.write_all(bytes)?;
         file.flush()?;
         file.sync_all()?;
         drop(file);
         if path.exists() {
-            fs::copy(path, with_suffix(path, ".bak"))?;
+            let bak = with_suffix(path, ".bak");
+            fs::copy(path, &bak)?;
+            owner_only(&bak)?;
         }
         fs::rename(&tmp, path)
     })();
@@ -676,6 +718,33 @@ mod tests {
         assert_eq!(reopened.path(), path.as_path());
         reopened.unlock(&secret(PW)).unwrap();
         assert!(reopened.is_unlocked());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vault_files_are_owner_only_and_a_new_folder_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let dir = TempDir::new().unwrap();
+        let folder = dir.path().join("fresh").join("fernjo");
+        let path = folder.join(FILE_NAME);
+        let mut vault = Vault::create_with(&path, &secret(PW), KdfParams::TEST).unwrap();
+        assert_eq!(mode(&folder), 0o700, "a folder fernjo creates is private");
+        assert_eq!(mode(&path), 0o600);
+        vault
+            .change_password(&secret(PW), &secret("another long password"))
+            .unwrap();
+        assert_eq!(mode(&bak(&path)), 0o600);
+        assert_eq!(mode(&path), 0o600);
+
+        // a vault an older build wrote with the default umask is tightened by the next save
+        // (and so is the backup copied from it)
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        vault
+            .change_password(&secret("another long password"), &secret(PW))
+            .unwrap();
+        assert_eq!(mode(&path), 0o600);
+        assert_eq!(mode(&bak(&path)), 0o600);
     }
 
     #[test]

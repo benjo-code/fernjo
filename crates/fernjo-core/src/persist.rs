@@ -96,18 +96,20 @@ pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), SaveError
     };
     let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
     if let Some(dir) = dir {
-        fs::create_dir_all(dir).map_err(fail)?;
+        create_private_dir_all(dir).map_err(fail)?;
     }
     let tmp = with_suffix(path, ".tmp");
     let result = (|| -> io::Result<()> {
-        let mut file = fs::File::create(&tmp)?;
+        let mut file = create_private_file(&tmp)?;
         file.write_all(contents)?;
         file.write_all(b"\n")?;
         file.flush()?;
         file.sync_all()?;
         drop(file);
         if path.exists() {
-            fs::copy(path, with_suffix(path, ".bak"))?;
+            let bak = with_suffix(path, ".bak");
+            fs::copy(path, &bak)?;
+            owner_only(&bak)?;
         }
         fs::rename(&tmp, path)
     })();
@@ -115,6 +117,46 @@ pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), SaveError
         let _ = fs::remove_file(&tmp);
         return Err(fail(source));
     }
+    Ok(())
+}
+
+/// Creates (truncating) `path` readable and writable by its owner only on Unix (mode 0600, also
+/// when a stale file of that name already exists); elsewhere the folder's inherited ACL applies.
+fn create_private_file(path: &Path) -> io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(path)?;
+    owner_only(path)?;
+    Ok(file)
+}
+
+/// Creates `dir` and its missing parents; on Unix with mode 0700 (folders that already exist
+/// keep theirs).
+fn create_private_dir_all(dir: &Path) -> io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(dir)
+}
+
+/// Unix: mode 0600. Other platforms: no change.
+fn owner_only(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 
@@ -356,6 +398,33 @@ mod tests {
 
     fn bak_path(dir: &Path) -> PathBuf {
         dir.join(format!("{FILE_NAME}.bak"))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn data_files_are_owner_only_and_a_new_folder_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let base = tempfile::tempdir().unwrap();
+        let data = base.path().join("fresh").join("fernjo");
+        let file = main_path(&data);
+        save(&file, &sample_tree("dc01")).unwrap();
+        assert_eq!(mode(&data), 0o700, "a folder fernjo creates is private");
+        assert_eq!(mode(&file), 0o600);
+        save(&file, &sample_tree("dc02")).unwrap();
+        assert_eq!(mode(&bak_path(&data)), 0o600);
+        assert_eq!(mode(&file), 0o600);
+
+        // a file an older build wrote with the default umask is tightened by the next save,
+        // and so is the backup copied from it; an existing folder keeps its mode
+        let old = main_path(base.path());
+        fs::write(&old, "{}").unwrap();
+        fs::set_permissions(&old, fs::Permissions::from_mode(0o644)).unwrap();
+        let folder_mode = mode(base.path());
+        save(&old, &sample_tree("dc03")).unwrap();
+        assert_eq!(mode(&old), 0o600);
+        assert_eq!(mode(&bak_path(base.path())), 0o600);
+        assert_eq!(mode(base.path()), folder_mode);
     }
 
     #[test]

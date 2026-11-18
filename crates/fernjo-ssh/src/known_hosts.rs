@@ -254,6 +254,46 @@ fn entry_matches(entry: &[u8], name: &str) -> bool {
     }
 }
 
+/// Creates (truncating) `path` readable and writable by its owner only on Unix (mode 0600, also
+/// when a stale file of that name already exists); elsewhere the folder's inherited ACL applies.
+fn create_private_file(path: &Path) -> io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(path)?;
+    owner_only(path)?;
+    Ok(file)
+}
+
+/// Creates `dir` and its missing parents; on Unix with mode 0700 (folders that already exist
+/// keep theirs).
+fn create_private_dir_all(dir: &Path) -> io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(dir)
+}
+
+/// Unix: mode 0600. Other platforms: no change.
+fn owner_only(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
 /// Temp file next to `path`, `sync_all`, current file copied to `.bak`, rename over `path`.
 fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), SshError> {
     let with_suffix = |suffix: &str| {
@@ -264,15 +304,17 @@ fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), SshError> {
     let tmp = with_suffix(".tmp");
     let result = (|| -> io::Result<()> {
         if let Some(dir) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-            fs::create_dir_all(dir)?;
+            create_private_dir_all(dir)?;
         }
-        let mut file = fs::File::create(&tmp)?;
+        let mut file = create_private_file(&tmp)?;
         file.write_all(contents)?;
         file.flush()?;
         file.sync_all()?;
         drop(file);
         if path.exists() {
-            fs::copy(path, with_suffix(".bak"))?;
+            let bak = with_suffix(".bak");
+            fs::copy(path, &bak)?;
+            owner_only(&bak)?;
         }
         fs::rename(&tmp, path)
     })();
@@ -490,6 +532,26 @@ mod tests {
         kh.add("b", 22, &key(ED_B)).unwrap();
         assert_eq!(fs::read(path.with_extension("bak")).unwrap(), first);
         assert_ne!(fs::read(&path).unwrap(), first);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn known_hosts_is_owner_only_and_a_new_folder_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("fresh").join("fernjo");
+        let path = folder.join("known_hosts");
+        let kh = KnownHosts::new(&path);
+        kh.add("a", 22, &key(ED_A)).unwrap();
+        assert_eq!(mode(&folder), 0o700, "a folder fernjo creates is private");
+        assert_eq!(mode(&path), 0o600);
+        // a file an older build wrote with the default umask is tightened by the next write,
+        // and so is the backup copied from it
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        kh.add("b", 22, &key(ED_B)).unwrap();
+        assert_eq!(mode(&path), 0o600);
+        assert_eq!(mode(&path.with_extension("bak")), 0o600);
     }
 
     #[test]
