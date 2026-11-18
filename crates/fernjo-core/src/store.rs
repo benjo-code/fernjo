@@ -56,6 +56,14 @@ impl Store {
     ) -> Result<T, StoreError> {
         let mut next = self.tree.clone();
         let out = f(&mut next)?;
+        // Defence in depth: `Tree` refuses what is too deep, but a file that cannot be read back
+        // would lock the owner out of the whole tree and its `.bak`, so a mutation that made the
+        // tree deeper than the limit is never saved (a deeper tree an older version wrote can
+        // still be edited, just not deepened).
+        let depth = next.depth();
+        if depth > MAX_TREE_DEPTH && depth > self.tree.depth() {
+            return Err(TreeError::TooDeep.into());
+        }
         persist::save(&self.path, &next)?;
         self.tree = next;
         Ok(out)
@@ -135,7 +143,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{CredentialId, Protocol};
+    use crate::model::{CredentialId, NodeKind, Protocol};
     use crate::persist::{self, FILE_NAME};
     use crate::tree::{NodePatch, Patch};
     use std::fs;
@@ -479,6 +487,94 @@ mod tests {
 
         let err = store
             .replace_tree(Tree::from_children(vec![chain(MAX_TREE_DEPTH)]))
+            .unwrap_err();
+        assert_eq!(err.code(), "too_deep");
+        assert!(!dir.path().join(FILE_NAME).exists());
+        assert!(store.tree().children().is_empty());
+    }
+
+    /// The review's sequence (M1): the deepest tree an import accepts, then folders by hand,
+    /// saving after each. Past level 62 the file no longer loaded and neither did its `.bak`.
+    #[test]
+    fn hand_made_nesting_cannot_make_the_file_unloadable() {
+        use crate::tree::MAX_TREE_DEPTH;
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = open(dir.path());
+        store.graft(None, chain(MAX_TREE_DEPTH - 2)).unwrap(); // folders 1..=58, leaf at 59
+        let mut parent = store.tree().children()[0].id;
+        loop {
+            let next = match &store.tree().get(parent).unwrap().kind {
+                NodeKind::Folder { children } => children
+                    .iter()
+                    .find(|c| matches!(c.kind, NodeKind::Folder { .. }))
+                    .map(|c| c.id),
+                NodeKind::Connection { .. } => None,
+            };
+            match next {
+                Some(id) => parent = id,
+                None => break,
+            }
+        }
+        let mut refused = 0;
+        for i in 0..8 {
+            match store.create_folder(Some(parent), None, &format!("hand-{i}")) {
+                Ok(id) => parent = id,
+                Err(e) => {
+                    assert_eq!(e.code(), "too_deep");
+                    refused += 1;
+                }
+            }
+            // every state on disk loads, the main file and the backup
+            let again = Store::open(dir.path()).unwrap();
+            assert!(again.notice.is_none(), "{i}: {:?}", again.notice);
+            assert_eq!(again.store.tree(), store.tree());
+            assert!(persist::load(&dir.path().join(format!("{FILE_NAME}.bak"))).is_ok());
+        }
+        assert!(refused > 0);
+        assert_eq!(store.tree().depth(), MAX_TREE_DEPTH);
+    }
+
+    #[test]
+    fn a_refused_move_or_duplicate_writes_nothing() {
+        use crate::tree::MAX_TREE_DEPTH;
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = open(dir.path());
+        store.graft(None, chain(MAX_TREE_DEPTH - 1)).unwrap();
+        let sibling = store.create_folder(None, None, "sibling").unwrap();
+        store.create_folder(Some(sibling), None, "inner").unwrap();
+        let deep_folder = {
+            let mut id = store.tree().children()[0].id;
+            while let NodeKind::Folder { children } = &store.tree().get(id).unwrap().kind {
+                match children
+                    .iter()
+                    .find(|c| matches!(c.kind, NodeKind::Folder { .. }))
+                {
+                    Some(c) => id = c.id,
+                    None => break,
+                }
+            }
+            id
+        };
+        let on_disk = fs::read(dir.path().join(FILE_NAME)).unwrap();
+        let before = store.tree().clone();
+        // `sibling` has two levels; below the folder at level 59 it would end at 61
+        let err = store.move_node(sibling, Some(deep_folder), 0).unwrap_err();
+        assert_eq!(err.code(), "too_deep");
+        assert_eq!(store.tree(), &before);
+        assert_eq!(fs::read(dir.path().join(FILE_NAME)).unwrap(), on_disk);
+    }
+
+    #[test]
+    fn the_save_guard_refuses_a_mutation_that_deepens_the_tree_past_the_limit() {
+        use crate::tree::MAX_TREE_DEPTH;
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = open(dir.path());
+        // `Tree` itself refuses this, so reach the guard with a closure that bypasses it
+        let err = store
+            .mutate(|t| {
+                *t = Tree::from_children(vec![chain(MAX_TREE_DEPTH)]);
+                Ok(())
+            })
             .unwrap_err();
         assert_eq!(err.code(), "too_deep");
         assert!(!dir.path().join(FILE_NAME).exists());
