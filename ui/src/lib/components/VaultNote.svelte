@@ -134,15 +134,23 @@
   // The neutral line never claims that a key is stored; unknown codes (newer Rust) get it too.
   const NEUTRAL_LINE =
     "The OS keychain could not be read, so automatic unlock was skipped. Enter the master password.";
-  const ISSUE_LINES: Record<string, string> = {
+  // `keychain_unavailable` shows no line on purpose: on a machine without a keychain service it
+  // is reported at every start, also to users who never turned automatic unlock on.
+  const ISSUE_LINES: Record<string, string | null> = {
     key_not_accepted: KEEP_KEY_LINE,
     unavailable: KEEP_KEY_LINE,
-    keychain_unavailable: NEUTRAL_LINE,
+    keychain_unavailable: null,
     rolled_back:
       "Automatic unlock did not open this vault: the file is older than the last version this device opened. Enter the master password to review.",
   };
   const issue = $derived(vault.status?.autoUnlockIssue ?? null);
-  const issueLine = $derived(issue ? (ISSUE_LINES[issue] ?? NEUTRAL_LINE) : null);
+  const issueLine = $derived(
+    issue
+      ? Object.prototype.hasOwnProperty.call(ISSUE_LINES, issue)
+        ? ISSUE_LINES[issue]
+        : NEUTRAL_LINE
+      : null,
+  );
 
   const backupPath = $derived(vault.status?.path ? `${vault.status.path}.bak` : null);
 </script>

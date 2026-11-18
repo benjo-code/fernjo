@@ -103,7 +103,7 @@ export interface VaultStatus {
   autoUnlockIssue: AutoUnlockIssue | null;
 }
 
-/** Wire codes of the startup auto-unlock failure; Rust may add more; the UI falls back to a neutral line for an unknown code. */
+/** Wire codes of the startup auto-unlock failure; Rust may add more; the UI falls back to a neutral line for an unknown code and shows no line for `keychain_unavailable`. */
 export type AutoUnlockIssue =
   "key_not_accepted" | "keychain_unavailable" | "unavailable" | "rolled_back";
 

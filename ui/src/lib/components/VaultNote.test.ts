@@ -310,14 +310,14 @@ describe("VaultNote", () => {
     );
   });
 
-  test("an_unreadable_keychain_shows_the_neutral_line_and_never_claims_a_stored_key", async () => {
+  test("an_unreadable_keychain_shows_no_line_because_most_users_never_opted_in", async () => {
     await setup(vaultStatus({ state: "locked", autoUnlockIssue: "keychain_unavailable" }));
     const text = document.body.textContent ?? "";
-    expect(text).toContain(
-      "The OS keychain could not be read, so automatic unlock was skipped. Enter the master password.",
-    );
+    expect(text).not.toContain("automatic unlock");
+    expect(text).not.toContain("Automatic unlock");
+    expect(text).not.toContain("keychain could not be read");
     expect(text).not.toContain("stored key");
-    expect(text).not.toContain("damaged");
+    expect(document.querySelector('[role="status"]')).toBeNull();
   });
 
   test("an_unknown_issue_code_falls_back_to_the_neutral_line", async () => {
