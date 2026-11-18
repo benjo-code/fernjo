@@ -114,8 +114,10 @@ jobs:
 
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
 
-  # Policy check for the workflow files themselves (pinned actions, split permissions, no
-  # untrusted values in run: scripts) and the tests of the release helper scripts.
+  # Policy check for the workflow files themselves (actions pinned to commit SHAs, the word
+  # self-hosted absent, no pull_request_target, a top-level permissions: block present, no
+  # untrusted values in run: scripts) and the tests of the release helper scripts. It does not
+  # judge what the permissions grant or which runner labels are used.
   workflows:
     name: workflows
     runs-on: ubuntu-latest

@@ -30,7 +30,8 @@ pub const MAX_PBKDF2_ITERATIONS: u64 = 20_000_000;
 const DEFAULT_ITERATIONS: u32 = 1000;
 /// The plaintext of the `Protected` attribute when the key is right.
 const PROTECTED_PLAINTEXT: &str = "ThisIsNotProtected";
-/// Most attributes one start tag may carry (real mRemoteNG nodes carry about 60). `roxmltree` checks
+/// Most attributes one start tag may carry (a node of a real 2.6 file, the owner's fixture
+/// `owner-confCons.xml`, carries 114, so the cap is about 1.75 times that). `roxmltree` checks
 /// every new attribute against the earlier ones, so one tag with 100 000 attributes costs 21 s.
 pub const MAX_ATTRIBUTES_PER_TAG: usize = 200;
 /// Most namespace declarations (`xmlns`, `xmlns:p`) a document may carry in all (a real file has one,

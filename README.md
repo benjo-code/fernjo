@@ -54,7 +54,7 @@ shasum -a 256 <file>                       # macOS: compare the printed hash wit
 
 ## Settings
 
-The gear in the sidebar opens Settings: the colour theme (System, Light or Dark; System follows the operating system and changes with it), the terminal (font family, size and scrollback) and the data folder (see [Docs/DECISIONS.md](Docs/DECISIONS.md) for how the folder is chosen). The choices are stored in `settings.json` in the config folder, not in the data folder, so syncing the data folder does not carry them to another machine.
+The gear in the sidebar opens Settings: the colour theme (System, Light or Dark; System follows the operating system and changes with it), the terminal (font family, size and scrollback) and the data folder (see [Docs/DECISIONS.md](Docs/DECISIONS.md) for how the folder is chosen). The choices are stored in `settings.json` in the config folder. By default that is also the data folder; once you choose a separate data folder, `settings.json` stays in the config folder, so syncing the data folder does not carry the settings to another machine.
 
 ## SSH
 

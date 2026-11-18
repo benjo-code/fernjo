@@ -294,7 +294,6 @@ Deliberately not scheduled. Ideas that `/ideen` files here are listed; if needed
 - **Broadcast input:** Send keystrokes to several SSH tabs at once.
 - **Export to mRemoteNG format:** Write `confCons.xml` for migration back or to other tools.
 - **Legacy mRemoteNG format:** Import of files from mRemoteNG ≤ 1.75 (AES-CBC), if not already done in M5. Decided in M5 (scope change 2026-11-16) not to be cheap enough; it stays here.
-- **Depth limit for hand-made tree nodes:** M5 caps the tree at 60 levels where it is written in bulk (`Tree::graft`, `Store::replace_tree`: imports and restores), because `connections.json` stops loading at about level 62 (serde_json recursion limit). Creating, moving and duplicating nodes by hand (M2) is not checked: a tree built beyond that saves but may not load again, and its backup is refused at restore as damaged. Enforce `MAX_TREE_DEPTH` in `create_folder`, `create_connection`, `move_node` and `duplicate` too (the UI then needs an error for it). See `Docs/DECISIONS.md` "M5 final review fixes".
 - **Vault auto-lock:** Lock the vault after a configurable idle time.
 - **Pageant support:** Use PuTTY's Pageant as SSH agent on Windows.
 - **More protocols:** VNC, Telnet, serial.

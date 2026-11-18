@@ -270,7 +270,6 @@
     { "title": "Broadcast input", "text": "Send keystrokes to several SSH tabs at once." },
     { "title": "Export to mRemoteNG format", "text": "Write `confCons.xml` for migration back or to other tools." },
     { "title": "Legacy mRemoteNG format", "text": "Import of files from mRemoteNG ≤ 1.75 (AES-CBC), if not already done in M5. Decided in M5 (scope change 2026-11-16) not to be cheap enough; it stays here." },
-    { "title": "Depth limit for hand-made tree nodes", "text": "M5 caps the tree at 60 levels where it is written in bulk (`Tree::graft`, `Store::replace_tree`: imports and restores), because `connections.json` stops loading at about level 62 (serde_json recursion limit). Creating, moving and duplicating nodes by hand (M2) is not checked: a tree built beyond that saves but may not load again, and its backup is refused at restore as damaged. Enforce `MAX_TREE_DEPTH` in `create_folder`, `create_connection`, `move_node` and `duplicate` too (the UI then needs an error for it). See `Docs/DECISIONS.md` \"M5 final review fixes\"." },
     { "title": "Vault auto-lock", "text": "Lock the vault after a configurable idle time." },
     { "title": "Pageant support", "text": "Use PuTTY's Pageant as SSH agent on Windows." },
     { "title": "More protocols", "text": "VNC, Telnet, serial." },

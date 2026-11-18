@@ -17,7 +17,7 @@ Run it on the exact commit the release will be cut from and write the result int
 
 ## v0.1.0 result
 
-Date: 2026-11-18. Branch `feature/m06-packaging-release-readiness`, draft PR #10 to `dev`. The code and workflows are those of commit `5265b2f` (every commit after it only touches documentation); all evidence below is for `5265b2f` unless stated.
+Date: 2026-11-18. Branch `feature/m06-packaging-release-readiness`, draft PR #10 to `dev`. The code and workflows are those of commit `5265b2f` (every commit after it only touches documentation and `tools/perf/cdp.mjs`); all evidence below is for `5265b2f` unless stated.
 
 ### Step 1: Version and metadata
 
