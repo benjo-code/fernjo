@@ -50,12 +50,13 @@ const evaluate = async (send, expression) => {
   return r.result?.result?.value;
 };
 
-// Tree pane only: rows inside the tree, or the empty-tree offer. The generic ".empty" class also
+// Tree pane only: rows inside the tree, or the empty-tree offer (TreeView.svelte renders
+// div.empty > p "No connections yet" inside Sidebar's .tree-slot). The generic ".empty" class also
 // marks placeholders of the main area and the properties panel, which exist as soon as the
-// shell mounts, before the snapshot has loaded.
+// shell mounts, before the snapshot has loaded, so the offer is scoped to .tree-slot.
 const POPULATED = `(() => {
   const rows = document.querySelectorAll('[role="tree"] [role="treeitem"]').length;
-  const offer = [...document.querySelectorAll('p.empty')].some((p) => p.textContent.trim() === 'No connections yet');
+  const offer = [...document.querySelectorAll('.tree-slot .empty p')].some((p) => p.textContent.trim() === 'No connections yet');
   return rows > 0 || offer;
 })()`;
 
