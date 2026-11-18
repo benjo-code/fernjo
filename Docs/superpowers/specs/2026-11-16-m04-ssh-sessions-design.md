@@ -12,7 +12,7 @@ After M4 the owner double-clicks an SSH connection and gets a terminal in a tab:
 
 **In:** the `fernjo-ssh` crate; the session manager and session commands in `src-tauri`; the tab strip, the terminal view and the inline prompts (host key, host key changed, keyboard-interactive, password, username, key passphrase, "needs vault"); the connect actions and lamps in the tree; terminal settings (font family, font size, scrollback); app shortcuts and their documentation in the README; the SSH integration tests in CI.
 
-**Out:** RDP (M7; opening an RDP connection shows a notice "RDP sessions are not available yet"); SFTP, port forwarding, jump hosts, local shell tabs, split panes, detached tabs, quick connect and Pageant (all backlog); key-file paths (keys live in the vault; PuTTY `.ppk` is not read); restoring tabs after a restart; SSH legacy algorithms (`ssh-rsa` with SHA-1, DSA, 3DES); the full settings dialog (M6).
+**Out:** RDP (M8; opening an RDP connection shows a notice "RDP sessions are not available yet"); SFTP, port forwarding, jump hosts, local shell tabs, split panes, detached tabs, quick connect and Pageant (all backlog); key-file paths (keys live in the vault; PuTTY `.ppk` is not read); restoring tabs after a restart; SSH legacy algorithms (`ssh-rsa` with SHA-1, DSA, 3DES); the full settings dialog (M6).
 
 **Anti-goals:** a password, key or passphrase in a log, an event payload, `Debug` output, a response or webview storage (the session commands join the no-secret test); a host key accepted without the user's decision; a silent fallback after a host key mismatch; the UI freezing or Ctrl+C stalling while a command floods the terminal; app shortcuts that take keys the terminal needs.
 

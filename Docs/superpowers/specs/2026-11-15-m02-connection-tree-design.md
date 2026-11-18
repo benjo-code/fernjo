@@ -12,7 +12,7 @@ After M2 the owner can organise connections in a persistent folder tree with mRe
 
 **In:** model, inheritance, persistence, Tauri commands, sidebar tree (filter, expand/collapse, drag and drop, context menu), properties panel, single instance, IPC CSP follow-up from `Docs/DECISIONS.md`.
 
-**Out (later milestones):** credential reference (M3), opening sessions, lamps, tabs (M4), RDP settings (M7), host column and its setting (M6), undo.
+**Out (later milestones):** credential reference (M3), opening sessions, lamps, tabs (M4), RDP settings (M8), host column and its setting (M6), undo.
 
 **Anti-goals for M2:** UI-owned tree state; any logic about validity or inheritance in TypeScript; a secret anywhere in `connections.json` (there are none yet, the format must not invite them).
 
@@ -68,7 +68,7 @@ After M2 the owner can organise connections in a persistent folder tree with mRe
 
 ## 9. Docs to update during implementation
 
-`Docs/DECISIONS.md` (format, location and write strategy, pointer-based drag and drop, CSP `connect-src`, new dependencies and versions), `CHANGELOG.md` `[Unreleased]`, `Docs/roadmap.json` (+ regenerated `ROADMAP.md`). No roadmap scope change: the three inheritable settings in §4 follow M3 (credential reference) and M7 (RDP settings) as already scheduled.
+`Docs/DECISIONS.md` (format, location and write strategy, pointer-based drag and drop, CSP `connect-src`, new dependencies and versions), `CHANGELOG.md` `[Unreleased]`, `Docs/roadmap.json` (+ regenerated `ROADMAP.md`). No roadmap scope change: the three inheritable settings in §4 follow M3 (credential reference) and M8 (RDP settings) as already scheduled.
 
 ## 10. Left to the builder
 
