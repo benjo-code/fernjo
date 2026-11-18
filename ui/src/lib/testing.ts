@@ -15,6 +15,8 @@ import type {
   SessionEvent,
   Snapshot,
   TerminalSettings,
+  Theme,
+  ThemeInfo,
   TreeNode,
   VaultStatus,
 } from "./types";
@@ -59,7 +61,14 @@ export function apiError(code: string, message = code): ApiError {
 }
 
 export function vaultStatus(partial: Partial<VaultStatus> = {}): VaultStatus {
-  return { state: "none", reason: null, path: null, autoUnlock: false, ...partial };
+  return {
+    state: "none",
+    reason: null,
+    path: null,
+    autoUnlock: false,
+    autoUnlockIssue: null,
+    ...partial,
+  };
 }
 
 export function credential(partial: Partial<CredentialInfo> = {}): CredentialInfo {
@@ -87,6 +96,10 @@ export function dataFolder(partial: Partial<DataFolderInfo> = {}): DataFolderInf
 
 export function terminalSettings(partial: Partial<TerminalSettings> = {}): TerminalSettings {
   return { fontFamily: null, fontSize: 14, scrollback: 10000, persistent: true, ...partial };
+}
+
+export function themeInfo(partial: Partial<ThemeInfo> = {}): ThemeInfo {
+  return { theme: "system", persistent: true, ...partial };
 }
 
 export function report(partial: Partial<Report> = {}): Report {
@@ -140,6 +153,7 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     vaultStatus: [],
     vaultCreate: [],
     vaultUnlock: [],
+    vaultUnlockOlder: [],
     vaultLock: [],
     vaultChangePassword: [],
     vaultSetAutoUnlock: [],
@@ -164,6 +178,8 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     openExternalUrl: [],
     getTerminalSettings: [],
     setTerminalSettings: [],
+    getTheme: [],
+    setTheme: [],
     importPick: [],
     importInspect: [],
     importApply: [],
@@ -218,6 +234,12 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     vaultUnlock: async (...args) => {
       calls.vaultUnlock.push(args);
       return impl.vaultUnlock ? impl.vaultUnlock(...args) : vaultStatus({ state: "unlocked" });
+    },
+    vaultUnlockOlder: async (...args) => {
+      calls.vaultUnlockOlder.push(args);
+      return impl.vaultUnlockOlder
+        ? impl.vaultUnlockOlder(...args)
+        : vaultStatus({ state: "unlocked" });
     },
     vaultLock: async () => {
       calls.vaultLock.push([]);
@@ -324,6 +346,14 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
       return impl.setTerminalSettings
         ? impl.setTerminalSettings(...args)
         : terminalSettings(args[0]);
+    },
+    getTheme: async () => {
+      calls.getTheme.push([]);
+      return impl.getTheme ? impl.getTheme() : themeInfo();
+    },
+    setTheme: async (...args) => {
+      calls.setTheme.push(args);
+      return impl.setTheme ? impl.setTheme(...args) : themeInfo({ theme: args[0] as Theme });
     },
     importPick: async (...args) => {
       calls.importPick.push(args);

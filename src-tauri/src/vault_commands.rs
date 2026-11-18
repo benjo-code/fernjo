@@ -16,7 +16,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::commands::{CommandError, Mutation, ensure_writable, snapshot, with_store};
-use crate::state::{AppState, VaultState};
+use crate::state::{AppState, AutoUnlockIssue, VaultState};
 
 impl From<VaultError> for CommandError {
     fn from(e: VaultError) -> Self {
@@ -49,6 +49,10 @@ pub struct VaultStatus {
     pub path: Option<String>,
     /// The key store holds this vault's key.
     pub auto_unlock: bool,
+    /// Why the automatic unlock at startup did not work (`locked` only): `key_not_accepted`,
+    /// `keychain_unavailable`, `unavailable` or `rolled_back` (the file is older than the last
+    /// version this device opened). A stored key is never deleted.
+    pub auto_unlock_issue: Option<&'static str>,
 }
 
 fn view(state: &AppState, vault: &VaultState) -> VaultStatus {
@@ -58,6 +62,7 @@ fn view(state: &AppState, vault: &VaultState) -> VaultStatus {
             reason: None,
             path: None,
             auto_unlock: false,
+            auto_unlock_issue: None,
         },
         VaultState::Open(v) => VaultStatus {
             state: if v.is_unlocked() {
@@ -69,13 +74,29 @@ fn view(state: &AppState, vault: &VaultState) -> VaultStatus {
             path: Some(v.path().display().to_string()),
             // A keychain error reads as "not stored".
             auto_unlock: matches!(state.keystore.get(v.id()), Ok(Some(_))),
+            auto_unlock_issue: if v.is_unlocked() {
+                None
+            } else {
+                state
+                    .auto_unlock_issue
+                    .lock()
+                    .ok()
+                    .and_then(|g| g.map(AutoUnlockIssue::code))
+            },
         },
         VaultState::Unusable { reason, path } => VaultStatus {
             state: "unusable",
             reason: Some(reason.clone()),
             path: Some(path.display().to_string()),
             auto_unlock: false,
+            auto_unlock_issue: None,
         },
+    }
+}
+
+fn clear_auto_unlock_issue(state: &AppState) {
+    if let Ok(mut issue) = state.auto_unlock_issue.lock() {
+        *issue = None;
     }
 }
 
@@ -127,11 +148,13 @@ pub fn vault_create(
     if path.try_exists().unwrap_or(true) {
         return Err(VaultError::AlreadyExists.into());
     }
-    let vault = Vault::create_with(&path, &password, state.kdf)?;
+    let mut vault = Vault::create_with(&path, &password, state.kdf)?;
+    vault.attach_generation_store(std::sync::Arc::clone(&state.generations));
     if remember {
         remember_key(state, &vault);
     }
     *guard = VaultState::Open(vault);
+    clear_auto_unlock_issue(state);
     Ok(view(state, &guard))
 }
 
@@ -147,6 +170,28 @@ pub fn vault_unlock(
         }
         Ok(())
     })?;
+    clear_auto_unlock_issue(state);
+    vault_status(state)
+}
+
+/// Like [`vault_unlock`], but takes a vault file that is older than the version this device last
+/// opened (the user saw `rolled_back` and decided to open it). The file is re-stamped at once.
+pub fn vault_unlock_older(
+    state: &AppState,
+    password: SecretString,
+    remember: bool,
+) -> Result<VaultStatus, CommandError> {
+    // Re-stamping the file is a write, so a pending data-folder restart refuses it like the other
+    // writers.
+    ensure_writable(state)?;
+    with_vault(state, |v| {
+        v.unlock_accepting_older(&password)?;
+        if remember {
+            remember_key(state, v);
+        }
+        Ok(())
+    })?;
+    clear_auto_unlock_issue(state);
     vault_status(state)
 }
 
@@ -531,6 +576,15 @@ pub mod handlers {
         super::vault_unlock(&state, SecretString::from(password), remember)
     }
 
+    #[tauri::command(async)]
+    pub fn vault_unlock_older(
+        state: State<'_, AppState>,
+        password: String,
+        remember: bool,
+    ) -> Result<VaultStatus, CommandError> {
+        super::vault_unlock_older(&state, SecretString::from(password), remember)
+    }
+
     #[tauri::command]
     pub fn vault_lock(state: State<'_, AppState>) -> Result<VaultStatus, CommandError> {
         super::vault_lock(&state)
@@ -619,7 +673,9 @@ mod tests {
         import_begin, import_cancel, import_inspect,
     };
     use fernjo_core::{NodeId, Protocol};
-    use fernjo_vault::{AutoUnlock, DataKey, KeyStore, KeyStoreError, Vault, VaultId};
+    use fernjo_vault::{
+        AutoUnlock, DataKey, GenerationStore, KeyStore, KeyStoreError, Vault, VaultId,
+    };
     use secrecy::SecretString;
     use serde::Serialize;
     use serde_json::{Value, json};
@@ -843,6 +899,252 @@ mod tests {
         assert_eq!(code(vault_set_auto_unlock(&st, false)), "vault_locked");
     }
 
+    /// A vault file with a wrong key in the key store at the next start.
+    fn start_with_wrong_key(dir: &Path) -> (AppState, VaultId) {
+        use fernjo_vault::MemoryKeyStore;
+        let path = dir.join(fernjo_vault::FILE_NAME);
+        let vault = Vault::create_with(&path, &sec(MASTER), fernjo_vault::KdfParams::TEST).unwrap();
+        let keys = MemoryKeyStore::default();
+        keys.set(vault.id(), &DataKey::from_bytes([7u8; 32]))
+            .unwrap();
+        let id = vault.id();
+        let st = AppState::open_with_keystore(dir.to_path_buf(), Box::new(keys));
+        (st, id)
+    }
+
+    #[test]
+    fn a_failed_startup_auto_unlock_reports_the_issue_and_keeps_the_item() {
+        let dir = tempfile::tempdir().unwrap();
+        let (st, id) = start_with_wrong_key(dir.path());
+        let status = vault_status(&st).unwrap();
+        assert_eq!(status.state, "locked");
+        assert_eq!(status.auto_unlock_issue, Some("key_not_accepted"));
+        // the item stays, so the box is still ticked
+        assert!(status.auto_unlock);
+        assert!(st.keystore.get(id).unwrap().is_some());
+        let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(json["autoUnlockIssue"], "key_not_accepted");
+    }
+
+    #[test]
+    fn a_password_unlock_clears_the_issue_and_remember_replaces_a_wrong_item() {
+        let dir = tempfile::tempdir().unwrap();
+        let (st, id) = start_with_wrong_key(dir.path());
+        let status = vault_unlock(&st, sec(MASTER), true).unwrap();
+        assert_eq!(status.state, "unlocked");
+        assert_eq!(status.auto_unlock_issue, None);
+        // the wrong item was overwritten with the real key
+        let stored = st.keystore.get(id).unwrap().unwrap();
+        let real = match &*st.vault.lock().unwrap() {
+            VaultState::Open(v) => v.data_key().unwrap(),
+            _ => panic!("no vault"),
+        };
+        assert_eq!(stored.as_bytes(), real.as_bytes());
+        // locking again does not bring the old issue back
+        assert_eq!(vault_lock(&st).unwrap().auto_unlock_issue, None);
+    }
+
+    #[test]
+    fn a_wrong_password_keeps_the_issue_and_unticked_unlock_keeps_the_item() {
+        let dir = tempfile::tempdir().unwrap();
+        let (st, id) = start_with_wrong_key(dir.path());
+        assert_eq!(
+            code(vault_unlock(&st, sec("wrong"), true)),
+            "wrong_password"
+        );
+        assert_eq!(
+            vault_status(&st).unwrap().auto_unlock_issue,
+            Some("key_not_accepted")
+        );
+        let status = vault_unlock(&st, sec(MASTER), false).unwrap();
+        assert_eq!(status.auto_unlock_issue, None);
+        assert!(status.auto_unlock);
+        assert!(st.keystore.get(id).unwrap().is_some());
+    }
+
+    /// A key store several `AppState`s can share (a "restart" that keeps the keychain).
+    struct SharedKeys(std::sync::Arc<fernjo_vault::MemoryKeyStore>);
+
+    impl KeyStore for SharedKeys {
+        fn get(&self, id: VaultId) -> Result<Option<DataKey>, KeyStoreError> {
+            self.0.get(id)
+        }
+        fn set(&self, id: VaultId, key: &DataKey) -> Result<(), KeyStoreError> {
+            self.0.set(id, key)
+        }
+        fn delete(&self, id: VaultId) -> Result<(), KeyStoreError> {
+            self.0.delete(id)
+        }
+    }
+
+    /// A vault at generation 2 whose file was then replaced by the generation-1 copy; the
+    /// returned state is a restart that keeps the keychain and the device marks.
+    fn start_with_rolled_back_vault(
+        dir: &Path,
+    ) -> (
+        AppState,
+        std::sync::Arc<fernjo_vault::MemoryKeyStore>,
+        std::sync::Arc<fernjo_vault::MemoryGenerationStore>,
+    ) {
+        use fernjo_vault::{MemoryGenerationStore, MemoryKeyStore};
+        use std::sync::Arc;
+        let keys = Arc::new(MemoryKeyStore::default());
+        let marks = Arc::new(MemoryGenerationStore::default());
+        let first = AppState::open_with_stores(
+            dir.to_path_buf(),
+            Box::new(SharedKeys(keys.clone())),
+            marks.clone(),
+        );
+        vault_create(&first, sec(MASTER), true).unwrap(); // generation 1
+        vault_change_password(&first, sec(MASTER), sec(NEW_MASTER)).unwrap(); // generation 2
+        let path = dir.join(fernjo_vault::FILE_NAME);
+        let mut bak = path.as_os_str().to_owned();
+        bak.push(".bak");
+        std::fs::copy(&bak, &path).unwrap();
+        drop(first);
+        let st = AppState::open_with_stores(
+            dir.to_path_buf(),
+            Box::new(SharedKeys(keys.clone())),
+            marks.clone(),
+        );
+        (st, keys, marks)
+    }
+
+    #[test]
+    fn a_rolled_back_vault_is_not_auto_unlocked_and_the_item_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let (st, keys, _marks) = start_with_rolled_back_vault(dir.path());
+        let status = vault_status(&st).unwrap();
+        assert_eq!(status.state, "locked");
+        assert_eq!(status.auto_unlock_issue, Some("rolled_back"));
+        assert!(status.auto_unlock, "the stored key is kept");
+        let id = match &*st.vault.lock().unwrap() {
+            VaultState::Open(v) => v.id(),
+            _ => panic!("no vault"),
+        };
+        assert!(keys.get(id).unwrap().is_some());
+        assert_eq!(
+            serde_json::to_value(&status).unwrap()["autoUnlockIssue"],
+            "rolled_back"
+        );
+    }
+
+    #[test]
+    fn a_password_unlock_of_a_rolled_back_vault_is_refused_until_the_user_accepts() {
+        let dir = tempfile::tempdir().unwrap();
+        let (st, keys, marks) = start_with_rolled_back_vault(dir.path());
+        let id = match &*st.vault.lock().unwrap() {
+            VaultState::Open(v) => v.id(),
+            _ => panic!("no vault"),
+        };
+        // the generation-1 copy still has the first password
+        let err = vault_unlock(&st, sec(MASTER), true).unwrap_err();
+        assert_eq!(err.code, "rolled_back");
+        assert!(err.message.contains("generation 1"), "{}", err.message);
+        assert!(err.message.contains("last seen 2"), "{}", err.message);
+        assert_eq!(vault_status(&st).unwrap().state, "locked");
+        // a wrong password is a wrong password, not a rollback
+        assert_eq!(
+            code(vault_unlock_older(&st, sec("wrong password"), false)),
+            "wrong_password"
+        );
+        assert_eq!(vault_status(&st).unwrap().state, "locked");
+        // no key stored by the refused attempts beyond the one that was already there
+        keys.delete(id).unwrap();
+
+        let status = vault_unlock_older(&st, sec(MASTER), true).unwrap();
+        assert_eq!(status.state, "unlocked");
+        assert_eq!(status.auto_unlock_issue, None);
+        assert!(status.auto_unlock, "remember stored the key again");
+        assert_eq!(
+            GenerationStore::get(&*marks, id),
+            Some(3),
+            "re-stamped above the floor of 2"
+        );
+        // and the next start auto-unlocks without a prompt
+        drop(st);
+        let again = AppState::open_with_stores(
+            dir.path().to_path_buf(),
+            Box::new(SharedKeys(keys.clone())),
+            marks.clone(),
+        );
+        assert_eq!(vault_status(&again).unwrap().state, "unlocked");
+    }
+
+    #[test]
+    fn vault_unlock_older_without_a_vault_or_with_nothing_to_accept() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = state(dir.path());
+        assert_eq!(
+            code(vault_unlock_older(&st, sec(MASTER), false)),
+            "no_vault"
+        );
+        vault_create(&st, sec(MASTER), false).unwrap();
+        vault_lock(&st).unwrap();
+        // a current file: a plain unlock
+        let status = vault_unlock_older(&st, sec(MASTER), false).unwrap();
+        assert_eq!(status.state, "unlocked");
+    }
+
+    /// A key store whose reads fail (no Secret Service, locked keyring).
+    struct BrokenKeyStore;
+
+    impl KeyStore for BrokenKeyStore {
+        fn get(&self, _: VaultId) -> Result<Option<DataKey>, KeyStoreError> {
+            Err(KeyStoreError::new("keychain down"))
+        }
+        fn set(&self, _: VaultId, _: &DataKey) -> Result<(), KeyStoreError> {
+            Err(KeyStoreError::new("keychain down"))
+        }
+        fn delete(&self, _: VaultId) -> Result<(), KeyStoreError> {
+            Err(KeyStoreError::new("keychain down"))
+        }
+    }
+
+    #[test]
+    fn an_unreadable_keychain_at_startup_reports_its_own_issue() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(fernjo_vault::FILE_NAME);
+        Vault::create_with(&path, &sec(MASTER), fernjo_vault::KdfParams::TEST).unwrap();
+        let st = AppState::open_with_keystore(dir.path().to_path_buf(), Box::new(BrokenKeyStore));
+        let status = vault_status(&st).unwrap();
+        assert_eq!(status.state, "locked");
+        assert_eq!(status.auto_unlock_issue, Some("keychain_unavailable"));
+        // an unreadable keychain reads as "no stored key"
+        assert!(!status.auto_unlock);
+        let unlocked = vault_unlock(&st, sec(MASTER), false).unwrap();
+        assert_eq!(unlocked.auto_unlock_issue, None);
+    }
+
+    #[test]
+    fn startup_with_no_key_or_a_working_key_leaves_no_issue() {
+        use fernjo_vault::MemoryKeyStore;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(fernjo_vault::FILE_NAME);
+        let vault = Vault::create_with(&path, &sec(MASTER), fernjo_vault::KdfParams::TEST).unwrap();
+        let none = AppState::open_with_keystore(
+            dir.path().to_path_buf(),
+            Box::new(MemoryKeyStore::default()),
+        );
+        assert_eq!(vault_status(&none).unwrap().auto_unlock_issue, None);
+        let keys = MemoryKeyStore::default();
+        keys.set(vault.id(), &vault.data_key().unwrap()).unwrap();
+        let ok = AppState::open_with_keystore(dir.path().to_path_buf(), Box::new(keys));
+        let status = vault_status(&ok).unwrap();
+        assert_eq!(status.state, "unlocked");
+        assert_eq!(status.auto_unlock_issue, None);
+    }
+
+    #[test]
+    fn no_issue_without_a_failed_auto_unlock() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = state(dir.path());
+        assert_eq!(vault_status(&st).unwrap().auto_unlock_issue, None);
+        vault_create(&st, sec(MASTER), true).unwrap();
+        vault_lock(&st).unwrap();
+        assert_eq!(vault_status(&st).unwrap().auto_unlock_issue, None);
+    }
+
     #[test]
     fn change_password_keeps_auto_unlock_working() {
         let dir = tempfile::tempdir().unwrap();
@@ -899,6 +1201,32 @@ mod tests {
             code(vault_create(&st3, sec(MASTER), false)),
             "already_exists"
         );
+    }
+
+    #[test]
+    fn an_oversized_vault_file_is_unusable_and_stays_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(fernjo_vault::FILE_NAME);
+        let len = fernjo_vault::MAX_FILE_LEN + 1;
+        let file = fs::File::create(&path).unwrap();
+        file.set_len(len).unwrap();
+        drop(file);
+        // the app starts normally, the vault is unusable and says why
+        let st = state(dir.path());
+        let status = vault_status(&st).unwrap();
+        assert_eq!(status.state, "unusable");
+        assert!(status.reason.unwrap().contains("larger than"));
+        assert_eq!(
+            code(vault_unlock(&st, sec(MASTER), false)),
+            "vault_unusable"
+        );
+        assert_eq!(
+            code(vault_create(&st, sec(MASTER), false)),
+            "already_exists"
+        );
+        // nothing was overwritten, truncated or deleted, and no .bak appeared
+        assert_eq!(fs::metadata(&path).unwrap().len(), len);
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 
     #[test]
@@ -961,6 +1289,8 @@ mod tests {
         let results = [
             code(vault_create(&w.st, sec(MASTER), false)),
             code(vault_change_password(&w.st, sec(MASTER), sec(NEW_MASTER))),
+            // re-stamps the vault file, so it is a writer like the others
+            code(vault_unlock_older(&w.st, sec(MASTER), false)),
             code(vault_set_auto_unlock(&w.st, true)),
             code(create_credential(&w.st, draft(pw_draft("x")))),
             code(update_credential(&w.st, id, update(json!({"name": "y"})))),
@@ -1361,6 +1691,9 @@ mod tests {
             entry("vault_unlock", |w| {
                 j(vault_unlock(&w.st, sec(MASTER), true))
             }),
+            entry("vault_unlock_older", |w| {
+                j(vault_unlock_older(&w.st, sec(MASTER), true))
+            }),
             entry("vault_lock", |w| j(vault_lock(&w.st))),
             entry("vault_change_password", |w| {
                 j(vault_change_password(&w.st, sec(MASTER), sec(NEW_MASTER)))
@@ -1401,6 +1734,13 @@ mod tests {
                         font_size: 14,
                         scrollback: 5000,
                     },
+                ))
+            }),
+            entry("get_theme", |w| j(crate::app_settings::get_theme(&w.st))),
+            entry("set_theme", |w| {
+                j(crate::app_settings::set_theme(
+                    &w.st,
+                    fernjo_core::Theme::Dark,
                 ))
             }),
             entry("open_session", |w| {
@@ -1710,6 +2050,7 @@ mod tests {
             include_str!("data_folder.rs"),
             include_str!("session_commands.rs"),
             include_str!("import_commands.rs"),
+            include_str!("app_settings.rs"),
         ];
         // Only lines that start with the attribute count (not doc comments or strings), so
         // `#[tauri::command(async)]` and similar forms are counted too.

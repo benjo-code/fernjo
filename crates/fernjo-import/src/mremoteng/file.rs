@@ -1,7 +1,7 @@
 //! Reading a mRemoteNG `confCons.xml` (ConfVersion 2.6) into a raw, unmapped document.
 //!
-//! Order of checks: size, UTF-8 and BOM, XML parse (no DTD), root element and version, encryption
-//! engine, `KdfIterations` range, the work budget (stored passwords x iterations), key check through
+//! Order of checks: size, UTF-8 and BOM, a byte scan for attribute and namespace floods, XML parse
+//! (no DTD), root element and version, encryption engine, `KdfIterations` range, the work budget (stored passwords x iterations), key check through
 //! `Protected`, optional full-file decryption (and the budget again for the decrypted body), then a
 //! depth-limited walk with a node cap. Error messages never contain secrets.
 
@@ -11,6 +11,7 @@ use secrecy::SecretString;
 use zeroize::Zeroizing;
 
 use super::crypto::{self, CryptoError, DEFAULT_KEY, MAX_ITERATIONS, MIN_ITERATIONS};
+use super::scan;
 use crate::error::ImportError;
 
 /// Files above this size are refused before parsing.
@@ -29,6 +30,30 @@ pub const MAX_PBKDF2_ITERATIONS: u64 = 20_000_000;
 const DEFAULT_ITERATIONS: u32 = 1000;
 /// The plaintext of the `Protected` attribute when the key is right.
 const PROTECTED_PLAINTEXT: &str = "ThisIsNotProtected";
+/// Most attributes one start tag may carry (a node of a real 2.6 file, the owner's fixture
+/// `owner-confCons.xml`, carries 114, so the cap is about 1.75 times that). `roxmltree` checks
+/// every new attribute against the earlier ones, so one tag with 100 000 attributes costs 21 s.
+pub const MAX_ATTRIBUTES_PER_TAG: usize = 200;
+/// Most namespace declarations (`xmlns`, `xmlns:p`) a document may carry in all (a real file has one,
+/// `xmlns:mrng` on the root). Each declaration is searched again by every later prefixed name, which
+/// is cubic over nested elements: 5 000 of them cost 55 s.
+pub const MAX_XMLNS_DECLARATIONS: usize = 8;
+/// Longest `Name` in characters. Longer names are cut (and reported): a name is copied into report
+/// lines, trails and the tree, so its length must not be attacker-chosen.
+pub const MAX_NAME_CHARS: usize = 256;
+/// Longest `Hostname` (a DNS name has at most 253). A longer value cannot be a host, so it is
+/// dropped (empty host, reported), never cut into a different host.
+pub const MAX_HOST_CHARS: usize = 256;
+/// Longest `Username`, `Domain` and `PuttySession` (cut; username and domain are reported, the
+/// PuTTY session is only shown in a report line).
+pub const MAX_IDENTITY_CHARS: usize = 256;
+/// Longest `Descr`; longer text is cut and reported.
+pub const MAX_DESCRIPTION_CHARS: usize = 4096;
+/// Longest `Protocol`; the only values that matter are `SSH2` and `RDP`.
+pub const MAX_PROTOCOL_CHARS: usize = 64;
+/// Longest `Password` attribute (base64 of salt, nonce, ciphertext and tag; a few hundred
+/// characters in practice). A longer one is treated as not decryptable, without deriving a key.
+pub const MAX_PASSWORD_CHARS: usize = 16 * 1024;
 /// Parser guard on all DOM nodes (elements and text); the real cap is `MAX_NODES` elements.
 const XML_NODES_LIMIT: u32 = 2_000_000;
 const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
@@ -51,6 +76,20 @@ pub struct Inherit {
     pub port: bool,
 }
 
+/// Which attributes of a node were longer than their cap and were cut (see the `MAX_*_CHARS`
+/// constants). The mapper turns each into a report line.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Clipped {
+    pub name: bool,
+    pub description: bool,
+    /// The host was too long to be one; `hostname` is empty then, never a cut-off host.
+    pub hostname: bool,
+    pub username: bool,
+    pub domain: bool,
+    /// `protocol` holds only the start of a value that cannot be a supported protocol.
+    pub protocol: bool,
+}
+
 #[derive(Clone)]
 pub struct RawNode {
     pub kind: RawKind,
@@ -68,6 +107,7 @@ pub struct RawNode {
     pub password_error: bool,
     pub inherit: Inherit,
     pub putty_session: String,
+    pub clipped: Clipped,
     pub children: Vec<RawNode>,
 }
 
@@ -108,6 +148,8 @@ fn shown(s: &str) -> String {
 }
 
 fn parse(text: &str) -> Result<roxmltree::Document<'_>, ImportError> {
+    // before roxmltree: it has no attribute or namespace limit, and both are superlinear
+    scan::check(text, MAX_ATTRIBUTES_PER_TAG, MAX_XMLNS_DECLARATIONS)?;
     let opts = roxmltree::ParsingOptions {
         allow_dtd: false,
         nodes_limit: XML_NODES_LIMIT,
@@ -142,8 +184,14 @@ fn flag(node: roxmltree::Node, name: &str) -> bool {
         .is_some_and(|v| v.trim().eq_ignore_ascii_case("true"))
 }
 
-fn attr(node: roxmltree::Node, name: &str) -> String {
-    node.attribute(name).unwrap_or_default().to_owned()
+/// An attribute as an owned string of at most `max` characters, and whether it was cut. The cut is
+/// found in `max` steps and only the kept part is copied, so a 16 MB value costs nothing here.
+fn attr(node: roxmltree::Node, name: &str, max: usize) -> (String, bool) {
+    let value = node.attribute(name).unwrap_or_default();
+    match value.char_indices().nth(max) {
+        None => (value.to_owned(), false),
+        Some((end, _)) => (value[..end].to_owned(), true),
+    }
 }
 
 fn malformed(e: CryptoError) -> ImportError {
@@ -340,7 +388,17 @@ fn read_node(
     counter: &mut usize,
     ctx: &Ctx,
 ) -> Result<RawNode, ImportError> {
-    let name = attr(el, "Name");
+    let (name, name_cut) = attr(el, "Name", MAX_NAME_CHARS);
+    let (description, description_cut) = attr(el, "Descr", MAX_DESCRIPTION_CHARS);
+    let (mut hostname, hostname_cut) = attr(el, "Hostname", MAX_HOST_CHARS);
+    if hostname_cut {
+        // too long to be a host: dropped, never cut into a different host
+        hostname.clear();
+    }
+    let (protocol, protocol_cut) = attr(el, "Protocol", MAX_PROTOCOL_CHARS);
+    let (username, username_cut) = attr(el, "Username", MAX_IDENTITY_CHARS);
+    let (domain, domain_cut) = attr(el, "Domain", MAX_IDENTITY_CHARS);
+    let (putty_session, _) = attr(el, "PuttySession", MAX_IDENTITY_CHARS);
     let kind = match el.attribute("Type").map(str::trim) {
         Some("Container") => RawKind::Container,
         Some("Connection") | None => RawKind::Connection,
@@ -355,6 +413,8 @@ fn read_node(
     };
     let (password, password_error) = match el.attribute("Password").map(str::trim) {
         None | Some("") => (None, false),
+        // far longer than any encrypted password: not worth deriving a key for
+        Some(secret) if secret.chars().nth(MAX_PASSWORD_CHARS).is_some() => (None, true),
         Some(secret) => match crypto::decrypt(secret, ctx.key, ctx.iterations) {
             Ok(p) if p.is_empty() => (None, false),
             Ok(p) => (Some(p), false),
@@ -367,13 +427,13 @@ fn read_node(
     };
     Ok(RawNode {
         kind,
-        description: attr(el, "Descr"),
-        hostname: attr(el, "Hostname"),
-        protocol: attr(el, "Protocol"),
+        description,
+        hostname,
+        protocol,
         port,
         port_invalid,
-        username: attr(el, "Username"),
-        domain: attr(el, "Domain"),
+        username,
+        domain,
         password,
         password_error,
         inherit: Inherit {
@@ -382,7 +442,15 @@ fn read_node(
             domain: flag(el, "InheritDomain"),
             port: flag(el, "InheritPort"),
         },
-        putty_session: attr(el, "PuttySession"),
+        putty_session,
+        clipped: Clipped {
+            name: name_cut,
+            description: description_cut,
+            hostname: hostname_cut,
+            username: username_cut,
+            domain: domain_cut,
+            protocol: protocol_cut,
+        },
         name,
         children,
     })

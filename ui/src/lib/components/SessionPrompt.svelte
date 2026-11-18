@@ -3,6 +3,7 @@
   import type { VaultStore } from "../vault.svelte";
   import HostKeyChangedPrompt from "./HostKeyChangedPrompt.svelte";
   import HostKeyPrompt from "./HostKeyPrompt.svelte";
+  import HostKeySyncedPrompt from "./HostKeySyncedPrompt.svelte";
   import NeedsVaultPrompt from "./NeedsVaultPrompt.svelte";
   import SecretsPrompt from "./SecretsPrompt.svelte";
 
@@ -26,6 +27,8 @@
   {#key asked.id}
     {#if asked.prompt.kind === "hostKey"}
       <HostKeyPrompt {tab} {sessions} prompt={asked.prompt} />
+    {:else if asked.prompt.kind === "hostKeySynced"}
+      <HostKeySyncedPrompt {tab} {sessions} prompt={asked.prompt} />
     {:else if asked.prompt.kind === "hostKeyChanged"}
       <HostKeyChangedPrompt {tab} {sessions} prompt={asked.prompt} />
     {:else}

@@ -49,6 +49,20 @@ test("session_prompt_picks_the_variant", async () => {
 
   await show({
     kind: "prompt",
+    id: 20,
+    prompt: {
+      kind: "hostKeySynced",
+      host: "h",
+      port: 22,
+      keyType: "ssh-ed25519",
+      fingerprint: "SHA256:x",
+      previous: [],
+    },
+  });
+  expect(title()).toBe("Confirm this host key?");
+
+  await show({
+    kind: "prompt",
     id: 2,
     prompt: {
       kind: "hostKeyChanged",

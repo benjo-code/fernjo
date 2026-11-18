@@ -6,6 +6,8 @@ use std::time::Duration;
 
 use secrecy::SecretString;
 
+use crate::known_hosts::KnownHosts;
+
 /// Credential to authenticate with. `Debug` is redacted.
 pub enum Credential {
     Password(SecretString),
@@ -37,6 +39,13 @@ pub struct ConnectParams {
     pub keepalive_secs: u32,
     pub credential: Option<Credential>,
     pub known_hosts: PathBuf,
+    /// Hosts this device has confirmed itself (an OpenSSH-format file outside the synced data
+    /// folder). A key found in `known_hosts` is trusted silently only when this file has it too;
+    /// otherwise the user is asked once. `None` and no `confirmed_in_memory`: the layer is off.
+    pub confirmed_hosts: Option<PathBuf>,
+    /// Process-lifetime stand-in for `confirmed_hosts` when the device has no folder for it
+    /// (a host then asks once per run). Used only when `confirmed_hosts` is `None`.
+    pub confirmed_in_memory: Option<KnownHosts>,
     pub cols: u32,
     pub rows: u32,
     pub connect_timeout: Duration,
@@ -54,6 +63,8 @@ impl ConnectParams {
             keepalive_secs: 30,
             credential: None,
             known_hosts,
+            confirmed_hosts: None,
+            confirmed_in_memory: None,
             cols: 80,
             rows: 24,
             connect_timeout: Self::DEFAULT_TIMEOUT,

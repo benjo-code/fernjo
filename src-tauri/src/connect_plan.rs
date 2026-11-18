@@ -94,6 +94,14 @@ pub fn resolve(
     if host.is_empty() {
         return Err(error("invalid_host", "the connection has no host"));
     }
+    // Refused before any session, prompt or network traffic: such a host cannot be recorded
+    // safely in `known_hosts` (see `fernjo_ssh::validate_host`).
+    if fernjo_ssh::validate_host(&host).is_err() {
+        return Err(error(
+            "invalid_host",
+            "the host name contains characters that are not allowed (use a DNS name or an IP address)",
+        ));
+    }
     let mut plan = ConnectPlan {
         host,
         port: node.port.effective.unwrap_or(DEFAULT_SSH_PORT),
@@ -442,6 +450,28 @@ mod tests {
         let st = state(dir.path());
         let c = conn(&st, None, "   ");
         assert_eq!(code(resolve(&st, c, false)), "invalid_host");
+    }
+
+    #[test]
+    fn a_host_that_cannot_be_recorded_in_known_hosts_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = state(dir.path());
+        for host in [
+            "evil,victim.corp",
+            "a b",
+            "x
+victim2",
+            "*.corp",
+            "[::1]",
+            &"a".repeat(256),
+        ] {
+            let c = conn(&st, None, host);
+            assert_eq!(code(resolve(&st, c, false)), "invalid_host", "{host:?}");
+        }
+        for host in ["web-01.lab", "10.0.0.1", "fe80::1%eth0", " padded.example "] {
+            let c = conn(&st, None, host);
+            assert_eq!(code(resolve(&st, c, false)), "ok", "{host:?}");
+        }
     }
 
     #[test]

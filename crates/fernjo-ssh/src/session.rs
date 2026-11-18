@@ -50,7 +50,19 @@ pub struct Session {
 }
 
 pub(crate) fn client_config(keepalive_secs: u32) -> client::Config {
+    // russh's default host key list ends with plain `ssh-rsa` (RSA over SHA-1), which OpenSSH
+    // stopped offering in 8.8. It would only be used for a host seen for the first time, but a
+    // SHA-1 signature is not worth the compatibility with servers that sign nothing better.
+    let mut preferred = client::Config::default().preferred;
+    let host_keys: Vec<Algorithm> = preferred
+        .key
+        .iter()
+        .filter(|alg| **alg != Algorithm::Rsa { hash: None })
+        .cloned()
+        .collect();
+    preferred.key = Cow::Owned(host_keys);
     client::Config {
+        preferred,
         keepalive_interval: (keepalive_secs > 0)
             .then(|| Duration::from_secs(u64::from(keepalive_secs))),
         keepalive_max: 3,
@@ -513,7 +525,15 @@ impl Session {
         params: ConnectParams,
         interaction: Arc<I>,
     ) -> Result<(Session, mpsc::Receiver<SessionEvent>), SshError> {
+        // Before any file access or network traffic: a host that cannot be recorded safely in
+        // `known_hosts` is never connected to.
+        crate::known_hosts::validate_host(&params.host)?;
         let known_hosts = KnownHosts::new(&params.known_hosts);
+        let confirmed = params
+            .confirmed_hosts
+            .as_ref()
+            .map(KnownHosts::new)
+            .or_else(|| params.confirmed_in_memory.clone());
         let mut config = client_config(params.keepalive_secs);
         let stored = known_hosts.stored_algorithms(&params.host, params.port)?;
         restrict_host_key_algorithms(&mut config, &stored);
@@ -537,6 +557,7 @@ impl Session {
             host: params.host.clone(),
             port: params.port,
             known_hosts,
+            confirmed,
             interaction: Arc::clone(&interaction),
             rejection: Arc::clone(&rejection),
             prompting: Arc::clone(&prompting),
@@ -717,6 +738,7 @@ mod tests {
         HostKeyChangedDecision, HostKeyChangedPrompt, HostKeyDecision, HostKeyPrompt,
     };
     use russh::client::Prompt;
+    use russh::keys::EcdsaCurve;
     use std::collections::VecDeque;
 
     /// Answers every keyboard-interactive prompt with "x"; nothing else is asked in these tests.
@@ -809,6 +831,114 @@ mod tests {
         assert_eq!(c.keepalive_interval, Some(Duration::from_secs(30)));
         assert_eq!(c.keepalive_max, 3);
         assert_eq!(client_config(0).keepalive_interval, None);
+    }
+
+    fn offered<T: AsRef<str>>(list: &[T]) -> Vec<&str> {
+        list.iter().map(AsRef::as_ref).collect()
+    }
+
+    /// The exact offered lists, in preference order (Docs/DECISIONS.md, "M6 security review: SSH
+    /// algorithm policy"). Any algorithm a russh upgrade adds, drops or reorders fails here and has
+    /// to be reviewed; update this test and the decision together.
+    #[test]
+    fn client_config_offers_exactly_the_reviewed_algorithms() {
+        let p = client_config(30).preferred;
+        assert_eq!(
+            offered(&p.kex),
+            [
+                "mlkem768x25519-sha256",
+                "curve25519-sha256",
+                "curve25519-sha256@libssh.org",
+                "diffie-hellman-group-exchange-sha256",
+                "diffie-hellman-group18-sha512",
+                "diffie-hellman-group17-sha512",
+                "diffie-hellman-group16-sha512",
+                "diffie-hellman-group15-sha512",
+                "diffie-hellman-group14-sha256",
+                // extension markers, not algorithms
+                "ext-info-c",
+                "ext-info-s",
+                "kex-strict-c-v00@openssh.com",
+                "kex-strict-s-v00@openssh.com",
+            ],
+            "key exchange"
+        );
+        assert_eq!(
+            offered(&p.cipher),
+            [
+                "chacha20-poly1305@openssh.com",
+                "aes256-gcm@openssh.com",
+                "aes256-ctr",
+                "aes192-ctr",
+                "aes128-ctr",
+            ],
+            "ciphers"
+        );
+        assert_eq!(
+            offered(&p.mac),
+            [
+                "hmac-sha2-512-etm@openssh.com",
+                "hmac-sha2-256-etm@openssh.com",
+                "hmac-sha2-512",
+                "hmac-sha2-256",
+            ],
+            "MACs"
+        );
+        assert_eq!(
+            p.key.as_ref(),
+            [
+                Algorithm::Ed25519,
+                Algorithm::Ecdsa {
+                    curve: EcdsaCurve::NistP256
+                },
+                Algorithm::Ecdsa {
+                    curve: EcdsaCurve::NistP384
+                },
+                Algorithm::Ecdsa {
+                    curve: EcdsaCurve::NistP521
+                },
+                Algorithm::Rsa {
+                    hash: Some(HashAlg::Sha512)
+                },
+                Algorithm::Rsa {
+                    hash: Some(HashAlg::Sha256)
+                },
+            ],
+            "host key algorithms"
+        );
+        assert_eq!(
+            offered(&p.compression),
+            ["none", "zlib", "zlib@openssh.com"],
+            "compression"
+        );
+    }
+
+    /// Second line of defence with its own message: even if the exact lists above are updated by
+    /// mistake, a SHA-1, CBC, 3DES, group1 or plain `ssh-rsa` entry must not slip in.
+    #[test]
+    fn client_config_offers_no_weak_algorithms() {
+        let p = client_config(30).preferred;
+        for name in offered(&p.kex) {
+            for weak in ["sha1", "group1-"] {
+                assert!(!name.contains(weak), "weak key exchange offered: {name}");
+            }
+        }
+        for name in offered(&p.cipher) {
+            for weak in ["cbc", "3des", "arcfour", "none"] {
+                assert!(!name.contains(weak), "weak cipher offered: {name}");
+            }
+        }
+        for name in offered(&p.mac) {
+            for weak in ["sha1", "md5", "none"] {
+                assert!(!name.contains(weak), "weak MAC offered: {name}");
+            }
+        }
+        // plain `ssh-rsa` (an RSA signature over SHA-1) is no longer offered by OpenSSH either
+        assert!(
+            !p.key.contains(&Algorithm::Rsa { hash: None }),
+            "ssh-rsa (SHA-1) host key offered: {:?}",
+            p.key
+        );
     }
 
     #[test]

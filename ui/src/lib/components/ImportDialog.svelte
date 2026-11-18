@@ -183,7 +183,9 @@
       vaultError =
         err.code === "wrong_password"
           ? "Wrong master password. Check Caps Lock and try again."
-          : err.message;
+          : err.code === "rolled_back"
+            ? `${err.message} Unlock from the vault note to review it.`
+            : err.message;
       await tick();
       vaultField?.focus();
       return;

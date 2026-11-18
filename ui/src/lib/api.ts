@@ -33,6 +33,7 @@ export const tauriApi: Api = {
   vaultStatus: () => call("vault_status"),
   vaultCreate: (password, remember) => call("vault_create", { password, remember }),
   vaultUnlock: (password, remember) => call("vault_unlock", { password, remember }),
+  vaultUnlockOlder: (password, remember) => call("vault_unlock_older", { password, remember }),
   vaultLock: () => call("vault_lock"),
   // the Rust parameters are named `old` and `new`
   vaultChangePassword: (old, next) => call("vault_change_password", { old, new: next }),
@@ -64,6 +65,8 @@ export const tauriApi: Api = {
   openExternalUrl: (url) => call("open_external_url", { url }),
   getTerminalSettings: () => call("get_terminal_settings"),
   setTerminalSettings: (settings) => call("set_terminal_settings", { settings }),
+  getTheme: () => call("get_theme"),
+  setTheme: (theme) => call("set_theme", { theme }),
   importPick: (kind) => call("import_pick", { kind }),
   importInspect: (secret) => call("import_inspect", { secret }),
   importApply: (options) => call("import_apply", { options }),

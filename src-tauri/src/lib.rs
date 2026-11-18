@@ -1,7 +1,9 @@
+mod app_settings;
 mod commands;
 mod connect_plan;
 mod data_folder;
 mod import_commands;
+mod nav_guard;
 mod session_commands;
 mod session_flow;
 mod sessions;
@@ -22,8 +24,8 @@ pub fn run() {
         // The single-instance plugin must stay the first plugin so a second launch is
         // intercepted before any other plugin initialises. (`AppState::open_for_app` below runs
         // while the builder is assembled, i.e. also in a second launch; it reads the data files and
-        // the keychain (auto-unlock), may delete a stale keychain item and, on macOS, may trigger a
-        // keychain prompt.)
+        // the keychain (auto-unlock; it never deletes the item) and, on macOS, may trigger a keychain
+        // prompt.)
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
@@ -31,6 +33,7 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
+        .plugin(nav_guard::plugin())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::open_for_app(fernjo_core::locate()))
@@ -59,6 +62,7 @@ pub fn run() {
             vault_commands::handlers::vault_status,
             vault_commands::handlers::vault_create,
             vault_commands::handlers::vault_unlock,
+            vault_commands::handlers::vault_unlock_older,
             vault_commands::handlers::vault_lock,
             vault_commands::handlers::vault_change_password,
             vault_commands::handlers::vault_set_auto_unlock,
@@ -72,6 +76,8 @@ pub fn run() {
             data_folder::handlers::get_data_folder,
             data_folder::handlers::choose_data_folder,
             data_folder::handlers::restart_app,
+            app_settings::handlers::get_theme,
+            app_settings::handlers::set_theme,
             session_commands::handlers::get_terminal_settings,
             session_commands::handlers::set_terminal_settings,
             session_commands::handlers::open_session,

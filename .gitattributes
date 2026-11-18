@@ -29,3 +29,6 @@
 # Lock files: generated, no diffs
 Cargo.lock -diff linguist-generated
 pnpm-lock.yaml -diff linguist-generated
+
+# Vault files are binary
+*.fernjo binary

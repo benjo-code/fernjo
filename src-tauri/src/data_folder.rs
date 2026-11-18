@@ -144,6 +144,30 @@ fn copy_data_files(from: &Path, target: &Path) -> Result<Vec<String>, CommandErr
     Ok(Vec::new())
 }
 
+/// Canonicalises `p` even when its tail does not exist yet: the longest existing ancestor is
+/// canonicalised (so Windows verbatim prefixes and letter case match a canonicalised path) and
+/// the remaining components are appended, with `.` dropped and `..` applied lexically.
+fn canonical_lenient(p: &Path) -> PathBuf {
+    use std::path::Component;
+    for ancestor in p.ancestors() {
+        let Ok(mut resolved) = fs::canonicalize(ancestor) else {
+            continue;
+        };
+        let tail = p.strip_prefix(ancestor).unwrap_or(Path::new(""));
+        for component in tail.components() {
+            match component {
+                Component::Normal(name) => resolved.push(name),
+                Component::ParentDir => {
+                    resolved.pop();
+                }
+                _ => {}
+            }
+        }
+        return resolved;
+    }
+    p.to_path_buf()
+}
+
 /// Moves the data folder: copies the data files (only into a folder that has neither of them),
 /// writes `settings.json` and flags `restart_required`. The running app keeps using the old
 /// folder. Choosing again while a restart is pending is allowed (the last choice wins);
@@ -172,6 +196,18 @@ pub fn apply_data_folder(state: &AppState, target: &Path) -> Result<DataFolderIn
     }
     check_writable(target).map_err(|e| not_usable(target, e))?;
     let canonical_target = fs::canonicalize(target).map_err(|e| not_usable(target, e))?;
+    // The device folder holds state that must never sync, so no data folder may be, hold or sit
+    // inside it. A device folder that does not exist yet is resolved
+    // with `canonical_lenient` (its existing part canonicalised, the rest appended lexically).
+    if let Some(device) = &state.device_dir {
+        let device = canonical_lenient(device);
+        if canonical_target.starts_with(&device) || device.starts_with(&canonical_target) {
+            return Err(error(
+                "folder_device_dir",
+                "this folder cannot be used: it is, contains or lies inside the folder where fernjo keeps state that must stay on this device",
+            ));
+        }
+    }
     let current = state
         .data_dir
         .as_ref()
@@ -470,6 +506,84 @@ mod tests {
         assert!(!restart_required(&st));
         assert!(!settings_path(config.path()).exists());
         assert_eq!(fs::read_dir(&inside).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn the_device_folder_is_refused_when_equal_parent_or_child() {
+        let [data, config, local] = dirs();
+        let device = local.path().join("fernjo-device");
+        fs::create_dir(&device).unwrap();
+        let child = device.join("sub");
+        fs::create_dir(&child).unwrap();
+        let mut st = state(data.path(), config.path(), DataDirSource::Default);
+        st.device_dir = Some(device.clone());
+        for target in [device.as_path(), local.path(), child.as_path()] {
+            assert_eq!(
+                code(apply_data_folder(&st, target)),
+                "folder_device_dir",
+                "{}",
+                target.display()
+            );
+        }
+        // a spelling through `..` does not get around it
+        let sneaky = child.join("..");
+        assert_eq!(code(apply_data_folder(&st, &sneaky)), "folder_device_dir");
+        assert!(!restart_required(&st));
+        assert!(!settings_path(config.path()).exists());
+        assert_eq!(fs::read_dir(&child).unwrap().count(), 0);
+        // an unrelated folder is still fine; a device folder that does not exist yet is too
+        let other = tempfile::tempdir().unwrap();
+        assert!(apply_data_folder(&st, other.path()).is_ok());
+        st.device_dir = Some(local.path().join("not-created-yet"));
+        assert!(apply_data_folder(&st, data.path()).is_ok());
+    }
+
+    #[test]
+    fn a_device_folder_that_does_not_exist_yet_still_blocks_its_parent() {
+        let [data, config, local] = dirs();
+        let device = local.path().join("fernjo-device");
+        assert!(!device.exists());
+        let mut st = state(data.path(), config.path(), DataDirSource::Default);
+        st.device_dir = Some(device.clone());
+        // the parent (canonicalised to a verbatim path on Windows), also with `..` and a
+        // trailing separator
+        let dotted = local.path().join("x").join("..");
+        fs::create_dir(local.path().join("x")).unwrap();
+        for target in [local.path().to_path_buf(), dotted] {
+            assert_eq!(
+                code(apply_data_folder(&st, &target)),
+                "folder_device_dir",
+                "{}",
+                target.display()
+            );
+        }
+        let mut trailing = local.path().as_os_str().to_owned();
+        trailing.push(std::path::MAIN_SEPARATOR_STR);
+        assert_eq!(
+            code(apply_data_folder(&st, Path::new(&trailing))),
+            "folder_device_dir"
+        );
+        // a device folder spelled with `..` that does not exist is resolved too
+        st.device_dir = Some(local.path().join("gone").join("..").join("fernjo-device"));
+        assert_eq!(
+            code(apply_data_folder(&st, local.path())),
+            "folder_device_dir"
+        );
+        // an unrelated sibling is allowed
+        let sibling = local.path().join("sibling");
+        fs::create_dir(&sibling).unwrap();
+        st.device_dir = Some(device);
+        assert!(apply_data_folder(&st, &sibling).is_ok());
+        assert!(restart_required(&st));
+    }
+
+    #[test]
+    fn canonical_lenient_resolves_the_existing_part_and_keeps_the_rest() {
+        let base = tempfile::tempdir().unwrap();
+        let real = fs::canonicalize(base.path()).unwrap();
+        let missing = base.path().join("a").join("..").join("b").join("c");
+        assert_eq!(canonical_lenient(&missing), real.join("b").join("c"));
+        assert_eq!(canonical_lenient(base.path()), real);
     }
 
     #[test]

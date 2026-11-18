@@ -518,3 +518,266 @@ fn full_file_encryption_is_counted_after_the_body_is_decrypted() {
     let err = read(full_file(&node.repeat(limit - 1)).as_bytes(), None).unwrap_err();
     assert!(matches!(err, ImportError::TooComplex(_)), "{err:?}");
 }
+
+// ---- hostile XML shapes (security review H1): refused before roxmltree parses them ----
+
+use fernjo_import::mremoteng::file::{MAX_ATTRIBUTES_PER_TAG, MAX_XMLNS_DECLARATIONS};
+use std::time::{Duration, Instant};
+
+/// Time bound for refusing a hostile file (debug build; the real cost is a few milliseconds).
+const REFUSE_WITHIN: Duration = Duration::from_secs(1);
+
+fn refused_quickly(text: &str) -> ImportError {
+    let start = Instant::now();
+    let err = read(text.as_bytes(), None).unwrap_err();
+    let took = start.elapsed();
+    assert!(took < REFUSE_WITHIN, "took {took:?}");
+    err
+}
+
+fn attributes(n: usize) -> String {
+    (0..n).map(|i| format!(r#" a{i}="""#)).collect()
+}
+
+#[test]
+fn one_tag_with_tens_of_thousands_of_attributes_is_refused_quickly() {
+    // review H1: N = 100 000 took 21 s; 30 000 keeps the red run short
+    let body = format!(
+        r#"<Node Name="n" Type="Connection" Protocol="SSH2"{}/>"#,
+        attributes(30_000)
+    );
+    let err = refused_quickly(&small_ok(&body));
+    assert!(matches!(err, ImportError::TooComplex(_)), "{err:?}");
+    assert_eq!(err.code(), "too_complex");
+}
+
+#[test]
+fn the_attribute_cap_is_an_exact_boundary() {
+    // Name, Type and Protocol are three of them
+    let at = MAX_ATTRIBUTES_PER_TAG - 3;
+    let ok = format!(
+        r#"<Node Name="n" Type="Connection" Protocol="SSH2"{}/>"#,
+        attributes(at)
+    );
+    assert_eq!(read(small_ok(&ok).as_bytes(), None).unwrap().nodes.len(), 1);
+    let over = format!(
+        r#"<Node Name="n" Type="Connection" Protocol="SSH2"{}/>"#,
+        attributes(at + 1)
+    );
+    assert!(matches!(
+        read(small_ok(&over).as_bytes(), None).unwrap_err(),
+        ImportError::TooComplex(_)
+    ));
+}
+
+#[test]
+fn nested_elements_with_their_own_namespace_declarations_are_refused_quickly() {
+    // review H1: 2 500 nested `<a xmlns:pN="uN" pN:x="1">` took 6.3 s, 5 000 took 55 s
+    let n = 2_500;
+    let mut body = String::new();
+    for i in 0..n {
+        body.push_str(&format!(r#"<a xmlns:p{i}="u{i}" p{i}:x="1">"#));
+    }
+    for _ in 0..n {
+        body.push_str("</a>");
+    }
+    let err = refused_quickly(&small_ok(&body));
+    assert!(matches!(err, ImportError::TooComplex(_)), "{err:?}");
+}
+
+#[test]
+fn the_namespace_cap_is_an_exact_boundary_and_counts_the_whole_file() {
+    // the root of `small_ok` has none; spread the declarations over many elements
+    let decl = |n: usize| -> String {
+        (0..n)
+            .map(|i| format!(r#"<x xmlns:q{i}="u{i}"/>"#))
+            .collect()
+    };
+    let ok = small_ok(&decl(MAX_XMLNS_DECLARATIONS));
+    assert!(read(ok.as_bytes(), None).is_ok());
+    let over = small_ok(&decl(MAX_XMLNS_DECLARATIONS + 1));
+    assert!(matches!(
+        read(over.as_bytes(), None).unwrap_err(),
+        ImportError::TooComplex(_)
+    ));
+    // a default namespace declaration counts too
+    let defaults: String = (0..=MAX_XMLNS_DECLARATIONS)
+        .map(|i| format!(r#"<x xmlns="u{i}"/>"#))
+        .collect();
+    assert!(matches!(
+        read(small_ok(&defaults).as_bytes(), None).unwrap_err(),
+        ImportError::TooComplex(_)
+    ));
+}
+
+#[test]
+fn a_large_but_legitimate_file_is_still_read() {
+    // 5 000 nodes with 60 attributes each and one namespace declaration on the root, like the
+    // owner's real file
+    let node = format!(
+        r#"<Node Name="n" Type="Connection" Protocol="SSH2" Hostname="h"{}/>"#,
+        attributes(55)
+    );
+    let text = small_ok(&node.repeat(5_000)).replacen(
+        "<Connections ",
+        r#"<Connections xmlns:mrng="http://mremoteng.org" "#,
+        1,
+    );
+    let doc = read(text.as_bytes(), None).unwrap();
+    assert_eq!(doc.nodes.len(), 5_000);
+}
+
+#[test]
+fn xmlns_and_markup_inside_values_comments_and_cdata_do_not_count() {
+    let noise = r#"title="xmlns:a xmlns:b xmlns:c xmlns:d xmlns:e xmlns:f xmlns:g xmlns:h xmlns:i > '" other='" xmlns:j'"#;
+    let body = format!(
+        r#"<!-- xmlns:a="1" xmlns:b="2" xmlns:c="3" xmlns:d="4" xmlns:e="5" xmlns:f="6" xmlns:g="7" xmlns:h="8" xmlns:i="9" --><Node Name="n" Type="Connection" Protocol="SSH2" {noise}/><![CDATA[ <x xmlns:a="1"/> xmlns xmlns xmlns xmlns xmlns xmlns xmlns xmlns xmlns xmlns ]]>"#
+    );
+    assert_eq!(
+        read(small_ok(&body).as_bytes(), None).unwrap().nodes.len(),
+        1
+    );
+}
+
+#[test]
+fn hostile_shapes_hidden_behind_decoys_are_still_refused() {
+    // a comment, CDATA and quoted `>` / `<!--` / `]]>` in front must not hide the real tag
+    let decoys = r#"<!-- <a q=" --><![CDATA[ <a q=" ]]><Node Name="<!-- ]]> -->" Type='"' Protocol="SSH2"/>"#;
+    let body = format!(
+        r#"{decoys}<Node Name="n" Type="Connection" Protocol="SSH2"{}/>"#,
+        attributes(MAX_ATTRIBUTES_PER_TAG + 1)
+    );
+    assert!(matches!(
+        read(small_ok(&body).as_bytes(), None).unwrap_err(),
+        ImportError::TooComplex(_)
+    ));
+    // an attribute value with the other kind of quote and a `>` before the many attributes
+    let body = format!(
+        r#"<Node Name='a"b>c' Type="Connection" Protocol="SSH2"{}/>"#,
+        attributes(MAX_ATTRIBUTES_PER_TAG + 1)
+    );
+    assert!(matches!(
+        read(small_ok(&body).as_bytes(), None).unwrap_err(),
+        ImportError::TooComplex(_)
+    ));
+}
+
+#[test]
+fn a_hostile_full_file_body_is_refused_after_decryption() {
+    // the default key is tried without a typed key, so anybody can build such a file
+    let inner = format!(
+        r#"<Node Name="n" Type="Connection" Protocol="SSH2"{}/>"#,
+        attributes(5_000)
+    );
+    let start = Instant::now();
+    let err = read(full_file(&inner).as_bytes(), None).unwrap_err();
+    assert!(start.elapsed() < REFUSE_WITHIN);
+    assert!(matches!(err, ImportError::TooComplex(_)), "{err:?}");
+}
+
+// ---- string caps (security review H2) ----
+
+use fernjo_import::mremoteng::file::{
+    MAX_DESCRIPTION_CHARS, MAX_HOST_CHARS, MAX_IDENTITY_CHARS, MAX_NAME_CHARS, MAX_PASSWORD_CHARS,
+    MAX_PROTOCOL_CHARS,
+};
+use fernjo_import::mremoteng::plan;
+
+fn one_node(attrs: &str) -> RawNode {
+    let body = format!(r#"<Node Type="Connection" Protocol="SSH2" {attrs}/>"#);
+    read(small_ok(&body).as_bytes(), None)
+        .unwrap()
+        .nodes
+        .remove(0)
+}
+
+#[test]
+fn values_exactly_at_their_caps_are_read_unchanged() {
+    let name = "ñ".repeat(MAX_NAME_CHARS);
+    let host = "h".repeat(MAX_HOST_CHARS);
+    let user = "u".repeat(MAX_IDENTITY_CHARS);
+    let domain = "d".repeat(MAX_IDENTITY_CHARS);
+    let descr = "x".repeat(MAX_DESCRIPTION_CHARS);
+    let n = one_node(&format!(
+        r#"Name="{name}" Hostname="{host}" Username="{user}" Domain="{domain}" Descr="{descr}""#
+    ));
+    assert_eq!(n.name, name);
+    assert_eq!(n.hostname, host);
+    assert_eq!(n.username, user);
+    assert_eq!(n.domain, domain);
+    assert_eq!(n.description, descr);
+    assert_eq!(n.clipped, Default::default());
+    // and through the mapper into the imported node
+    let p = plan(&RawDocument { nodes: vec![n] }, "2026-11-18", &[]);
+    let fernjo_core::NodeKind::Folder { children } = &p.folder.kind else {
+        panic!("folder")
+    };
+    assert_eq!(children[0].name, name);
+    assert_eq!(children[0].description, descr);
+    // nothing was cut, so no line says so (the domain line is the unrelated "no password" one)
+    let lines = p.report.partial.iter().chain(&p.report.problems);
+    assert!(lines.clone().all(|l| !l.text.contains("longer than")));
+    assert_eq!(lines.count(), 1);
+}
+
+#[test]
+fn values_over_their_caps_are_cut_and_flagged() {
+    let n = one_node(&format!(
+        r#"Name="{}" Hostname="{}" Username="{}" Domain="{}" Descr="{}""#,
+        "n".repeat(MAX_NAME_CHARS + 1),
+        "h".repeat(MAX_HOST_CHARS + 1),
+        "u".repeat(MAX_IDENTITY_CHARS + 1),
+        "d".repeat(MAX_IDENTITY_CHARS + 1),
+        "x".repeat(MAX_DESCRIPTION_CHARS + 1),
+    ));
+    assert_eq!(n.name.chars().count(), MAX_NAME_CHARS);
+    assert_eq!(n.username.chars().count(), MAX_IDENTITY_CHARS);
+    assert_eq!(n.domain.chars().count(), MAX_IDENTITY_CHARS);
+    assert_eq!(n.description.chars().count(), MAX_DESCRIPTION_CHARS);
+    // a host that is too long to be one is dropped, never cut into another host
+    assert_eq!(n.hostname, "");
+    assert!(n.clipped.name && n.clipped.hostname && n.clipped.username);
+    assert!(n.clipped.domain && n.clipped.description && !n.clipped.protocol);
+}
+
+#[test]
+fn an_overlong_protocol_is_flagged_and_an_overlong_password_is_not_decrypted() {
+    let n = one_node(&format!(
+        r#"Name="n" Password="{}""#,
+        "A".repeat(MAX_PASSWORD_CHARS + 1)
+    ));
+    assert!(n.password.is_none() && n.password_error);
+    let body = format!(
+        r#"<Node Name="n" Type="Connection" Protocol="SSH2{}x"/>"#,
+        " ".repeat(MAX_PROTOCOL_CHARS)
+    );
+    let n = read(small_ok(&body).as_bytes(), None)
+        .unwrap()
+        .nodes
+        .remove(0);
+    assert!(n.clipped.protocol);
+    assert!(n.protocol.chars().count() <= MAX_PROTOCOL_CHARS);
+}
+
+#[test]
+fn a_file_of_huge_names_reads_and_plans_quickly() {
+    // review input A end to end, scaled down: 2 MB name, 10 000 unsupported children
+    let kids = r#"<Node Name="x" Type="Connection" Protocol="X"/>"#.repeat(10_000);
+    let body = format!(
+        r#"<Node Name="{}" Type="Container">{kids}</Node>"#,
+        "N".repeat(2_000_000)
+    );
+    let start = Instant::now();
+    let doc = read(small_ok(&body).as_bytes(), None).unwrap();
+    let p = plan(&doc, "2026-11-18", &[]);
+    let took = start.elapsed();
+    assert!(took < Duration::from_secs(2), "took {took:?}");
+    assert_eq!(p.report.counts.skipped, 10_000);
+    // the cut name is reported once, not once per child
+    assert!(
+        p.report
+            .partial
+            .iter()
+            .any(|l| l.text.contains("shortened to"))
+    );
+}

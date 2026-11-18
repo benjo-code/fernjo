@@ -8,15 +8,15 @@ use crate::error::TreeError;
 use crate::model::{CredentialId, Node, NodeId, NodeKind, Protocol, ResolvedNode, Settings};
 use crate::resolve::resolve;
 
-/// Deepest nesting a whole subtree may have when it is added with [`Tree::graft`] or the tree
-/// is replaced: the top level is level 1, so a connection may sit at level 60.
+/// Deepest nesting the tree may have: the top level is level 1, so a connection may sit at level
+/// 60. Every way to add or move a node ([`Tree::graft`], the `create_*` calls, [`Tree::move_node`],
+/// [`Tree::duplicate`]) and replacing the whole tree refuse more with `TooDeep`.
 ///
 /// `connections.json` is read with serde_json's recursion limit of 128 nested JSON levels. A
 /// node costs two levels (object and `children` array) and a connection's `settings` one more,
 /// so a connection at level 62 still loads from the file and from a backup body (which nests
 /// the document one object deeper; a test finds the edge by parsing). 60 keeps a margin of
-/// two levels. Creating or moving nodes by hand is not checked against it (see
-/// `Docs/DECISIONS.md`).
+/// two levels.
 pub const MAX_TREE_DEPTH: usize = 60;
 
 /// A change to one inheritable setting.
@@ -207,7 +207,42 @@ impl Tree {
         }
     }
 
+    /// The level of the folder `parent` (the top level is level 1), 0 for `None`, the top level
+    /// itself. The parent must exist.
+    fn level_of(&self, parent: Option<NodeId>) -> usize {
+        match parent {
+            None => 0,
+            Some(pid) => {
+                let mut trail = Vec::new();
+                ancestors(&self.children, pid, &mut trail);
+                trail.len() + 1
+            }
+        }
+    }
+
+    /// `TooDeep` when `node` (with everything below it) put below `parent` would reach past
+    /// `MAX_TREE_DEPTH`. `parent` must exist.
+    fn check_depth(&self, parent: Option<NodeId>, node: &Node) -> Result<(), TreeError> {
+        if self.level_of(parent) + subtree_depth(node) > MAX_TREE_DEPTH {
+            return Err(TreeError::TooDeep);
+        }
+        Ok(())
+    }
+
     fn insert(
+        &mut self,
+        parent: Option<NodeId>,
+        index: Option<usize>,
+        node: Node,
+    ) -> Result<NodeId, TreeError> {
+        // a bad parent reports as such; then the depth, then the position
+        self.siblings_mut(parent)?;
+        self.check_depth(parent, &node)?;
+        self.insert_unchecked(parent, index, node)
+    }
+
+    /// `insert` without the depth check, for a node that keeps its level (a reorder).
+    fn insert_unchecked(
         &mut self,
         parent: Option<NodeId>,
         index: Option<usize>,
@@ -253,17 +288,7 @@ impl Tree {
         }
         // validate the parent first so a bad parent reports as such
         self.siblings_mut(parent)?;
-        let parent_level = match parent {
-            None => 0,
-            Some(pid) => {
-                let mut trail = Vec::new();
-                ancestors(&self.children, pid, &mut trail);
-                trail.len() + 1
-            }
-        };
-        if parent_level + subtree_depth(&node) > MAX_TREE_DEPTH {
-            return Err(TreeError::TooDeep);
-        }
+        self.check_depth(parent, &node)?;
         // one set of the existing ids: O(tree + subtree), not a tree search per grafted node
         let mut existing = HashSet::new();
         collect(&self.children, &mut existing);
@@ -382,8 +407,10 @@ impl Tree {
         walk(&mut self.children, id)
     }
 
-    /// Moves `id` below `new_parent`. `index` counts among the new parent's children
-    /// after `id` was taken out; `index == len` appends. Nothing changes on error.
+    /// Moves `id` (with its subtree) below `new_parent`. `index` counts among the new parent's
+    /// children after `id` was taken out; `index == len` appends. Refuses with `TooDeep` when the
+    /// moved subtree would reach past `MAX_TREE_DEPTH`; a move inside the same parent is never
+    /// refused for that. Nothing changes on error.
     pub fn move_node(
         &mut self,
         id: NodeId,
@@ -413,9 +440,20 @@ impl Tree {
         if index > target_len {
             return Err(TreeError::IndexOutOfRange);
         }
+        // the new parent is not inside the moved subtree, so taking the node out does not change
+        // its level: check the whole subtree before anything is taken out. A move inside the same
+        // parent keeps every level as it is (the tree may already be deeper than the limit, as
+        // an older version could write it), so reordering is never refused as too deep.
+        if old_parent != new_parent {
+            self.check_depth(new_parent, node)?;
+        }
 
         let moved = self.take(id).ok_or(TreeError::NotFound(id))?;
-        self.insert(new_parent, Some(index), moved)?;
+        if old_parent == new_parent {
+            self.insert_unchecked(new_parent, Some(index), moved)?;
+        } else {
+            self.insert(new_parent, Some(index), moved)?;
+        }
         Ok(())
     }
 
@@ -1174,5 +1212,193 @@ mod tests {
         for (e, code) in all {
             assert_eq!(e.code(), code);
         }
+    }
+
+    // ---- the depth limit holds on every path that adds or moves a node -----
+
+    /// Nested folders created one by one at levels 1..=`levels`; their ids, top-down.
+    fn nested_folders(t: &mut Tree, levels: usize) -> Vec<NodeId> {
+        let mut ids = Vec::new();
+        let mut parent = None;
+        for i in 0..levels {
+            let id = folder(t, parent, &format!("f{i}"));
+            ids.push(id);
+            parent = Some(id);
+        }
+        ids
+    }
+
+    /// The node reached by always taking the first child.
+    fn deepest(t: &Tree) -> NodeId {
+        let mut node = &t.children()[0];
+        while let NodeKind::Folder { children } = &node.kind {
+            match children.first() {
+                Some(c) => node = c,
+                None => break,
+            }
+        }
+        node.id
+    }
+
+    #[test]
+    fn create_stops_at_the_depth_limit_and_leaves_the_tree_unchanged() {
+        let mut t = Tree::new();
+        let ids = nested_folders(&mut t, MAX_TREE_DEPTH - 1); // levels 1..=59
+        let level_59 = *ids.last().unwrap();
+        // a folder and a connection at level 60 are fine
+        let level_60 = t.create_folder(Some(level_59), None, "level 60").unwrap();
+        ssh(&mut t, Some(level_59), "leaf 60");
+        assert_eq!(t.depth(), MAX_TREE_DEPTH);
+        let before = t.clone();
+        // level 61 is not, for either kind and at any index
+        let err = t.create_folder(Some(level_60), None, "61").unwrap_err();
+        assert_eq!(err, TreeError::TooDeep);
+        assert_eq!(err.code(), "too_deep");
+        let err = t
+            .create_connection(Some(level_60), Some(0), "61", Protocol::Ssh, "h")
+            .unwrap_err();
+        assert_eq!(err, TreeError::TooDeep);
+        assert_eq!(t, before);
+    }
+
+    #[test]
+    fn hand_made_nesting_after_a_deep_graft_is_refused_where_graft_would() {
+        // the review's sequence: the deepest tree an import accepts, then folders by hand
+        let mut t = Tree::new();
+        t.graft(None, chain(MAX_TREE_DEPTH - 2)).unwrap(); // folders 1..=58, leaf at 59
+        let mut parent = *nested_ids(&t).last().unwrap();
+        let mut refused = 0;
+        for i in 0..6 {
+            match t.create_folder(Some(parent), None, &format!("hand-{i}")) {
+                Ok(id) => parent = id,
+                Err(e) => {
+                    assert_eq!(e, TreeError::TooDeep);
+                    refused += 1;
+                }
+            }
+        }
+        assert_eq!(t.depth(), MAX_TREE_DEPTH);
+        assert!(refused >= 4, "{refused}");
+    }
+
+    /// Ids of the folders on the first-child path, top-down.
+    fn nested_ids(t: &Tree) -> Vec<NodeId> {
+        let mut out = Vec::new();
+        let mut nodes = t.children();
+        while let Some(
+            first @ Node {
+                kind: NodeKind::Folder { children },
+                ..
+            },
+        ) = nodes.first()
+        {
+            out.push(first.id);
+            nodes = children;
+        }
+        out
+    }
+
+    #[test]
+    fn move_checks_the_height_of_the_whole_moved_subtree() {
+        let mut t = Tree::new();
+        let ids = nested_folders(&mut t, MAX_TREE_DEPTH - 2); // levels 1..=58
+        let target = *ids.last().unwrap();
+        // a subtree of three levels: folder, folder, connection
+        let outer = folder(&mut t, None, "outer");
+        let mid = folder(&mut t, Some(outer), "mid");
+        let leaf_id = ssh(&mut t, Some(mid), "leaf");
+        let before = t.clone();
+        // below level 58 its connection would sit at 58 + 3 = 61
+        assert_eq!(
+            t.move_node(outer, Some(target), 0).unwrap_err(),
+            TreeError::TooDeep
+        );
+        assert_eq!(t, before);
+        // `mid` has two levels and ends at 60: fine (it now sits at level 59)
+        t.move_node(mid, Some(target), 0).unwrap();
+        assert_eq!(t.depth(), MAX_TREE_DEPTH);
+
+        // a folder at level 60 takes nothing more: the move is refused, the tree stays as it is
+        let f60 = folder(&mut t, None, "f60");
+        t.move_node(f60, Some(mid), 0).unwrap();
+        let c = ssh(&mut t, None, "c");
+        let snapshot = t.clone();
+        assert_eq!(
+            t.move_node(c, Some(f60), 0).unwrap_err(),
+            TreeError::TooDeep
+        );
+        assert_eq!(t, snapshot);
+
+        // reordering inside a folder at the limit is not a deeper move
+        t.move_node(leaf_id, Some(mid), 1).unwrap();
+        assert_eq!(t.depth(), MAX_TREE_DEPTH);
+    }
+
+    #[test]
+    fn reordering_inside_an_already_too_deep_folder_is_allowed() {
+        // a tree from an older version (or a hand-edited file) at the deepest level that still
+        // loads: 60 folders, a bottom folder at level 61, two connections at level 62
+        let mut node = branch("bottom", vec![leaf("a"), leaf("b")]);
+        for i in 0..60 {
+            node = branch(&format!("level-{i}"), vec![node]);
+        }
+        let mut t = Tree::from_children(vec![node]);
+        assert_eq!(t.depth(), MAX_TREE_DEPTH + 2);
+        let ids = nested_ids(&t);
+        let (bottom, level_59) = (ids[60], ids[58]);
+        let children_of = |t: &Tree, id: NodeId| -> Vec<String> {
+            match &t.get(id).unwrap().kind {
+                NodeKind::Folder { children } => children.iter().map(|c| c.name.clone()).collect(),
+                NodeKind::Connection { .. } => unreachable!(),
+            }
+        };
+        let a = match &t.get(bottom).unwrap().kind {
+            NodeKind::Folder { children } => children[0].id,
+            NodeKind::Connection { .. } => unreachable!(),
+        };
+
+        // same parent: no level changes, so the move cannot be "too deep"
+        t.move_node(a, Some(bottom), 1).unwrap();
+        assert_eq!(children_of(&t, bottom), ["b", "a"]);
+        t.move_node(a, Some(bottom), 0).unwrap();
+        assert_eq!(children_of(&t, bottom), ["a", "b"]);
+        assert_eq!(t.depth(), MAX_TREE_DEPTH + 2);
+
+        // a subtree that gets deeper still fails: folder x with a connection, below the bottom
+        let x = folder(&mut t, None, "x");
+        ssh(&mut t, Some(x), "x-leaf");
+        let before = t.clone();
+        assert_eq!(
+            t.move_node(x, Some(bottom), 0).unwrap_err(),
+            TreeError::TooDeep
+        );
+        assert_eq!(t, before);
+
+        // moving upward still works: a connection below the folder at level 59 sits at level 60
+        t.move_node(a, Some(level_59), 0).unwrap();
+        t.move_node(a, None, 0).unwrap();
+        assert_eq!(t.children()[0].id, a);
+    }
+
+    #[test]
+    fn duplicate_refuses_a_copy_below_the_limit_and_allows_one_at_it() {
+        // a tree written by an older version can already be deeper than the limit
+        let mut t = Tree::from_children(vec![chain(MAX_TREE_DEPTH + 1)]);
+        let top = t.children()[0].id;
+        let before = t.clone();
+        assert_eq!(t.duplicate(top).unwrap_err(), TreeError::TooDeep);
+        let bottom = deepest(&t);
+        assert_eq!(t.duplicate(bottom).unwrap_err(), TreeError::TooDeep);
+        assert_eq!(t, before);
+
+        // at the limit the copy of the deepest leaf is a sibling on the same level
+        let mut t = Tree::new();
+        t.graft(None, chain(MAX_TREE_DEPTH - 1)).unwrap();
+        let leaf_id = deepest(&t);
+        t.duplicate(leaf_id).unwrap();
+        // and so is the copy of the whole 60 level folder at the top
+        let top = t.children()[0].id;
+        t.duplicate(top).unwrap();
+        assert_eq!(t.depth(), MAX_TREE_DEPTH);
     }
 }

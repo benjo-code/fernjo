@@ -35,6 +35,9 @@
   let creating = $state(false);
   let busy = $state(false);
   let unlockError = $state<string | null>(null);
+  // True while the last password unlock failed with `rolled_back`: the file is older than the
+  // last version this device opened, and the user may choose to open it anyway.
+  let olderOffered = $state(false);
   let createError = $state<string | null>(null);
   let confirmError = $state<string | null>(null);
 
@@ -59,7 +62,26 @@
       unlocking = false;
     } else {
       unlockError = err.code === "wrong_password" ? WRONG_PASSWORD : err.message;
+      olderOffered = err.code === "rolled_back";
       // keep focus inside the form (a clicked submit button must not strand it on <body>)
+      await tick();
+      unlockField?.focus();
+    }
+  }
+
+  /** Takes the older vault file; the password stays in the field from the failed attempt. */
+  async function openOlder() {
+    if (busy) return;
+    busy = true;
+    const err = await vault.unlockOlder(password, remember);
+    busy = false;
+    if (!err) {
+      password = "";
+      unlocking = false;
+      olderOffered = false;
+    } else {
+      unlockError = err.code === "wrong_password" ? WRONG_PASSWORD : err.message;
+      olderOffered = err.code === "rolled_back";
       await tick();
       unlockField?.focus();
     }
@@ -92,6 +114,7 @@
     unlocking = false;
     password = "";
     unlockError = null;
+    olderOffered = false;
   }
 
   function cancelCreate() {
@@ -105,6 +128,29 @@
   $effect(() => {
     open = (phase === "locked" && unlocking) || (phase === "none" && creating);
   });
+
+  const KEEP_KEY_LINE =
+    "Automatic unlock did not work this time (the vault file may be incomplete or damaged). Your stored key was kept. Enter the master password.";
+  // The neutral line never claims that a key is stored; unknown codes (newer Rust) get it too.
+  const NEUTRAL_LINE =
+    "The OS keychain could not be read, so automatic unlock was skipped. Enter the master password.";
+  // `keychain_unavailable` shows no line on purpose: on a machine without a keychain service it
+  // is reported at every start, also to users who never turned automatic unlock on.
+  const ISSUE_LINES: Record<string, string | null> = {
+    key_not_accepted: KEEP_KEY_LINE,
+    unavailable: KEEP_KEY_LINE,
+    keychain_unavailable: null,
+    rolled_back:
+      "Automatic unlock did not open this vault: the file is older than the last version this device opened. Enter the master password to review.",
+  };
+  const issue = $derived(vault.status?.autoUnlockIssue ?? null);
+  const issueLine = $derived(
+    issue
+      ? Object.prototype.hasOwnProperty.call(ISSUE_LINES, issue)
+        ? ISSUE_LINES[issue]
+        : NEUTRAL_LINE
+      : null,
+  );
 
   const backupPath = $derived(vault.status?.path ? `${vault.status.path}.bak` : null);
 </script>
@@ -133,6 +179,9 @@
 
     {#if phase === "locked"}
       <p class="body">Connections with stored credentials ask for it.</p>
+      {#if issueLine}
+        <p class="body" role="status">{issueLine}</p>
+      {/if}
       {#if unlocking}
         <form onsubmit={submitUnlock}>
           <PasswordField
@@ -141,7 +190,10 @@
             label="Master password"
             bind:value={password}
             error={unlockError}
-            onedit={() => (unlockError = null)}
+            onedit={() => {
+              unlockError = null;
+              olderOffered = false;
+            }}
           />
           <label class="check">
             <input
@@ -156,6 +208,16 @@
           {/if}
           <div class="actions">
             <button type="submit" class="btn small" aria-disabled={busy}>Unlock</button>
+            {#if olderOffered}
+              <button
+                type="button"
+                class="btn small"
+                aria-disabled={busy}
+                onclick={() => void openOlder()}
+              >
+                Open the older vault
+              </button>
+            {/if}
             <button type="button" class="btn small" onclick={cancelUnlock}>Cancel</button>
           </div>
         </form>
@@ -285,6 +347,7 @@
 
   .actions {
     display: flex;
+    flex-wrap: wrap;
     gap: var(--space-3);
   }
 

@@ -4,9 +4,7 @@
 //! wrappers in [`handlers`].
 
 use fernjo_core::NodeId;
-use fernjo_core::{
-    AppSettings, DEFAULT_FONT_SIZE, DEFAULT_SCROLLBACK, DataDirSource, TerminalPrefs, settings,
-};
+use fernjo_core::{DEFAULT_FONT_SIZE, DEFAULT_SCROLLBACK, DataDirSource, TerminalPrefs};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, InvokeResponseBody};
 
@@ -47,7 +45,7 @@ pub struct TerminalSettingsInput {
     pub scrollback: u32,
 }
 
-fn persistent(state: &AppState) -> bool {
+pub(crate) fn persistent(state: &AppState) -> bool {
     state.source != DataDirSource::Env && !state.settings_unusable && state.config_dir.is_some()
 }
 
@@ -93,22 +91,7 @@ pub fn set_terminal_settings(
         .terminal
         .lock()
         .map_err(|_| CommandError::internal())?;
-    if let (true, Some(config_dir)) = (persistent(state), &state.config_dir) {
-        let path = config_dir.join(settings::FILE_NAME);
-        let mut current: AppSettings = settings::load(&path).map_err(|e| {
-            error(
-                "settings_unusable",
-                format!("settings.json cannot be used: {e}"),
-            )
-        })?;
-        current.terminal = Some(prefs.clone());
-        settings::save(&path, &current).map_err(|e| {
-            error(
-                "settings_write_failed",
-                format!("could not save the terminal settings: {e}"),
-            )
-        })?;
-    }
+    crate::app_settings::update_settings(state, |s| s.terminal = Some(prefs.clone()))?;
     *slot = prefs;
     Ok(info(state, &slot))
 }
@@ -307,6 +290,7 @@ pub mod handlers {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fernjo_core::{AppSettings, settings};
     use std::path::{Path, PathBuf};
 
     fn dirs<const N: usize>() -> [tempfile::TempDir; N] {
@@ -392,6 +376,7 @@ mod tests {
             &AppSettings {
                 data_dir: Some(elsewhere.path().to_path_buf()),
                 terminal: None,
+                theme: None,
             },
         )
         .unwrap();

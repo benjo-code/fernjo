@@ -8,13 +8,17 @@
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher, RandomState};
+use std::rc::Rc;
 
 use fernjo_core::{CredentialId, Node, NodeId, NodeKind, Protocol, Settings};
 use fernjo_vault::{EntryId, NewEntry, Secret};
 use secrecy::{ExposeSecret, SecretString};
 
-use super::file::{RawDocument, RawKind, RawNode};
-use crate::report::{Counts, Report, ReportLine, cap};
+use super::file::{
+    MAX_DESCRIPTION_CHARS, MAX_HOST_CHARS, MAX_IDENTITY_CHARS, MAX_NAME_CHARS, RawDocument,
+    RawKind, RawNode,
+};
+use crate::report::{Counts, MAX_LINE_CHARS, Report, ReportLine, cap};
 
 const UNNAMED: &str = "Unnamed";
 const DEFAULT_PUTTY_SESSION: &str = "Default Settings";
@@ -39,11 +43,12 @@ pub struct ImportPlan {
     pub report_without_passwords: Report,
 }
 
-/// The nearest folders above a node that set a credential / a username (their names).
+/// The nearest folders above a node that set a credential / a username (their names as shown in
+/// report lines, see `display`). Shared, so a long name is not cloned for every child folder.
 #[derive(Clone, Default)]
 struct Above {
-    credential: Option<String>,
-    username: Option<String>,
+    credential: Option<Rc<str>>,
+    username: Option<Rc<str>>,
 }
 
 /// How a report line reads when the import runs without passwords.
@@ -114,9 +119,33 @@ pub fn plan(doc: &RawDocument, today: &str, taken_names: &[String]) -> ImportPla
     }
 }
 
-/// The report path of the node at the end of `trail`. Built only when a line needs it.
+/// The part of `s` a report line can show: its first `MAX_LINE_CHARS` characters. A line is cut to
+/// that many anyway, so anything copied beyond it is wasted, and with an attacker-chosen name
+/// times the number of nodes it adds up to minutes. Names pass through here wherever they are
+/// put into a trail or a message; the cut text reads the same as before in the line.
+fn display(s: &str) -> &str {
+    match s.char_indices().nth(MAX_LINE_CHARS) {
+        None => s,
+        Some((end, _)) => &s[..end],
+    }
+}
+
+/// The report path of the node at the end of `trail` (its components come from `display`). Built
+/// only when a line needs it, and not further than the line can show.
 fn path(trail: &[&str]) -> String {
-    trail.join(" / ")
+    // bytes >= characters, so this many bytes always hold more characters than the line shows
+    const ENOUGH_BYTES: usize = 4 * (MAX_LINE_CHARS + 1);
+    let mut out = String::new();
+    for (i, part) in trail.iter().enumerate() {
+        if i > 0 {
+            out.push_str(" / ");
+        }
+        out.push_str(part);
+        if out.len() >= ENOUGH_BYTES {
+            break;
+        }
+    }
+    out
 }
 
 impl Builder {
@@ -216,7 +245,7 @@ impl Builder {
     ) -> Option<Node> {
         let trimmed = raw.name.trim();
         let name = if trimmed.is_empty() { UNNAMED } else { trimmed };
-        trail.push(name);
+        trail.push(display(name));
         let node = self.convert_in(raw, name, trimmed.is_empty(), trail, above);
         trail.pop();
         node
@@ -243,12 +272,16 @@ impl Builder {
             RawKind::Container => None,
             RawKind::Connection => {
                 let p = raw.protocol.trim();
-                if p.eq_ignore_ascii_case("SSH2") {
+                // a cut value is never a protocol, even when what is left reads like one
+                if raw.clipped.protocol {
+                    self.skip(trail, format!("protocol {}… is not supported", display(p)));
+                    return None;
+                } else if p.eq_ignore_ascii_case("SSH2") {
                     Some(Protocol::Ssh)
                 } else if p.eq_ignore_ascii_case("RDP") {
                     Some(Protocol::Rdp)
                 } else {
-                    let shown = if p.is_empty() { "(none)" } else { p };
+                    let shown = if p.is_empty() { "(none)" } else { display(p) };
                     self.skip(trail, format!("protocol {shown} is not supported"));
                     return None;
                 }
@@ -258,12 +291,20 @@ impl Builder {
         if unnamed {
             self.problem(trail, "has no name; imported as \"Unnamed\"".to_owned());
         }
+        self.clipped_lines(raw, trail);
         let (settings, credential_set, username_set) = self.settings(raw, name, trail, above);
 
         let kind = match protocol {
             Some(protocol) => {
                 let host = raw.hostname.trim().to_owned();
-                if host.is_empty() {
+                if host.is_empty() && raw.clipped.hostname {
+                    self.problem(
+                        trail,
+                        format!(
+                            "its host is longer than {MAX_HOST_CHARS} characters; imported with an empty host"
+                        ),
+                    );
+                } else if host.is_empty() {
                     self.problem(trail, "has no host; imported with an empty host".to_owned());
                 }
                 match protocol {
@@ -274,7 +315,7 @@ impl Builder {
                 if !putty.is_empty() && putty != DEFAULT_PUTTY_SESSION {
                     self.partly(
                         trail,
-                        format!("PuTTY session \"{putty}\" is not carried over"),
+                        format!("PuTTY session \"{}\" is not carried over", display(putty)),
                     );
                 }
                 NodeKind::Connection { protocol, host }
@@ -283,12 +324,12 @@ impl Builder {
                 self.counts.folders += 1;
                 let below = Above {
                     credential: if credential_set {
-                        Some(name.to_owned())
+                        Some(Rc::from(display(name)))
                     } else {
                         above.credential.clone()
                     },
                     username: if username_set {
-                        Some(name.to_owned())
+                        Some(Rc::from(display(name)))
                     } else {
                         above.username.clone()
                     },
@@ -309,6 +350,27 @@ impl Builder {
             settings,
             kind,
         })
+    }
+
+    /// One line per attribute of `raw` that was cut at its cap (see `file::MAX_*_CHARS`). A cut host
+    /// is reported where the host is mapped.
+    fn clipped_lines(&mut self, raw: &RawNode, trail: &[&str]) {
+        let c = raw.clipped;
+        for (cut, what, max) in [
+            (c.name, "name", MAX_NAME_CHARS),
+            (c.description, "description", MAX_DESCRIPTION_CHARS),
+            (c.username, "username", MAX_IDENTITY_CHARS),
+            (c.domain, "domain", MAX_IDENTITY_CHARS),
+        ] {
+            if cut {
+                self.partly(
+                    trail,
+                    format!(
+                        "its {what} was longer than {max} characters and was shortened to {max}"
+                    ),
+                );
+            }
+        }
     }
 
     /// The node's own settings. Also returns whether it sets a credential and a username (so a
@@ -388,7 +450,10 @@ impl Builder {
         {
             self.partly(
                 trail,
-                format!("domain \"{domain}\" is not imported (no password to attach it to)"),
+                format!(
+                    "domain \"{}\" is not imported (no password to attach it to)",
+                    display(&domain)
+                ),
             );
         }
         if !raw.inherit.username

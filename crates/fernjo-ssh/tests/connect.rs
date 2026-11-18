@@ -365,3 +365,52 @@ async fn dropping_the_session_closes_the_connection_even_if_the_receiver_stays()
     .expect("connection stayed open after the session was dropped");
     assert_eq!(end, Some(CloseReason::ClosedByUser));
 }
+
+#[tokio::test]
+async fn a_known_host_that_this_device_has_not_confirmed_asks_once() {
+    let Some(s) = support::server() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let kh = dir.path().join("known_hosts");
+    let confirmed = dir.path().join("device").join("known_hosts.confirmed");
+    let with_confirmed = |s: &TestServer| {
+        let mut p = params(s, &kh);
+        p.confirmed_hosts = Some(confirmed.clone());
+        p
+    };
+    // The host arrives in the synced file without this device having confirmed it.
+    let seed = Arc::new(ScriptedInteraction::new().host_key(HostKeyDecision::TrustAlways));
+    let (session, _rx) = Session::connect(params(&s, &kh), seed).await.unwrap();
+    session.close();
+    assert!(!confirmed.exists());
+
+    // The scripted interaction answers the synced prompt through `host_key` (the default).
+    let first = Arc::new(ScriptedInteraction::new().host_key(HostKeyDecision::TrustAlways));
+    let (session, _rx) = Session::connect(with_confirmed(&s), Arc::clone(&first))
+        .await
+        .unwrap();
+    session.close();
+    assert_eq!(first.host_key_calls(), 1);
+    assert!(confirmed.exists());
+
+    let second = Arc::new(ScriptedInteraction::new());
+    let (session, _rx) = Session::connect(with_confirmed(&s), Arc::clone(&second))
+        .await
+        .unwrap();
+    session.close();
+    assert_eq!(second.host_key_calls(), 0);
+}
+
+#[tokio::test]
+async fn rejecting_a_synced_key_ends_with_host_key_rejected() {
+    let Some(s) = support::server() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let kh = dir.path().join("known_hosts");
+    let seed = Arc::new(ScriptedInteraction::new().host_key(HostKeyDecision::TrustAlways));
+    let (session, _rx) = Session::connect(params(&s, &kh), seed).await.unwrap();
+    session.close();
+    let mut p = params(&s, &kh);
+    p.confirmed_hosts = Some(dir.path().join("confirmed"));
+    let ia = Arc::new(ScriptedInteraction::new());
+    let err = Session::connect(p, ia).await.err().unwrap();
+    assert!(matches!(err, SshError::HostKeyRejected), "{err:?}");
+}

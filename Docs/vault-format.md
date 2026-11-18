@@ -42,7 +42,7 @@ A wrapped key that does not authenticate is reported as "wrong password" (it can
 
 ## Body (after decryption)
 
-UTF-8 JSON, `{ "entries": [ ... ] }`. A reader must ignore unknown fields. Secrets are stored byte-exact (no trimming or normalisation, line endings preserved). One entry:
+UTF-8 JSON, `{ "generation": 7, "entries": [ ... ] }`. A reader must ignore unknown fields. `generation` is an unsigned 64-bit integer that counts the saves of the vault (see "Rollback protection" below); a body without it (every file written before the counter existed) reads as generation `0`. The format version stays **1**: the field lives inside the authenticated body, and a reader that does not know it simply ignores it. Secrets are stored byte-exact (no trimming or normalisation, line endings preserved). One entry:
 
 ```json
 {
@@ -62,9 +62,22 @@ UTF-8 JSON, `{ "entries": [ ... ] }`. A reader must ignore unknown fields. Secre
 
 - A file whose version is **greater** than the reader's is refused and never overwritten; version `0` and a wrong magic are "unreadable". The version is checked before the length, so a future, longer header is still reported as "newer format".
 - The file must be at least 150 + 16 bytes.
+- The file must be at most 64 MiB (`MAX_FILE_LEN`). A larger file is refused as `unreadable` without being read into memory (the length is checked and the read itself is bounded), the vault is then unusable and the file is never overwritten. The writer keeps the same bound: a save whose file (header plus ciphertext) would exceed 64 MiB is refused as `save_failed` before anything is encrypted or written, so the vault never writes a file it would then refuse to open.
 - KDF parameters are bounded when read, **before** any derivation, so a hostile synced file cannot demand gigabytes or minutes: parallelism 1..16, iterations 1..20, memory from `8 * parallelism` KiB up to 1 GiB (1 048 576 KiB).
 - Writes are atomic: temporary file in the same folder, `sync_all`, copy of the current file to `.bak`, rename.
 - **Lost-update guard:** a handle remembers the header bytes (0..150) it last read or wrote. The body nonce changes on every save, so the header identifies the version of the file. Before a save the file on disk is read again: if it is missing the save recreates it; otherwise it must start with exactly those header bytes. A file that cannot be parsed, is empty or shorter than a header, is a newer format or has any other header was written by someone else (another device, a sync tool) and is **not** overwritten: the save fails with `changed_on_disk` and the in-memory entries stay as they were. Locking and unlocking re-reads the file and picks the other version up. This is a check followed by a write, not a lock: a sync tool can still win the race in the instant between the check and the rename.
+
+## Rollback protection (generation counter)
+
+A sync tool can put an older copy of `vault.fernjo` back (a stale device wins, a conflict resolves the wrong way). The header and body authenticate each other, but an old file is still a perfectly valid file, so it must be recognised by comparing it with what this device saw before.
+
+- **Counter:** every save writes `generation = max(body generation, floor) + 1` (saturating) in the body, on every kind of save (adding, editing, deleting, restoring and changing the master password). A new vault starts at 1 on its first save. `floor` is the highest generation this handle has seen or written. The in-memory generation only changes after the file was written; a failed save leaves it alone.
+- **Device marks:** besides its own memory, a device keeps the highest generation it has seen per vault id in a file outside the synced data folder: `vault-marks.json` in the device-local folder (`<OS local data dir>/fernjo-device`, or `<FERNJO_DATA_DIR>/.device` while that variable is set), `{"schemaVersion":1,"marks":{"<vault id>":N}}`. Marks only ever increase; the file is re-read right before it is written, an unreadable, corrupt or newer-schema file counts as empty, and a failed write is ignored. The marks contain no secret.
+- **Check on unlock:** after the password (or the stored key) opened the body, `floor = max(floor, mark)`. A body generation **below** the floor is `rolled_back` (found, seen) and the vault stays locked. An **equal** or higher generation opens silently (the file of another device that saved more often is simply newer) and raises the mark. The check happens only after the body authenticated, so someone without the password or key learns nothing about generations. The automatic unlock (stored key) never accepts an older file; it reports `rolled_back` and leaves the key in the keychain.
+- **Accepting an older file:** the user can open it anyway with the master password (`unlock_accepting_older`). The floor is **not** lowered; the file is re-stamped at once with a best-effort save that writes `floor + 1` (so `.bak` then holds the older file as it was, and a device that had seen `floor` accepts the result). If the re-stamp fails the vault stays open, the next save writes `floor + 1` anyway, and the question returns on the next start.
+- **Without marks** (no device-local folder, an unwritable one, the first start on a new device) the protection is limited to what the running handle remembers: lock and unlock cycles within one run are protected, a fresh start is not.
+- **What it does not cover:** a first open on a new device (nothing seen yet), `connections.json` (not versioned this way), a device-local folder that itself lies inside a synced tree, and two devices that each save once from the same base: both write the same generation N, the check is `<`, so whichever file the sync tool leaves is accepted silently and the other device's changes survive only in `.bak`.
+- **Mixed builds:** a build from before the counter existed ignores `generation` when it reads the body and does not write it back, so its next save leaves a file that reads as generation 0 again. On a device that runs the new build every such save triggers a harmless, repeated `rolled_back` prompt (accepting re-stamps the file and is undone by the next save from the old build). Update every device that shares a vault to the same build.
 
 ## Reading the header by hand
 

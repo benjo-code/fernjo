@@ -713,3 +713,39 @@ fn remove_entries_deletes_all_given_ids_in_one_save() {
     assert_eq!(vault.list().unwrap().len(), 1);
     assert_eq!(fs::read(&path).unwrap(), before);
 }
+
+#[test]
+fn a_save_that_would_exceed_the_load_cap_is_refused_and_writes_nothing() {
+    let dir = TempDir::new().unwrap();
+    let (mut vault, path) = new_vault(&dir);
+    let keep = vault.add(password_entry("keep", "pw-one")).unwrap();
+    let before = fs::read(&path).unwrap();
+    let bak = path.with_file_name(format!("{FILE_NAME}.bak"));
+    let bak_before = fs::read(&bak).unwrap();
+
+    let mut huge = password_entry("huge", "pw-two");
+    huge.notes = "n".repeat(usize::try_from(crate::MAX_FILE_LEN).unwrap() + 1);
+    let err = vault.add(huge).unwrap_err();
+    assert_eq!(err.code(), "save_failed");
+    assert!(err.to_string().contains("64 MiB"), "{err}");
+
+    assert_eq!(fs::read(&path).unwrap(), before, "vault file untouched");
+    assert_eq!(fs::read(&bak).unwrap(), bak_before, ".bak untouched");
+    let list = vault.list().unwrap();
+    assert_eq!(list.len(), 1, "memory unchanged");
+    assert_eq!(list[0].id, keep);
+
+    // the vault stays usable
+    vault.add(password_entry("after", "pw-three")).unwrap();
+    let mut reopened = Vault::open(&path).unwrap().unwrap();
+    reopened.unlock(&secret(PW)).unwrap();
+    assert_eq!(reopened.list().unwrap().len(), 2);
+}
+
+#[test]
+fn a_file_exactly_at_the_load_cap_is_allowed_one_byte_more_is_not() {
+    assert!(crate::vault::check_file_len(crate::MAX_FILE_LEN, crate::MAX_FILE_LEN).is_ok());
+    let err =
+        crate::vault::check_file_len(crate::MAX_FILE_LEN + 1, crate::MAX_FILE_LEN).unwrap_err();
+    assert_eq!(err.code(), "save_failed");
+}

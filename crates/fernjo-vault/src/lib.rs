@@ -7,6 +7,7 @@ mod crypto;
 mod entry;
 mod error;
 mod format;
+mod generation;
 mod keystore;
 mod sealed;
 mod vault;
@@ -14,7 +15,10 @@ mod vault;
 pub use crypto::DataKey;
 pub use entry::{EntryId, EntrySummary, EntryUpdate, NewEntry, Secret, SecretKind};
 pub use error::VaultError;
-pub use format::{FILE_NAME, KdfParams};
+pub use format::{FILE_NAME, KdfParams, MAX_FILE_LEN};
+pub use generation::{
+    FileGenerationStore, GenerationStore, MARKS_FILE_NAME, MemoryGenerationStore,
+};
 pub use keystore::{
     AutoUnlock, KeyStore, KeyStoreError, MemoryKeyStore, OsKeyStore, try_auto_unlock,
 };

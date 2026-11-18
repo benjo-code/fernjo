@@ -16,6 +16,8 @@
   } = $props();
 
   const WRONG_PASSWORD = "Wrong master password. Check Caps Lock and try again.";
+  // The choice to open an older vault file lives in the vault note, not in this prompt.
+  const ROLLED_BACK_HINT = " Unlock from the vault note to review it.";
 
   let field: PasswordField | undefined = $state();
   let password = $state("");
@@ -41,7 +43,12 @@
     if (!err) {
       sessions.resume(tab.id, false);
     } else {
-      error = err.code === "wrong_password" ? WRONG_PASSWORD : err.message;
+      error =
+        err.code === "wrong_password"
+          ? WRONG_PASSWORD
+          : err.code === "rolled_back"
+            ? err.message + ROLLED_BACK_HINT
+            : err.message;
       await tick();
       field?.focus();
     }

@@ -7,7 +7,6 @@ ignore = [
     { id = "RUSTSEC-2026-0371", reason = "zbus_names is unmaintained; pulled in by zbus via tauri-plugin-single-instance (Linux D-Bus only), no safe upgrade exists" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive is unmaintained; pulled in by zbus via tauri-plugin-single-instance (Linux D-Bus only), no safe upgrade exists" },
     { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained, all versions affected, no safe upgrade; it is pulled in by russh-util (so by russh) and fernjo-app uses it only for the local date of import folder names and export file names. Remove this ignore when russh drops chrono or fernjo moves to a maintained date crate" },
-    { id = "RUSTSEC-2023-0071", reason = "Marvin Attack (RSA timing side channel); russh pins rsa 0.10.0-rc.18, fixed in rsa 0.10.0. Time-boxed (owner decision 2026-11-16): remove this ignore when russh depends on rsa >= 0.10.0" },
 ]
 
 [licenses]

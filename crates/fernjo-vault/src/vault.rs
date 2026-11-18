@@ -5,6 +5,7 @@ use std::fmt;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -12,10 +13,13 @@ use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-use crate::crypto::{self, DataKey, NONCE_LEN, SALT_LEN};
+use crate::crypto::{self, DataKey, NONCE_LEN, SALT_LEN, TAG_LEN};
 use crate::entry::{Entry, EntryId, EntrySummary, EntryUpdate, NewEntry, Secret, non_empty};
 use crate::error::VaultError;
-use crate::format::{HEADER_LEN, Header, KdfParams, OFF_WRAPPED_KEY, WRAPPED_KEY_LEN};
+use crate::format::{
+    HEADER_LEN, Header, KdfParams, MAX_FILE_LEN, OFF_WRAPPED_KEY, WRAPPED_KEY_LEN, read_capped,
+};
+use crate::generation::GenerationStore;
 
 /// Identifier of a vault, stored in its header; keys the OS keychain item (Task 3).
 pub type VaultId = Uuid;
@@ -23,11 +27,28 @@ pub type VaultId = Uuid;
 /// Minimum master password length in characters, counted after NFC normalisation.
 const MIN_PASSWORD_CHARS: usize = 8;
 
-/// The decrypted body: `{ "entries": [...] }`.
-#[derive(Debug, Default, Serialize, Deserialize)]
+/// The decrypted body: `{ "generation": N, "entries": [...] }`. A body written before the
+/// counter existed has no `generation` and reads as 0; unknown fields are ignored, so an older
+/// build can still read a file written by this one (the header version stays 1).
+#[derive(Debug, Default, Deserialize)]
 pub(crate) struct Body {
     #[serde(default)]
+    pub generation: u64,
+    #[serde(default)]
     pub entries: Vec<Entry>,
+}
+
+/// What `save` serialises: the same JSON shape as [`Body`], borrowing the entries.
+#[derive(Serialize)]
+struct BodyOut<'a> {
+    generation: u64,
+    entries: &'a [Entry],
+}
+
+/// What proves to `unlock_inner` that the caller may open the vault.
+enum KeySource<'a> {
+    Password(&'a SecretString),
+    Key(&'a DataKey),
 }
 
 struct Unlocked {
@@ -38,12 +59,16 @@ struct Unlocked {
 /// An encrypted vault file. Locked vaults hold no key and no decrypted entries.
 pub struct Vault {
     path: PathBuf,
-    header: Header,
+    header: Box<Header>,
     /// The header bytes this handle last read from or wrote to the file. `save` refuses to
     /// overwrite a file that no longer starts with them (see `check_unchanged_on_disk`).
     /// It differs from `header.encode()` only while `change_password` saves.
     disk_header: Box<[u8; HEADER_LEN]>,
     unlocked: Option<Unlocked>,
+    /// The highest generation this handle has seen or written, also in the device marks. A file
+    /// below it is a rollback. Never lowered (accepting an older file keeps it).
+    floor: u64,
+    generations: Option<Arc<dyn GenerationStore>>,
 }
 
 impl fmt::Debug for Vault {
@@ -120,11 +145,13 @@ impl Vault {
         let mut vault = Self {
             path: path.to_path_buf(),
             disk_header: Box::new(header.encode()),
-            header,
+            header: Box::new(header),
             unlocked: Some(Unlocked {
                 key,
                 body: Body::default(),
             }),
+            floor: 0,
+            generations: None,
         };
         vault.save()?;
         Ok(vault)
@@ -135,7 +162,7 @@ impl Vault {
     /// # Errors
     /// `unreadable`, `newer_format`, `invalid_kdf_params`.
     pub fn open(path: &Path) -> Result<Option<Self>, VaultError> {
-        let bytes = match fs::read(path) {
+        let bytes = match read_capped(path, MAX_FILE_LEN) {
             Ok(b) => b,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(VaultError::Unreadable(e.to_string())),
@@ -144,8 +171,10 @@ impl Vault {
         Ok(Some(Self {
             path: path.to_path_buf(),
             disk_header: Box::new(header.encode()),
-            header,
+            header: Box::new(header),
             unlocked: None,
+            floor: 0,
+            generations: None,
         }))
     }
 
@@ -164,50 +193,66 @@ impl Vault {
         self.unlocked.is_some()
     }
 
+    /// Attaches the device marks (see [`GenerationStore`]): the floor becomes the higher of its
+    /// own value and the mark, and an unlocked vault raises the mark to its generation. Without
+    /// a store the handle still remembers what it saw while it lives.
+    pub fn attach_generation_store(&mut self, store: Arc<dyn GenerationStore>) {
+        if let Some(mark) = store.get(self.header.id) {
+            self.floor = self.floor.max(mark);
+        }
+        if let Some(u) = &self.unlocked {
+            store.raise(self.header.id, u.body.generation);
+        }
+        self.generations = Some(store);
+    }
+
+    /// The generation of the open body (it counts the saves of the vault), `None` while locked.
+    #[must_use]
+    pub fn generation(&self) -> Option<u64> {
+        self.unlocked.as_ref().map(|u| u.body.generation)
+    }
+
     /// Unlocks with the master password. The file is read again, so a vault updated on
-    /// disk by a sync tool is picked up; a file with another vault id is refused. On any
-    /// error the vault stays locked.
+    /// disk by a sync tool is picked up; a file with another vault id is refused. A file whose
+    /// generation is below the highest this device has seen is refused as `rolled_back`, and
+    /// only after the password proved genuine. On any error the vault stays locked.
     ///
     /// # Errors
-    /// `wrong_password`, `tampered`, `unreadable`, `newer_format`, `invalid_kdf_params`.
+    /// `wrong_password`, `tampered`, `unreadable`, `newer_format`, `invalid_kdf_params`,
+    /// `rolled_back`.
     pub fn unlock(&mut self, password: &SecretString) -> Result<(), VaultError> {
-        let bytes = fs::read(&self.path).map_err(|e| VaultError::Unreadable(e.to_string()))?;
-        let (header, ciphertext) = Header::parse(&bytes)?;
-        if header.id != self.header.id {
-            return Err(VaultError::Unreadable(
-                "the vault file was replaced by a different vault".to_owned(),
-            ));
-        }
-        let password = normalise(password);
-        let kek = crypto::derive_key(password.as_bytes(), header.kdf, &header.salt)?;
-        let header_bytes = header.encode();
-        let raw = crypto::open(
-            &kek,
-            &header.wrap_nonce,
-            key_wrap_aad(&header_bytes),
-            &header.wrapped_key,
-        )
-        .map_err(|()| VaultError::WrongPassword)?;
-        let key_bytes: [u8; 32] = raw
-            .as_slice()
-            .try_into()
-            .map_err(|_| VaultError::Tampered)?;
-        let key = DataKey::from_bytes(key_bytes);
-        let body = open_body(&key, &header, &header_bytes, ciphertext)?;
-        *self.disk_header = header.encode();
-        self.header = header;
-        self.unlocked = Some(Unlocked { key, body });
-        Ok(())
+        self.unlock_inner(&KeySource::Password(password), false)
+    }
+
+    /// Like [`Vault::unlock`], but opens a rolled-back file too (the user decided to take the
+    /// older version). The floor is not lowered, and the file is re-stamped at once with a
+    /// best-effort save (generation `floor + 1`, `.bak` keeps the file as it was); a failed
+    /// re-stamp keeps the unlock and the question returns on the next start.
+    ///
+    /// # Errors
+    /// As [`Vault::unlock`] except `rolled_back`.
+    pub fn unlock_accepting_older(&mut self, password: &SecretString) -> Result<(), VaultError> {
+        self.unlock_inner(&KeySource::Password(password), true)
     }
 
     /// Unlocks with the data key (for example read from the OS keychain). Same file
-    /// handling as [`Vault::unlock`]; a key that does not open the body is refused.
+    /// handling as [`Vault::unlock`]; a key that does not open the body is refused, and so is
+    /// a rolled-back file (the automatic unlock never accepts an older version).
     ///
     /// # Errors
     /// `tampered` (the key does not fit the file), `unreadable`, `newer_format`,
-    /// `invalid_kdf_params`.
+    /// `invalid_kdf_params`, `rolled_back`.
     pub fn unlock_with_key(&mut self, key: &DataKey) -> Result<(), VaultError> {
-        let bytes = fs::read(&self.path).map_err(|e| VaultError::Unreadable(e.to_string()))?;
+        self.unlock_inner(&KeySource::Key(key), false)
+    }
+
+    fn unlock_inner(
+        &mut self,
+        source: &KeySource<'_>,
+        accept_older: bool,
+    ) -> Result<(), VaultError> {
+        let bytes = read_capped(&self.path, MAX_FILE_LEN)
+            .map_err(|e| VaultError::Unreadable(e.to_string()))?;
         let (header, ciphertext) = Header::parse(&bytes)?;
         if header.id != self.header.id {
             return Err(VaultError::Unreadable(
@@ -215,13 +260,53 @@ impl Vault {
             ));
         }
         let header_bytes = header.encode();
-        let body = open_body(key, &header, &header_bytes, ciphertext)?;
+        let key = match source {
+            KeySource::Password(password) => {
+                let password = normalise(password);
+                let kek = crypto::derive_key(password.as_bytes(), header.kdf, &header.salt)?;
+                let raw = crypto::open(
+                    &kek,
+                    &header.wrap_nonce,
+                    key_wrap_aad(&header_bytes),
+                    &header.wrapped_key,
+                )
+                .map_err(|()| VaultError::WrongPassword)?;
+                let key_bytes: [u8; 32] = raw
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| VaultError::Tampered)?;
+                DataKey::from_bytes(key_bytes)
+            }
+            KeySource::Key(key) => DataKey::from_bytes(*key.as_bytes()),
+        };
+        let body = open_body(&key, &header, &header_bytes, ciphertext)?;
+
+        // Only now, with the password or key proven genuine, is a rollback revealed.
+        let mark = self
+            .generations
+            .as_ref()
+            .and_then(|s| s.get(header.id))
+            .unwrap_or(0);
+        self.floor = self.floor.max(mark);
+        let rolled_back = body.generation < self.floor;
+        if rolled_back && !accept_older {
+            return Err(VaultError::RolledBack {
+                found: body.generation,
+                seen: self.floor,
+            });
+        }
+        self.floor = self.floor.max(body.generation);
+        if let Some(store) = &self.generations {
+            store.raise(header.id, self.floor);
+        }
         *self.disk_header = header.encode();
-        self.header = header;
-        self.unlocked = Some(Unlocked {
-            key: DataKey::from_bytes(*key.as_bytes()),
-            body,
-        });
+        *self.header = header;
+        self.unlocked = Some(Unlocked { key, body });
+        if rolled_back {
+            // Re-stamp above the floor so this device and the others stop asking. Best
+            // effort: on failure the vault stays open and the next start asks again.
+            let _ = self.save();
+        }
         Ok(())
     }
 
@@ -499,7 +584,7 @@ impl Vault {
         if new.chars().count() < MIN_PASSWORD_CHARS {
             return Err(VaultError::WeakPassword);
         }
-        let mut header = self.header.clone();
+        let mut header = (*self.header).clone();
         header.salt = crypto::random_array()?;
         header.wrap_nonce = crypto::random_array()?;
         let kek = crypto::derive_key(new.as_bytes(), header.kdf, &header.salt)?;
@@ -508,7 +593,7 @@ impl Vault {
         header.wrapped_key = wrapped
             .try_into()
             .map_err(|_| VaultError::SaveFailed("unexpected wrapped key size".to_owned()))?;
-        let previous = std::mem::replace(&mut self.header, header);
+        let previous = std::mem::replace(&mut self.header, Box::new(header));
         let result = self.save();
         if result.is_err() {
             self.header = previous;
@@ -547,11 +632,19 @@ impl Vault {
     pub(crate) fn save(&mut self) -> Result<(), VaultError> {
         let unlocked = self.unlocked.as_ref().ok_or(VaultError::VaultLocked)?;
         self.check_unchanged_on_disk()?;
+        let generation = unlocked.body.generation.max(self.floor).saturating_add(1);
         let plain = Zeroizing::new(
-            serde_json::to_vec(&unlocked.body)
-                .map_err(|e| VaultError::SaveFailed(e.to_string()))?,
+            serde_json::to_vec(&BodyOut {
+                generation,
+                entries: &unlocked.body.entries,
+            })
+            .map_err(|e| VaultError::SaveFailed(e.to_string()))?,
         );
-        let mut header = self.header.clone();
+        // The readers refuse a file above MAX_FILE_LEN (a vault that cannot be opened again),
+        // so refuse before encrypting or writing anything. The file is the header plus the
+        // ciphertext, which is the plaintext plus the authentication tag.
+        check_file_len((HEADER_LEN + plain.len() + TAG_LEN) as u64, MAX_FILE_LEN)?;
+        let mut header = (*self.header).clone();
         header.body_nonce = crypto::random_array()?;
         let header_bytes = header.encode();
         let ciphertext = crypto::seal(
@@ -565,9 +658,29 @@ impl Vault {
         file.extend_from_slice(&ciphertext);
         write_atomic(&self.path, &file).map_err(|e| VaultError::SaveFailed(e.to_string()))?;
         *self.disk_header = header_bytes;
-        self.header = header;
+        *self.header = header;
+        // memory changes only after the file is written
+        if let Some(u) = self.unlocked.as_mut() {
+            u.body.generation = generation;
+        }
+        self.floor = self.floor.max(generation);
+        if let Some(store) = &self.generations {
+            store.raise(self.header.id, generation);
+        }
         Ok(())
     }
+}
+
+/// Refuses a vault file of `len` bytes when the readers (`MAX_FILE_LEN`, see `read_capped`)
+/// would refuse to open it again.
+fn check_file_len(len: u64, max: u64) -> Result<(), VaultError> {
+    if len > max {
+        return Err(VaultError::SaveFailed(format!(
+            "the vault would be larger than {} MiB, the most that can be opened again",
+            max / (1024 * 1024)
+        )));
+    }
+    Ok(())
 }
 
 fn entry_from(id: EntryId, name: String, new: NewEntry) -> Entry {
@@ -601,19 +714,61 @@ fn open_body(
     serde_json::from_slice(&plain).map_err(|_| VaultError::Tampered)
 }
 
-fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+/// Creates (truncating) `path` readable and writable by its owner only on Unix (mode 0600, also
+/// when a stale file of that name already exists); elsewhere the folder's inherited ACL applies.
+fn create_private_file(path: &Path) -> io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(path)?;
+    owner_only(path)?;
+    Ok(file)
+}
+
+/// Creates `dir` and its missing parents; on Unix with mode 0700 (folders that already exist
+/// keep theirs).
+fn create_private_dir_all(dir: &Path) -> io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(dir)
+}
+
+/// Unix: mode 0600. Other platforms: no change.
+fn owner_only(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(dir) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        fs::create_dir_all(dir)?;
+        create_private_dir_all(dir)?;
     }
     let tmp = with_suffix(path, ".tmp");
     let result = (|| -> io::Result<()> {
-        let mut file = fs::File::create(&tmp)?;
+        let mut file = create_private_file(&tmp)?;
         file.write_all(bytes)?;
         file.flush()?;
         file.sync_all()?;
         drop(file);
         if path.exists() {
-            fs::copy(path, with_suffix(path, ".bak"))?;
+            let bak = with_suffix(path, ".bak");
+            fs::copy(path, &bak)?;
+            owner_only(&bak)?;
         }
         fs::rename(&tmp, path)
     })();
@@ -626,12 +781,13 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::io;
     use std::path::{Path, PathBuf};
 
     use secrecy::SecretString;
     use tempfile::TempDir;
 
-    use crate::format::{HEADER_LEN, OFF_KDF_MEMORY, OFF_VERSION};
+    use crate::format::{HEADER_LEN, MAX_FILE_LEN, OFF_KDF_MEMORY, OFF_VERSION, read_capped};
     use crate::{DataKey, FILE_NAME, KdfParams, Vault, VaultError};
 
     const PW: &str = "correct horse battery";
@@ -676,6 +832,33 @@ mod tests {
         assert_eq!(reopened.path(), path.as_path());
         reopened.unlock(&secret(PW)).unwrap();
         assert!(reopened.is_unlocked());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vault_files_are_owner_only_and_a_new_folder_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let dir = TempDir::new().unwrap();
+        let folder = dir.path().join("fresh").join("fernjo");
+        let path = folder.join(FILE_NAME);
+        let mut vault = Vault::create_with(&path, &secret(PW), KdfParams::TEST).unwrap();
+        assert_eq!(mode(&folder), 0o700, "a folder fernjo creates is private");
+        assert_eq!(mode(&path), 0o600);
+        vault
+            .change_password(&secret(PW), &secret("another long password"))
+            .unwrap();
+        assert_eq!(mode(&bak(&path)), 0o600);
+        assert_eq!(mode(&path), 0o600);
+
+        // a vault an older build wrote with the default umask is tightened by the next save
+        // (and so is the backup copied from it)
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        vault
+            .change_password(&secret("another long password"), &secret(PW))
+            .unwrap();
+        assert_eq!(mode(&path), 0o600);
+        assert_eq!(mode(&bak(&path)), 0o600);
     }
 
     #[test]
@@ -849,6 +1032,43 @@ mod tests {
         let needle = format!("{:?}", real.as_bytes());
         assert!(!shown.contains(&needle));
     }
+
+    #[test]
+    fn read_capped_accepts_up_to_the_cap_and_refuses_one_byte_more() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("f");
+        fs::write(&path, [7u8; 10]).unwrap();
+        assert_eq!(read_capped(&path, 10).unwrap(), vec![7u8; 10]);
+        let err = read_capped(&path, 9).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("larger than"));
+        fs::write(&path, []).unwrap();
+        assert!(read_capped(&path, 0).unwrap().is_empty());
+        let missing = read_capped(&dir.path().join("none"), 10).unwrap_err();
+        assert_eq!(missing.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn an_oversized_vault_file_is_refused_by_open_unlock_and_unlock_with_key() {
+        let dir = TempDir::new().unwrap();
+        let (mut vault, path) = new_vault(&dir);
+        let key = vault.data_key().unwrap();
+        vault.lock();
+        // grow the file in place: a valid header followed by zeros up to cap + 1 (cheap, no
+        // allocation of the content)
+        let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_len(MAX_FILE_LEN + 1).unwrap();
+        drop(file);
+        assert_eq!(code(vault.unlock(&secret(PW))), "unreadable");
+        assert_eq!(code(vault.unlock_with_key(&key)), "unreadable");
+        assert!(!vault.is_unlocked());
+        match Vault::open(&path) {
+            Err(VaultError::Unreadable(m)) => assert!(m.contains("larger than"), "{m}"),
+            other => panic!("expected unreadable, got {:?}", other.map(|_| ())),
+        }
+        // refusing never touches the file
+        assert_eq!(fs::metadata(&path).unwrap().len(), MAX_FILE_LEN + 1);
+    }
 }
 
 #[cfg(test)]
@@ -870,3 +1090,7 @@ mod timing {
 #[cfg(test)]
 #[path = "entry_tests.rs"]
 mod entry_tests;
+
+#[cfg(test)]
+#[path = "generation_tests.rs"]
+mod generation_tests;

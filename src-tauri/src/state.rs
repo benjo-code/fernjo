@@ -1,15 +1,15 @@
 //! Application state shared by all commands.
 
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 
 use fernjo_core::{
-    DataDirSource, Location, Notice, Store, TerminalPrefs, find_conflicts, settings,
+    DataDirSource, Location, Notice, Store, TerminalPrefs, Theme, find_conflicts, settings,
 };
 use fernjo_vault::{
-    FILE_NAME as VAULT_FILE_NAME, KdfParams, KeyStore, MemoryKeyStore, OsKeyStore, Vault,
-    try_auto_unlock,
+    AutoUnlock, FILE_NAME as VAULT_FILE_NAME, FileGenerationStore, GenerationStore, KdfParams,
+    KeyStore, MemoryGenerationStore, MemoryKeyStore, OsKeyStore, Vault, try_auto_unlock,
 };
 
 use crate::commands::CommandError;
@@ -42,18 +42,83 @@ pub enum VaultStatus {
     Unusable { reason: String, path: PathBuf },
 }
 
+/// Why the startup auto-unlock did not unlock although a key may be stored. Only the
+/// message to the user depends on it; the keychain item is never touched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoUnlockIssue {
+    /// The stored key did not open the file (the file may be damaged, half-synced or replaced).
+    KeyNotAccepted,
+    /// The keychain could not be read; nothing is known about a stored key.
+    KeychainUnavailable,
+    /// The vault file could not be used.
+    Unavailable,
+    /// The file is older than the version this device last opened.
+    RolledBack,
+}
+
+impl AutoUnlockIssue {
+    /// The issue behind an outcome; `None` when nothing is worth telling the user
+    /// (unlocked, or no key stored).
+    pub fn from_outcome(outcome: &AutoUnlock) -> Option<Self> {
+        match outcome {
+            AutoUnlock::Unlocked | AutoUnlock::NoKey => None,
+            AutoUnlock::KeyNotAccepted => Some(Self::KeyNotAccepted),
+            AutoUnlock::KeychainUnavailable(_) => Some(Self::KeychainUnavailable),
+            AutoUnlock::Unavailable(_) => Some(Self::Unavailable),
+            AutoUnlock::RolledBack { .. } => Some(Self::RolledBack),
+        }
+    }
+
+    /// The wire code the UI reads (`autoUnlockIssue` in the vault status).
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::KeyNotAccepted => "key_not_accepted",
+            Self::KeychainUnavailable => "keychain_unavailable",
+            Self::Unavailable => "unavailable",
+            Self::RolledBack => "rolled_back",
+        }
+    }
+}
+
+/// The folders besides the data folder that `build` records.
+struct Folders {
+    config_dir: Option<PathBuf>,
+    device_dir: Option<PathBuf>,
+    source: DataDirSource,
+}
+
+impl Folders {
+    /// No config or device folder, source `Default` (tests, no location).
+    fn none() -> Self {
+        Folders {
+            config_dir: None,
+            device_dir: None,
+            source: DataDirSource::Default,
+        }
+    }
+}
+
 /// One store behind a lock, the startup notices (delivered once), the vault and the data
 /// folder location.
 pub struct AppState {
     pub store: Mutex<Result<Store, StartupFailure>>,
     pub notices: Mutex<Vec<Notice>>,
     pub vault: Mutex<VaultState>,
+    /// Why the startup auto-unlock failed (set once at startup, cleared by a successful
+    /// unlock or a new vault). Shown while the vault is locked.
+    pub auto_unlock_issue: Mutex<Option<AutoUnlockIssue>>,
     pub keystore: Box<dyn KeyStore>,
+    /// The highest vault generation this device has seen, per vault (rollback protection):
+    /// a file in `device_dir` when there is one, else memory only.
+    pub generations: Arc<dyn GenerationStore>,
     /// Argon2id cost for vaults created by this run (tests use `KdfParams::TEST`).
     pub kdf: KdfParams,
     pub data_dir: Option<PathBuf>,
     /// Folder of `settings.json` (`None` for the test constructor).
     pub config_dir: Option<PathBuf>,
+    /// Device-local folder (never synced; `None` for the test constructor or without an OS
+    /// local data dir). Not created here: its consumers create it and fall back to memory.
+    pub device_dir: Option<PathBuf>,
     /// Where `data_dir` came from. `settings.json` is never saved when this is `Env` (the
     /// variable wins) nor when `settings_unusable` is set (`set_terminal_settings` enforces it).
     pub source: DataDirSource,
@@ -66,6 +131,8 @@ pub struct AppState {
     /// Terminal preferences: loaded from `settings.json` at startup, in memory only while
     /// `FERNJO_DATA_DIR` is set.
     pub terminal: Mutex<TerminalPrefs>,
+    /// Colour theme: loaded from `settings.json` at startup (same rule as `terminal`).
+    pub theme: Mutex<Theme>,
     /// The open terminal sessions.
     pub sessions: SessionManager,
     /// The import or restore that waits for inspect/apply (one at a time).
@@ -89,12 +156,12 @@ impl AppState {
     pub fn open(dir: Option<PathBuf>) -> AppState {
         Self::build(
             dir,
-            None,
-            DataDirSource::Default,
+            Folders::none(),
             false,
             None,
             Box::new(MemoryKeyStore::default()),
             KdfParams::TEST,
+            None,
         )
     }
 
@@ -104,36 +171,43 @@ impl AppState {
         match location {
             None => Self::build(
                 None,
-                None,
-                DataDirSource::Default,
+                Folders::none(),
                 false,
                 None,
                 keystore,
                 KdfParams::default(),
+                None,
             ),
             Some(l) => {
                 // `settings.json` is neither read nor written while the variable is set, and
                 // an unusable file yields the defaults.
-                let terminal = if l.source == DataDirSource::Env || l.settings_error.is_some() {
+                let loaded = if l.source == DataDirSource::Env || l.settings_error.is_some() {
                     None
                 } else {
-                    settings::load(&l.config_dir.join(settings::FILE_NAME))
-                        .ok()
-                        .and_then(|s| s.terminal)
+                    settings::load(&l.config_dir.join(settings::FILE_NAME)).ok()
                 };
+                let terminal = loaded.as_ref().and_then(|s| s.terminal.clone());
+                let theme = loaded.and_then(|s| s.theme);
                 let state = Self::build(
                     Some(l.data_dir),
-                    Some(l.config_dir),
-                    l.source,
+                    Folders {
+                        config_dir: Some(l.config_dir),
+                        device_dir: l.device_dir,
+                        source: l.source,
+                    },
                     l.settings_error.is_some(),
                     l.settings_error.map(|e| Notice::SettingsUnreadable {
                         message: e.to_string(),
                     }),
                     keystore,
                     KdfParams::default(),
+                    None,
                 );
                 if let (Some(prefs), Ok(mut slot)) = (terminal, state.terminal.lock()) {
                     *slot = prefs;
+                }
+                if let (Some(theme), Ok(mut slot)) = (theme, state.theme.lock()) {
+                    *slot = theme;
                 }
                 state
             }
@@ -145,26 +219,55 @@ impl AppState {
     pub(crate) fn open_with_keystore(dir: PathBuf, keystore: Box<dyn KeyStore>) -> AppState {
         Self::build(
             Some(dir),
-            None,
-            DataDirSource::Default,
+            Folders::none(),
             false,
             None,
             keystore,
             KdfParams::TEST,
+            None,
+        )
+    }
+
+    /// Test constructor with an explicit key store and generation store (a "restart" that
+    /// keeps the device marks).
+    #[cfg(test)]
+    pub(crate) fn open_with_stores(
+        dir: PathBuf,
+        keystore: Box<dyn KeyStore>,
+        generations: Arc<dyn GenerationStore>,
+    ) -> AppState {
+        Self::build(
+            Some(dir),
+            Folders::none(),
+            false,
+            None,
+            keystore,
+            KdfParams::TEST,
+            Some(generations),
         )
     }
 
     fn build(
         dir: Option<PathBuf>,
-        config_dir: Option<PathBuf>,
-        source: DataDirSource,
+        folders: Folders,
         settings_unusable: bool,
         settings_notice: Option<Notice>,
         keystore: Box<dyn KeyStore>,
         kdf: KdfParams,
+        generations: Option<Arc<dyn GenerationStore>>,
     ) -> AppState {
+        let Folders {
+            config_dir,
+            device_dir,
+            source,
+        } = folders;
+        let generations = generations.unwrap_or_else(|| match &device_dir {
+            Some(dir) => Arc::new(FileGenerationStore::in_dir(dir)),
+            None => Arc::new(MemoryGenerationStore::default()),
+        });
         let mut notices = Vec::new();
         let mut vault = VaultState::None;
+        let mut auto_unlock_issue = None;
         let store = match &dir {
             None => Err(StartupFailure {
                 code: "load_failed".to_string(),
@@ -191,8 +294,13 @@ impl AppState {
             vault = match Vault::open(&path) {
                 Ok(None) => VaultState::None,
                 Ok(Some(mut v)) => {
-                    // The outcome only matters for the UI, which asks `vault_status`.
-                    let _ = try_auto_unlock(&mut v, keystore.as_ref());
+                    // The marks come first: an older file must be recognised before the
+                    // stored key opens it.
+                    v.attach_generation_store(Arc::clone(&generations));
+                    // Never deletes the keychain item; the UI learns of a failure through
+                    // `vault_status` (`autoUnlockIssue`).
+                    auto_unlock_issue =
+                        AutoUnlockIssue::from_outcome(&try_auto_unlock(&mut v, keystore.as_ref()));
                     VaultState::Open(v)
                 }
                 Err(e) => VaultState::Unusable {
@@ -206,15 +314,19 @@ impl AppState {
             store: Mutex::new(store),
             notices: Mutex::new(notices),
             vault: Mutex::new(vault),
+            auto_unlock_issue: Mutex::new(auto_unlock_issue),
             keystore,
+            generations,
             kdf,
             data_dir: dir,
             config_dir,
+            device_dir,
             source,
             settings_unusable,
             restart_required: AtomicBool::new(false),
             pending_data_dir: Mutex::new(None),
             terminal: Mutex::new(TerminalPrefs::default()),
+            theme: Mutex::new(Theme::default()),
             sessions: SessionManager::default(),
             pending: Mutex::new(None),
         }

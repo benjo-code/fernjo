@@ -3,6 +3,7 @@
 pub mod crypto;
 pub mod file;
 pub mod map;
+mod scan;
 
-pub use file::{Inherit, RawDocument, RawKind, RawNode, read};
+pub use file::{Clipped, Inherit, RawDocument, RawKind, RawNode, read};
 pub use map::{ImportPlan, PlannedEntry, plan};

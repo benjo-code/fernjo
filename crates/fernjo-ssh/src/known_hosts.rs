@@ -11,6 +11,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use data_encoding::BASE64;
 use hmac::{Hmac, KeyInit, Mac};
@@ -38,10 +39,12 @@ pub fn fingerprint(key: &PublicKey) -> String {
     key.fingerprint(HashAlg::Sha256).to_string()
 }
 
-/// Handle on one `known_hosts` file. A missing file counts as empty.
+/// Handle on one `known_hosts` file. A missing file counts as empty. [`KnownHosts::in_memory`]
+/// is a file-less variant (shared between its clones) for callers that have nowhere to write.
 #[derive(Debug, Clone)]
 pub struct KnownHosts {
     path: PathBuf,
+    memory: Option<Arc<Mutex<Vec<u8>>>>,
 }
 
 /// One line that matches a host: where it lives in the file and what it stores.
@@ -57,12 +60,24 @@ struct Match {
 
 impl KnownHosts {
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        Self {
+            path: path.into(),
+            memory: None,
+        }
+    }
+
+    /// An empty store that lives only as long as its handles; nothing touches the disk. Same
+    /// matching, `add` and `replace` rules as the file-backed one.
+    pub fn in_memory() -> Self {
+        Self {
+            path: PathBuf::new(),
+            memory: Some(Arc::default()),
+        }
     }
 
     pub fn check(&self, host: &str, port: u16, key: &PublicKey) -> Result<HostKeyStatus, SshError> {
         let bytes = self.read()?;
-        let same: Vec<PublicKey> = find_matches(&bytes, &host_port(host, port))
+        let same: Vec<PublicKey> = find_matches(&bytes, &host_port(host, port)?)
             .into_iter()
             .map(|m| m.key)
             .filter(|k| k.algorithm() == key.algorithm())
@@ -82,7 +97,7 @@ impl KnownHosts {
     pub fn stored_algorithms(&self, host: &str, port: u16) -> Result<Vec<Algorithm>, SshError> {
         let bytes = self.read()?;
         let mut out: Vec<Algorithm> = Vec::new();
-        for m in find_matches(&bytes, &host_port(host, port)) {
+        for m in find_matches(&bytes, &host_port(host, port)?) {
             let alg = m.key.algorithm();
             if !out.contains(&alg) {
                 out.push(alg);
@@ -94,18 +109,18 @@ impl KnownHosts {
     /// Appends the key unless it is already stored for the host and port.
     pub fn add(&self, host: &str, port: u16, key: &PublicKey) -> Result<(), SshError> {
         let mut bytes = self.read()?;
-        let name = host_port(host, port);
+        let name = host_port(host, port)?;
         if find_matches(&bytes, &name).iter().any(|m| &m.key == key) {
             return Ok(());
         }
         append_line(&mut bytes, &name, key)?;
-        write_atomic(&self.path, &bytes)
+        self.write(&bytes)
     }
 
     /// Drops the stored keys of the same algorithm for the host and port, then appends the new one.
     pub fn replace(&self, host: &str, port: u16, key: &PublicKey) -> Result<(), SshError> {
         let bytes = self.read()?;
-        let name = host_port(host, port);
+        let name = host_port(host, port)?;
         let drop_these: Vec<Match> = find_matches(&bytes, &name)
             .into_iter()
             .filter(|m| m.key.algorithm() == key.algorithm())
@@ -133,10 +148,23 @@ impl KnownHosts {
         }
         out.extend_from_slice(&bytes[pos..]);
         append_line(&mut out, &name, key)?;
-        write_atomic(&self.path, &out)
+        self.write(&out)
+    }
+
+    fn write(&self, contents: &[u8]) -> Result<(), SshError> {
+        match &self.memory {
+            Some(memory) => {
+                *memory.lock().map_err(|_| SshError::Io)? = contents.to_vec();
+                Ok(())
+            }
+            None => write_atomic(&self.path, contents),
+        }
     }
 
     fn read(&self) -> Result<Vec<u8>, SshError> {
+        if let Some(memory) = &self.memory {
+            return Ok(memory.lock().map_err(|_| SshError::Io)?.clone());
+        }
         match fs::read(&self.path) {
             Ok(b) => Ok(b),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
@@ -145,14 +173,54 @@ impl KnownHosts {
     }
 }
 
+/// Longest host name accepted: the DNS limit for a name in text form.
+const MAX_HOST_LEN: usize = 255;
+
+/// Checks that `host` can be written to `known_hosts` as one plain host pattern. The accepted
+/// forms are what a connection can actually resolve: DNS names (letters, digits, `-`, `_`, `.`,
+/// a trailing dot; non-ASCII letters and digits are kept because the resolver gets the name
+/// as typed, an internationalised name can also be entered as punycode) and IPv4/IPv6
+/// literals (an IPv6 literal without brackets, optionally with a `%zone`). Everything else is
+/// refused: empty or longer than 255 bytes, whitespace and control characters (a newline would
+/// start a second line), `,` (would add an alias host), and `|`, `@`, `!`, `#`, `*`, `?`,
+/// quotes, brackets and `/` (patterns, markers, comments, or the `[host]:port` form that
+/// `host_port` generates itself).
+///
+/// # Errors
+/// [`SshError::InvalidHost`].
+pub fn validate_host(host: &str) -> Result<(), SshError> {
+    if host.is_empty() || host.len() > MAX_HOST_LEN {
+        return Err(SshError::InvalidHost);
+    }
+    let plain = |c: char| c.is_alphanumeric() || matches!(c, '.' | '-' | '_');
+    let ok = if host.contains(':') {
+        // IPv6 literal, optionally with a zone id ("fe80::1%eth0")
+        let (addr, zone) = match host.split_once('%') {
+            Some((addr, zone)) => (addr, Some(zone)),
+            None => (host, None),
+        };
+        addr.parse::<std::net::Ipv6Addr>().is_ok()
+            && zone.is_none_or(|z| !z.is_empty() && z.chars().all(plain))
+    } else {
+        host.chars().all(plain)
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(SshError::InvalidHost)
+    }
+}
+
 /// The host name as OpenSSH writes it: bare on port 22, `[host]:port` otherwise. Lowercased.
-fn host_port(host: &str, port: u16) -> String {
+/// Refuses a host that [`validate_host`] does not accept.
+fn host_port(host: &str, port: u16) -> Result<String, SshError> {
+    validate_host(host)?;
     let host = host.to_ascii_lowercase();
-    if port == 22 {
+    Ok(if port == 22 {
         host
     } else {
         format!("[{host}]:{port}")
-    }
+    })
 }
 
 /// Appends `name key` as a new line, using the file's line ending (CRLF if it has any).
@@ -254,6 +322,46 @@ fn entry_matches(entry: &[u8], name: &str) -> bool {
     }
 }
 
+/// Creates (truncating) `path` readable and writable by its owner only on Unix (mode 0600, also
+/// when a stale file of that name already exists); elsewhere the folder's inherited ACL applies.
+fn create_private_file(path: &Path) -> io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(path)?;
+    owner_only(path)?;
+    Ok(file)
+}
+
+/// Creates `dir` and its missing parents; on Unix with mode 0700 (folders that already exist
+/// keep theirs).
+fn create_private_dir_all(dir: &Path) -> io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(dir)
+}
+
+/// Unix: mode 0600. Other platforms: no change.
+fn owner_only(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
 /// Temp file next to `path`, `sync_all`, current file copied to `.bak`, rename over `path`.
 fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), SshError> {
     let with_suffix = |suffix: &str| {
@@ -264,15 +372,17 @@ fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), SshError> {
     let tmp = with_suffix(".tmp");
     let result = (|| -> io::Result<()> {
         if let Some(dir) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-            fs::create_dir_all(dir)?;
+            create_private_dir_all(dir)?;
         }
-        let mut file = fs::File::create(&tmp)?;
+        let mut file = create_private_file(&tmp)?;
         file.write_all(contents)?;
         file.flush()?;
         file.sync_all()?;
         drop(file);
         if path.exists() {
-            fs::copy(path, with_suffix(".bak"))?;
+            let bak = with_suffix(".bak");
+            fs::copy(path, &bak)?;
+            owner_only(&bak)?;
         }
         fs::rename(&tmp, path)
     })();
@@ -492,11 +602,209 @@ mod tests {
         assert_ne!(fs::read(&path).unwrap(), first);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn known_hosts_is_owner_only_and_a_new_folder_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("fresh").join("fernjo");
+        let path = folder.join("known_hosts");
+        let kh = KnownHosts::new(&path);
+        kh.add("a", 22, &key(ED_A)).unwrap();
+        assert_eq!(mode(&folder), 0o700, "a folder fernjo creates is private");
+        assert_eq!(mode(&path), 0o600);
+        // a file an older build wrote with the default umask is tightened by the next write,
+        // and so is the backup copied from it
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        kh.add("b", 22, &key(ED_B)).unwrap();
+        assert_eq!(mode(&path), 0o600);
+        assert_eq!(mode(&path.with_extension("bak")), 0o600);
+    }
+
     #[test]
     fn write_is_atomic_no_temp_file_left() {
         let (d, kh, _p) = setup();
         kh.add("a", 22, &key(ED_A)).unwrap();
         kh.add("b", 22, &key(ED_B)).unwrap();
         assert_eq!(names(d.path()), ["known_hosts", "known_hosts.bak"]);
+    }
+
+    /// Host strings that must never reach the file: each would add an alias, a second line, a
+    /// pattern or a marker.
+    fn bad_hosts() -> Vec<String> {
+        let mut v: Vec<String> = [
+            "",
+            "evil,victim.corp",
+            "victim.corp,evil",
+            "x\nvictim2 ssh-ed25519 AAAA",
+            "a\rb",
+            "a b",
+            "a\tb",
+            "a\0b",
+            "a\u{7f}b",
+            "a\u{85}b",
+            "a\u{2028}b",
+            "a\u{200b}b",
+            "|1|c2FsdA==|aGFzaA==",
+            "@cert-authority",
+            "@revoked",
+            "!victim.corp",
+            "#comment",
+            "*.corp",
+            "*",
+            "h?",
+            "\"h\"",
+            "'h'",
+            "[h]",
+            "[::1]:22",
+            "h]:22",
+            "a/b",
+            "user@host",
+            "host:22",
+            "1:2",
+            "::1::2",
+            "fe80::1%",
+            "fe80::1%a b",
+            "fe80::1%a,b",
+            "%eth0",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        v.push("a".repeat(256));
+        v
+    }
+
+    fn good_hosts() -> Vec<String> {
+        let mut v: Vec<String> = [
+            "host.example",
+            "HOST.Example",
+            "localhost",
+            "a",
+            "10.0.0.1",
+            "my_host.lab",
+            "host.example.",
+            "web-01.lab",
+            "xn--bcher-kva.example",
+            "::1",
+            "2001:db8::1",
+            "fe80::1%eth0",
+            "fe80::1%12",
+            "::ffff:192.0.2.1",
+            "b\u{fc}cher.example",
+            "\u{4f8b}\u{3048}.jp",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        v.push("a".repeat(255));
+        v
+    }
+
+    #[test]
+    fn the_writer_refuses_hosts_that_cannot_be_stored_safely_and_leaves_the_file_alone() {
+        let (_d, kh, p) = setup();
+        let original = format!("victim.corp ssh-ed25519 {ED_B}\n");
+        fs::write(&p, &original).unwrap();
+        for host in bad_hosts() {
+            for port in [22, 2222] {
+                let label = format!("{host:?}:{port}");
+                assert!(
+                    matches!(kh.add(&host, port, &key(ED_A)), Err(SshError::InvalidHost)),
+                    "add {label}"
+                );
+                assert!(
+                    matches!(
+                        kh.replace(&host, port, &key(ED_A)),
+                        Err(SshError::InvalidHost)
+                    ),
+                    "replace {label}"
+                );
+                assert!(
+                    matches!(
+                        kh.check(&host, port, &key(ED_A)),
+                        Err(SshError::InvalidHost)
+                    ),
+                    "check {label}"
+                );
+                assert!(
+                    matches!(
+                        kh.stored_algorithms(&host, port),
+                        Err(SshError::InvalidHost)
+                    ),
+                    "stored_algorithms {label}"
+                );
+            }
+            assert_eq!(fs::read_to_string(&p).unwrap(), original, "{host:?}");
+        }
+        // the probe of the review: no alias for the victim, no second line
+        assert!(kh.add("evil,victim.corp", 22, &key(ED_A)).is_err());
+        assert_eq!(
+            kh.check("victim.corp", 22, &key(ED_A)).unwrap(),
+            HostKeyStatus::Changed {
+                stored: vec![FP_ED_B.to_string()]
+            },
+            "the victim keeps only its own key"
+        );
+    }
+
+    #[test]
+    fn legitimate_hosts_round_trip_and_match_only_themselves() {
+        for host in good_hosts() {
+            for port in [22, 2222] {
+                let (_d, kh, p) = setup();
+                kh.add(&host, port, &key(ED_A)).unwrap();
+                let text = fs::read_to_string(&p).unwrap();
+                assert_eq!(text.lines().count(), 1, "{host:?}");
+                assert_eq!(
+                    kh.check(&host, port, &key(ED_A)).unwrap(),
+                    HostKeyStatus::Known,
+                    "{host:?}:{port}"
+                );
+                assert_eq!(
+                    kh.check(&host.to_ascii_uppercase(), port, &key(ED_A))
+                        .unwrap(),
+                    HostKeyStatus::Known,
+                    "case-insensitive {host:?}:{port}"
+                );
+                assert_eq!(
+                    kh.check("other.example", port, &key(ED_A)).unwrap(),
+                    HostKeyStatus::Unknown,
+                    "{host:?}:{port}"
+                );
+                let other_port = if port == 22 { 2222 } else { 22 };
+                assert_eq!(
+                    kh.check(&host, other_port, &key(ED_A)).unwrap(),
+                    HostKeyStatus::Unknown,
+                    "port {host:?}:{port}"
+                );
+                // replace works for a legitimate host too
+                kh.replace(&host, port, &key(ED_B)).unwrap();
+                assert_eq!(
+                    kh.check(&host, port, &key(ED_B)).unwrap(),
+                    HostKeyStatus::Known
+                );
+                assert_eq!(
+                    kh.check(&host, port, &key(ED_A)).unwrap(),
+                    HostKeyStatus::Changed {
+                        stored: vec![FP_ED_B.to_string()]
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn validate_host_accepts_the_good_table_and_refuses_the_bad_one() {
+        for host in good_hosts() {
+            assert!(validate_host(&host).is_ok(), "{host:?}");
+        }
+        for host in bad_hosts() {
+            assert!(
+                matches!(validate_host(&host), Err(SshError::InvalidHost)),
+                "{host:?}"
+            );
+        }
     }
 }

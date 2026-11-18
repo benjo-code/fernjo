@@ -96,7 +96,16 @@ export interface VaultStatus {
   path: string | null;
   /** The key store holds this vault's key. */
   autoUnlock: boolean;
+  /**
+   * Why the automatic unlock at startup did not work (locked only). Rust never deletes the stored
+   * key for any of these, except that `keychain_unavailable` means nothing is known about one.
+   */
+  autoUnlockIssue: AutoUnlockIssue | null;
 }
+
+/** Wire codes of the startup auto-unlock failure; Rust may add more; the UI falls back to a neutral line for an unknown code and shows no line for `keychain_unavailable`. */
+export type AutoUnlockIssue =
+  "key_not_accepted" | "keychain_unavailable" | "unavailable" | "rolled_back";
 
 /** A credential as the UI sees it: never a secret field. */
 export interface CredentialInfo {
@@ -177,6 +186,8 @@ export interface Api {
   vaultStatus(): Promise<VaultStatus>;
   vaultCreate(password: string, remember: boolean): Promise<VaultStatus>;
   vaultUnlock(password: string, remember: boolean): Promise<VaultStatus>;
+  /** Unlocks a vault file that is older than the last version this device opened. */
+  vaultUnlockOlder(password: string, remember: boolean): Promise<VaultStatus>;
   vaultLock(): Promise<VaultStatus>;
   vaultChangePassword(old: string, next: string): Promise<VaultStatus>;
   vaultSetAutoUnlock(enabled: boolean): Promise<VaultStatus>;
@@ -215,6 +226,8 @@ export interface Api {
     fontSize: number;
     scrollback: number;
   }): Promise<TerminalSettings>;
+  getTheme(): Promise<ThemeInfo>;
+  setTheme(theme: Theme): Promise<ThemeInfo>;
   /** Opens the native file picker; `null` when it was cancelled. */
   importPick(kind: ImportKind): Promise<PickedFile | null>;
   /** The secret is an mRemoteNG key or a backup password; the only secret that goes in. */
@@ -301,6 +314,14 @@ export type SessionState = "connecting" | "needsVault" | "connected" | "disconne
 export type Prompt =
   | { kind: "hostKey"; host: string; port: number; keyType: string; fingerprint: string }
   | {
+      kind: "hostKeySynced";
+      host: string;
+      port: number;
+      keyType: string;
+      fingerprint: string;
+      previous: string[];
+    }
+  | {
       kind: "hostKeyChanged";
       host: string;
       port: number;
@@ -330,6 +351,14 @@ export type PromptAnswer =
   | { kind: "secrets"; values: string[] }
   | { kind: "text"; value: string }
   | { kind: "cancel" };
+
+export type Theme = "system" | "light" | "dark";
+
+export interface ThemeInfo {
+  theme: Theme;
+  /** `false` when the choice only lives in memory. */
+  persistent: boolean;
+}
 
 export interface TerminalSettings {
   /** `null` means the default monospace stack. */

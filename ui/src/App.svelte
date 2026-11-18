@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from "svelte";
   import { tauriApi, toApiError } from "./lib/api";
-  import DataFolderDialog from "./lib/components/DataFolderDialog.svelte";
+  import SettingsDialog from "./lib/components/SettingsDialog.svelte";
   import ImportDialog from "./lib/components/ImportDialog.svelte";
   import PropertiesPanel from "./lib/components/PropertiesPanel.svelte";
   import SessionArea from "./lib/components/SessionArea.svelte";
@@ -14,6 +14,7 @@
   import { isMac, routeKey } from "./lib/shortcuts";
   import { TreeStore } from "./lib/store.svelte";
   import { TerminalSettingsStore } from "./lib/terminal-settings.svelte";
+  import { ThemeStore } from "./lib/theme.svelte";
   import type { Api, Protocol, TerminalSettings } from "./lib/types";
   import { VaultStore } from "./lib/vault.svelte";
 
@@ -30,6 +31,9 @@
 
   // svelte-ignore state_referenced_locally
   const terminal = new TerminalSettingsStore(api);
+
+  // svelte-ignore state_referenced_locally
+  const theme = new ThemeStore(api);
 
   /** Until Rust answers (or when it cannot), terminals use these. */
   const DEFAULT_TERMINAL: TerminalSettings = {
@@ -141,6 +145,7 @@
     void vault.init();
     void refreshRestart();
     void terminal.load();
+    void theme.load();
   });
 </script>
 
@@ -178,9 +183,10 @@
 </div>
 
 {#if folderOpen}
-  <DataFolderDialog
+  <SettingsDialog
     {api}
     {terminal}
+    {theme}
     onclose={() => (folderOpen = false)}
     onchange={(info) => (restartPending = info.restartRequired)}
   />

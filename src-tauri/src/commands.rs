@@ -481,6 +481,7 @@ mod tests {
             data_dir: dir.path().to_path_buf(),
             config_dir: dir.path().to_path_buf(),
             source: fernjo_core::DataDirSource::Default,
+            device_dir: None,
             settings_error: Some(fernjo_core::LoadError::Unreadable {
                 path: dir.path().join("settings.json"),
                 reason: "bad".into(),
@@ -586,5 +587,50 @@ mod tests {
         let err =
             serde_json::to_value(create_folder(&st, None, None, " ".into()).unwrap_err()).unwrap();
         assert_eq!(err["code"], "empty_name");
+    }
+
+    /// Security review M1: creating, moving and duplicating past `MAX_TREE_DEPTH` is an ordinary
+    /// command error (the UI shows its message) and changes neither the tree nor the file.
+    #[test]
+    fn creating_or_moving_below_the_depth_limit_is_a_too_deep_command_error() {
+        use fernjo_core::MAX_TREE_DEPTH;
+        let dir = tempfile::tempdir().unwrap();
+        let st = state(dir.path());
+        let mut parent = None;
+        for i in 0..MAX_TREE_DEPTH {
+            parent = create_folder(&st, parent, None, format!("level {i}"))
+                .unwrap()
+                .id;
+        }
+        let deepest = parent.unwrap();
+        let spare = create_folder(&st, None, None, "spare".into())
+            .unwrap()
+            .id
+            .unwrap();
+        let on_disk = fs::read(dir.path().join(FILE_NAME)).unwrap();
+
+        let errors = [
+            create_folder(&st, Some(deepest), None, "one too many".into()),
+            create_connection(
+                &st,
+                Some(deepest),
+                None,
+                "c".into(),
+                Protocol::Ssh,
+                "h".into(),
+            ),
+            move_node(&st, spare, Some(deepest), 0),
+        ];
+        for result in errors {
+            let err = result.unwrap_err();
+            assert_eq!(err.code, "too_deep");
+            assert!(err.message.contains("nested"), "{}", err.message);
+        }
+        // the file on disk is unchanged and still loads
+        assert_eq!(fs::read(dir.path().join(FILE_NAME)).unwrap(), on_disk);
+        assert!(
+            Store::open(dir.path()).unwrap().notice.is_none(),
+            "the file must load"
+        );
     }
 }

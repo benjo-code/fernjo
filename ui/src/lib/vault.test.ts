@@ -47,6 +47,35 @@ describe("VaultStore", () => {
     expect(store.credentials).toEqual([]);
   });
 
+  test("unlock_older_calls_the_older_command_and_adopts_the_status", async () => {
+    const { api, calls } = mockApi([], {
+      vaultStatus: async () => locked(),
+      vaultUnlockOlder: async () => unlocked(),
+      listCredentials: async () => [credential({ id: "c1" })],
+    });
+    const store = new VaultStore(api);
+    await store.init();
+    expect(await store.unlockOlder("pw", true)).toBeNull();
+    expect(calls.vaultUnlockOlder).toEqual([["pw", true]]);
+    expect(calls.vaultUnlock).toEqual([]);
+    expect(store.status?.state).toBe("unlocked");
+    expect(store.credentials).toHaveLength(1);
+  });
+
+  test("unlock_older_error_is_returned_and_status_stays_locked", async () => {
+    const err = apiError("wrong_password", "wrong password");
+    const { api } = mockApi([], {
+      vaultStatus: async () => locked(),
+      vaultUnlockOlder: async () => {
+        throw err;
+      },
+    });
+    const store = new VaultStore(api);
+    await store.init();
+    expect(await store.unlockOlder("nope", false)).toEqual(err);
+    expect(store.status?.state).toBe("locked");
+  });
+
   test("lock_clears_the_credential_list", async () => {
     const { api } = mockApi([], {
       vaultStatus: async () => unlocked(),

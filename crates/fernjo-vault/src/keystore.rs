@@ -11,7 +11,7 @@ use std::sync::Mutex;
 use zeroize::Zeroizing;
 
 use crate::crypto::KEY_LEN;
-use crate::{DataKey, Vault, VaultId};
+use crate::{DataKey, Vault, VaultError, VaultId};
 
 /// Keychain service name of all fernjo items.
 const SERVICE: &str = "fernjo";
@@ -149,26 +149,35 @@ pub enum AutoUnlock {
     Unlocked,
     /// No key is stored; ask for the master password.
     NoKey,
-    /// The stored key did not fit and was removed; ask for the master password.
-    StaleKeyRemoved,
-    /// The keychain or the file could not be used; ask for the master password.
+    /// The file did not open with the stored key (wrong item, or a damaged, half-synced or
+    /// replaced file). The item is kept; ask for the master password.
+    KeyNotAccepted,
+    /// The keychain could not be read (no Secret Service, locked keyring, access denied), so
+    /// nothing is known about a stored key; ask for the master password.
+    KeychainUnavailable(String),
+    /// The vault file could not be used (unreadable, truncated, replaced, newer format); the
+    /// item is kept; ask for the master password.
     Unavailable(String),
+    /// The stored key opened the file, but the file is older than the version this device last
+    /// opened (a sync tool may have put an older copy back). Auto-unlock never accepts that;
+    /// the item is kept and the user decides with the master password.
+    RolledBack { found: u64, seen: u64 },
 }
 
-/// Tries to unlock `vault` with the key from `store`. Never prompts, never panics.
+/// Tries to unlock `vault` with the key from `store`. Never prompts, never panics and never
+/// deletes the item: the key never changes for a vault id (not even on a password change),
+/// and the file may be damaged or half-synced right now, so a failure proves nothing about
+/// the item. Only the user's explicit "off" removes it.
 pub fn try_auto_unlock(vault: &mut Vault, store: &dyn KeyStore) -> AutoUnlock {
     let key = match store.get(vault.id()) {
         Ok(Some(key)) => key,
         Ok(None) => return AutoUnlock::NoKey,
-        Err(e) => return AutoUnlock::Unavailable(e.0),
+        Err(e) => return AutoUnlock::KeychainUnavailable(e.0),
     };
     match vault.unlock_with_key(&key) {
         Ok(()) => AutoUnlock::Unlocked,
-        Err(e) if e.code() == "tampered" => {
-            // Failure to delete is ignored: the vault stays locked either way.
-            let _ = store.delete(vault.id());
-            AutoUnlock::StaleKeyRemoved
-        }
+        Err(VaultError::RolledBack { found, seen }) => AutoUnlock::RolledBack { found, seen },
+        Err(e) if e.code() == "tampered" => AutoUnlock::KeyNotAccepted,
         Err(e) => AutoUnlock::Unavailable(e.to_string()),
     }
 }

@@ -26,6 +26,8 @@ connections.json
 connections.json.bak
 connections.json.tmp
 *.fernjo.bak
+# the golden vault fixtures are test data, not a real vault
+!crates/fernjo-vault/tests/fixtures/*.fernjo
 *.fernjo.tmp
 *.tmp
 *.ppk
