@@ -50,7 +50,7 @@ shasum -a 256 -c --ignore-missing SHA256SUMS  # macOS
 
 **macOS** (from Apple's documented behaviour, not yet run on a Mac). Open the `.dmg` and drag fernjo to Applications. The first start is blocked because the app is unsigned and not notarised: open System Settings, Privacy & Security, scroll to the message about fernjo and choose "Open Anyway". Alternatively remove the quarantine flag once: `xattr -dr com.apple.quarantine /Applications/fernjo.app`. Use the Apple Silicon image on M-series Macs and the Intel image otherwise; macOS 11 or newer.
 
-**Linux** (Wayland on recent GNOME and KDE is the tested setup; Ubuntu 22.04 or newer). Debian and Ubuntu: `sudo apt install ./fernjo_<version>_amd64.deb`. AppImage: `chmod +x fernjo_<version>_amd64.AppImage` and run it; it needs FUSE 2, which is the package `libfuse2` on Ubuntu 22.04 and `libfuse2t64` on 24.04. The CI release build installs the `.deb` and extracts the AppImage (`--appimage-extract`); starting either on a real desktop (and the FUSE note, from documented behaviour) is not yet checked.
+**Linux** (Wayland on recent GNOME and KDE is the target setup; Ubuntu 22.04 or newer). Debian and Ubuntu: `sudo apt install ./fernjo_<version>_amd64.deb`. AppImage: `chmod +x fernjo_<version>_amd64.AppImage` and run it; it needs FUSE 2, which is the package `libfuse2` on Ubuntu 22.04 and `libfuse2t64` on 24.04. The CI release build installs the `.deb` and extracts the AppImage (`--appimage-extract`); starting either on a real desktop (and the FUSE note, from documented behaviour) is not yet checked.
 
 ## Settings
 

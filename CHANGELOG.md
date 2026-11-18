@@ -34,7 +34,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 ### Changed
 
 - The gear dialog is now called "Settings" and also holds the terminal section (M4).
-- The release build is smaller and links with thin LTO (M6).
+- Release builds strip symbols and link with thin LTO (M6).
 
 ### Fixed
 
