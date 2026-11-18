@@ -6,13 +6,24 @@
 
 use tauri::Url;
 
-/// Origins the release webview serves the app from (`tauri://` on macOS and Linux,
-/// `http(s)://tauri.localhost` on Windows and Android).
+/// True on the platforms where Tauri serves the app from `http(s)://tauri.localhost` (Windows and
+/// Android); everywhere else it is `tauri://localhost` (see `tauri::protocol::origin`).
+const HTTP_ORIGIN_PLATFORM: bool = cfg!(any(windows, target_os = "android"));
+
+/// The origin the release webview serves the app from on one platform: `http(s)://tauri.localhost`
+/// when `http_origin` is set (Windows and Android), `tauri://localhost` otherwise. Only the
+/// platform's own origin is allowed, so e.g. a loopback `http://tauri.localhost/` is not shown on
+/// macOS or Linux.
+fn is_release_origin_for(url: &Url, http_origin: bool) -> bool {
+    match (url.scheme(), url.host_str()) {
+        ("http" | "https", Some("tauri.localhost")) => http_origin,
+        ("tauri", Some("localhost")) => !http_origin,
+        _ => false,
+    }
+}
+
 fn is_release_origin(url: &Url) -> bool {
-    matches!(
-        (url.scheme(), url.host_str()),
-        ("tauri", Some("localhost")) | ("http" | "https", Some("tauri.localhost"))
-    )
+    is_release_origin_for(url, HTTP_ORIGIN_PLATFORM)
 }
 
 /// True when `url` is the same origin (scheme, host and port) as the dev server.
@@ -25,8 +36,9 @@ fn is_dev_origin(url: &Url, dev_url: &Url) -> bool {
 
 /// Decides whether the main webview may navigate to `url`.
 ///
-/// Allowed: the release origins (any path, query and fragment, but no explicit port and no
-/// userinfo) and, in a dev build, exactly the origin of `build.devUrl`. Everything else is refused.
+/// Allowed: the platform's release origin (any path, query and fragment, but no non-default port
+/// and no userinfo) and, in a dev build, exactly the origin of `build.devUrl`. Everything else is
+/// refused.
 #[must_use]
 pub fn is_app_url(url: &Url, dev: bool, dev_url: Option<&Url>) -> bool {
     if !url.username().is_empty() || url.password().is_some() {
@@ -65,21 +77,51 @@ mod tests {
         u("http://localhost:1420")
     }
 
+    const HTTP_FORMS: [&str; 6] = [
+        "http://tauri.localhost/",
+        "http://tauri.localhost/index.html#x",
+        "http://tauri.localhost/a/b?q=1#f",
+        "https://tauri.localhost/",
+        "HTTP://TAURI.LOCALHOST/",
+        // the parser decodes the host, so this is the very same host
+        "http://tauri%2Elocalhost/",
+    ];
+    const TAURI_FORMS: [&str; 2] = ["tauri://localhost", "tauri://localhost/index.html"];
+
     #[test]
-    fn release_origins_are_allowed() {
-        for s in [
-            "http://tauri.localhost/",
-            "http://tauri.localhost/index.html#x",
-            "http://tauri.localhost/a/b?q=1#f",
-            "tauri://localhost",
-            "tauri://localhost/index.html",
-            "https://tauri.localhost/",
-            "HTTP://TAURI.LOCALHOST/",
-            // the parser decodes the host, so this is the very same host
-            "http://tauri%2Elocalhost/",
-        ] {
+    fn windows_and_android_allow_only_the_http_origins() {
+        for s in HTTP_FORMS {
+            assert!(is_release_origin_for(&u(s), true), "{s}");
+        }
+        for s in TAURI_FORMS {
+            assert!(!is_release_origin_for(&u(s), true), "{s}");
+        }
+    }
+
+    #[test]
+    fn macos_and_linux_allow_only_the_tauri_origin() {
+        for s in TAURI_FORMS {
+            assert!(is_release_origin_for(&u(s), false), "{s}");
+        }
+        for s in HTTP_FORMS {
+            assert!(!is_release_origin_for(&u(s), false), "{s}");
+        }
+    }
+
+    #[test]
+    fn the_running_platform_allows_exactly_its_own_origin() {
+        let (own, foreign) = if cfg!(any(windows, target_os = "android")) {
+            (HTTP_FORMS.as_slice(), TAURI_FORMS.as_slice())
+        } else {
+            (TAURI_FORMS.as_slice(), HTTP_FORMS.as_slice())
+        };
+        for s in own {
             assert!(is_app_url(&u(s), false, Some(&dev_url())), "{s}");
             assert!(is_app_url(&u(s), false, None), "{s}");
+        }
+        for s in foreign {
+            assert!(!is_app_url(&u(s), false, Some(&dev_url())), "{s}");
+            assert!(!is_app_url(&u(s), false, None), "{s}");
         }
     }
 
