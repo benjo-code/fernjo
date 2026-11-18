@@ -50,10 +50,13 @@ const evaluate = async (send, expression) => {
   return r.result?.result?.value;
 };
 
+// Tree pane only: rows inside the tree, or the empty-tree offer. The generic ".empty" class also
+// marks placeholders of the main area and the properties panel, which exist as soon as the
+// shell mounts, before the snapshot has loaded.
 const POPULATED = `(() => {
   const rows = document.querySelectorAll('[role="tree"] [role="treeitem"]').length;
-  const empty = document.querySelector('.empty') !== null;
-  return rows > 0 || empty;
+  const offer = [...document.querySelectorAll('p.empty')].some((p) => p.textContent.trim() === 'No connections yet');
+  return rows > 0 || offer;
 })()`;
 
 if (mode === "usable") {

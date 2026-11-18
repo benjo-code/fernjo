@@ -1,6 +1,6 @@
 # Performance measurements (spec section 6)
 
-Targets: cold start to a usable window under 2 s, idle memory with no session under about 150 MB, a tree of 500 connections filters without visible lag. All three **met** on Windows; Linux and macOS are open owner checks (commands below).
+Targets: cold start to a usable window under 2 s, idle memory with no session under about 150 MB, a tree of 500 connections filters without visible lag. All three **met** on Windows (see the verdicts for the filter's cold first update); Linux and macOS are open owner checks (commands below).
 
 ## Definitions
 
@@ -12,16 +12,23 @@ Targets: cold start to a usable window under 2 s, idle memory with no session un
 ## Result (Windows, 3 sessions of 10 runs)
 
 - Machine: AMD Ryzen 7 3800X 8-Core, 15.9 GB RAM, Windows 11 Pro build 10.0.26200.
-- Binary: `pnpm tauri build --no-bundle` (release profile: strip, lto thin, codegen-units 1) of commit `eb5404e` plus the measurement script.
+- Binary: `pnpm tauri build --no-bundle` (release profile: strip, lto thin, codegen-units 1) built from commit `2965077` (the working tree held only the corrected probe selector in `tools/perf/cdp.mjs`, no app source change).
 - Date: 2026-11-18.
 
-| Session | Cold start median / max (ms) | Idle fernjo only / with WebView (MiB) | Filter median / max (ms), first |
+| Session | Cold start median / max (ms) | Idle fernjo only / with WebView (MiB) | Filter median / max (ms), first cold update |
 |---|---|---|---|
-| 1 | 880 / 950 | 3.6 / 67.3 | 29.4 / 49.2, 120.1 |
-| 2 | 858 / 916 | 3.5 / 67.4 | 28.3 / 53.4, 123.4 |
-| 3 | 852 / 924 | 3.6 / 69.7 | 32.2 / 49.5, 115.6 |
+| 1 | 932 / 1091 | 3.7 / 69.5 | 32.7 / 70.9, 159.0 |
+| 2 | 954 / 1092 | 3.1 / 60.8 | 30.7 / 59.0, 125.5 |
+| 3 | 992 / 1025 | 3.6 / 67.2 | 29.5 / 55.0, 136.2 |
 
-Medians: cold start about 858 ms (target under 2000 ms: met), idle memory 3.6 MiB fernjo only and about 67 MiB with WebView (target about 150: met), filter median about 29 ms, worst 53 ms (no visible lag: met; M2 measured median 61 ms on the dev build).
+Verdicts:
+- Cold start: medians 932, 954 and 992 ms, worst single run 1092 ms; target under 2000 ms: **met**.
+- Idle memory: 3.1-3.7 MiB fernjo only, 60.8-69.5 MiB with WebView; target about 150 MB: **met** on both readings.
+- Filter: median 29.5-32.7 ms and worst 70.9 ms over 20 alternating worst-case updates, no visible lag: **met**. The very first (cold) update after start took 125-159 ms; this is accepted as in M2's record, which had a 163 ms cold first keystroke and was judged no visible lag (`Docs/ROADMAP.md`, M2 acceptance record).
+
+### Correction of an earlier reading
+
+The first version of the probe also accepted any element with the class `.empty`. The main area ("Open a connection from the tree") and the properties panel render such a paragraph as soon as the shell mounts, so the probe fired before the tree snapshot had loaded. Measured side by side on the same build (three starts): the shell placeholder appeared at 1011, 903 and 883 ms, the first tree row at 1040, 939 and 920 ms, so the first version read about 35 ms low (medians 880, 858, 852 ms). The probe now accepts only rows inside `[role=tree]` or the tree pane's "No connections yet" offer; the numbers below are from that probe.
 
 ### Raw output
 
@@ -30,30 +37,30 @@ Session 1:
 ```json
 {
     "coldStartMs":  {
-                        "median":  880,
-                        "max":  950,
+                        "median":  932,
+                        "max":  1091,
                         "runs":  [
-                                     950,
-                                     897,
-                                     845,
-                                     888,
-                                     881,
-                                     853,
-                                     879,
-                                     836,
-                                     856,
-                                     881
+                                     1091,
+                                     909,
+                                     937,
+                                     913,
+                                     986,
+                                     900,
+                                     932,
+                                     919,
+                                     932,
+                                     944
                                  ]
                     },
     "idleMemoryMiB":  {
-                          "fernjoOnly":  3.6,
-                          "withWebView":  67.3,
+                          "fernjoOnly":  3.7,
+                          "withWebView":  69.5,
                           "processes":  7
                       },
     "filter500Ms":  {
-                        "median":  29.4,
-                        "max":  49.2,
-                        "firstMs":  120.1,
+                        "median":  32.7,
+                        "max":  70.9,
+                        "firstMs":  159,
                         "updates":  20
                     }
 }
@@ -64,30 +71,30 @@ Session 2:
 ```json
 {
     "coldStartMs":  {
-                        "median":  858,
-                        "max":  916,
+                        "median":  954,
+                        "max":  1092,
                         "runs":  [
-                                     916,
-                                     877,
-                                     848,
-                                     838,
-                                     868,
-                                     857,
-                                     860,
-                                     831,
-                                     838,
-                                     901
+                                     1092,
+                                     1028,
+                                     938,
+                                     884,
+                                     948,
+                                     927,
+                                     1012,
+                                     1019,
+                                     915,
+                                     959
                                  ]
                     },
     "idleMemoryMiB":  {
-                          "fernjoOnly":  3.5,
-                          "withWebView":  67.4,
+                          "fernjoOnly":  3.1,
+                          "withWebView":  60.8,
                           "processes":  7
                       },
     "filter500Ms":  {
-                        "median":  28.3,
-                        "max":  53.4,
-                        "firstMs":  123.4,
+                        "median":  30.7,
+                        "max":  59,
+                        "firstMs":  125.5,
                         "updates":  20
                     }
 }
@@ -98,30 +105,30 @@ Session 3:
 ```json
 {
     "coldStartMs":  {
-                        "median":  852,
-                        "max":  924,
+                        "median":  992,
+                        "max":  1025,
                         "runs":  [
-                                     924,
-                                     902,
-                                     846,
-                                     865,
-                                     867,
-                                     835,
-                                     835,
-                                     856,
-                                     849,
-                                     849
+                                     995,
+                                     910,
+                                     991,
+                                     1025,
+                                     992,
+                                     961,
+                                     992,
+                                     1009,
+                                     966,
+                                     957
                                  ]
                     },
     "idleMemoryMiB":  {
                           "fernjoOnly":  3.6,
-                          "withWebView":  69.7,
+                          "withWebView":  67.2,
                           "processes":  7
                       },
     "filter500Ms":  {
-                        "median":  32.2,
-                        "max":  49.5,
-                        "firstMs":  115.6,
+                        "median":  29.5,
+                        "max":  55,
+                        "firstMs":  136.2,
                         "updates":  20
                     }
 }
