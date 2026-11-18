@@ -1390,7 +1390,7 @@ dependencies = [
 
 [[package]]
 name = "fernjo-app"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "chrono",
  "fernjo-core",
@@ -1412,7 +1412,7 @@ dependencies = [
 
 [[package]]
 name = "fernjo-core"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "directories",
  "serde",
@@ -1424,7 +1424,7 @@ dependencies = [
 
 [[package]]
 name = "fernjo-import"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "aes-gcm",
  "base64 0.23.1",
@@ -1444,7 +1444,7 @@ dependencies = [
 
 [[package]]
 name = "fernjo-ssh"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "data-encoding",
  "hmac",
@@ -1458,7 +1458,7 @@ dependencies = [
 
 [[package]]
 name = "fernjo-vault"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "argon2",
  "chacha20poly1305",

@@ -6,6 +6,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-18
+
+First release, the "Daily SSH driver": milestones M0 to M6 (project foundation, design, connection tree, credential vault, SSH sessions in tabs, mRemoteNG import with export and backup, packaging and security fixes).
+
 ### Added
 
 - Project foundation (M0): Rust workspace, Tauri 2 shell with an empty window, Svelte 5 frontend, CI on GitHub-hosted runners (build, tests, lint, `cargo deny`, CodeQL), dual MIT/Apache-2.0 licence.
@@ -53,5 +57,3 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 
 - Settings dialog (M6): a late-arriving load no longer overwrites what you already typed; the "Saved" note disappears when you edit a terminal field again; a failed load of the terminal settings shows an error and keeps Save disabled; Enter in a terminal field no longer saves while an input method composition is active.
 - Windows installer (M6): `fernjo_<version>_x64-setup.exe` now carries the fernjo app icon instead of the generic NSIS icon.
-
-### Removed

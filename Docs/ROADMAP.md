@@ -30,7 +30,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 | 4 | SSH sessions in tabs | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-16-milestone-04-ssh-sessions.md) | 2026-11-16 |
 | 5 | mRemoteNG import & export | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-16-milestone-05-mremoteng-import.md) | 2026-11-17 |
 | 6 | Packaging, app settings & release readiness | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-17-milestone-06-packaging-release-readiness.md) | 2026-11-18 |
-| – | **Release `v0.1.0`** – Daily SSH driver (M0 to M6) | – | ⬜ open | – | – |
+| – | **Release `v0.1.0`** – Daily SSH driver (M0 to M6) | – | ✅ done | – | 2026-11-18 |
 | 7 | RDP sessions | 1 – fernjo app | ⬜ open | – | – |
 | – | **Release `v0.2.0`** – RDP (M7) | – | ⬜ open | – | – |
 

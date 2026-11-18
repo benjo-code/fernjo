@@ -4,7 +4,7 @@ A lightweight, cross-platform remote connection manager for **SSH and RDP** on W
 
 All your connections live in one folder tree in the sidebar, sessions open as tabs in a single window, and passwords and keys are kept in an encrypted vault. Existing connections can be imported from mRemoteNG, including saved passwords.
 
-**Status:** in development – see [Docs/ROADMAP.md](Docs/ROADMAP.md). SSH, the vault, import and backup are implemented, and the installers for Windows, macOS and Linux are built by CI. The first release (v0.1.0) is not published yet, so there is nothing to download today; v0.2.0 adds RDP.
+**Status:** in development – see [Docs/ROADMAP.md](Docs/ROADMAP.md). The first release, v0.1.0, is published: SSH, the vault, import and backup are implemented, and the installers for Windows, macOS and Linux are on the [releases page](https://github.com/benjo-code/fernjo/releases). v0.2.0 adds RDP.
 
 ## Features
 
@@ -25,7 +25,7 @@ Design and scope: [Docs/superpowers/specs/2026-11-15-fernjo-design.md](Docs/supe
 
 ## Install
 
-The first release (v0.1.0) is not published yet. Once it is, the GitHub release will hold five installers and a checksum file:
+The GitHub release of v0.1.0 holds five installers and a checksum file:
 
 | Platform | File |
 |---|---|
