@@ -8,6 +8,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 
 ### Added
 
+- Project foundation (M0): Rust workspace, Tauri 2 shell with an empty window, Svelte 5 frontend, CI on GitHub-hosted runners (build, tests, lint, `cargo deny`, CodeQL), dual MIT/Apache-2.0 licence.
 - Visual design "Ulm, revised": light and dark theme that follows the system setting, bundled fonts (Hanken Grotesk, Red Hat Mono), design tokens for all upcoming UI (M1).
 - New app icon (M1).
 - Connection tree (M2): folders and SSH/RDP connections in a sidebar tree with filter, expand/collapse, keyboard navigation, rename, duplicate, delete with confirmation, context menu and drag and drop; the tree is saved to `connections.json` in the app's data folder (atomic write with a `.bak` backup).
@@ -30,9 +31,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 - `SHA256SUMS` (M6): every release carries a checksum file for all installers.
 - Third-party notices (M6): the licences of the bundled Rust crates, npm packages and the two fonts ship inside every installer (`THIRD-PARTY-NOTICES.md`).
 - Per-user Windows install (M6): the setup installs under `%LOCALAPPDATA%\fernjo` without administrator rights; uninstalling keeps `%APPDATA%\fernjo`.
+- Security hardening (M6, from the pre-release security review in `Docs/release-checklist.md`):
+  - On Unix the data files (`connections.json`, `settings.json`, `vault.fernjo`, `known_hosts` and their `.bak` copies) are created with mode 0600 and a data folder fernjo creates with 0700; before, they followed the default umask. Windows ACLs are unchanged. The new tests have been type-checked for Linux but only run in CI.
+  - Host names that cannot be written safely to `known_hosts` (separators, whitespace, control characters) are refused before any traffic with the error `invalid_host`.
+  - An oversize `vault.fernjo` (over 64 MiB) is refused as unusable instead of being read whole, and is never overwritten.
+  - Importing a hostile mRemoteNG file is bounded: too many attributes or namespace declarations are refused (`too_complex`), long names are shortened, over-long host names are dropped and over-long password attributes are not decrypted.
+  - The folder depth limit is now enforced on every create, move and duplicate (`too_deep`), not only on import and restore, so a tree can no longer grow past what `connections.json` can be loaded from.
 
 ### Changed
 
+- SSH: the plain `ssh-rsa` host key algorithm (RSA over SHA-1) is no longer offered, like OpenSSH since 8.8; a server that only has a SHA-1 RSA host key can no longer be connected to (M6).
+- Dependencies: russh updated to 0.65.2 (with `rsa` 0.10), which removes the `RUSTSEC-2023-0071` advisory ignore (M6).
 - The gear dialog is now called "Settings" and also holds the terminal section (M4).
 - Release builds strip symbols and link with thin LTO (M6).
 
