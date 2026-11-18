@@ -902,6 +902,32 @@ mod tests {
     }
 
     #[test]
+    fn an_oversized_vault_file_is_unusable_and_stays_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(fernjo_vault::FILE_NAME);
+        let len = fernjo_vault::MAX_FILE_LEN + 1;
+        let file = fs::File::create(&path).unwrap();
+        file.set_len(len).unwrap();
+        drop(file);
+        // the app starts normally, the vault is unusable and says why
+        let st = state(dir.path());
+        let status = vault_status(&st).unwrap();
+        assert_eq!(status.state, "unusable");
+        assert!(status.reason.unwrap().contains("larger than"));
+        assert_eq!(
+            code(vault_unlock(&st, sec(MASTER), false)),
+            "vault_unusable"
+        );
+        assert_eq!(
+            code(vault_create(&st, sec(MASTER), false)),
+            "already_exists"
+        );
+        // nothing was overwritten, truncated or deleted, and no .bak appeared
+        assert_eq!(fs::metadata(&path).unwrap().len(), len);
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
     fn short_password_returns_weak_password() {
         let dir = tempfile::tempdir().unwrap();
         let st = state(dir.path());

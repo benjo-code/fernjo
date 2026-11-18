@@ -15,7 +15,9 @@ use zeroize::Zeroizing;
 use crate::crypto::{self, DataKey, NONCE_LEN, SALT_LEN};
 use crate::entry::{Entry, EntryId, EntrySummary, EntryUpdate, NewEntry, Secret, non_empty};
 use crate::error::VaultError;
-use crate::format::{HEADER_LEN, Header, KdfParams, OFF_WRAPPED_KEY, WRAPPED_KEY_LEN};
+use crate::format::{
+    HEADER_LEN, Header, KdfParams, MAX_FILE_LEN, OFF_WRAPPED_KEY, WRAPPED_KEY_LEN, read_capped,
+};
 
 /// Identifier of a vault, stored in its header; keys the OS keychain item (Task 3).
 pub type VaultId = Uuid;
@@ -135,7 +137,7 @@ impl Vault {
     /// # Errors
     /// `unreadable`, `newer_format`, `invalid_kdf_params`.
     pub fn open(path: &Path) -> Result<Option<Self>, VaultError> {
-        let bytes = match fs::read(path) {
+        let bytes = match read_capped(path, MAX_FILE_LEN) {
             Ok(b) => b,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(VaultError::Unreadable(e.to_string())),
@@ -171,7 +173,8 @@ impl Vault {
     /// # Errors
     /// `wrong_password`, `tampered`, `unreadable`, `newer_format`, `invalid_kdf_params`.
     pub fn unlock(&mut self, password: &SecretString) -> Result<(), VaultError> {
-        let bytes = fs::read(&self.path).map_err(|e| VaultError::Unreadable(e.to_string()))?;
+        let bytes = read_capped(&self.path, MAX_FILE_LEN)
+            .map_err(|e| VaultError::Unreadable(e.to_string()))?;
         let (header, ciphertext) = Header::parse(&bytes)?;
         if header.id != self.header.id {
             return Err(VaultError::Unreadable(
@@ -207,7 +210,8 @@ impl Vault {
     /// `tampered` (the key does not fit the file), `unreadable`, `newer_format`,
     /// `invalid_kdf_params`.
     pub fn unlock_with_key(&mut self, key: &DataKey) -> Result<(), VaultError> {
-        let bytes = fs::read(&self.path).map_err(|e| VaultError::Unreadable(e.to_string()))?;
+        let bytes = read_capped(&self.path, MAX_FILE_LEN)
+            .map_err(|e| VaultError::Unreadable(e.to_string()))?;
         let (header, ciphertext) = Header::parse(&bytes)?;
         if header.id != self.header.id {
             return Err(VaultError::Unreadable(
@@ -668,12 +672,13 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::io;
     use std::path::{Path, PathBuf};
 
     use secrecy::SecretString;
     use tempfile::TempDir;
 
-    use crate::format::{HEADER_LEN, OFF_KDF_MEMORY, OFF_VERSION};
+    use crate::format::{HEADER_LEN, MAX_FILE_LEN, OFF_KDF_MEMORY, OFF_VERSION, read_capped};
     use crate::{DataKey, FILE_NAME, KdfParams, Vault, VaultError};
 
     const PW: &str = "correct horse battery";
@@ -917,6 +922,43 @@ mod tests {
         let real = vault.data_key().unwrap();
         let needle = format!("{:?}", real.as_bytes());
         assert!(!shown.contains(&needle));
+    }
+
+    #[test]
+    fn read_capped_accepts_up_to_the_cap_and_refuses_one_byte_more() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("f");
+        fs::write(&path, [7u8; 10]).unwrap();
+        assert_eq!(read_capped(&path, 10).unwrap(), vec![7u8; 10]);
+        let err = read_capped(&path, 9).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("larger than"));
+        fs::write(&path, []).unwrap();
+        assert!(read_capped(&path, 0).unwrap().is_empty());
+        let missing = read_capped(&dir.path().join("none"), 10).unwrap_err();
+        assert_eq!(missing.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn an_oversized_vault_file_is_refused_by_open_unlock_and_unlock_with_key() {
+        let dir = TempDir::new().unwrap();
+        let (mut vault, path) = new_vault(&dir);
+        let key = vault.data_key().unwrap();
+        vault.lock();
+        // grow the file in place: a valid header followed by zeros up to cap + 1 (cheap, no
+        // allocation of the content)
+        let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_len(MAX_FILE_LEN + 1).unwrap();
+        drop(file);
+        assert_eq!(code(vault.unlock(&secret(PW))), "unreadable");
+        assert_eq!(code(vault.unlock_with_key(&key)), "unreadable");
+        assert!(!vault.is_unlocked());
+        match Vault::open(&path) {
+            Err(VaultError::Unreadable(m)) => assert!(m.contains("larger than"), "{m}"),
+            other => panic!("expected unreadable, got {:?}", other.map(|_| ())),
+        }
+        // refusing never touches the file
+        assert_eq!(fs::metadata(&path).unwrap().len(), MAX_FILE_LEN + 1);
     }
 }
 

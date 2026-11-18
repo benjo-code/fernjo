@@ -15,6 +15,10 @@
 //!    150     n  body ciphertext (JSON + 16 byte tag)
 //! ```
 
+use std::fs;
+use std::io::{self, Read};
+use std::path::Path;
+
 use uuid::Uuid;
 
 use crate::crypto::{NONCE_LEN, SALT_LEN, TAG_LEN};
@@ -38,6 +42,38 @@ pub(crate) const WRAPPED_KEY_LEN: usize = 32 + TAG_LEN;
 pub(crate) const OFF_BODY_NONCE: usize = OFF_WRAPPED_KEY + WRAPPED_KEY_LEN;
 /// Length of the header; the body ciphertext follows.
 pub(crate) const HEADER_LEN: usize = OFF_BODY_NONCE + NONCE_LEN;
+
+/// Largest vault file (or backup of it) the app reads: 64 MiB. A vault holds credentials of a
+/// few KB each, so even tens of thousands of entries stay far below this; a bigger file is a
+/// planted or damaged one and is refused (`unreadable`) instead of being read into memory.
+/// See `Docs/DECISIONS.md` ("M6 security review").
+pub const MAX_FILE_LEN: u64 = 64 * 1024 * 1024;
+
+/// Reads a whole file, but never more than `max` bytes. The length is checked up front (so an
+/// oversized file is refused without allocating it) and the read itself is bounded too, so a
+/// file that grows between the check and the read cannot bypass the cap. Oversize is an
+/// `InvalidData` error; a missing file keeps its `NotFound` kind.
+pub(crate) fn read_capped(path: &Path, max: u64) -> io::Result<Vec<u8>> {
+    let too_large = || {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("the file is larger than {} MiB", max / (1024 * 1024)),
+        )
+    };
+    let file = fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    if len > max {
+        return Err(too_large());
+    }
+    // `len <= max`, so the reservation is bounded by the cap (the cast cannot truncate on
+    // the targets that matter and a smaller reservation only costs a reallocation)
+    let mut bytes = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
+    file.take(max.saturating_add(1)).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max {
+        return Err(too_large());
+    }
+    Ok(bytes)
+}
 
 /// Bounds applied to the parameters read from a file, so a hostile synced file cannot
 /// demand gigabytes of memory or minutes of CPU.
