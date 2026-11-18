@@ -1,5 +1,5 @@
 // View state for the theme. Rust owns the stored choice (settings.json); localStorage only mirrors
-// it so that `main.ts` can set the attribute before the first paint, before Rust has answered.
+// it so that `main.ts` can set the attribute as soon as the page script runs, before Rust has answered.
 import { toApiError } from "./api";
 import type { Api, ApiError, Theme, ThemeInfo } from "./types";
 
@@ -62,6 +62,8 @@ export class ThemeStore {
   #take(info: ThemeInfo) {
     this.info = info;
     applyTheme(info.theme);
-    mirror(info.theme);
+    // A run that cannot store the choice (FERNJO_DATA_DIR) answers System; writing that would
+    // overwrite the mirror of the real settings and flash once on the next real start.
+    if (info.persistent) mirror(info.theme);
   }
 }

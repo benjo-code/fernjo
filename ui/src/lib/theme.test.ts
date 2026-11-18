@@ -69,3 +69,27 @@ test("a_successful_set_applies_and_mirrors", async () => {
   expect(document.documentElement.dataset.theme).toBe("dark");
   expect(localStorage.getItem(THEME_KEY)).toBe("dark");
 });
+
+test("a_non_persistent_theme_is_applied_but_does_not_overwrite_the_mirror", async () => {
+  localStorage.setItem(THEME_KEY, "dark");
+  const { api } = mockApi([], {
+    getTheme: async () => themeInfo({ theme: "system", persistent: false }),
+    setTheme: async (theme) => themeInfo({ theme, persistent: false }),
+  });
+  const store = new ThemeStore(api);
+  await store.load();
+  // the attribute follows the answer ("system" removes it), the mirror still holds the real choice
+  expect(document.documentElement.hasAttribute("data-theme")).toBe(false);
+  expect(localStorage.getItem(THEME_KEY)).toBe("dark");
+  expect(await store.set("light")).toBeNull();
+  expect(document.documentElement.dataset.theme).toBe("light");
+  expect(localStorage.getItem(THEME_KEY)).toBe("dark");
+});
+
+test("a_persistent_theme_replaces_the_mirror", async () => {
+  localStorage.setItem(THEME_KEY, "dark");
+  const { api } = mockApi([], { getTheme: async () => themeInfo({ theme: "light" }) });
+  const store = new ThemeStore(api);
+  await store.load();
+  expect(localStorage.getItem(THEME_KEY)).toBe("light");
+});

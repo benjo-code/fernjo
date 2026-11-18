@@ -26,7 +26,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 - App shortcuts (M4): tab switching, close tab, filter, terminal search, copy and paste that leave the terminal's own keys alone; listed in the README.
 - Import and backup (M5): import connections and passwords from mRemoteNG (confCons.xml, version 2.6); export connections as JSON; encrypted full backup and restore (formats in `Docs/backup-format.md`).
 - Double-clicking a folder in the tree expands or collapses it (M4).
-- Theme setting (M6): Settings has an Appearance section with System, Light and Dark; the choice is stored in `settings.json` and applied before the first frame, so a stored theme does not flash the other one at start.
+- Theme setting (M6): Settings has an Appearance section with System, Light and Dark; the choice is stored in `settings.json` and applied from a copy kept in the web view as soon as the page script runs, so a stored theme normally does not flash the other one at start (without that copy, on a first start, it follows the system theme until the settings have loaded).
 - Installers (M6): the release workflow builds a Windows setup (`fernjo_<version>_x64-setup.exe`), macOS images for Apple Silicon and Intel (`_aarch64.dmg`, `_x64.dmg`) and a Linux `.deb` and AppImage (`_amd64`) on GitHub-hosted runners and attaches them to a published release. Each installer is smoke-tested on its runner first. The installers are not code-signed; README, section "Install", explains the Windows and macOS warnings.
 - `SHA256SUMS` (M6): every release carries a checksum file for all installers.
 - Third-party notices (M6): the licences of the bundled Rust crates, npm packages and the two fonts ship inside every installer (`THIRD-PARTY-NOTICES.md`).
