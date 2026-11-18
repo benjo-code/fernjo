@@ -52,5 +52,6 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 ### Fixed
 
 - Settings dialog (M6): a late-arriving load no longer overwrites what you already typed; the "Saved" note disappears when you edit a terminal field again; a failed load of the terminal settings shows an error and keeps Save disabled; Enter in a terminal field no longer saves while an input method composition is active.
+- Windows installer (M6): `fernjo_<version>_x64-setup.exe` now carries the fernjo app icon instead of the generic NSIS icon.
 
 ### Removed

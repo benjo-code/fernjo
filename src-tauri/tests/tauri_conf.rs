@@ -74,6 +74,25 @@ fn bundle_icons_exist_on_disk() {
     }
 }
 
+/// Without `installerIcon` the bundler uses the NSIS default icon for `fernjo_<v>_x64-setup.exe`.
+#[test]
+fn nsis_installer_uses_the_app_icon() {
+    let conf = load("tauri.conf.json");
+    let icon = conf["bundle"]["windows"]["nsis"]["installerIcon"]
+        .as_str()
+        .expect("bundle.windows.nsis.installerIcon must be set to a path");
+    assert_eq!(icon, "icons/icon.ico", "the installer carries the app icon");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(icon);
+    assert!(path.is_file(), "missing installer icon {}", path.display());
+    let bundle_icons = conf["bundle"]["icon"]
+        .as_array()
+        .expect("bundle.icon must be an array");
+    assert!(
+        bundle_icons.iter().any(|i| i.as_str() == Some(icon)),
+        "the installer icon must be one of bundle.icon: {bundle_icons:?}"
+    );
+}
+
 #[test]
 fn version_comes_from_cargo_not_from_the_conf() {
     let conf = load("tauri.conf.json");
