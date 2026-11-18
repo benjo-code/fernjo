@@ -16,7 +16,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::commands::{CommandError, Mutation, ensure_writable, snapshot, with_store};
-use crate::state::{AppState, VaultState};
+use crate::state::{AppState, AutoUnlockIssue, VaultState};
 
 impl From<VaultError> for CommandError {
     fn from(e: VaultError) -> Self {
@@ -49,6 +49,9 @@ pub struct VaultStatus {
     pub path: Option<String>,
     /// The key store holds this vault's key.
     pub auto_unlock: bool,
+    /// Why the automatic unlock at startup did not work (`locked` only): `key_not_accepted`
+    /// or `unavailable`. The stored key is kept in both cases.
+    pub auto_unlock_issue: Option<&'static str>,
 }
 
 fn view(state: &AppState, vault: &VaultState) -> VaultStatus {
@@ -58,6 +61,7 @@ fn view(state: &AppState, vault: &VaultState) -> VaultStatus {
             reason: None,
             path: None,
             auto_unlock: false,
+            auto_unlock_issue: None,
         },
         VaultState::Open(v) => VaultStatus {
             state: if v.is_unlocked() {
@@ -69,13 +73,29 @@ fn view(state: &AppState, vault: &VaultState) -> VaultStatus {
             path: Some(v.path().display().to_string()),
             // A keychain error reads as "not stored".
             auto_unlock: matches!(state.keystore.get(v.id()), Ok(Some(_))),
+            auto_unlock_issue: if v.is_unlocked() {
+                None
+            } else {
+                state
+                    .auto_unlock_issue
+                    .lock()
+                    .ok()
+                    .and_then(|g| g.map(AutoUnlockIssue::code))
+            },
         },
         VaultState::Unusable { reason, path } => VaultStatus {
             state: "unusable",
             reason: Some(reason.clone()),
             path: Some(path.display().to_string()),
             auto_unlock: false,
+            auto_unlock_issue: None,
         },
+    }
+}
+
+fn clear_auto_unlock_issue(state: &AppState) {
+    if let Ok(mut issue) = state.auto_unlock_issue.lock() {
+        *issue = None;
     }
 }
 
@@ -132,6 +152,7 @@ pub fn vault_create(
         remember_key(state, &vault);
     }
     *guard = VaultState::Open(vault);
+    clear_auto_unlock_issue(state);
     Ok(view(state, &guard))
 }
 
@@ -147,6 +168,7 @@ pub fn vault_unlock(
         }
         Ok(())
     })?;
+    clear_auto_unlock_issue(state);
     vault_status(state)
 }
 
@@ -841,6 +863,79 @@ mod tests {
         assert!(st.keystore.get(id).unwrap().is_some());
         vault_lock(&st).unwrap();
         assert_eq!(code(vault_set_auto_unlock(&st, false)), "vault_locked");
+    }
+
+    /// A vault file with a wrong key in the key store at the next start.
+    fn start_with_wrong_key(dir: &Path) -> (AppState, VaultId) {
+        use fernjo_vault::MemoryKeyStore;
+        let path = dir.join(fernjo_vault::FILE_NAME);
+        let vault = Vault::create_with(&path, &sec(MASTER), fernjo_vault::KdfParams::TEST).unwrap();
+        let keys = MemoryKeyStore::default();
+        keys.set(vault.id(), &DataKey::from_bytes([7u8; 32]))
+            .unwrap();
+        let id = vault.id();
+        let st = AppState::open_with_keystore(dir.to_path_buf(), Box::new(keys));
+        (st, id)
+    }
+
+    #[test]
+    fn a_failed_startup_auto_unlock_reports_the_issue_and_keeps_the_item() {
+        let dir = tempfile::tempdir().unwrap();
+        let (st, id) = start_with_wrong_key(dir.path());
+        let status = vault_status(&st).unwrap();
+        assert_eq!(status.state, "locked");
+        assert_eq!(status.auto_unlock_issue, Some("key_not_accepted"));
+        // the item stays, so the box is still ticked
+        assert!(status.auto_unlock);
+        assert!(st.keystore.get(id).unwrap().is_some());
+        let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(json["autoUnlockIssue"], "key_not_accepted");
+    }
+
+    #[test]
+    fn a_password_unlock_clears_the_issue_and_remember_replaces_a_wrong_item() {
+        let dir = tempfile::tempdir().unwrap();
+        let (st, id) = start_with_wrong_key(dir.path());
+        let status = vault_unlock(&st, sec(MASTER), true).unwrap();
+        assert_eq!(status.state, "unlocked");
+        assert_eq!(status.auto_unlock_issue, None);
+        // the wrong item was overwritten with the real key
+        let stored = st.keystore.get(id).unwrap().unwrap();
+        let real = match &*st.vault.lock().unwrap() {
+            VaultState::Open(v) => v.data_key().unwrap(),
+            _ => panic!("no vault"),
+        };
+        assert_eq!(stored.as_bytes(), real.as_bytes());
+        // locking again does not bring the old issue back
+        assert_eq!(vault_lock(&st).unwrap().auto_unlock_issue, None);
+    }
+
+    #[test]
+    fn a_wrong_password_keeps_the_issue_and_unticked_unlock_keeps_the_item() {
+        let dir = tempfile::tempdir().unwrap();
+        let (st, id) = start_with_wrong_key(dir.path());
+        assert_eq!(
+            code(vault_unlock(&st, sec("wrong"), true)),
+            "wrong_password"
+        );
+        assert_eq!(
+            vault_status(&st).unwrap().auto_unlock_issue,
+            Some("key_not_accepted")
+        );
+        let status = vault_unlock(&st, sec(MASTER), false).unwrap();
+        assert_eq!(status.auto_unlock_issue, None);
+        assert!(status.auto_unlock);
+        assert!(st.keystore.get(id).unwrap().is_some());
+    }
+
+    #[test]
+    fn no_issue_without_a_failed_auto_unlock() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = state(dir.path());
+        assert_eq!(vault_status(&st).unwrap().auto_unlock_issue, None);
+        vault_create(&st, sec(MASTER), true).unwrap();
+        vault_lock(&st).unwrap();
+        assert_eq!(vault_status(&st).unwrap().auto_unlock_issue, None);
     }
 
     #[test]

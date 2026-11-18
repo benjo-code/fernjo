@@ -8,8 +8,8 @@ use fernjo_core::{
     DataDirSource, Location, Notice, Store, TerminalPrefs, Theme, find_conflicts, settings,
 };
 use fernjo_vault::{
-    FILE_NAME as VAULT_FILE_NAME, KdfParams, KeyStore, MemoryKeyStore, OsKeyStore, Vault,
-    try_auto_unlock,
+    AutoUnlock, FILE_NAME as VAULT_FILE_NAME, KdfParams, KeyStore, MemoryKeyStore, OsKeyStore,
+    Vault, try_auto_unlock,
 };
 
 use crate::commands::CommandError;
@@ -42,6 +42,36 @@ pub enum VaultStatus {
     Unusable { reason: String, path: PathBuf },
 }
 
+/// Why the startup auto-unlock did not unlock although a key may be stored. Only the
+/// message to the user depends on it; the keychain item is never touched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoUnlockIssue {
+    /// The stored key did not open the file (the file may be damaged, half-synced or replaced).
+    KeyNotAccepted,
+    /// The keychain or the file could not be read.
+    Unavailable,
+}
+
+impl AutoUnlockIssue {
+    /// The issue behind an outcome; `None` when nothing is worth telling the user
+    /// (unlocked, or no key stored).
+    pub fn from_outcome(outcome: &AutoUnlock) -> Option<Self> {
+        match outcome {
+            AutoUnlock::Unlocked | AutoUnlock::NoKey => None,
+            AutoUnlock::KeyNotAccepted => Some(Self::KeyNotAccepted),
+            AutoUnlock::Unavailable(_) => Some(Self::Unavailable),
+        }
+    }
+
+    /// The wire code the UI reads (`autoUnlockIssue` in the vault status).
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::KeyNotAccepted => "key_not_accepted",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
 /// The folders besides the data folder that `build` records.
 struct Folders {
     config_dir: Option<PathBuf>,
@@ -66,6 +96,9 @@ pub struct AppState {
     pub store: Mutex<Result<Store, StartupFailure>>,
     pub notices: Mutex<Vec<Notice>>,
     pub vault: Mutex<VaultState>,
+    /// Why the startup auto-unlock failed (set once at startup, cleared by a successful
+    /// unlock or a new vault). Shown while the vault is locked.
+    pub auto_unlock_issue: Mutex<Option<AutoUnlockIssue>>,
     pub keystore: Box<dyn KeyStore>,
     /// Argon2id cost for vaults created by this run (tests use `KdfParams::TEST`).
     pub kdf: KdfParams,
@@ -195,6 +228,7 @@ impl AppState {
         } = folders;
         let mut notices = Vec::new();
         let mut vault = VaultState::None;
+        let mut auto_unlock_issue = None;
         let store = match &dir {
             None => Err(StartupFailure {
                 code: "load_failed".to_string(),
@@ -221,8 +255,10 @@ impl AppState {
             vault = match Vault::open(&path) {
                 Ok(None) => VaultState::None,
                 Ok(Some(mut v)) => {
-                    // The outcome only matters for the UI, which asks `vault_status`.
-                    let _ = try_auto_unlock(&mut v, keystore.as_ref());
+                    // Never deletes the keychain item; the UI learns of a failure through
+                    // `vault_status` (`autoUnlockIssue`).
+                    auto_unlock_issue =
+                        AutoUnlockIssue::from_outcome(&try_auto_unlock(&mut v, keystore.as_ref()));
                     VaultState::Open(v)
                 }
                 Err(e) => VaultState::Unusable {
@@ -236,6 +272,7 @@ impl AppState {
             store: Mutex::new(store),
             notices: Mutex::new(notices),
             vault: Mutex::new(vault),
+            auto_unlock_issue: Mutex::new(auto_unlock_issue),
             keystore,
             kdf,
             data_dir: dir,
