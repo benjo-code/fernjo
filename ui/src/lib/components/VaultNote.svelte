@@ -106,6 +106,10 @@
     open = (phase === "locked" && unlocking) || (phase === "none" && creating);
   });
 
+  const AUTO_UNLOCK_FAILED =
+    "Automatic unlock did not work this time (the vault file may be incomplete or damaged). Your stored key was kept. Enter the master password.";
+  const issue = $derived(vault.status?.autoUnlockIssue ?? null);
+
   const backupPath = $derived(vault.status?.path ? `${vault.status.path}.bak` : null);
 </script>
 
@@ -133,6 +137,9 @@
 
     {#if phase === "locked"}
       <p class="body">Connections with stored credentials ask for it.</p>
+      {#if issue}
+        <p class="body" role="status">{AUTO_UNLOCK_FAILED}</p>
+      {/if}
       {#if unlocking}
         <form onsubmit={submitUnlock}>
           <PasswordField

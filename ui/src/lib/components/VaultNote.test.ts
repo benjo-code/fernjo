@@ -292,4 +292,34 @@ describe("VaultNote", () => {
     await settle();
     expect(box.checked).toBe(false);
   });
+
+  test("a_failed_auto_unlock_shows_the_note_line_in_the_locked_note", async () => {
+    await setup(
+      vaultStatus({ state: "locked", autoUnlock: true, autoUnlockIssue: "key_not_accepted" }),
+    );
+    expect(document.body.textContent).toContain(
+      "Automatic unlock did not work this time (the vault file may be incomplete or damaged). Your stored key was kept. Enter the master password.",
+    );
+    expect(document.querySelector('[role="status"]')).not.toBeNull();
+  });
+
+  test("the_unavailable_issue_shows_the_same_line_and_no_issue_shows_none", async () => {
+    await setup(vaultStatus({ state: "locked", autoUnlockIssue: "unavailable" }));
+    expect(document.body.textContent).toContain("Automatic unlock did not work this time");
+  });
+
+  test("a_locked_note_without_an_issue_has_no_auto_unlock_line", async () => {
+    await setup(vaultStatus({ state: "locked", autoUnlock: true }));
+    expect(document.body.textContent).not.toContain("Automatic unlock did not work");
+  });
+
+  test("the_note_line_goes_away_when_the_vault_unlocks", async () => {
+    const { vault } = await setup(
+      vaultStatus({ state: "locked", autoUnlock: true, autoUnlockIssue: "key_not_accepted" }),
+      { vaultUnlock: async () => vaultStatus({ state: "unlocked", autoUnlock: true }) },
+    );
+    await vault.unlock("x", true);
+    await settle();
+    expect(document.body.textContent).not.toContain("Automatic unlock did not work");
+  });
 });

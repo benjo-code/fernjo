@@ -96,7 +96,12 @@ export interface VaultStatus {
   path: string | null;
   /** The key store holds this vault's key. */
   autoUnlock: boolean;
+  /** Why the automatic unlock at startup did not work (locked only); the stored key is kept. */
+  autoUnlockIssue: AutoUnlockIssue | null;
 }
+
+/** Wire codes of the startup auto-unlock failure; Rust adds new ones, the UI treats any as a note. */
+export type AutoUnlockIssue = "key_not_accepted" | "unavailable";
 
 /** A credential as the UI sees it: never a secret field. */
 export interface CredentialInfo {

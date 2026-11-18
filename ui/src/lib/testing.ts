@@ -61,7 +61,14 @@ export function apiError(code: string, message = code): ApiError {
 }
 
 export function vaultStatus(partial: Partial<VaultStatus> = {}): VaultStatus {
-  return { state: "none", reason: null, path: null, autoUnlock: false, ...partial };
+  return {
+    state: "none",
+    reason: null,
+    path: null,
+    autoUnlock: false,
+    autoUnlockIssue: null,
+    ...partial,
+  };
 }
 
 export function credential(partial: Partial<CredentialInfo> = {}): CredentialInfo {
