@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Connections Name="Connections" Export="False" Protected="ZlcKyAjyUlqNU7gDDmIzaYSUwU+2xqNiCONLBBYS0TQ4cD1gIQ=" ConfVersion="2.5">
+  <Node Name="old" Type="Connection" Hostname="old.example.com" Protocol="SSH2" Port="22" />
+</Connections>

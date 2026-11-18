@@ -1,0 +1,220 @@
+/*
+ * fernjo design tokens: direction "Ulm, revised" (see DESIGN.md).
+ * This file is an interface: names are only added, never renamed (renames need a DECISIONS entry).
+ * Rules (guarded by tokens.test.ts): colours are #rrggbb or #rrggbbaa; every colour token exists
+ * in the light block and in both dark blocks (which stay identical); no modern colour functions,
+ * nesting, @layer, :has() or container queries, because WebKitGTK 4.1 and the safari13 build
+ * target cannot render them.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Housing and surfaces */
+  --color-bg: #f7f6f3;
+  --color-surface: #fbfaf7;
+  --color-surface-raised: #fdfcfa;
+  --color-sidebar: #e6e4de;
+  --color-border: #cfccc3;
+  --color-border-strong: #77736b;
+  --color-border-input: #7f7b73;
+  --color-tab-text: #55534d;
+
+  /* Ink */
+  --color-text: #1e1e1c;
+  --color-text-muted: #5a5852;
+
+  /* The yellow key: the one action that matters, and Reconnect on dropped tabs */
+  --color-accent: #f0b400;
+  --color-accent-text: #1e1e1c;
+
+  /* Tree */
+  --color-selection: #d1cdc3;
+  --color-selection-bar: #1e1e1c;
+  --color-hover: #eeece7;
+  --color-focus: #1e1e1c;
+
+  /* State: lamps and marks only, always paired with a shape */
+  --color-success: #2f7d22;
+  --color-warning: #9a5d00;
+  --color-danger: #b3261e;
+
+  /* Lamp column: shape carries the state (none, pulsing ring, filled, struck), colour supports it.
+     Light lamps are darker than the concept's (#2f8a22, #a86400) so they hold 3:1 on the selected row. */
+  --color-lamp-live: #2f7d22;
+  --color-lamp-connecting: #9a5d00;
+  --color-lamp-dropped: #b3261e;
+
+  /* Protocol icons are told apart by shape, not colour */
+  --color-ssh: #5a5852;
+  --color-rdp: #5a5852;
+
+  --color-overlay: #2826226b;
+  --color-shadow: #1e1c1847;
+
+  /* Terminal (mapped onto the xterm.js theme in M4) */
+  --term-bg: #fbfaf7;
+  --term-fg: #232320;
+  --term-cursor: #1e1e1c;
+  --term-selection: #eadfb8;
+  --term-ansi-0: #232320;
+  --term-ansi-1: #b3261e;
+  --term-ansi-2: #3d7a1f;
+  --term-ansi-3: #8a6000;
+  --term-ansi-4: #2d5c9a;
+  --term-ansi-5: #8a3f8f;
+  --term-ansi-6: #1d7270;
+  --term-ansi-7: #cfccc4;
+  --term-ansi-8: #6b6962;
+  --term-ansi-9: #c9372c;
+  --term-ansi-10: #47862a;
+  --term-ansi-11: #9c6c00;
+  --term-ansi-12: #3a6cb0;
+  --term-ansi-13: #9f4ca4;
+  --term-ansi-14: #22827d;
+  --term-ansi-15: #ffffff;
+  /* xterm.js minimumContrastRatio: faint foregrounds are adjusted when drawn, the palette stays */
+  --terminal-min-contrast: 4.5;
+
+  /* Type */
+  --font-ui: "Hanken Grotesk Variable", "Hanken Grotesk", system-ui, sans-serif;
+  --font-mono: "Red Hat Mono Variable", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 13px;
+  --text-lg: 17px;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-strong: 600;
+
+  /* Space and shape */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 8px;
+  --space-4: 12px;
+  --space-5: 16px;
+  --space-6: 24px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --row-height-tree: 24px;
+  --tree-indent: 14px;
+  --sidebar-width: 300px;
+  --shadow-raised: 0 2px 6px var(--color-shadow), 0 24px 48px -12px var(--color-shadow);
+
+  /* Motion */
+  --duration-fast: 120ms;
+  --duration-normal: 200ms;
+  --duration-pulse: 1600ms;
+  --easing-pulse: cubic-bezier(0.45, 0, 0.55, 1);
+  --lamp-size: 9px;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-bg: #1c1c1a;
+  --color-surface: #222220;
+  --color-surface-raised: #2a2a27;
+  --color-sidebar: #262624;
+  --color-border: #363531;
+  --color-border-strong: #77746d;
+  --color-border-input: #75736c;
+  --color-tab-text: #a3a097;
+  --color-text: #eceae4;
+  --color-text-muted: #a3a097;
+  --color-accent: #f0b400;
+  --color-accent-text: #1c1c1a;
+  --color-selection: #4a4843;
+  --color-selection-bar: #eceae4;
+  --color-hover: #2e2d2a;
+  --color-focus: #eceae4;
+  --color-success: #6cc04a;
+  --color-warning: #e0a030;
+  --color-danger: #ff7a70;
+  --color-lamp-live: #6cc04a;
+  --color-lamp-connecting: #e0a030;
+  --color-lamp-dropped: #ff7a70;
+  --color-ssh: #a3a097;
+  --color-rdp: #a3a097;
+  --color-overlay: #00000085;
+  --color-shadow: #00000080;
+  --term-bg: #1c1c1a;
+  --term-fg: #e2e0d9;
+  --term-cursor: #f0b400;
+  --term-selection: #4a4535;
+  --term-ansi-0: #3a3935;
+  --term-ansi-1: #f0625a;
+  --term-ansi-2: #8ccf5e;
+  --term-ansi-3: #f0c445;
+  --term-ansi-4: #7aa7e0;
+  --term-ansi-5: #d08ad4;
+  --term-ansi-6: #63c4bd;
+  --term-ansi-7: #cfccc4;
+  --term-ansi-8: #6b6962;
+  --term-ansi-9: #ff8a80;
+  --term-ansi-10: #a8e07f;
+  --term-ansi-11: #ffd86b;
+  --term-ansi-12: #9cc1f0;
+  --term-ansi-13: #e5a8e8;
+  --term-ansi-14: #8fded7;
+  --term-ansi-15: #f7f6f2;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --color-bg: #1c1c1a;
+    --color-surface: #222220;
+    --color-surface-raised: #2a2a27;
+    --color-sidebar: #262624;
+    --color-border: #363531;
+    --color-border-strong: #77746d;
+    --color-border-input: #75736c;
+    --color-tab-text: #a3a097;
+    --color-text: #eceae4;
+    --color-text-muted: #a3a097;
+    --color-accent: #f0b400;
+    --color-accent-text: #1c1c1a;
+    --color-selection: #4a4843;
+    --color-selection-bar: #eceae4;
+    --color-hover: #2e2d2a;
+    --color-focus: #eceae4;
+    --color-success: #6cc04a;
+    --color-warning: #e0a030;
+    --color-danger: #ff7a70;
+    --color-lamp-live: #6cc04a;
+    --color-lamp-connecting: #e0a030;
+    --color-lamp-dropped: #ff7a70;
+    --color-ssh: #a3a097;
+    --color-rdp: #a3a097;
+    --color-overlay: #00000085;
+    --color-shadow: #00000080;
+    --term-bg: #1c1c1a;
+    --term-fg: #e2e0d9;
+    --term-cursor: #f0b400;
+    --term-selection: #4a4535;
+    --term-ansi-0: #3a3935;
+    --term-ansi-1: #f0625a;
+    --term-ansi-2: #8ccf5e;
+    --term-ansi-3: #f0c445;
+    --term-ansi-4: #7aa7e0;
+    --term-ansi-5: #d08ad4;
+    --term-ansi-6: #63c4bd;
+    --term-ansi-7: #cfccc4;
+    --term-ansi-8: #6b6962;
+    --term-ansi-9: #ff8a80;
+    --term-ansi-10: #a8e07f;
+    --term-ansi-11: #ffd86b;
+    --term-ansi-12: #9cc1f0;
+    --term-ansi-13: #e5a8e8;
+    --term-ansi-14: #8fded7;
+    --term-ansi-15: #f7f6f2;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 0ms;
+    --duration-normal: 0ms;
+    --duration-pulse: 0ms;
+  }
+}

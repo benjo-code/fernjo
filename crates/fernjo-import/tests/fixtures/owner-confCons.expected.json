@@ -1,0 +1,242 @@
+{
+  "note": "Written by hand from the plain attributes of owner-confCons.xml and the owner's statement of the test passwords; not produced by the importer. Folders carry port 3389 with InheritPort=false; no node inherits anything.",
+  "counts": {
+    "folders": 5,
+    "ssh": 11,
+    "rdp": 1,
+    "skipped": 0,
+    "credentials": 8,
+    "sharedCredentials": 2,
+    "problems": 0
+  },
+  "skipped": [],
+  "nodes": [
+    {
+      "path": "proxmox-masters",
+      "kind": "folder",
+      "name": "proxmox-masters",
+      "port": 3389,
+      "username": null,
+      "inheritFlags": [],
+      "password": null
+    },
+    {
+      "path": "proxmox-masters/proxmox-2",
+      "kind": "connection",
+      "name": "proxmox-2",
+      "protocol": "ssh",
+      "host": "192.168.172.1",
+      "port": 22,
+      "username": "root",
+      "inheritFlags": [],
+      "password": "1234"
+    },
+    {
+      "path": "proxmox-masters/proxmox-3",
+      "kind": "connection",
+      "name": "proxmox-3",
+      "protocol": "ssh",
+      "host": "192.168.172.2",
+      "port": 22,
+      "username": "root",
+      "inheritFlags": [],
+      "password": "1234"
+    },
+    {
+      "path": "proxmox-masters/proxmox-4",
+      "kind": "connection",
+      "name": "proxmox-4",
+      "protocol": "ssh",
+      "host": "192.168.172.3",
+      "port": 22,
+      "username": "root",
+      "inheritFlags": [],
+      "password": "1234"
+    },
+    {
+      "path": "proxmox-masters/VMs",
+      "kind": "folder",
+      "name": "VMs",
+      "port": 3389,
+      "username": null,
+      "inheritFlags": [],
+      "password": null
+    },
+    {
+      "path": "proxmox-masters/VMs/vm-1",
+      "kind": "connection",
+      "name": "vm-1",
+      "protocol": "ssh",
+      "host": "192.168.172.4",
+      "port": 22,
+      "username": "user1",
+      "inheritFlags": [],
+      "password": "1234"
+    },
+    {
+      "path": "proxmox-masters/VMs/vm-2",
+      "kind": "connection",
+      "name": "vm-2",
+      "protocol": "ssh",
+      "host": "192.168.172.5",
+      "port": 22,
+      "username": "user2",
+      "inheritFlags": [],
+      "password": "1234"
+    },
+    {
+      "path": "proxmox-masters/VMs/vm-3",
+      "kind": "connection",
+      "name": "vm-3",
+      "protocol": "ssh",
+      "host": "192.168.172.6",
+      "port": 22,
+      "username": "user3",
+      "inheritFlags": [],
+      "password": "1234"
+    },
+    {
+      "path": "proxmox-standalone",
+      "kind": "folder",
+      "name": "proxmox-standalone",
+      "port": 3389,
+      "username": null,
+      "inheritFlags": [],
+      "password": null
+    },
+    {
+      "path": "proxmox-standalone/proxmox-standalone",
+      "kind": "connection",
+      "name": "proxmox-standalone",
+      "protocol": "ssh",
+      "host": "192.168.172.7",
+      "port": 22,
+      "username": "root",
+      "inheritFlags": [],
+      "password": "1234"
+    },
+    {
+      "path": "proxmox-standalone/VMs",
+      "kind": "folder",
+      "name": "VMs",
+      "port": 3389,
+      "username": null,
+      "inheritFlags": [],
+      "password": null
+    },
+    {
+      "path": "proxmox-standalone/VMs/win11-1",
+      "kind": "connection",
+      "name": "win11-1",
+      "protocol": "rdp",
+      "host": "192.168.172.8",
+      "port": 3389,
+      "username": "userabc",
+      "inheritFlags": [],
+      "password": "1234"
+    },
+    {
+      "path": "proxmox-standalone/VMs/vm-s2",
+      "kind": "connection",
+      "name": "vm-s2",
+      "protocol": "ssh",
+      "host": "192.168.172.9",
+      "port": 22,
+      "username": "user4",
+      "inheritFlags": [],
+      "password": "1234"
+    },
+    {
+      "path": "proxmox-standalone/VMs/vm-s3",
+      "kind": "connection",
+      "name": "vm-s3",
+      "protocol": "ssh",
+      "host": "192.168.172.10",
+      "port": 22,
+      "username": "user5",
+      "inheritFlags": [],
+      "password": "1234"
+    },
+    {
+      "path": "storage",
+      "kind": "folder",
+      "name": "storage",
+      "port": 3389,
+      "username": null,
+      "inheritFlags": [],
+      "password": null
+    },
+    {
+      "path": "storage/NAS-1",
+      "kind": "connection",
+      "name": "NAS-1",
+      "protocol": "ssh",
+      "host": "192.168.172.11",
+      "port": 22,
+      "username": "root",
+      "inheritFlags": [],
+      "password": "s1234"
+    },
+    {
+      "path": "storage/NAS-2",
+      "kind": "connection",
+      "name": "NAS-2",
+      "protocol": "ssh",
+      "host": "192.168.172.12",
+      "port": 22,
+      "username": "root",
+      "inheritFlags": [],
+      "password": "s1234"
+    }
+  ],
+  "entries": [
+    {
+      "name": "root",
+      "username": "root",
+      "domain": null,
+      "password": "1234"
+    },
+    {
+      "name": "user1",
+      "username": "user1",
+      "domain": null,
+      "password": "1234"
+    },
+    {
+      "name": "user2",
+      "username": "user2",
+      "domain": null,
+      "password": "1234"
+    },
+    {
+      "name": "user3",
+      "username": "user3",
+      "domain": null,
+      "password": "1234"
+    },
+    {
+      "name": "userabc",
+      "username": "userabc",
+      "domain": null,
+      "password": "1234"
+    },
+    {
+      "name": "user4",
+      "username": "user4",
+      "domain": null,
+      "password": "1234"
+    },
+    {
+      "name": "user5",
+      "username": "user5",
+      "domain": null,
+      "password": "1234"
+    },
+    {
+      "name": "root (2)",
+      "username": "root",
+      "domain": null,
+      "password": "s1234"
+    }
+  ]
+}

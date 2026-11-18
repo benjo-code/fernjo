@@ -1,0 +1,52 @@
+# Rust
+target/
+
+# Node / UI
+node_modules/
+ui/dist/
+
+# Tauri generated files
+src-tauri/gen/
+
+# Secrets and local data: never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+id_ecdsa
+id_ecdsa.pub
+vault.fernjo
+*.fernjo
+connections.json
+connections.json.bak
+connections.json.tmp
+*.fernjo.bak
+# the golden vault fixtures are test data, not a real vault
+!crates/fernjo-vault/tests/fixtures/*.fernjo
+*.fernjo.tmp
+*.tmp
+*.ppk
+id_dsa*
+/settings.json
+/data/
+
+# Agent and editor scratch
+.superpowers/
+.claude/settings.local.json
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# impeccable: mocks, reviews and live sessions are local; config, design.json and surface briefs are committed
+.impeccable/*
+!.impeccable/config.json
+!.impeccable/design.json
+!.impeccable/surfaces/

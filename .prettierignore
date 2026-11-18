@@ -1,0 +1,7 @@
+Docs/
+src-tauri/
+target/
+tools/
+ui/dist
+node_modules
+pnpm-lock.yaml

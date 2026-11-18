@@ -1,0 +1,52 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/benjo-code/fernjo"
+publish = false
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+thiserror = "2"
+directories = "6"
+tempfile = "3"
+argon2 = { version = "0.6.0", features = ["zeroize"] }
+chacha20poly1305 = { version = "0.11.0", features = ["zeroize"] }
+secrecy = "0.10.3"
+zeroize = "1.9.1"
+unicode-normalization = "0.1.26"
+getrandom = "0.4.3"
+russh = { version = "0.65.1", default-features = false, features = ["flate2", "ring", "rsa"] }
+tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros", "io-util"] }
+roxmltree = "0.21.2"
+aes-gcm = { version = "0.11.1", features = ["zeroize"] }
+pbkdf2 = { version = "0.13.0", features = ["hmac"] }
+sha1 = "0.11.0"
+base64 = "0.23.1"
+
+[profile.release]
+strip = "symbols"
+lto = "thin"
+codegen-units = 1
+
+# Argon2 in an unoptimised dev build is about 30 times slower; keep the vault usable in `pnpm tauri dev`.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
+# The mRemoteNG import derives one PBKDF2-HMAC-SHA1 key per stored password. The hash loop is
+# generic code that is compiled into the crate that uses it, so `fernjo-import` itself is optimised
+# (a million iterations take about 0.3 s instead of minutes in an unoptimised dev build); `sha1`
+# holds the compression function. Without this the tests of the work budget and the import dialog
+# in `pnpm tauri dev` would hang on files with a few hundred passwords.
+[profile.dev.package.fernjo-import]
+opt-level = 3
+[profile.dev.package.sha1]
+opt-level = 3

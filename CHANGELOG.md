@@ -6,14 +6,54 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-18
+
+First release, the "Daily SSH driver": milestones M0 to M6 (project foundation, design, connection tree, credential vault, SSH sessions in tabs, mRemoteNG import with export and backup, packaging and security fixes).
+
 ### Added
-- Section `## Backlog` in `Docs/ROADMAP.md`, step "review open ideas with `/ideen`" in the milestone workflow of `CLAUDE.md`, and issue template `idee.md` (label `idee`)
-- Roadmap as machine-readable `Docs/roadmap.json` with a JSON schema (`Docs/roadmap.schema.json`); `tools/roadmap.cs` (.NET 10 single file) generates `Docs/ROADMAP.md` from it (commands `generate`, `check`, `selftest`), the `roadmap` job in `.github/workflows/roadmap.yml` validates it, section "Maintaining the roadmap" in `CLAUDE.md`
+
+- Project foundation (M0): Rust workspace, Tauri 2 shell with an empty window, Svelte 5 frontend, CI on GitHub-hosted runners (build, tests, lint, `cargo deny`, CodeQL), dual MIT/Apache-2.0 licence.
+- Visual design "Ulm, revised": light and dark theme that follows the system setting, bundled fonts (Hanken Grotesk, Red Hat Mono), design tokens for all upcoming UI (M1).
+- New app icon (M1).
+- Connection tree (M2): folders and SSH/RDP connections in a sidebar tree with filter, expand/collapse, keyboard navigation, rename, duplicate, delete with confirmation, context menu and drag and drop; the tree is saved to `connections.json` in the app's data folder (atomic write with a `.bak` backup).
+- Inherited settings (M2): username, port and keepalive can be set on a folder and are inherited by everything below it; the properties panel shows "from <folder>" and an "Inherit" reset.
+- Single instance (M2): starting fernjo a second time brings the running window to the front.
+- Credential vault (M3): passwords and private keys (with optional passphrase) are stored in an encrypted vault file (`vault.fernjo`: Argon2id, XChaCha20-Poly1305, wrapped random data key; format in `Docs/vault-format.md`). Create it with a master password, lock and unlock it, change the master password, and manage entries in the vault manager (list, create, edit, explicit reveal that hides again after 10 seconds, delete with a usage warning). Optionally unlock automatically on this device through the OS keychain (Windows Credential Manager, macOS Keychain, Secret Service).
+- Credential reference (M3): a connection or folder can reference a vault entry in the properties panel; the reference is inherited like username and port ("from <folder>"). `connections.json` stores only the entry's id (schema version 2; builds from before M3 refuse the file instead of dropping the reference).
+- Data folder (M3): the data folder can be changed from the gear button in the sidebar; the data is copied to the chosen folder and the change applies after a restart. `FERNJO_DATA_DIR` still overrides it.
+- Sync-conflict warning (M3): copies such as `connections.sync-conflict-…json` left by Syncthing, Nextcloud or Dropbox in the data folder are reported in a notice.
+- Vault safety (M3): the vault refuses to overwrite a `vault.fernjo` that a sync tool or another device changed after it was unlocked ("Lock and unlock the vault to load the changes"); replacing a private key keeps its passphrase unless you tick "Remove stored passphrase"; unticking "Unlock automatically on this device" while unlocking turns it off; the lock note is compact until you ask for the password form; an unusable vault names `vault.fernjo.bak` for a manual restore. Changing the master password does not change older copies of the vault file (backups, sync history): they keep opening with the previous password.
+- SSH sessions in tabs (M4): double-click a connection to open it as a terminal tab (xterm.js, WebGL renderer for the visible tab, search, clickable links, copy and paste). Tabs show connecting, connected and disconnected states with a lamp, can be reordered, closed (with a confirmation while connected), opened a second time as another session and reconnected after a dropped connection; the screen is kept.
+- SSH sign-in (M4): SSH agent, then key (Ed25519, RSA, encrypted keys with passphrase), password, keyboard-interactive, then an inline prompt in the tab. A locked vault parks the tab until you unlock it.
+- Host key verification (M4): fernjo's own OpenSSH-format `known_hosts` in the data folder; a first-contact fingerprint prompt (trust always or once) and a blocking warning when a stored key changes.
+- Terminal settings (M4): font family, font size and scrollback in the Settings dialog (the gear in the sidebar), applied live and stored in `settings.json`.
+- App shortcuts (M4): tab switching, close tab, filter, terminal search, copy and paste that leave the terminal's own keys alone; listed in the README.
+- Import and backup (M5): import connections and passwords from mRemoteNG (confCons.xml, version 2.6); export connections as JSON; encrypted full backup and restore (formats in `Docs/backup-format.md`).
+- Double-clicking a folder in the tree expands or collapses it (M4).
+- Theme setting (M6): Settings has an Appearance section with System, Light and Dark; the choice is stored in `settings.json` and applied from a copy kept in the web view as soon as the page script runs, so a stored theme normally does not flash the other one at start (without that copy, on a first start, it follows the system theme until the settings have loaded).
+- Installers (M6): the release workflow builds a Windows setup (`fernjo_<version>_x64-setup.exe`), macOS images for Apple Silicon and Intel (`_aarch64.dmg`, `_x64.dmg`) and a Linux `.deb` and AppImage (`_amd64`) on GitHub-hosted runners and attaches them to a published release. Each installer is smoke-tested on its runner first. The installers are not code-signed; README, section "Install", explains the Windows and macOS warnings.
+- `SHA256SUMS` (M6): every release carries a checksum file for all installers.
+- Third-party notices (M6): the licences of the bundled Rust crates, npm packages and the two fonts ship inside every installer (`THIRD-PARTY-NOTICES.md`).
+- Per-user Windows install (M6): the setup installs under `%LOCALAPPDATA%\fernjo` without administrator rights; uninstalling keeps `%APPDATA%\fernjo`.
+- Security hardening (M6, from the pre-release security review in `Docs/release-checklist.md`):
+  - On Unix the data files (`connections.json`, `settings.json`, `vault.fernjo`, `known_hosts` and their `.bak` copies) are created with mode 0600 and a data folder fernjo creates with 0700; before, they followed the default umask. Windows ACLs are unchanged. The new tests ran green in CI on Linux (run 44218999770); macOS was not run.
+  - Host names that cannot be written safely to `known_hosts` (separators, whitespace, control characters) are refused before any traffic with the error `invalid_host`.
+  - An oversize `vault.fernjo` (over 64 MiB) is refused as unusable instead of being read whole, and is never overwritten.
+  - Importing a hostile mRemoteNG file is bounded: too many attributes or namespace declarations are refused (`too_complex`), long names are shortened, over-long host names are dropped and over-long password attributes are not decrypted.
+  - The folder depth limit is now enforced on every create, move and duplicate (`too_deep`), not only on import and restore, so a tree can no longer grow past what `connections.json` can be loaded from.
+  - The main window refuses to navigate away from the app's own origin, so a remote page can no longer be loaded into it and never reaches the app's commands. On Windows the web view (WebView2) still sends one request for a cancelled top-level navigation and discards the answer; that is not prevented.
+  - Hosts are confirmed per device: a host key that is in the synced `known_hosts` but that this device has not confirmed asks once ("Confirm and connect", "Connect once" or "Cancel") before any credential is sent. After this update every existing host asks once per device. Confirmations are kept in a device-local folder outside the synced data folder (`<OS local data dir>/fernjo-device`, `%LOCALAPPDATA%\fernjo-device` on Windows), which is created on the first save; choosing a data folder that contains it or lies inside it is refused.
+  - Rollback protection for the vault: each vault file carries a generation counter and each device remembers the highest one it opened. An older `vault.fernjo` is refused after the master password proved genuine ("older than the version this device last opened"); automatic unlock never accepts it, and "Open the older vault" opens it anyway and re-stamps it. Not covered: the first open on a new device, two histories with the same generation, and devices that also run an older build (they may see repeated prompts). Existing vaults open unchanged; the first save adds the counter.
+  - Automatic unlock never deletes the stored key from the OS keychain any more, and the lock note says when it did not work (damaged or incomplete vault file, or an older file). Unticking "Unlock automatically on this device" still removes the key.
 
 ### Changed
-- `Docs/ROADMAP.md` is generated and is no longer edited by hand; Labjo (M12) migrates existing repos
-- Everything in the template is now in English: documentation, templates, `CLAUDE.md`, the generated roadmap, and the messages of `tools/roadmap.cs`
+
+- SSH: the plain `ssh-rsa` host key algorithm (RSA over SHA-1) is no longer offered, like OpenSSH since 8.8; a server that only has a SHA-1 RSA host key can no longer be connected to (M6).
+- Dependencies: russh updated to 0.65.2 (with `rsa` 0.10), which removes the `RUSTSEC-2023-0071` advisory ignore (M6).
+- The gear dialog is now called "Settings" and also holds the terminal section (M4).
+- Release builds strip symbols and link with thin LTO (M6).
 
 ### Fixed
 
-### Removed
+- Settings dialog (M6): a late-arriving load no longer overwrites what you already typed; the "Saved" note disappears when you edit a terminal field again; a failed load of the terminal settings shows an error and keeps Save disabled; Enter in a terminal field no longer saves while an input method composition is active.
+- Windows installer (M6): `fernjo_<version>_x64-setup.exe` now carries the fernjo app icon instead of the generic NSIS icon.

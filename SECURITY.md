@@ -1,0 +1,38 @@
+# Security policy
+
+## Supported versions
+
+fernjo is in early development. Security fixes are made for the latest release (from v0.1.0 on) and for `dev`; older releases are not patched.
+
+## Reporting a vulnerability
+
+Please report vulnerabilities **privately**, not as a public issue or pull request:
+
+1. Open the repository's **Security** tab and choose **Report a vulnerability**
+   ([direct link](https://github.com/benjo-code/fernjo/security/advisories/new)). This uses GitHub's private vulnerability reporting.
+2. Describe what you found, the affected version or commit, and how to reproduce it. Do not include real credentials, private keys or other people's data.
+
+This is a personal open-source project, so responses are best effort: expect an acknowledgement within about a week. Fixes for confirmed issues are released as soon as practical, and reporters are credited in the advisory unless they prefer otherwise.
+
+## What matters most
+
+fernjo stores SSH and RDP credentials. Reports about the following are especially welcome:
+
+- a secret (password, private key, passphrase, vault data key) reaching the webview, a log, `connections.json` or any file in plaintext
+- weaknesses in the vault file format or its key handling
+- bypasses of SSH host key verification
+- anything that lets web content in the app window reach Tauri commands it should not
+
+## Threat model: the synced data folder
+
+The data folder is meant to be synced (Syncthing, Nextcloud, iCloud). The vault file is encrypted and authenticated, but `connections.json` and `known_hosts` are plain files without integrity protection. Anyone who can write to the synced folder (another device, a sync server, a shared folder) can change a connection so that it points at a host of their choosing and add that host's key to `known_hosts`. The same writers can also put an older valid `vault.fernjo` back. The two protections below reduce these risks; they do not remove them, and each lists what it does not cover.
+
+**Hosts confirmed on this device.** A key in the synced `known_hosts` is no longer enough to connect silently. Each device keeps its own list of the host keys it confirmed itself (`known_hosts.confirmed`, OpenSSH format, in the device-local folder outside the synced data folder, next to `vault-marks.json`). When the server presents a key that `known_hosts` has but this device has not confirmed, the connect stops before authentication, so no credential is sent, and asks "Confirm this host key?" ("This host key was added by another device or file. This device has not confirmed it."). "Confirm and connect" remembers the key on this device, "Connect once" records nothing, "Cancel" ends the attempt. If this device confirmed a different key for that host earlier, the prompt also shows the fingerprints it trusted before. What the user sees: every host asks once per device (existing entries are not carried over after an update, on purpose), and again only when its key changes. A device that has no device-local folder at all (none could be determined) keeps the list in memory, so a host asks once per run of the app. If the folder is known but cannot be written (read-only profile, full disk), nothing is remembered and the host asks on every connect. In both cases a connect never fails because the list cannot be written.
+
+This does **not** protect: a device-local folder that itself sits inside a synced tree (with `FERNJO_DATA_DIR` set it is `<FERNJO_DATA_DIR>/.device`, so a synced folder given that way loses the protection); repointing a connection to a host this device already confirmed (the key is the same, so no prompt appears; the prompt guards new host/key pairs, not the choice of which stored host a connection uses); the first use of a new device, where the user has to judge the first prompt; a user who confirms a prompt without checking; or someone who can also write to the device-local files. The rest of this section's limits for `connections.json` apply unchanged: it has no integrity protection either.
+
+**Vault rollback protection.** The vault body carries a generation counter, and each device remembers the highest generation it has opened in a device-local file outside the synced folder (`vault-marks.json`). A vault file with a lower generation than this device last opened is refused after the master password proved genuine ("older than the version this device last opened"), the automatic unlock never accepts it, and the user can choose to open the older file anyway (it is then re-stamped). This covers an older copy of `vault.fernjo` reappearing on a device that has opened a newer one. It does **not** cover: the first open on a new device or after the device-local folder is lost (nothing was seen yet); two devices that each save once from the same base (both write the same generation, the check is "lower than", so the file the sync tool leaves is accepted silently and the other device's changes survive only in `vault.fernjo.bak`); a build from before the counter, whose next save drops it (a device on the new build then gets a repeated, harmless "older vault" prompt until every device runs the same build); a rollback of `connections.json` or `known_hosts` (they have no counter); a device-local folder that itself sits inside a synced tree (with `FERNJO_DATA_DIR` set it is `<FERNJO_DATA_DIR>/.device`, so a synced folder given that way loses the protection); or someone who already holds the master password or the device-local files. Use only sync folders that nobody but you can write to.
+
+**Web content in the app window.** The main window may only navigate to the app's own origin (`http://tauri.localhost` on Windows, `tauri://localhost` on macOS and Linux), and the capability file grants no command to any other origin. A remote page therefore cannot be loaded into the window or reach the app's commands. This does **not** stop everything: WebView2 on Windows still sends one request for a cancelled top-level GET navigation (the response is discarded), so script that already runs inside the app page could leak data in a URL that way. The content security policy blocks `fetch` and other requests, not navigation.
+
+**Keychain.** Automatic unlock reads the data key from the OS keychain and never deletes it; unticking "Unlock automatically on this device" removes it. Anything running as your OS user can read that item while the option is on, which is why it is an opt-in per device.
