@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use fernjo_core::{Node, NodeKind, Protocol, Source, Tree};
 use fernjo_import::mremoteng::{
-    ImportPlan, Inherit, PlannedEntry, RawDocument, RawKind, RawNode, plan, read,
+    Clipped, ImportPlan, Inherit, PlannedEntry, RawDocument, RawKind, RawNode, plan, read,
 };
 use fernjo_import::report::ReportLine;
 use fernjo_vault::Secret;
@@ -27,6 +27,7 @@ fn raw(kind: RawKind, name: &str) -> RawNode {
         password_error: false,
         inherit: Inherit::default(),
         putty_session: String::new(),
+        clipped: Clipped::default(),
         children: Vec::new(),
     }
 }
@@ -731,4 +732,128 @@ fn the_references_line_counts_before_the_cap_and_is_never_cut() {
             .contains("1 stored password reference ")
     );
     assert_eq!(bare.partial[200].text, "and 51 more");
+}
+
+// ---- long strings (security review H2): cost must not scale with name length x node count ----
+
+use std::time::{Duration, Instant};
+
+/// Debug build; the real cost after the fix is a few milliseconds.
+const PLAN_WITHIN: Duration = Duration::from_secs(2);
+
+fn timed_plan(nodes: Vec<RawNode>) -> (ImportPlan, Duration) {
+    let start = Instant::now();
+    let p = run(nodes);
+    (p, start.elapsed())
+}
+
+#[test]
+fn a_huge_folder_name_is_not_copied_into_every_report_line() {
+    // review input A, scaled down: a container named with 2 MB and 10 000 unsupported children
+    // (16 MB x 10 000 took 40 s; the work was name length x node count)
+    let kids: Vec<RawNode> = (0..10_000).map(|_| conn("x", "X", "h")).collect();
+    let (p, took) = timed_plan(vec![folder(&"N".repeat(2_000_000), kids)]);
+    assert!(took < PLAN_WITHIN, "took {took:?}");
+    assert_eq!(p.report.counts.skipped, 10_000);
+    // the lines are still clipped, and the path still starts with the folder's name
+    let line = &p.report.skipped[0];
+    assert_eq!(line.path.chars().count(), 200);
+    assert!(line.path.starts_with("NNN") && line.path.ends_with('…'));
+}
+
+#[test]
+fn a_huge_credential_folder_name_is_not_cloned_per_child_folder_or_per_line() {
+    // review input B, scaled down: a credential folder with a 2 MB name, 2 000 child folders and a
+    // connection below each that inherits the credential ("now uses the credential of folder ...")
+    let kids: Vec<RawNode> = (0..2_000)
+        .map(|_| folder("sub", vec![ssh("leaf")]))
+        .collect();
+    let top = pw(
+        folder(&"N".repeat(2_000_000), kids),
+        "u",
+        "",
+        "secret-for-the-test",
+    );
+    let (p, took) = timed_plan(vec![top]);
+    assert!(took < PLAN_WITHIN, "took {took:?}");
+    // password and username line for each of the 2 000 folders and 2 000 connections
+    assert_eq!(p.report.counts.partial, 8_000);
+    // the shown text is the first 200 characters, ellipsis when cut
+    let line = &p.report.partial[0];
+    assert_eq!(line.text.chars().count(), 200);
+}
+
+#[test]
+fn short_names_give_the_same_report_lines_as_before() {
+    let p = run(vec![pw(
+        folder(
+            "Prod",
+            vec![folder("Sub", vec![ssh("db")]), conn("old", "VNC", "h")],
+        ),
+        "u",
+        "",
+        "pw",
+    )]);
+    let partial: Vec<(&str, &str)> = p
+        .report
+        .partial
+        .iter()
+        .map(|l| (l.path.as_str(), l.text.as_str()))
+        .collect();
+    let pw_line =
+        "has no password of its own in mRemoteNG; it now uses the credential of folder \"Prod\"";
+    let user_line =
+        "has no username of its own in mRemoteNG; it now uses the username of folder \"Prod\"";
+    assert_eq!(
+        partial,
+        [
+            ("Prod / Sub", pw_line),
+            ("Prod / Sub", user_line),
+            ("Prod / Sub / db", pw_line),
+            ("Prod / Sub / db", user_line),
+        ]
+    );
+    assert_eq!(p.report.skipped[0].path, "Prod / old");
+    assert_eq!(p.report.skipped[0].text, "protocol VNC is not supported");
+}
+
+#[test]
+fn cut_values_are_reported_once_on_their_node() {
+    let mut n = ssh("a");
+    n.clipped.name = true;
+    n.clipped.description = true;
+    let mut h = conn("b", "SSH2", "");
+    h.clipped.hostname = true;
+    let mut v = conn("c", "SSH2", "host.example");
+    v.clipped.protocol = true;
+    let p = run(vec![folder("F", vec![n, h, v])]);
+    let lines = |l: &[ReportLine]| -> Vec<(String, String)> {
+        l.iter().map(|l| (l.path.clone(), l.text.clone())).collect()
+    };
+    assert_eq!(
+        lines(&p.report.partial),
+        [
+            (
+                "F / a".to_owned(),
+                "its name was longer than 256 characters and was shortened to 256".to_owned()
+            ),
+            (
+                "F / a".to_owned(),
+                "its description was longer than 4096 characters and was shortened to 4096"
+                    .to_owned()
+            ),
+        ]
+    );
+    // a dropped host is one problem line (not also "has no host"); a cut protocol is never
+    // taken for SSH2, even when what is left of it reads like one
+    assert_eq!(
+        lines(&p.report.problems),
+        [(
+            "F / b".to_owned(),
+            "its host is longer than 256 characters; imported with an empty host".to_owned()
+        )]
+    );
+    assert_eq!(p.report.skipped.len(), 1);
+    assert_eq!(p.report.skipped[0].path, "F / c");
+    assert!(p.report.skipped[0].text.ends_with("… is not supported"));
 }

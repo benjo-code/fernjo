@@ -674,3 +674,110 @@ fn a_hostile_full_file_body_is_refused_after_decryption() {
     assert!(start.elapsed() < REFUSE_WITHIN);
     assert!(matches!(err, ImportError::TooComplex(_)), "{err:?}");
 }
+
+// ---- string caps (security review H2) ----
+
+use fernjo_import::mremoteng::file::{
+    MAX_DESCRIPTION_CHARS, MAX_HOST_CHARS, MAX_IDENTITY_CHARS, MAX_NAME_CHARS, MAX_PASSWORD_CHARS,
+    MAX_PROTOCOL_CHARS,
+};
+use fernjo_import::mremoteng::plan;
+
+fn one_node(attrs: &str) -> RawNode {
+    let body = format!(r#"<Node Type="Connection" Protocol="SSH2" {attrs}/>"#);
+    read(small_ok(&body).as_bytes(), None)
+        .unwrap()
+        .nodes
+        .remove(0)
+}
+
+#[test]
+fn values_exactly_at_their_caps_are_read_unchanged() {
+    let name = "ñ".repeat(MAX_NAME_CHARS);
+    let host = "h".repeat(MAX_HOST_CHARS);
+    let user = "u".repeat(MAX_IDENTITY_CHARS);
+    let domain = "d".repeat(MAX_IDENTITY_CHARS);
+    let descr = "x".repeat(MAX_DESCRIPTION_CHARS);
+    let n = one_node(&format!(
+        r#"Name="{name}" Hostname="{host}" Username="{user}" Domain="{domain}" Descr="{descr}""#
+    ));
+    assert_eq!(n.name, name);
+    assert_eq!(n.hostname, host);
+    assert_eq!(n.username, user);
+    assert_eq!(n.domain, domain);
+    assert_eq!(n.description, descr);
+    assert_eq!(n.clipped, Default::default());
+    // and through the mapper into the imported node
+    let p = plan(&RawDocument { nodes: vec![n] }, "2026-11-18", &[]);
+    let fernjo_core::NodeKind::Folder { children } = &p.folder.kind else {
+        panic!("folder")
+    };
+    assert_eq!(children[0].name, name);
+    assert_eq!(children[0].description, descr);
+    // nothing was cut, so no line says so (the domain line is the unrelated "no password" one)
+    let lines = p.report.partial.iter().chain(&p.report.problems);
+    assert!(lines.clone().all(|l| !l.text.contains("longer than")));
+    assert_eq!(lines.count(), 1);
+}
+
+#[test]
+fn values_over_their_caps_are_cut_and_flagged() {
+    let n = one_node(&format!(
+        r#"Name="{}" Hostname="{}" Username="{}" Domain="{}" Descr="{}""#,
+        "n".repeat(MAX_NAME_CHARS + 1),
+        "h".repeat(MAX_HOST_CHARS + 1),
+        "u".repeat(MAX_IDENTITY_CHARS + 1),
+        "d".repeat(MAX_IDENTITY_CHARS + 1),
+        "x".repeat(MAX_DESCRIPTION_CHARS + 1),
+    ));
+    assert_eq!(n.name.chars().count(), MAX_NAME_CHARS);
+    assert_eq!(n.username.chars().count(), MAX_IDENTITY_CHARS);
+    assert_eq!(n.domain.chars().count(), MAX_IDENTITY_CHARS);
+    assert_eq!(n.description.chars().count(), MAX_DESCRIPTION_CHARS);
+    // a host that is too long to be one is dropped, never cut into another host
+    assert_eq!(n.hostname, "");
+    assert!(n.clipped.name && n.clipped.hostname && n.clipped.username);
+    assert!(n.clipped.domain && n.clipped.description && !n.clipped.protocol);
+}
+
+#[test]
+fn an_overlong_protocol_is_flagged_and_an_overlong_password_is_not_decrypted() {
+    let n = one_node(&format!(
+        r#"Name="n" Password="{}""#,
+        "A".repeat(MAX_PASSWORD_CHARS + 1)
+    ));
+    assert!(n.password.is_none() && n.password_error);
+    let body = format!(
+        r#"<Node Name="n" Type="Connection" Protocol="SSH2{}x"/>"#,
+        " ".repeat(MAX_PROTOCOL_CHARS)
+    );
+    let n = read(small_ok(&body).as_bytes(), None)
+        .unwrap()
+        .nodes
+        .remove(0);
+    assert!(n.clipped.protocol);
+    assert!(n.protocol.chars().count() <= MAX_PROTOCOL_CHARS);
+}
+
+#[test]
+fn a_file_of_huge_names_reads_and_plans_quickly() {
+    // review input A end to end, scaled down: 2 MB name, 10 000 unsupported children
+    let kids = r#"<Node Name="x" Type="Connection" Protocol="X"/>"#.repeat(10_000);
+    let body = format!(
+        r#"<Node Name="{}" Type="Container">{kids}</Node>"#,
+        "N".repeat(2_000_000)
+    );
+    let start = Instant::now();
+    let doc = read(small_ok(&body).as_bytes(), None).unwrap();
+    let p = plan(&doc, "2026-11-18", &[]);
+    let took = start.elapsed();
+    assert!(took < Duration::from_secs(2), "took {took:?}");
+    assert_eq!(p.report.counts.skipped, 10_000);
+    // the cut name is reported once, not once per child
+    assert!(
+        p.report
+            .partial
+            .iter()
+            .any(|l| l.text.contains("shortened to"))
+    );
+}
