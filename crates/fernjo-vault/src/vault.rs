@@ -12,7 +12,7 @@ use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-use crate::crypto::{self, DataKey, NONCE_LEN, SALT_LEN};
+use crate::crypto::{self, DataKey, NONCE_LEN, SALT_LEN, TAG_LEN};
 use crate::entry::{Entry, EntryId, EntrySummary, EntryUpdate, NewEntry, Secret, non_empty};
 use crate::error::VaultError;
 use crate::format::{
@@ -555,6 +555,10 @@ impl Vault {
             serde_json::to_vec(&unlocked.body)
                 .map_err(|e| VaultError::SaveFailed(e.to_string()))?,
         );
+        // The readers refuse a file above MAX_FILE_LEN (a vault that cannot be opened again),
+        // so refuse before encrypting or writing anything. The file is the header plus the
+        // ciphertext, which is the plaintext plus the authentication tag.
+        check_file_len((HEADER_LEN + plain.len() + TAG_LEN) as u64, MAX_FILE_LEN)?;
         let mut header = self.header.clone();
         header.body_nonce = crypto::random_array()?;
         let header_bytes = header.encode();
@@ -572,6 +576,18 @@ impl Vault {
         self.header = header;
         Ok(())
     }
+}
+
+/// Refuses a vault file of `len` bytes when the readers (`MAX_FILE_LEN`, see `read_capped`)
+/// would refuse to open it again.
+fn check_file_len(len: u64, max: u64) -> Result<(), VaultError> {
+    if len > max {
+        return Err(VaultError::SaveFailed(format!(
+            "the vault would be larger than {} MiB, the most that can be opened again",
+            max / (1024 * 1024)
+        )));
+    }
+    Ok(())
 }
 
 fn entry_from(id: EntryId, name: String, new: NewEntry) -> Entry {
