@@ -96,12 +96,16 @@ export interface VaultStatus {
   path: string | null;
   /** The key store holds this vault's key. */
   autoUnlock: boolean;
-  /** Why the automatic unlock at startup did not work (locked only); the stored key is kept. */
+  /**
+   * Why the automatic unlock at startup did not work (locked only). Rust never deletes the stored
+   * key for any of these, except that `keychain_unavailable` means nothing is known about one.
+   */
   autoUnlockIssue: AutoUnlockIssue | null;
 }
 
 /** Wire codes of the startup auto-unlock failure; Rust may add more; the UI falls back to a neutral line for an unknown code. */
-export type AutoUnlockIssue = "key_not_accepted" | "keychain_unavailable" | "unavailable";
+export type AutoUnlockIssue =
+  "key_not_accepted" | "keychain_unavailable" | "unavailable" | "rolled_back";
 
 /** A credential as the UI sees it: never a secret field. */
 export interface CredentialInfo {
@@ -182,6 +186,8 @@ export interface Api {
   vaultStatus(): Promise<VaultStatus>;
   vaultCreate(password: string, remember: boolean): Promise<VaultStatus>;
   vaultUnlock(password: string, remember: boolean): Promise<VaultStatus>;
+  /** Unlocks a vault file that is older than the last version this device opened. */
+  vaultUnlockOlder(password: string, remember: boolean): Promise<VaultStatus>;
   vaultLock(): Promise<VaultStatus>;
   vaultChangePassword(old: string, next: string): Promise<VaultStatus>;
   vaultSetAutoUnlock(enabled: boolean): Promise<VaultStatus>;

@@ -33,6 +33,7 @@ export const tauriApi: Api = {
   vaultStatus: () => call("vault_status"),
   vaultCreate: (password, remember) => call("vault_create", { password, remember }),
   vaultUnlock: (password, remember) => call("vault_unlock", { password, remember }),
+  vaultUnlockOlder: (password, remember) => call("vault_unlock_older", { password, remember }),
   vaultLock: () => call("vault_lock"),
   // the Rust parameters are named `old` and `new`
   vaultChangePassword: (old, next) => call("vault_change_password", { old, new: next }),

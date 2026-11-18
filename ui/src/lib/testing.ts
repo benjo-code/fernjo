@@ -153,6 +153,7 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     vaultStatus: [],
     vaultCreate: [],
     vaultUnlock: [],
+    vaultUnlockOlder: [],
     vaultLock: [],
     vaultChangePassword: [],
     vaultSetAutoUnlock: [],
@@ -233,6 +234,12 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     vaultUnlock: async (...args) => {
       calls.vaultUnlock.push(args);
       return impl.vaultUnlock ? impl.vaultUnlock(...args) : vaultStatus({ state: "unlocked" });
+    },
+    vaultUnlockOlder: async (...args) => {
+      calls.vaultUnlockOlder.push(args);
+      return impl.vaultUnlockOlder
+        ? impl.vaultUnlockOlder(...args)
+        : vaultStatus({ state: "unlocked" });
     },
     vaultLock: async () => {
       calls.vaultLock.push([]);

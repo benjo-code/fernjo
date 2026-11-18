@@ -35,6 +35,9 @@
   let creating = $state(false);
   let busy = $state(false);
   let unlockError = $state<string | null>(null);
+  // True while the last password unlock failed with `rolled_back`: the file is older than the
+  // last version this device opened, and the user may choose to open it anyway.
+  let olderOffered = $state(false);
   let createError = $state<string | null>(null);
   let confirmError = $state<string | null>(null);
 
@@ -59,7 +62,26 @@
       unlocking = false;
     } else {
       unlockError = err.code === "wrong_password" ? WRONG_PASSWORD : err.message;
+      olderOffered = err.code === "rolled_back";
       // keep focus inside the form (a clicked submit button must not strand it on <body>)
+      await tick();
+      unlockField?.focus();
+    }
+  }
+
+  /** Takes the older vault file; the password stays in the field from the failed attempt. */
+  async function openOlder() {
+    if (busy) return;
+    busy = true;
+    const err = await vault.unlockOlder(password, remember);
+    busy = false;
+    if (!err) {
+      password = "";
+      unlocking = false;
+      olderOffered = false;
+    } else {
+      unlockError = err.code === "wrong_password" ? WRONG_PASSWORD : err.message;
+      olderOffered = err.code === "rolled_back";
       await tick();
       unlockField?.focus();
     }
@@ -92,6 +114,7 @@
     unlocking = false;
     password = "";
     unlockError = null;
+    olderOffered = false;
   }
 
   function cancelCreate() {
@@ -115,6 +138,8 @@
     key_not_accepted: KEEP_KEY_LINE,
     unavailable: KEEP_KEY_LINE,
     keychain_unavailable: NEUTRAL_LINE,
+    rolled_back:
+      "Automatic unlock did not open this vault: the file is older than the last version this device opened. Enter the master password to review.",
   };
   const issue = $derived(vault.status?.autoUnlockIssue ?? null);
   const issueLine = $derived(issue ? (ISSUE_LINES[issue] ?? NEUTRAL_LINE) : null);
@@ -157,7 +182,10 @@
             label="Master password"
             bind:value={password}
             error={unlockError}
-            onedit={() => (unlockError = null)}
+            onedit={() => {
+              unlockError = null;
+              olderOffered = false;
+            }}
           />
           <label class="check">
             <input
@@ -172,6 +200,16 @@
           {/if}
           <div class="actions">
             <button type="submit" class="btn small" aria-disabled={busy}>Unlock</button>
+            {#if olderOffered}
+              <button
+                type="button"
+                class="btn small"
+                aria-disabled={busy}
+                onclick={() => void openOlder()}
+              >
+                Open the older vault
+              </button>
+            {/if}
             <button type="button" class="btn small" onclick={cancelUnlock}>Cancel</button>
           </div>
         </form>
@@ -301,6 +339,7 @@
 
   .actions {
     display: flex;
+    flex-wrap: wrap;
     gap: var(--space-3);
   }
 

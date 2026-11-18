@@ -68,9 +68,25 @@ export class VaultStore {
    * a failure of that second call is shown, the unlock stands.
    */
   unlock(password: string, remember: boolean) {
+    return this.#unlockWith((p, r) => this.#api.vaultUnlock(p, r), password, remember);
+  }
+
+  /**
+   * Unlocks a vault file that is older than the last version this device opened (after `unlock`
+   * failed with `rolled_back` and the user chose to take it). Same key-store handling as `unlock`.
+   */
+  unlockOlder(password: string, remember: boolean) {
+    return this.#unlockWith((p, r) => this.#api.vaultUnlockOlder(p, r), password, remember);
+  }
+
+  #unlockWith(
+    call: (password: string, remember: boolean) => Promise<VaultStatus>,
+    password: string,
+    remember: boolean,
+  ) {
     return this.#run(async () => {
       const hadAutoUnlock = this.status?.autoUnlock === true;
-      this.status = await this.#api.vaultUnlock(password, remember);
+      this.status = await call(password, remember);
       await this.#loadCredentials();
       if (!remember && hadAutoUnlock && this.status.autoUnlock) {
         try {

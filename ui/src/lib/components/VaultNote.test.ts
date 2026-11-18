@@ -346,4 +346,76 @@ describe("VaultNote", () => {
     await settle();
     expect(document.body.textContent).not.toContain("Automatic unlock did not work");
   });
+
+  test("a_rolled_back_vault_shows_its_own_note_line", async () => {
+    await setup(vaultStatus({ state: "locked", autoUnlock: true, autoUnlockIssue: "rolled_back" }));
+    expect(document.body.textContent).toContain(
+      "Automatic unlock did not open this vault: the file is older than the last version this device opened. Enter the master password to review.",
+    );
+    expect(document.body.textContent).not.toContain("damaged");
+  });
+
+  test("a_rolled_back_unlock_shows_the_error_and_offers_the_older_vault_with_the_password_kept", async () => {
+    const message = "The vault file is older than the version this device last opened.";
+    const { calls } = await setup(vaultStatus({ state: "locked" }), {
+      vaultUnlock: async () => {
+        throw apiError("rolled_back", message);
+      },
+      vaultUnlockOlder: async () => vaultStatus({ state: "unlocked" }),
+    });
+    await expand();
+    expect(button("Open the older vault")).toBeUndefined();
+    await type(fields()[0], "master password");
+    button("Unlock")!.click();
+    await settle();
+    expect(document.body.textContent).toContain(message);
+    expect(fields()[0].value).toBe("master password");
+    const older = button("Open the older vault");
+    expect(older).toBeDefined();
+
+    older!.click();
+    await settle();
+    expect(calls.vaultUnlockOlder).toEqual([["master password", false]]);
+    // success closes the form and clears the field
+    expect(document.querySelector('[role="region"]')).toBeNull();
+  });
+
+  test("the_older_vault_offer_passes_the_remember_choice_and_goes_away_on_edit_or_cancel", async () => {
+    const { calls } = await setup(vaultStatus({ state: "locked" }), {
+      vaultUnlock: async () => {
+        throw apiError("rolled_back", "older");
+      },
+      vaultUnlockOlder: async () => {
+        throw apiError("wrong_password", "wrong");
+      },
+    });
+    await expand();
+    await type(fields()[0], "master password");
+    const box = document.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    box.click();
+    await settle();
+    button("Unlock")!.click();
+    await settle();
+    button("Open the older vault")!.click();
+    await settle();
+    expect(calls.vaultUnlockOlder).toEqual([["master password", true]]);
+    // a failure other than rolled_back hides the offer again and shows the usual text
+    expect(button("Open the older vault")).toBeUndefined();
+    expect(document.body.textContent).toContain("Wrong master password");
+
+    // a new attempt that is rolled back offers it again; typing removes it
+    button("Unlock")!.click();
+    await settle();
+    expect(button("Open the older vault")).toBeDefined();
+    await type(fields()[0], "master password 2");
+    expect(button("Open the older vault")).toBeUndefined();
+
+    button("Unlock")!.click();
+    await settle();
+    expect(button("Open the older vault")).toBeDefined();
+    button("Cancel")!.click();
+    await settle();
+    await expand();
+    expect(button("Open the older vault")).toBeUndefined();
+  });
 });
