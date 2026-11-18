@@ -1,6 +1,109 @@
 # Release checklist
 
-<!-- TASK 10 PLACEHOLDER: the reusable release checklist (steps for every release) and the v0.1.0 readiness verdict are written in Task 10. Nothing is written here yet. -->
+This file has three parts: the reusable checklist for every release (next), the readiness result for v0.1.0, and the v0.1.0 security review with its evidence. A release happens only on the owner's explicit instruction (`CLAUDE.md`, "Releases" and "Collaboration"); this file prepares the decision and never performs it.
+
+## Reusable checklist (every release)
+
+Run it on the exact commit the release will be cut from and write the result into a new "vX.Y.Z result" section.
+
+1. **Version and metadata.** `Cargo.toml` `[workspace.package] version`, `package.json` `version` and the new `CHANGELOG.md` heading all name the release. `bash tools/check-release-version.sh vX.Y.Z` passes (before the release branch it fails only because the files still say the old version). `cargo metadata --locked` and `pnpm install --frozen-lockfile` succeed (lock files current). `LICENSE-MIT`, `LICENSE-APACHE` exist; the release workflow generates `THIRD-PARTY-NOTICES.md` into `src-tauri/resources/` and every installer of the dry run contains it.
+2. **Documentation matches the app.** Every claim in `README.md` (features, SSH sign-in order, shortcut table against `ui/src/lib/shortcuts.ts`, install section, privacy statement), `SECURITY.md` and the issue templates is true for this version; `[Unreleased]` names the milestones it contains. `dotnet run tools/roadmap.cs -- check` is valid.
+3. **Build and test evidence on that commit.** `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --locked`, `pnpm test`, `pnpm lint`, `cargo deny check`, `bash tools/check-workflows.sh`. The SSH integration tests count only with the throwaway container (`eval "$(tools/ssh-test-server.sh start)"`, run, `tools/ssh-test-server.sh stop`) or through the CI `rust` job, which starts it and fails when it is missing. `gh pr checks <pr>` is fully green, including the CodeQL result check and the `release.yml` dry run (five installers, smoke tests, `SHA256SUMS`).
+4. **Security review.** Repeat the section "v0.1.0 security review" for what changed since the last release (secrets, webview and IPC surface, release-binary hygiene, network behaviour, data at rest, SSH algorithms, supply chain, pipeline); `gh api repos/benjo-code/fernjo/code-scanning/alerts?state=open` is empty, `/security-review` of the diff is run, gitleaks over the history is clean.
+5. **Known gaps table.** List every open manual check, every unfixed finding and every unverified claim with a disposition (blocker, accepted for this release, after release). An unverified claim is never shown as verified.
+6. **Attach-step rehearsal.** `workflow_dispatch` with `tag` attaches to an *existing* release, so first create a draft release `v0.0.0-rehearsal` (`gh release create v0.0.0-rehearsal --draft --target dev --title rehearsal --notes rehearsal`), then `gh workflow run release.yml --ref dev -f tag=v0.0.0-rehearsal`; check that the installers and `SHA256SUMS` are attached, then delete the draft and its tag (`gh release delete v0.0.0-rehearsal --cleanup-tag --yes`). Needs the workflow on `dev` and the owner's go-ahead. Whether the publish job can find a draft by tag is itself unproven: if it cannot, the rehearsal shows that before v0.1.0.
+7. **Verdict.** One go / no-go line per area (security review, installers, docs, performance, repo settings) and an overall line, or the list of blockers.
+8. **Release (only on the owner's instruction, `CLAUDE.md` "Releases").** Branch `release/vX.Y.Z` from `dev`, bump the versions in `Cargo.toml` (a build then refreshes `Cargo.lock`; commit it), `package.json`, turn `[Unreleased]` into `[X.Y.Z] - YYYY-MM-DD` and add an empty `[Unreleased]`; PR to `main` (merge commit); `gh release create vX.Y.Z --target main --title "vX.Y.Z" --notes "<CHANGELOG section>"` (the `release` event runs `release.yml`, which builds, smoke-tests and attaches the installers and `SHA256SUMS`); check the attached files; merge `main` back into `dev` (merge commit).
+
+## v0.1.0 result
+
+Date: 2026-11-18. Branch `feature/m06-packaging-release-readiness`, draft PR #10 to `dev`. The code and workflows are those of commit `5265b2f` (every commit after it only touches documentation); all evidence below is for `5265b2f` unless stated.
+
+### Step 1: Version and metadata
+
+- `Cargo.toml` `[workspace.package]` version `0.0.0`, `package.json` version `0.0.0`. `bash tools/check-release-version.sh v0.1.0` exits 1 with `error: Cargo.toml [workspace.package] version '0.0.0' does not match tag version '0.1.0'` and the same for `package.json`: the **expected state** today; the release procedure (step 8 above) bumps both and the CHANGELOG heading. No file has been bumped on this branch on purpose.
+- `cargo metadata --locked`: ok. `pnpm install --frozen-lockfile`: "Lockfile is up to date".
+- `LICENSE-APACHE` and `LICENSE-MIT` exist. `src-tauri/resources/THIRD-PARTY-NOTICES.md` in the repo is a placeholder on purpose (guarded by `tauri_conf.rs`, `notices_are_a_bundle_resource`); the release workflow generates the real file. In the dry-run installers of run `44205574554` the notices were found in all five installers (security review, Step 3); the dry run of `5265b2f` produced the Windows, Linux, macOS arm64 and macOS x64 artifacts again (run `44218999595`). A local `pnpm tauri build --no-bundle` was not repeated here, so a local build ships the placeholder.
+
+### Step 2: Documentation
+
+- README checked against the code: SSH sign-in order (agent, key, stored password, keyboard-interactive, typed password, `crates/fernjo-ssh/src/auth_plan.rs`), shortcut table (matches `ui/src/lib/shortcuts.ts`: Ctrl+Shift+letter, Cmd+letter on macOS, Ctrl+Tab), "Pageant is not supported yet" (no Pageant code in `fernjo-ssh`), backup format link (`Docs/backup-format.md` exists). The README states no import limits, so none to check. Corrections made here: the macOS checksum command (`shasum -a 256 -c --ignore-missing` is not supported by every stock `shasum`, now `shasum -a 256 <file>` and compare), a privacy statement in the Security section, the threat model note in `SECURITY.md`, and `[Unreleased]` now covers M0 to M6 with the M6 security changes. The install section for macOS and the Linux AppImage/FUSE note stay marked "not yet run".
+- Issue templates (`bug.md`, `feature.md`, `idee.md`) exist; `SECURITY.md` names private vulnerability reporting, which is enabled (security review, Step 8).
+- `dotnet run tools/roadmap.cs -- check`: "Roadmap is valid and ROADMAP.md is up to date." (run after these edits).
+
+### Step 3: Build and test evidence
+
+Local gate on Windows (2026-11-18, after the documentation edits, same code as `5265b2f`):
+
+| Command | Result |
+|---|---|
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets --locked -- -D warnings` | exit 0 |
+| `cargo test --workspace --locked` | 538 passed, 0 failed, 2 ignored (summed over all test binaries; the live-SSH tests skipped, no container: see CI) |
+| `pnpm test` | 36 files, 441 tests passed |
+| `pnpm lint` | ESLint, Prettier and svelte-check: 0 errors, 0 warnings |
+| `cargo deny check` | advisories ok, bans ok, licenses ok, sources ok |
+| `bash tools/check-workflows.sh` | exit 0 |
+| `dotnet run tools/roadmap.cs -- check` | valid, `ROADMAP.md` up to date |
+
+Not run locally: the SSH integration tests (the Docker daemon is not running here and was not started). They count through CI: the `rust` job of run `44218999770` (https://github.com/benjo-code/fernjo/actions/runs/44218999770) started the OpenSSH container (`FERNJO_TEST_SSH_ADDR` set; without it the tests fail under `CI`), ran `cargo test --workspace` on Linux and passed; the log shows the Unix-mode tests (`data_files_are_owner_only_and_a_new_folder_is_private`, `known_hosts_is_owner_only_and_a_new_folder_is_private`, `vault_files_are_owner_only_and_a_new_folder_is_private`) and `client_config_offers_exactly_the_reviewed_algorithms` / `client_config_offers_no_weak_algorithms` passing, and the `fernjo-ssh` integration binaries (`auth`, `connect`, `timeout`, `agent`) running. This closes the OPEN items "SSH integration tests after the russh update and the host key change" and "Unix file-mode tests" of the security review for Linux (not macOS). I did not read each integration test's output line by line.
+
+CI of PR #10 at `5265b2f` (`gh pr checks 10`, read after the runs finished):
+
+| Check | Result | Run |
+|---|---|---|
+| `rust`, `ui`, `tauri-build`, `cargo-deny`, `workflows` (workflow CI) | pass | `44218999770` |
+| `roadmap` | pass | `44218999630` |
+| `build (windows)`, `build (linux)`, `build (macos-arm64)`, `build (macos-x64)` (release.yml dry run with installer smoke tests, `publish` skipped as designed) | pass | `44218999595` |
+| `analyze (rust)`, `analyze (javascript-typescript)` | pass | `44218999613` |
+| **`CodeQL` (code scanning result check on the PR)** | **FAIL**: "4 new alerts including 4 critical", all `rust/hard-coded-cryptographic-value`, in test code: `crates/fernjo-import/tests/map.rs` lines 775 and 795 and `crates/fernjo-vault/src/vault.rs` lines 740 and 749 (test passwords such as `"secret-for-the-test"`, `"another long password"`); alerts 106 to 109 on `refs/pull/10/merge`, still open | https://github.com/benjo-code/fernjo/runs/134516149006 |
+
+The 98 earlier alerts of this rule were dismissed by the owner as "used in tests" (security review, Step 7). These four are the same class (hard-coded test values in new tests) but are **new and open**, and the check is red. Dismissing them is a GitHub change I did not make: the owner or controller dismisses alerts 106-109 as "used in tests" (or the tests are reworded so the rule no longer fires) and the check must be green before the merge. The `CodeQL` check is not a required check of `dev` or `main`.
+
+### Step 4: Known gaps
+
+Proposed dispositions; the owner decides. "Blocker" means: do not release until resolved.
+
+| # | Gap | Evidence / what is missing | Proposed disposition |
+|---|-----|----------------------------|----------------------|
+| 1 | CodeQL result check red on PR #10 (4 test-code alerts) | See Step 3 | **Blocker for the merge**, trivial: dismiss alerts 106-109 as "used in tests" after a look, re-run the check |
+| 2 | Vault rollback: an older valid `vault.fernjo` is accepted (finding 14, Medium) | Needs write access to the data folder; now stated in `SECURITY.md` | Owner decides: accepted for v0.1.0 with the documented limit (proposed) or fix first (generation counter outside the folder) |
+| 3 | Keychain item deleted on any `tampered` result (finding 15, Medium) | Convenience and surprise only, key not disclosed | Owner decides: after release (proposed) |
+| 4 | Synced `known_hosts` and `connections.json` not integrity-protected (finding 16, Medium) | Documented in `SECURITY.md`, same trust model as OpenSSH's `known_hosts` | Accepted for v0.1.0 with the documentation; HMAC or unsynced `known_hosts` after release |
+| 5 | No navigation guard on the main webview (finding 4, Low) | No IPC reaches remote content (ACL refuses every command) | After release (backlog) |
+| 6 | Required checks of `main` and `dev` lack `workflows` (finding 8) | Branch protection read on 2026-11-18 | Owner action after the merge (GitHub setting); not a blocker |
+| 7 | Dependabot: `glib` 0.18.5 (Tauri's GTK3 stack) and `minimatch` 10.2.6 (dev only) | `pnpm audit --prod` clean; glib in `Docs/DECISIONS.md` since M0 | Accepted for v0.1.0; revisit with Tauri / typescript-eslint |
+| 8 | Unexplained background HTTPS connection of the Windows web view (WebView2) about 60 s after start (finding 5) | Address registered to Microsoft; purpose not verified; one mitigation tried, did not stop it; macOS and Linux not checked | Accepted, stated in the README privacy statement; investigate after release |
+| 9 | gitleaks over the history not run | Docker unavailable here; `git grep` over 31 revisions for key headers and token shapes found nothing (weaker) | Run before the release: `docker run --rm -v "<repo>:/repo:ro" ghcr.io/gitleaks/gitleaks:v8.30.1 detect --source /repo --redact --no-banner` (expected `no leaks found`), or the local CLI. **Open, owner or controller** |
+| 10 | The sentinel secret check never reached a real SSH authentication | Connection failed at TCP connect locally | After release unless the owner wants it first: command in the security review "Open items" (needs the container) |
+| 11 | Unix-mode and SSH integration tests on macOS | Linux is covered by CI; macOS has no CI job running tests | Accepted for v0.1.0, with the macOS caveat in the README |
+| 12 | Manual checks on Linux and macOS for M0 to M5 (roadmap "Open manual checks (owner)": themes, drag and drop, single instance, CSP, keychain round trip, shortcuts, `pgrep fernjo`, import flow) | Postponed by the owner; nothing run on a Mac or a Linux desktop | Accepted for v0.1.0 **only** with the README stating macOS and Linux were not run on real machines (done); the owner decides whether to announce Windows only |
+| 13 | The owner's real hosts for M4 (each auth method, `vim`, `htop`, ten tabs), the Windows ssh-agent pipe, and the four unused native dialogs of M5 | Open in the roadmap block | Accepted for v0.1.0 (the owner used five real connections on 2026-11-17); recommended before release: a short real-host run on Windows |
+| 14 | Installers unsigned (SmartScreen, Gatekeeper warnings), macOS not notarised | Documented in the README install section | Accepted for v0.1.0 (decided by design); signing after release |
+| 15 | Attach step of `release.yml` against a real release is unproven (`publish` is skipped on `pull_request`) | The dry run proves the builds, smoke tests and artifacts, not the upload to a release or `SHA256SUMS` attachment | **Open**, rehearsal below. The roadmap criterion keeps "installers produced" ticked and notes "attach step unproven until v0.1.0" if it is not rehearsed |
+| 16 | Installers smoke-tested on CI runners only; macOS dmgs and Linux packages never started on a real desktop | README says so | Accepted |
+| 17 | Performance measured on Windows only | `Docs/performance.md`: cold start 932-992 ms median (target under 2 s), idle 61-70 MiB with web view (target about 150 MB), filter median 30-33 ms; Linux and macOS are owner runs | Accepted for v0.1.0; the figures are one machine (Ryzen 7 3800X) and the filter's cold first update was 125-159 ms |
+| 18 | Low findings 6, 17, 18, 19 (build paths in binaries, vault and SSH Lows, import/backup Lows) | Backlog entries are made by the controller in Task 11 | After release (backlog) |
+| 19 | `deny.toml` advisory ignores | `RUSTSEC-2023-0071` removed; `RUSTSEC-2024-0370`, `-2026-0370/0371/0372`, `-2026-0543` kept, each with a reason and still matching crates in the lockfile; `cargo deny check` green | Accepted |
+| 20 | A stored connection whose host is now refused (`invalid_host`, for example an imported `a,b`) fails to open until the host is corrected | Task 9 wave 2 report | Accepted, in the CHANGELOG |
+
+### Step 5: Rehearsal of the attach step
+
+**Not performed (OPEN).** It needs the owner's go-ahead and `release.yml` with the `workflow_dispatch` `tag` input on `dev`. Procedure once both hold: `gh release create v0.0.0-rehearsal --draft --target dev --title rehearsal --notes rehearsal`, `gh workflow run release.yml --ref dev -f tag=v0.0.0-rehearsal`, wait for the run, check the draft's assets (installers and `SHA256SUMS`; the Linux job yields a `.deb` and an AppImage); then `gh release delete v0.0.0-rehearsal --cleanup-tag --yes`. Not proven: that the publish job finds a draft release by tag. Until then the attach step is proven by nothing but reading the workflow.
+
+### Step 6: Verdict
+
+| Area | Verdict | Reasoning |
+|---|---|---|
+| Security review | **No-go until two items are closed**; otherwise go | No High finding is open (finding 11, the one High, is fixed and tested); the independent crate reviews and `/security-review` found no further blocker. Closed by hand: the red CodeQL check (gap 1) and gitleaks (gap 9, a command to run). The three owner-decision Mediums (gaps 2-4) are documented, not fixed. Claims are limited to what was run: the real-app checks ran on a binary built before the later fix commits |
+| Installers | Go for building, **attach step unproven** | Five installers (the Linux job yields two) are built and smoke-tested on CI at `5265b2f`; the upload to a release has not been run (gap 15). Unsigned by design |
+| Docs | Go | README, CHANGELOG, SECURITY and the roadmap check are consistent with the code and the evidence; macOS and Linux claims are marked as not run |
+| Performance | Go (Windows) | Targets met on one Windows machine; Linux and macOS not measured (gap 17) |
+| Repo settings | Go with an owner action | Protection and security features as in M0 (read-only check); `workflows` is not yet a required check (gap 6) |
+
+**Overall: not ready yet. Blockers: (1) the four open CodeQL alerts on PR #10 must be dismissed as "used in tests" or fixed so the check is green; (2) the gitleaks history scan has to be run once. After those two, and with the Medium decisions of gaps 2-4 made, the state is "ready for the owner to decide on v0.1.0"; the attach step (gap 15) and the missing macOS and Linux runs stay open and are stated, not hidden.** The version files are intentionally still 0.0.0.
+
+What may be overstated elsewhere in the evidence: "all green" refers to Windows locally and Linux/macOS/Windows CI, never to a real macOS or Linux desktop; the security review's real-app checks are of a pre-fix binary; the performance figures are one machine; "installers produced" says nothing about the release upload.
 
 ## v0.1.0 security review
 
