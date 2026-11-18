@@ -22,3 +22,7 @@ fernjo stores SSH and RDP credentials. Reports about the following are especiall
 - weaknesses in the vault file format or its key handling
 - bypasses of SSH host key verification
 - anything that lets web content in the app window reach Tauri commands it should not
+
+## Threat model: the synced data folder
+
+The data folder is meant to be synced (Syncthing, Nextcloud, iCloud). The vault file is encrypted and authenticated, but `connections.json` and `known_hosts` are plain files without integrity protection. Anyone who can write to the synced folder (another device, a sync server, a shared folder) can change a connection so that it points at a host of their choosing and add that host's key to `known_hosts`; the next connect then shows no host key prompt and sends the credential the connection references to that host. This is the trust model of OpenSSH's `~/.ssh/known_hosts` too, but a synced folder is easier to reach than a private home directory. The same writers can also put an older valid `vault.fernjo` back (there is no rollback protection). Use only sync folders that nobody but you can write to.

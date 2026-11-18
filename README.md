@@ -38,8 +38,8 @@ The first release (v0.1.0) is not published yet. Once it is, the GitHub release 
 The installers are not code-signed (and the macOS images are not notarised), so Windows and macOS warn on the first start; the steps below get past that. Check a download against `SHA256SUMS` first:
 
 ```bash
-sha256sum -c --ignore-missing SHA256SUMS      # Linux, and macOS with coreutils
-shasum -a 256 -c --ignore-missing SHA256SUMS  # macOS
+sha256sum -c --ignore-missing SHA256SUMS   # Linux (GNU coreutils)
+shasum -a 256 <file>                       # macOS: compare the printed hash with the line for <file> in SHA256SUMS
 ```
 
 ```powershell
@@ -99,6 +99,8 @@ cargo deny check                                       # licences, advisories, s
 ## Security
 
 Please report vulnerabilities privately, see [SECURITY.md](SECURITY.md).
+
+**Privacy.** fernjo's own code makes no network connections except the SSH sessions you open. It has no update check, no telemetry and no analytics. Your connections, settings and encrypted vault stay in your data folder on your computer. The window itself is drawn by your operating system's web view (WebView2 on Windows, WebKit on macOS and Linux), a separate component that makes background connections of its own: on Windows we saw one HTTPS connection from the Windows web view (WebView2) about a minute after start, to an address registered to Microsoft, and have not found a way to disable it. macOS and Linux were not checked. Notes on the synced data folder are in [SECURITY.md](SECURITY.md).
 
 ## License
 
