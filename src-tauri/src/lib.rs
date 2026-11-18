@@ -62,6 +62,7 @@ pub fn run() {
             vault_commands::handlers::vault_status,
             vault_commands::handlers::vault_create,
             vault_commands::handlers::vault_unlock,
+            vault_commands::handlers::vault_unlock_older,
             vault_commands::handlers::vault_lock,
             vault_commands::handlers::vault_change_password,
             vault_commands::handlers::vault_set_auto_unlock,

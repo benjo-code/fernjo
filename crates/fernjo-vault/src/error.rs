@@ -34,6 +34,10 @@ pub enum VaultError {
         "The vault file was changed by another device or a sync tool. Lock and unlock the vault to load the changes, then repeat your change."
     )]
     ChangedOnDisk,
+    #[error(
+        "The vault file is older than the version this device last opened (generation {found}, last seen {seen}). Another device or a sync tool may have put an older copy back."
+    )]
+    RolledBack { found: u64, seen: u64 },
 }
 
 impl VaultError {
@@ -54,6 +58,7 @@ impl VaultError {
             Self::EmptyName => "empty_name",
             Self::SaveFailed(_) => "save_failed",
             Self::ChangedOnDisk => "changed_on_disk",
+            Self::RolledBack { .. } => "rolled_back",
         }
     }
 }

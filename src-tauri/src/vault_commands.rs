@@ -49,8 +49,9 @@ pub struct VaultStatus {
     pub path: Option<String>,
     /// The key store holds this vault's key.
     pub auto_unlock: bool,
-    /// Why the automatic unlock at startup did not work (`locked` only): `key_not_accepted`
-    /// `keychain_unavailable` or `unavailable`. A stored key is never deleted.
+    /// Why the automatic unlock at startup did not work (`locked` only): `key_not_accepted`,
+    /// `keychain_unavailable`, `unavailable` or `rolled_back` (the file is older than the last
+    /// version this device opened). A stored key is never deleted.
     pub auto_unlock_issue: Option<&'static str>,
 }
 
@@ -147,7 +148,8 @@ pub fn vault_create(
     if path.try_exists().unwrap_or(true) {
         return Err(VaultError::AlreadyExists.into());
     }
-    let vault = Vault::create_with(&path, &password, state.kdf)?;
+    let mut vault = Vault::create_with(&path, &password, state.kdf)?;
+    vault.attach_generation_store(std::sync::Arc::clone(&state.generations));
     if remember {
         remember_key(state, &vault);
     }
@@ -163,6 +165,24 @@ pub fn vault_unlock(
 ) -> Result<VaultStatus, CommandError> {
     with_vault(state, |v| {
         v.unlock(&password)?;
+        if remember {
+            remember_key(state, v);
+        }
+        Ok(())
+    })?;
+    clear_auto_unlock_issue(state);
+    vault_status(state)
+}
+
+/// Like [`vault_unlock`], but takes a vault file that is older than the version this device last
+/// opened (the user saw `rolled_back` and decided to open it). The file is re-stamped at once.
+pub fn vault_unlock_older(
+    state: &AppState,
+    password: SecretString,
+    remember: bool,
+) -> Result<VaultStatus, CommandError> {
+    with_vault(state, |v| {
+        v.unlock_accepting_older(&password)?;
         if remember {
             remember_key(state, v);
         }
@@ -553,6 +573,15 @@ pub mod handlers {
         super::vault_unlock(&state, SecretString::from(password), remember)
     }
 
+    #[tauri::command(async)]
+    pub fn vault_unlock_older(
+        state: State<'_, AppState>,
+        password: String,
+        remember: bool,
+    ) -> Result<VaultStatus, CommandError> {
+        super::vault_unlock_older(&state, SecretString::from(password), remember)
+    }
+
     #[tauri::command]
     pub fn vault_lock(state: State<'_, AppState>) -> Result<VaultStatus, CommandError> {
         super::vault_lock(&state)
@@ -641,7 +670,9 @@ mod tests {
         import_begin, import_cancel, import_inspect,
     };
     use fernjo_core::{NodeId, Protocol};
-    use fernjo_vault::{AutoUnlock, DataKey, KeyStore, KeyStoreError, Vault, VaultId};
+    use fernjo_vault::{
+        AutoUnlock, DataKey, GenerationStore, KeyStore, KeyStoreError, Vault, VaultId,
+    };
     use secrecy::SecretString;
     use serde::Serialize;
     use serde_json::{Value, json};
@@ -926,6 +957,130 @@ mod tests {
         assert_eq!(status.auto_unlock_issue, None);
         assert!(status.auto_unlock);
         assert!(st.keystore.get(id).unwrap().is_some());
+    }
+
+    /// A key store several `AppState`s can share (a "restart" that keeps the keychain).
+    struct SharedKeys(std::sync::Arc<fernjo_vault::MemoryKeyStore>);
+
+    impl KeyStore for SharedKeys {
+        fn get(&self, id: VaultId) -> Result<Option<DataKey>, KeyStoreError> {
+            self.0.get(id)
+        }
+        fn set(&self, id: VaultId, key: &DataKey) -> Result<(), KeyStoreError> {
+            self.0.set(id, key)
+        }
+        fn delete(&self, id: VaultId) -> Result<(), KeyStoreError> {
+            self.0.delete(id)
+        }
+    }
+
+    /// A vault at generation 2 whose file was then replaced by the generation-1 copy; the
+    /// returned state is a restart that keeps the keychain and the device marks.
+    fn start_with_rolled_back_vault(
+        dir: &Path,
+    ) -> (
+        AppState,
+        std::sync::Arc<fernjo_vault::MemoryKeyStore>,
+        std::sync::Arc<fernjo_vault::MemoryGenerationStore>,
+    ) {
+        use fernjo_vault::{MemoryGenerationStore, MemoryKeyStore};
+        use std::sync::Arc;
+        let keys = Arc::new(MemoryKeyStore::default());
+        let marks = Arc::new(MemoryGenerationStore::default());
+        let first = AppState::open_with_stores(
+            dir.to_path_buf(),
+            Box::new(SharedKeys(keys.clone())),
+            marks.clone(),
+        );
+        vault_create(&first, sec(MASTER), true).unwrap(); // generation 1
+        vault_change_password(&first, sec(MASTER), sec(NEW_MASTER)).unwrap(); // generation 2
+        let path = dir.join(fernjo_vault::FILE_NAME);
+        let mut bak = path.as_os_str().to_owned();
+        bak.push(".bak");
+        std::fs::copy(&bak, &path).unwrap();
+        drop(first);
+        let st = AppState::open_with_stores(
+            dir.to_path_buf(),
+            Box::new(SharedKeys(keys.clone())),
+            marks.clone(),
+        );
+        (st, keys, marks)
+    }
+
+    #[test]
+    fn a_rolled_back_vault_is_not_auto_unlocked_and_the_item_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let (st, keys, _marks) = start_with_rolled_back_vault(dir.path());
+        let status = vault_status(&st).unwrap();
+        assert_eq!(status.state, "locked");
+        assert_eq!(status.auto_unlock_issue, Some("rolled_back"));
+        assert!(status.auto_unlock, "the stored key is kept");
+        let id = match &*st.vault.lock().unwrap() {
+            VaultState::Open(v) => v.id(),
+            _ => panic!("no vault"),
+        };
+        assert!(keys.get(id).unwrap().is_some());
+        assert_eq!(
+            serde_json::to_value(&status).unwrap()["autoUnlockIssue"],
+            "rolled_back"
+        );
+    }
+
+    #[test]
+    fn a_password_unlock_of_a_rolled_back_vault_is_refused_until_the_user_accepts() {
+        let dir = tempfile::tempdir().unwrap();
+        let (st, keys, marks) = start_with_rolled_back_vault(dir.path());
+        let id = match &*st.vault.lock().unwrap() {
+            VaultState::Open(v) => v.id(),
+            _ => panic!("no vault"),
+        };
+        // the generation-1 copy still has the first password
+        let err = vault_unlock(&st, sec(MASTER), true).unwrap_err();
+        assert_eq!(err.code, "rolled_back");
+        assert!(err.message.contains("generation 1"), "{}", err.message);
+        assert!(err.message.contains("last seen 2"), "{}", err.message);
+        assert_eq!(vault_status(&st).unwrap().state, "locked");
+        // a wrong password is a wrong password, not a rollback
+        assert_eq!(
+            code(vault_unlock_older(&st, sec("wrong password"), false)),
+            "wrong_password"
+        );
+        assert_eq!(vault_status(&st).unwrap().state, "locked");
+        // no key stored by the refused attempts beyond the one that was already there
+        keys.delete(id).unwrap();
+
+        let status = vault_unlock_older(&st, sec(MASTER), true).unwrap();
+        assert_eq!(status.state, "unlocked");
+        assert_eq!(status.auto_unlock_issue, None);
+        assert!(status.auto_unlock, "remember stored the key again");
+        assert_eq!(
+            GenerationStore::get(&*marks, id),
+            Some(3),
+            "re-stamped above the floor of 2"
+        );
+        // and the next start auto-unlocks without a prompt
+        drop(st);
+        let again = AppState::open_with_stores(
+            dir.path().to_path_buf(),
+            Box::new(SharedKeys(keys.clone())),
+            marks.clone(),
+        );
+        assert_eq!(vault_status(&again).unwrap().state, "unlocked");
+    }
+
+    #[test]
+    fn vault_unlock_older_without_a_vault_or_with_nothing_to_accept() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = state(dir.path());
+        assert_eq!(
+            code(vault_unlock_older(&st, sec(MASTER), false)),
+            "no_vault"
+        );
+        vault_create(&st, sec(MASTER), false).unwrap();
+        vault_lock(&st).unwrap();
+        // a current file: a plain unlock
+        let status = vault_unlock_older(&st, sec(MASTER), false).unwrap();
+        assert_eq!(status.state, "unlocked");
     }
 
     /// A key store whose reads fail (no Secret Service, locked keyring).
@@ -1530,6 +1685,9 @@ mod tests {
             }),
             entry("vault_unlock", |w| {
                 j(vault_unlock(&w.st, sec(MASTER), true))
+            }),
+            entry("vault_unlock_older", |w| {
+                j(vault_unlock_older(&w.st, sec(MASTER), true))
             }),
             entry("vault_lock", |w| j(vault_lock(&w.st))),
             entry("vault_change_password", |w| {

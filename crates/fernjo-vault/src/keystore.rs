@@ -11,7 +11,7 @@ use std::sync::Mutex;
 use zeroize::Zeroizing;
 
 use crate::crypto::KEY_LEN;
-use crate::{DataKey, Vault, VaultId};
+use crate::{DataKey, Vault, VaultError, VaultId};
 
 /// Keychain service name of all fernjo items.
 const SERVICE: &str = "fernjo";
@@ -158,6 +158,10 @@ pub enum AutoUnlock {
     /// The vault file could not be used (unreadable, truncated, replaced, newer format); the
     /// item is kept; ask for the master password.
     Unavailable(String),
+    /// The stored key opened the file, but the file is older than the version this device last
+    /// opened (a sync tool may have put an older copy back). Auto-unlock never accepts that;
+    /// the item is kept and the user decides with the master password.
+    RolledBack { found: u64, seen: u64 },
 }
 
 /// Tries to unlock `vault` with the key from `store`. Never prompts, never panics and never
@@ -172,6 +176,7 @@ pub fn try_auto_unlock(vault: &mut Vault, store: &dyn KeyStore) -> AutoUnlock {
     };
     match vault.unlock_with_key(&key) {
         Ok(()) => AutoUnlock::Unlocked,
+        Err(VaultError::RolledBack { found, seen }) => AutoUnlock::RolledBack { found, seen },
         Err(e) if e.code() == "tampered" => AutoUnlock::KeyNotAccepted,
         Err(e) => AutoUnlock::Unavailable(e.to_string()),
     }

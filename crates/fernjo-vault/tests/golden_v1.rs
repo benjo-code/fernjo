@@ -42,6 +42,11 @@ fn the_v1_fixture_opens_and_lists_its_entries() {
     let list = vault.list().unwrap();
     let names: Vec<&str> = list.iter().map(|e| e.name.as_str()).collect();
     assert_eq!(names, ["Web server", "Deploy key", "Jump host"]);
+    assert_eq!(
+        vault.generation(),
+        Some(0),
+        "a v1 file without the field reads as 0"
+    );
     assert_eq!(list[0].username.as_deref(), Some("root"));
     assert_eq!(list[1].notes, "for CI");
     match vault.reveal(list[0].id).unwrap() {
@@ -85,10 +90,16 @@ fn the_first_save_keeps_the_fixture_as_bak_and_the_result_still_opens() {
             },
         )
         .unwrap();
+    assert_eq!(
+        vault.generation(),
+        Some(1),
+        "the first save writes generation 1"
+    );
     assert_eq!(fs::read(bak(&path)).unwrap(), original);
     assert_ne!(fs::read(&path).unwrap(), original);
 
     let mut again = Vault::open(&path).unwrap().unwrap();
     again.unlock(&secret(PASSWORD)).unwrap();
     assert_eq!(again.list().unwrap()[2].notes, "changed");
+    assert_eq!(again.generation(), Some(1));
 }

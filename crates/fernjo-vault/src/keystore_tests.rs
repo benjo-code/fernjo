@@ -278,3 +278,38 @@ fn os_keystore_round_trip() {
     // Deleting a missing item is not an error.
     store.delete(id).unwrap();
 }
+
+#[test]
+fn a_rolled_back_file_is_not_auto_unlocked_and_the_item_is_kept() {
+    use std::sync::Arc;
+
+    use crate::MemoryGenerationStore;
+
+    let dir = TempDir::new().unwrap();
+    let mut vault = new_vault(&dir);
+    vault.attach_generation_store(Arc::new(MemoryGenerationStore::default()));
+    let store = CountingStore::default();
+    store.set(vault.id(), &vault.data_key().unwrap()).unwrap();
+    vault
+        .add(crate::NewEntry {
+            name: "a".to_owned(),
+            username: None,
+            domain: None,
+            secret: crate::Secret::Password {
+                password: secret("pw"),
+            },
+            notes: String::new(),
+        })
+        .unwrap();
+    let mut bak = vault.path().as_os_str().to_owned();
+    bak.push(".bak");
+    std::fs::copy(&bak, vault.path()).unwrap();
+    vault.lock();
+    assert_eq!(
+        try_auto_unlock(&mut vault, &store),
+        AutoUnlock::RolledBack { found: 1, seen: 2 }
+    );
+    assert!(!vault.is_unlocked());
+    assert_eq!(store.deletes(), 0);
+    assert!(store.get(vault.id()).unwrap().is_some());
+}

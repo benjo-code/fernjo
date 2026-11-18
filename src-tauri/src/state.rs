@@ -1,15 +1,15 @@
 //! Application state shared by all commands.
 
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 
 use fernjo_core::{
     DataDirSource, Location, Notice, Store, TerminalPrefs, Theme, find_conflicts, settings,
 };
 use fernjo_vault::{
-    AutoUnlock, FILE_NAME as VAULT_FILE_NAME, KdfParams, KeyStore, MemoryKeyStore, OsKeyStore,
-    Vault, try_auto_unlock,
+    AutoUnlock, FILE_NAME as VAULT_FILE_NAME, FileGenerationStore, GenerationStore, KdfParams,
+    KeyStore, MemoryGenerationStore, MemoryKeyStore, OsKeyStore, Vault, try_auto_unlock,
 };
 
 use crate::commands::CommandError;
@@ -52,6 +52,8 @@ pub enum AutoUnlockIssue {
     KeychainUnavailable,
     /// The vault file could not be used.
     Unavailable,
+    /// The file is older than the version this device last opened.
+    RolledBack,
 }
 
 impl AutoUnlockIssue {
@@ -63,6 +65,7 @@ impl AutoUnlockIssue {
             AutoUnlock::KeyNotAccepted => Some(Self::KeyNotAccepted),
             AutoUnlock::KeychainUnavailable(_) => Some(Self::KeychainUnavailable),
             AutoUnlock::Unavailable(_) => Some(Self::Unavailable),
+            AutoUnlock::RolledBack { .. } => Some(Self::RolledBack),
         }
     }
 
@@ -72,6 +75,7 @@ impl AutoUnlockIssue {
             Self::KeyNotAccepted => "key_not_accepted",
             Self::KeychainUnavailable => "keychain_unavailable",
             Self::Unavailable => "unavailable",
+            Self::RolledBack => "rolled_back",
         }
     }
 }
@@ -104,6 +108,9 @@ pub struct AppState {
     /// unlock or a new vault). Shown while the vault is locked.
     pub auto_unlock_issue: Mutex<Option<AutoUnlockIssue>>,
     pub keystore: Box<dyn KeyStore>,
+    /// The highest vault generation this device has seen, per vault (rollback protection):
+    /// a file in `device_dir` when there is one, else memory only.
+    pub generations: Arc<dyn GenerationStore>,
     /// Argon2id cost for vaults created by this run (tests use `KdfParams::TEST`).
     pub kdf: KdfParams,
     pub data_dir: Option<PathBuf>,
@@ -154,6 +161,7 @@ impl AppState {
             None,
             Box::new(MemoryKeyStore::default()),
             KdfParams::TEST,
+            None,
         )
     }
 
@@ -168,6 +176,7 @@ impl AppState {
                 None,
                 keystore,
                 KdfParams::default(),
+                None,
             ),
             Some(l) => {
                 // `settings.json` is neither read nor written while the variable is set, and
@@ -192,6 +201,7 @@ impl AppState {
                     }),
                     keystore,
                     KdfParams::default(),
+                    None,
                 );
                 if let (Some(prefs), Ok(mut slot)) = (terminal, state.terminal.lock()) {
                     *slot = prefs;
@@ -214,6 +224,26 @@ impl AppState {
             None,
             keystore,
             KdfParams::TEST,
+            None,
+        )
+    }
+
+    /// Test constructor with an explicit key store and generation store (a "restart" that
+    /// keeps the device marks).
+    #[cfg(test)]
+    pub(crate) fn open_with_stores(
+        dir: PathBuf,
+        keystore: Box<dyn KeyStore>,
+        generations: Arc<dyn GenerationStore>,
+    ) -> AppState {
+        Self::build(
+            Some(dir),
+            Folders::none(),
+            false,
+            None,
+            keystore,
+            KdfParams::TEST,
+            Some(generations),
         )
     }
 
@@ -224,12 +254,17 @@ impl AppState {
         settings_notice: Option<Notice>,
         keystore: Box<dyn KeyStore>,
         kdf: KdfParams,
+        generations: Option<Arc<dyn GenerationStore>>,
     ) -> AppState {
         let Folders {
             config_dir,
             device_dir,
             source,
         } = folders;
+        let generations = generations.unwrap_or_else(|| match &device_dir {
+            Some(dir) => Arc::new(FileGenerationStore::in_dir(dir)),
+            None => Arc::new(MemoryGenerationStore::default()),
+        });
         let mut notices = Vec::new();
         let mut vault = VaultState::None;
         let mut auto_unlock_issue = None;
@@ -259,6 +294,9 @@ impl AppState {
             vault = match Vault::open(&path) {
                 Ok(None) => VaultState::None,
                 Ok(Some(mut v)) => {
+                    // The marks come first: an older file must be recognised before the
+                    // stored key opens it.
+                    v.attach_generation_store(Arc::clone(&generations));
                     // Never deletes the keychain item; the UI learns of a failure through
                     // `vault_status` (`autoUnlockIssue`).
                     auto_unlock_issue =
@@ -278,6 +316,7 @@ impl AppState {
             vault: Mutex::new(vault),
             auto_unlock_issue: Mutex::new(auto_unlock_issue),
             keystore,
+            generations,
             kdf,
             data_dir: dir,
             config_dir,
