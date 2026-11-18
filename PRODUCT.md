@@ -32,7 +32,7 @@ The mRemoteNG way of working (one window, folder tree with inheritance, tabs) on
 
 ## Capabilities and Constraints
 
-- Planned: connection tree (folders, connections, unlimited nesting, manual order, drag and drop, filter on name/host/description) and a properties panel showing local vs inherited values (M2). Credential vault with master password and keychain auto-unlock (M3). SSH terminal tabs with xterm.js (M4). mRemoteNG import and backup export (M5). Installers and a settings dialog with theme light/dark/system (M6). RDP tabs (M7).
+- Planned: connection tree (folders, connections, unlimited nesting, manual order, drag and drop, filter on name/host/description) and a properties panel showing local vs inherited values (M2). Credential vault with master password and keychain auto-unlock (M3). SSH terminal tabs with xterm.js (M4). mRemoteNG import and backup export (M5). Installers and a settings dialog with theme light/dark/system (M6). RDP tabs (M8).
 - Out of scope for now: built-in sync, SFTP, port forwarding, jump hosts, local shell tabs, split panes, other protocols, team features, code signing.
 - Technical: Tauri 2 + Svelte 5 + TypeScript; all logic in Rust, TypeScript for presentation only. Strict CSP, so no remote fonts or assets at runtime. Must start fast (cold start < 2 s) and stay light (idle < ~150 MB).
 - Secrets (passwords, keys, passphrases) never reach the webview, except through an explicit "reveal" action in the vault UI.
