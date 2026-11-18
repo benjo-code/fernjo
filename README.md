@@ -4,18 +4,57 @@ A lightweight, cross-platform remote connection manager for **SSH and RDP** on W
 
 All your connections live in one folder tree in the sidebar, sessions open as tabs in a single window, and passwords and keys are kept in an encrypted vault. Existing connections can be imported from mRemoteNG, including saved passwords.
 
-**Status:** in development – see [Docs/ROADMAP.md](Docs/ROADMAP.md). Nothing is installable yet; the first release (v0.1.0) brings SSH, v0.2.0 adds RDP.
+**Status:** in development – see [Docs/ROADMAP.md](Docs/ROADMAP.md). SSH, the vault, import and backup are implemented, and the installers for Windows, macOS and Linux are built by CI. The first release (v0.1.0) is not published yet, so there is nothing to download today; v0.2.0 adds RDP.
 
-## Features (planned)
+## Features
+
+Working now:
 
 - Connection tree with nested folders; folders pass settings such as username, credential or port down to their connections
 - SSH sessions in tabs with a full terminal (xterm.js), agent/key/password/keyboard-interactive login and host key verification
-- RDP sessions in tabs (IronRDP)
 - Encrypted credential vault (Argon2id + XChaCha20-Poly1305), optional unlock via the OS keychain
 - Import from mRemoteNG (`confCons.xml` 2.6, including saved passwords), export of the connections as JSON and an encrypted full backup with restore (formats in [Docs/backup-format.md](Docs/backup-format.md))
 - Data folder you can sync yourself (Syncthing, Nextcloud, iCloud) – the vault stays encrypted
+- Light and dark theme, following the system or set by hand
+
+Planned:
+
+- RDP sessions in tabs (IronRDP)
 
 Design and scope: [Docs/superpowers/specs/2026-11-15-fernjo-design.md](Docs/superpowers/specs/2026-11-15-fernjo-design.md)
+
+## Install
+
+The first release (v0.1.0) is not published yet. Once it is, the GitHub release will hold five installers and a checksum file:
+
+| Platform | File |
+|---|---|
+| Windows (x64) | `fernjo_<version>_x64-setup.exe` |
+| macOS, Apple Silicon | `fernjo_<version>_aarch64.dmg` |
+| macOS, Intel | `fernjo_<version>_x64.dmg` |
+| Linux (x64) | `fernjo_<version>_amd64.deb` and `fernjo_<version>_amd64.AppImage` |
+| All | `SHA256SUMS` |
+
+The installers are not code-signed (and the macOS images are not notarised), so Windows and macOS warn on the first start; the steps below get past that. Check a download against `SHA256SUMS` first:
+
+```bash
+sha256sum -c --ignore-missing SHA256SUMS      # Linux, and macOS with coreutils
+shasum -a 256 -c --ignore-missing SHA256SUMS  # macOS
+```
+
+```powershell
+(Get-FileHash .\fernjo_<version>_x64-setup.exe -Algorithm SHA256).Hash   # compare with the line in SHA256SUMS
+```
+
+**Windows.** Run the setup. SmartScreen shows "Windows protected your PC": choose "More info", then "Run anyway". The install is per user (under `%LOCALAPPDATA%\fernjo`) and needs no administrator rights. Uninstalling keeps your data in `%APPDATA%\fernjo`.
+
+**macOS** (from Apple's documented behaviour, not yet run on a Mac). Open the `.dmg` and drag fernjo to Applications. The first start is blocked because the app is unsigned and not notarised: open System Settings, Privacy & Security, scroll to the message about fernjo and choose "Open Anyway". Alternatively remove the quarantine flag once: `xattr -dr com.apple.quarantine /Applications/fernjo.app`. Use the Apple Silicon image on M-series Macs and the Intel image otherwise; macOS 11 or newer.
+
+**Linux** (Wayland on recent GNOME and KDE is the tested setup; Ubuntu 22.04 or newer). Debian and Ubuntu: `sudo apt install ./fernjo_<version>_amd64.deb`. AppImage: `chmod +x fernjo_<version>_amd64.AppImage` and run it; it needs FUSE 2, which is the package `libfuse2` on Ubuntu 22.04 and `libfuse2t64` on 24.04. The CI release build installs the `.deb` and extracts the AppImage (`--appimage-extract`); starting either on a real desktop (and the FUSE note, from documented behaviour) is not yet checked.
+
+## Settings
+
+The gear in the sidebar opens Settings: the colour theme (System, Light or Dark; System follows the operating system and changes with it), the terminal (font family, size and scrollback) and the data folder (see [Docs/DECISIONS.md](Docs/DECISIONS.md) for how the folder is chosen). The choices are stored in `settings.json` in the config folder, not in the data folder, so syncing the data folder does not carry them to another machine.
 
 ## SSH
 
@@ -59,7 +98,7 @@ cargo deny check                                       # licences, advisories, s
 
 ## Security
 
-Please report vulnerabilities privately, see `SECURITY.md` (added in milestone 0).
+Please report vulnerabilities privately, see [SECURITY.md](SECURITY.md).
 
 ## License
 

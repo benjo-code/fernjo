@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-fernjo is in early development. Security fixes are made for the latest release only (and for `dev` until the first release exists).
+fernjo is in early development. Security fixes are made for the latest release (from v0.1.0 on) and for `dev`; older releases are not patched.
 
 ## Reporting a vulnerability
 

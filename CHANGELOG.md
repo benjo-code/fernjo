@@ -25,11 +25,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 - App shortcuts (M4): tab switching, close tab, filter, terminal search, copy and paste that leave the terminal's own keys alone; listed in the README.
 - Import and backup (M5): import connections and passwords from mRemoteNG (confCons.xml, version 2.6); export connections as JSON; encrypted full backup and restore (formats in `Docs/backup-format.md`).
 - Double-clicking a folder in the tree expands or collapses it (M4).
+- Theme setting (M6): Settings has an Appearance section with System, Light and Dark; the choice is stored in `settings.json` and applied before the first frame, so a stored theme does not flash the other one at start.
+- Installers (M6): the release workflow builds a Windows setup (`fernjo_<version>_x64-setup.exe`), macOS images for Apple Silicon and Intel (`_aarch64.dmg`, `_x64.dmg`) and a Linux `.deb` and AppImage (`_amd64`) on GitHub-hosted runners and attaches them to a published release. Each installer is smoke-tested on its runner first. The installers are not code-signed; README, section "Install", explains the Windows and macOS warnings.
+- `SHA256SUMS` (M6): every release carries a checksum file for all installers.
+- Third-party notices (M6): the licences of the bundled Rust crates, npm packages and the two fonts ship inside every installer (`THIRD-PARTY-NOTICES.md`).
+- Per-user Windows install (M6): the setup installs under `%LOCALAPPDATA%\fernjo` without administrator rights; uninstalling keeps `%APPDATA%\fernjo`.
 
 ### Changed
 
 - The gear dialog is now called "Settings" and also holds the terminal section (M4).
+- The release build is smaller and links with thin LTO (M6).
 
 ### Fixed
+
+- Settings dialog (M6): a late-arriving load no longer overwrites what you already typed; the "Saved" note disappears when you edit a terminal field again; a failed load of the terminal settings shows an error and keeps Save disabled; Enter in a terminal field no longer saves while an input method composition is active.
 
 ### Removed
