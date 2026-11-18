@@ -1,7 +1,7 @@
 //! Reading a mRemoteNG `confCons.xml` (ConfVersion 2.6) into a raw, unmapped document.
 //!
-//! Order of checks: size, UTF-8 and BOM, XML parse (no DTD), root element and version, encryption
-//! engine, `KdfIterations` range, the work budget (stored passwords x iterations), key check through
+//! Order of checks: size, UTF-8 and BOM, a byte scan for attribute and namespace floods, XML parse
+//! (no DTD), root element and version, encryption engine, `KdfIterations` range, the work budget (stored passwords x iterations), key check through
 //! `Protected`, optional full-file decryption (and the budget again for the decrypted body), then a
 //! depth-limited walk with a node cap. Error messages never contain secrets.
 
@@ -11,6 +11,7 @@ use secrecy::SecretString;
 use zeroize::Zeroizing;
 
 use super::crypto::{self, CryptoError, DEFAULT_KEY, MAX_ITERATIONS, MIN_ITERATIONS};
+use super::scan;
 use crate::error::ImportError;
 
 /// Files above this size are refused before parsing.
@@ -29,6 +30,13 @@ pub const MAX_PBKDF2_ITERATIONS: u64 = 20_000_000;
 const DEFAULT_ITERATIONS: u32 = 1000;
 /// The plaintext of the `Protected` attribute when the key is right.
 const PROTECTED_PLAINTEXT: &str = "ThisIsNotProtected";
+/// Most attributes one start tag may carry (real mRemoteNG nodes carry about 60). `roxmltree` checks
+/// every new attribute against the earlier ones, so one tag with 100 000 attributes costs 21 s.
+pub const MAX_ATTRIBUTES_PER_TAG: usize = 200;
+/// Most namespace declarations (`xmlns`, `xmlns:p`) a document may carry in all (a real file has one,
+/// `xmlns:mrng` on the root). Each declaration is searched again by every later prefixed name, which
+/// is cubic over nested elements: 5 000 of them cost 55 s.
+pub const MAX_XMLNS_DECLARATIONS: usize = 8;
 /// Parser guard on all DOM nodes (elements and text); the real cap is `MAX_NODES` elements.
 const XML_NODES_LIMIT: u32 = 2_000_000;
 const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
@@ -108,6 +116,8 @@ fn shown(s: &str) -> String {
 }
 
 fn parse(text: &str) -> Result<roxmltree::Document<'_>, ImportError> {
+    // before roxmltree: it has no attribute or namespace limit, and both are superlinear
+    scan::check(text, MAX_ATTRIBUTES_PER_TAG, MAX_XMLNS_DECLARATIONS)?;
     let opts = roxmltree::ParsingOptions {
         allow_dtd: false,
         nodes_limit: XML_NODES_LIMIT,
