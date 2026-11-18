@@ -97,6 +97,22 @@ test("needs_vault_wrong_password_shows_error_and_keeps_prompt", async () => {
   expect(document.activeElement).toBe(field());
 });
 
+test("needs_vault_rolled_back_points_to_the_vault_note", async () => {
+  const t = await setup({
+    vaultUnlock: async () => {
+      throw apiError("rolled_back", "The vault file is older than the last version.");
+    },
+  });
+  await type(field(), "pw");
+  button("Unlock and connect").click();
+  await settle();
+  const alert = document.querySelector('[role="alert"]')!;
+  expect(alert.textContent).toContain(
+    "The vault file is older than the last version. Unlock from the vault note to review it.",
+  );
+  expect(t.calls.resumeSession).toHaveLength(0);
+});
+
 test("needs_vault_cancel_resumes_with_skip", async () => {
   const t = await setup();
   button("Cancel").click();

@@ -416,6 +416,35 @@ describe("ImportDialog", () => {
     expect(input("backup-password").value).toBe("");
   });
 
+  test("vault_unlock_rolled_back_points_to_the_vault_note", async () => {
+    let attempts = 0;
+    const { calls } = await setup({
+      vaultStatus: async () => vaultStatus({ state: "locked" }),
+      vaultUnlock: async () => {
+        throw apiError("rolled_back", "The vault file is older than the last version.");
+      },
+      importInspect: async () =>
+        preview({
+          report: withCounts(2),
+          needsVault: true,
+          vault: vaultStatus({ state: "locked" }),
+        }),
+      importApply: async () => {
+        attempts++;
+        throw apiError("vault_needed", "Unlock the vault first.");
+      },
+    });
+    await click("mRemoteNG file…");
+    await click("Import");
+    type(input("import-vault-password"), "master");
+    await click("Unlock and import");
+    expect(calls.vaultUnlock).toHaveLength(1);
+    expect(document.body.textContent).toContain(
+      "The vault file is older than the last version. Unlock from the vault note to review it.",
+    );
+    expect(attempts).toBe(1);
+  });
+
   test("vault_needed_step_offers_unlock_and_resumes_the_apply", async () => {
     let attempts = 0;
     const { calls, vault } = await setup({
