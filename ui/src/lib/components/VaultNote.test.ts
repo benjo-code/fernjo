@@ -303,9 +303,33 @@ describe("VaultNote", () => {
     expect(document.querySelector('[role="status"]')).not.toBeNull();
   });
 
-  test("the_unavailable_issue_shows_the_same_line_and_no_issue_shows_none", async () => {
+  test("the_unavailable_issue_shows_the_keep_key_line", async () => {
     await setup(vaultStatus({ state: "locked", autoUnlockIssue: "unavailable" }));
-    expect(document.body.textContent).toContain("Automatic unlock did not work this time");
+    expect(document.body.textContent).toContain(
+      "Automatic unlock did not work this time (the vault file may be incomplete or damaged). Your stored key was kept. Enter the master password.",
+    );
+  });
+
+  test("an_unreadable_keychain_shows_the_neutral_line_and_never_claims_a_stored_key", async () => {
+    await setup(vaultStatus({ state: "locked", autoUnlockIssue: "keychain_unavailable" }));
+    const text = document.body.textContent ?? "";
+    expect(text).toContain(
+      "The OS keychain could not be read, so automatic unlock was skipped. Enter the master password.",
+    );
+    expect(text).not.toContain("stored key");
+    expect(text).not.toContain("damaged");
+  });
+
+  test("an_unknown_issue_code_falls_back_to_the_neutral_line", async () => {
+    await setup(
+      vaultStatus({
+        state: "locked",
+        autoUnlockIssue: "from_the_future" as unknown as "unavailable",
+      }),
+    );
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("automatic unlock was skipped");
+    expect(text).not.toContain("stored key");
   });
 
   test("a_locked_note_without_an_issue_has_no_auto_unlock_line", async () => {

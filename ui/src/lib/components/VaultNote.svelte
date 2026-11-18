@@ -106,9 +106,18 @@
     open = (phase === "locked" && unlocking) || (phase === "none" && creating);
   });
 
-  const AUTO_UNLOCK_FAILED =
+  const KEEP_KEY_LINE =
     "Automatic unlock did not work this time (the vault file may be incomplete or damaged). Your stored key was kept. Enter the master password.";
+  // The neutral line never claims that a key is stored; unknown codes (newer Rust) get it too.
+  const NEUTRAL_LINE =
+    "The OS keychain could not be read, so automatic unlock was skipped. Enter the master password.";
+  const ISSUE_LINES: Record<string, string> = {
+    key_not_accepted: KEEP_KEY_LINE,
+    unavailable: KEEP_KEY_LINE,
+    keychain_unavailable: NEUTRAL_LINE,
+  };
   const issue = $derived(vault.status?.autoUnlockIssue ?? null);
+  const issueLine = $derived(issue ? (ISSUE_LINES[issue] ?? NEUTRAL_LINE) : null);
 
   const backupPath = $derived(vault.status?.path ? `${vault.status.path}.bak` : null);
 </script>
@@ -137,8 +146,8 @@
 
     {#if phase === "locked"}
       <p class="body">Connections with stored credentials ask for it.</p>
-      {#if issue}
-        <p class="body" role="status">{AUTO_UNLOCK_FAILED}</p>
+      {#if issueLine}
+        <p class="body" role="status">{issueLine}</p>
       {/if}
       {#if unlocking}
         <form onsubmit={submitUnlock}>

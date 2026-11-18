@@ -100,8 +100,8 @@ export interface VaultStatus {
   autoUnlockIssue: AutoUnlockIssue | null;
 }
 
-/** Wire codes of the startup auto-unlock failure; Rust adds new ones, the UI treats any as a note. */
-export type AutoUnlockIssue = "key_not_accepted" | "unavailable";
+/** Wire codes of the startup auto-unlock failure; Rust may add more; the UI falls back to a neutral line for an unknown code. */
+export type AutoUnlockIssue = "key_not_accepted" | "keychain_unavailable" | "unavailable";
 
 /** A credential as the UI sees it: never a secret field. */
 export interface CredentialInfo {

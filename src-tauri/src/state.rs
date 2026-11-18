@@ -48,7 +48,9 @@ pub enum VaultStatus {
 pub enum AutoUnlockIssue {
     /// The stored key did not open the file (the file may be damaged, half-synced or replaced).
     KeyNotAccepted,
-    /// The keychain or the file could not be read.
+    /// The keychain could not be read; nothing is known about a stored key.
+    KeychainUnavailable,
+    /// The vault file could not be used.
     Unavailable,
 }
 
@@ -59,6 +61,7 @@ impl AutoUnlockIssue {
         match outcome {
             AutoUnlock::Unlocked | AutoUnlock::NoKey => None,
             AutoUnlock::KeyNotAccepted => Some(Self::KeyNotAccepted),
+            AutoUnlock::KeychainUnavailable(_) => Some(Self::KeychainUnavailable),
             AutoUnlock::Unavailable(_) => Some(Self::Unavailable),
         }
     }
@@ -67,6 +70,7 @@ impl AutoUnlockIssue {
     pub fn code(self) -> &'static str {
         match self {
             Self::KeyNotAccepted => "key_not_accepted",
+            Self::KeychainUnavailable => "keychain_unavailable",
             Self::Unavailable => "unavailable",
         }
     }

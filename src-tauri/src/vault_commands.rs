@@ -50,7 +50,7 @@ pub struct VaultStatus {
     /// The key store holds this vault's key.
     pub auto_unlock: bool,
     /// Why the automatic unlock at startup did not work (`locked` only): `key_not_accepted`
-    /// or `unavailable`. The stored key is kept in both cases.
+    /// `keychain_unavailable` or `unavailable`. A stored key is never deleted.
     pub auto_unlock_issue: Option<&'static str>,
 }
 
@@ -926,6 +926,55 @@ mod tests {
         assert_eq!(status.auto_unlock_issue, None);
         assert!(status.auto_unlock);
         assert!(st.keystore.get(id).unwrap().is_some());
+    }
+
+    /// A key store whose reads fail (no Secret Service, locked keyring).
+    struct BrokenKeyStore;
+
+    impl KeyStore for BrokenKeyStore {
+        fn get(&self, _: VaultId) -> Result<Option<DataKey>, KeyStoreError> {
+            Err(KeyStoreError::new("keychain down"))
+        }
+        fn set(&self, _: VaultId, _: &DataKey) -> Result<(), KeyStoreError> {
+            Err(KeyStoreError::new("keychain down"))
+        }
+        fn delete(&self, _: VaultId) -> Result<(), KeyStoreError> {
+            Err(KeyStoreError::new("keychain down"))
+        }
+    }
+
+    #[test]
+    fn an_unreadable_keychain_at_startup_reports_its_own_issue() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(fernjo_vault::FILE_NAME);
+        Vault::create_with(&path, &sec(MASTER), fernjo_vault::KdfParams::TEST).unwrap();
+        let st = AppState::open_with_keystore(dir.path().to_path_buf(), Box::new(BrokenKeyStore));
+        let status = vault_status(&st).unwrap();
+        assert_eq!(status.state, "locked");
+        assert_eq!(status.auto_unlock_issue, Some("keychain_unavailable"));
+        // an unreadable keychain reads as "no stored key"
+        assert!(!status.auto_unlock);
+        let unlocked = vault_unlock(&st, sec(MASTER), false).unwrap();
+        assert_eq!(unlocked.auto_unlock_issue, None);
+    }
+
+    #[test]
+    fn startup_with_no_key_or_a_working_key_leaves_no_issue() {
+        use fernjo_vault::MemoryKeyStore;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(fernjo_vault::FILE_NAME);
+        let vault = Vault::create_with(&path, &sec(MASTER), fernjo_vault::KdfParams::TEST).unwrap();
+        let none = AppState::open_with_keystore(
+            dir.path().to_path_buf(),
+            Box::new(MemoryKeyStore::default()),
+        );
+        assert_eq!(vault_status(&none).unwrap().auto_unlock_issue, None);
+        let keys = MemoryKeyStore::default();
+        keys.set(vault.id(), &vault.data_key().unwrap()).unwrap();
+        let ok = AppState::open_with_keystore(dir.path().to_path_buf(), Box::new(keys));
+        let status = vault_status(&ok).unwrap();
+        assert_eq!(status.state, "unlocked");
+        assert_eq!(status.auto_unlock_issue, None);
     }
 
     #[test]

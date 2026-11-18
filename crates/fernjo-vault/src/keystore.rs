@@ -152,7 +152,11 @@ pub enum AutoUnlock {
     /// The file did not open with the stored key (wrong item, or a damaged, half-synced or
     /// replaced file). The item is kept; ask for the master password.
     KeyNotAccepted,
-    /// The keychain or the file could not be used; ask for the master password.
+    /// The keychain could not be read (no Secret Service, locked keyring, access denied), so
+    /// nothing is known about a stored key; ask for the master password.
+    KeychainUnavailable(String),
+    /// The vault file could not be used (unreadable, truncated, replaced, newer format); the
+    /// item is kept; ask for the master password.
     Unavailable(String),
 }
 
@@ -164,7 +168,7 @@ pub fn try_auto_unlock(vault: &mut Vault, store: &dyn KeyStore) -> AutoUnlock {
     let key = match store.get(vault.id()) {
         Ok(Some(key)) => key,
         Ok(None) => return AutoUnlock::NoKey,
-        Err(e) => return AutoUnlock::Unavailable(e.0),
+        Err(e) => return AutoUnlock::KeychainUnavailable(e.0),
     };
     match vault.unlock_with_key(&key) {
         Ok(()) => AutoUnlock::Unlocked,

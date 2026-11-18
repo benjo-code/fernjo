@@ -199,13 +199,13 @@ fn a_password_change_copied_from_another_device_still_auto_unlocks() {
 }
 
 #[test]
-fn store_failure_stays_locked_with_unavailable() {
+fn store_failure_stays_locked_with_keychain_unavailable() {
     let dir = TempDir::new().unwrap();
     let mut vault = new_vault(&dir);
     vault.lock();
     assert_eq!(
         try_auto_unlock(&mut vault, &FailingStore),
-        AutoUnlock::Unavailable("keychain unavailable".to_owned())
+        AutoUnlock::KeychainUnavailable("keychain unavailable".to_owned())
     );
     assert!(!vault.is_unlocked());
 }
