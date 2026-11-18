@@ -92,7 +92,13 @@ describe("TabStrip", () => {
   });
 
   test("a_tab_with_a_pending_prompt_says_what_it_waits_for", () => {
-    const { sessions } = setup(["connecting", "connecting", "connecting", "needsVault"]);
+    const { sessions } = setup([
+      "connecting",
+      "connecting",
+      "connecting",
+      "needsVault",
+      "connecting",
+    ]);
     const ask = (i: number, prompt: Tab["prompt"]) => (sessions.tabs[i]!.prompt = prompt);
     ask(0, {
       id: 1,
@@ -116,12 +122,24 @@ describe("TabStrip", () => {
       },
     });
     ask(2, { id: 3, prompt: { kind: "password", user: "u", host: "h" } });
+    ask(4, {
+      id: 4,
+      prompt: {
+        kind: "hostKeySynced",
+        host: "h",
+        port: 22,
+        keyType: "ssh-ed25519",
+        fingerprint: "SHA256:x",
+        previous: [],
+      },
+    });
     flushSync();
     const caption = (i: number) => tabs()[i]!.querySelector(".caption")?.textContent;
     expect(caption(0)).toBe("Confirm host key");
     expect(caption(1)).toBe("Confirm host key");
     expect(caption(2)).toBe("Needs input");
     expect(caption(3)).toBe("Needs vault");
+    expect(caption(4)).toBe("Confirm host key");
     // answered: back to the plain state caption
     sessions.tabs[2]!.prompt = null;
     flushSync();

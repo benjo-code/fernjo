@@ -31,7 +31,9 @@
     // a pending prompt is state "connecting" in Rust; the caption tells that the tab waits for the user
     if (tab.prompt) {
       const kind = tab.prompt.prompt.kind;
-      return kind === "hostKey" || kind === "hostKeyChanged" ? "Confirm host key" : "Needs input";
+      return kind === "hostKey" || kind === "hostKeySynced" || kind === "hostKeyChanged"
+        ? "Confirm host key"
+        : "Needs input";
     }
     switch (tab.state) {
       case "connecting":

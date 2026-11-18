@@ -314,6 +314,14 @@ export type SessionState = "connecting" | "needsVault" | "connected" | "disconne
 export type Prompt =
   | { kind: "hostKey"; host: string; port: number; keyType: string; fingerprint: string }
   | {
+      kind: "hostKeySynced";
+      host: string;
+      port: number;
+      keyType: string;
+      fingerprint: string;
+      previous: string[];
+    }
+  | {
       kind: "hostKeyChanged";
       host: string;
       port: number;
