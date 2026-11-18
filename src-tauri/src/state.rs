@@ -42,6 +42,24 @@ pub enum VaultStatus {
     Unusable { reason: String, path: PathBuf },
 }
 
+/// The folders besides the data folder that `build` records.
+struct Folders {
+    config_dir: Option<PathBuf>,
+    device_dir: Option<PathBuf>,
+    source: DataDirSource,
+}
+
+impl Folders {
+    /// No config or device folder, source `Default` (tests, no location).
+    fn none() -> Self {
+        Folders {
+            config_dir: None,
+            device_dir: None,
+            source: DataDirSource::Default,
+        }
+    }
+}
+
 /// One store behind a lock, the startup notices (delivered once), the vault and the data
 /// folder location.
 pub struct AppState {
@@ -54,6 +72,9 @@ pub struct AppState {
     pub data_dir: Option<PathBuf>,
     /// Folder of `settings.json` (`None` for the test constructor).
     pub config_dir: Option<PathBuf>,
+    /// Device-local folder (never synced; `None` for the test constructor or without an OS
+    /// local data dir). Not created here: its consumers create it and fall back to memory.
+    pub device_dir: Option<PathBuf>,
     /// Where `data_dir` came from. `settings.json` is never saved when this is `Env` (the
     /// variable wins) nor when `settings_unusable` is set (`set_terminal_settings` enforces it).
     pub source: DataDirSource,
@@ -91,8 +112,7 @@ impl AppState {
     pub fn open(dir: Option<PathBuf>) -> AppState {
         Self::build(
             dir,
-            None,
-            DataDirSource::Default,
+            Folders::none(),
             false,
             None,
             Box::new(MemoryKeyStore::default()),
@@ -106,8 +126,7 @@ impl AppState {
         match location {
             None => Self::build(
                 None,
-                None,
-                DataDirSource::Default,
+                Folders::none(),
                 false,
                 None,
                 keystore,
@@ -125,8 +144,11 @@ impl AppState {
                 let theme = loaded.and_then(|s| s.theme);
                 let state = Self::build(
                     Some(l.data_dir),
-                    Some(l.config_dir),
-                    l.source,
+                    Folders {
+                        config_dir: Some(l.config_dir),
+                        device_dir: l.device_dir,
+                        source: l.source,
+                    },
                     l.settings_error.is_some(),
                     l.settings_error.map(|e| Notice::SettingsUnreadable {
                         message: e.to_string(),
@@ -150,8 +172,7 @@ impl AppState {
     pub(crate) fn open_with_keystore(dir: PathBuf, keystore: Box<dyn KeyStore>) -> AppState {
         Self::build(
             Some(dir),
-            None,
-            DataDirSource::Default,
+            Folders::none(),
             false,
             None,
             keystore,
@@ -161,13 +182,17 @@ impl AppState {
 
     fn build(
         dir: Option<PathBuf>,
-        config_dir: Option<PathBuf>,
-        source: DataDirSource,
+        folders: Folders,
         settings_unusable: bool,
         settings_notice: Option<Notice>,
         keystore: Box<dyn KeyStore>,
         kdf: KdfParams,
     ) -> AppState {
+        let Folders {
+            config_dir,
+            device_dir,
+            source,
+        } = folders;
         let mut notices = Vec::new();
         let mut vault = VaultState::None;
         let store = match &dir {
@@ -215,6 +240,7 @@ impl AppState {
             kdf,
             data_dir: dir,
             config_dir,
+            device_dir,
             source,
             settings_unusable,
             restart_required: AtomicBool::new(false),

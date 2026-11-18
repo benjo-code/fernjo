@@ -172,6 +172,17 @@ pub fn apply_data_folder(state: &AppState, target: &Path) -> Result<DataFolderIn
     }
     check_writable(target).map_err(|e| not_usable(target, e))?;
     let canonical_target = fs::canonicalize(target).map_err(|e| not_usable(target, e))?;
+    // The device folder holds state that must never sync, so no data folder may be, hold or sit
+    // inside it. A device folder that does not exist yet is compared as spelled.
+    if let Some(device) = &state.device_dir {
+        let device = fs::canonicalize(device).unwrap_or_else(|_| device.clone());
+        if canonical_target.starts_with(&device) || device.starts_with(&canonical_target) {
+            return Err(error(
+                "folder_device_dir",
+                "this folder cannot be used: it is, contains or lies inside the folder where fernjo keeps state that must stay on this device",
+            ));
+        }
+    }
     let current = state
         .data_dir
         .as_ref()
@@ -470,6 +481,36 @@ mod tests {
         assert!(!restart_required(&st));
         assert!(!settings_path(config.path()).exists());
         assert_eq!(fs::read_dir(&inside).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn the_device_folder_is_refused_when_equal_parent_or_child() {
+        let [data, config, local] = dirs();
+        let device = local.path().join("fernjo-device");
+        fs::create_dir(&device).unwrap();
+        let child = device.join("sub");
+        fs::create_dir(&child).unwrap();
+        let mut st = state(data.path(), config.path(), DataDirSource::Default);
+        st.device_dir = Some(device.clone());
+        for target in [device.as_path(), local.path(), child.as_path()] {
+            assert_eq!(
+                code(apply_data_folder(&st, target)),
+                "folder_device_dir",
+                "{}",
+                target.display()
+            );
+        }
+        // a spelling through `..` does not get around it
+        let sneaky = child.join("..");
+        assert_eq!(code(apply_data_folder(&st, &sneaky)), "folder_device_dir");
+        assert!(!restart_required(&st));
+        assert!(!settings_path(config.path()).exists());
+        assert_eq!(fs::read_dir(&child).unwrap().count(), 0);
+        // an unrelated folder is still fine; a device folder that does not exist yet is too
+        let other = tempfile::tempdir().unwrap();
+        assert!(apply_data_folder(&st, other.path()).is_ok());
+        st.device_dir = Some(local.path().join("not-created-yet"));
+        assert!(apply_data_folder(&st, data.path()).is_ok());
     }
 
     #[test]

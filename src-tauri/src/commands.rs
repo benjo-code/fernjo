@@ -481,6 +481,7 @@ mod tests {
             data_dir: dir.path().to_path_buf(),
             config_dir: dir.path().to_path_buf(),
             source: fernjo_core::DataDirSource::Default,
+            device_dir: None,
             settings_error: Some(fernjo_core::LoadError::Unreadable {
                 path: dir.path().join("settings.json"),
                 reason: "bad".into(),

@@ -16,7 +16,10 @@ pub use model::{
     CredentialId, DEFAULT_KEEPALIVE_SECS, DEFAULT_RDP_PORT, DEFAULT_SSH_PORT, Field, Node, NodeId,
     NodeKind, NodeType, Protocol, ResolvedNode, Settings, Source,
 };
-pub use paths::{DATA_DIR_ENV, DataDirSource, Location, locate, locate_from};
+pub use paths::{
+    DATA_DIR_ENV, DEVICE_DIR_NAME, DEVICE_SUBDIR_ENV, DataDirSource, Location, device_dir_from,
+    locate, locate_from,
+};
 pub use persist::{
     CURRENT_VERSION, FILE_NAME, Loaded, Notice, document, load, migrate_with, parse_document, save,
     write_exact,

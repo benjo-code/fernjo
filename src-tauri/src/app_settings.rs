@@ -157,6 +157,7 @@ mod tests {
                 config_dir: config.path().to_path_buf(),
                 source: DataDirSource::Default,
                 settings_error: None,
+                device_dir: None,
             }))
         };
         let st = open();
