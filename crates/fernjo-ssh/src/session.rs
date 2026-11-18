@@ -529,6 +529,11 @@ impl Session {
         // `known_hosts` is never connected to.
         crate::known_hosts::validate_host(&params.host)?;
         let known_hosts = KnownHosts::new(&params.known_hosts);
+        let confirmed = params
+            .confirmed_hosts
+            .as_ref()
+            .map(KnownHosts::new)
+            .or_else(|| params.confirmed_in_memory.clone());
         let mut config = client_config(params.keepalive_secs);
         let stored = known_hosts.stored_algorithms(&params.host, params.port)?;
         restrict_host_key_algorithms(&mut config, &stored);
@@ -552,6 +557,7 @@ impl Session {
             host: params.host.clone(),
             port: params.port,
             known_hosts,
+            confirmed,
             interaction: Arc::clone(&interaction),
             rejection: Arc::clone(&rejection),
             prompting: Arc::clone(&prompting),

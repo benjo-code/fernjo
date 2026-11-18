@@ -11,6 +11,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use data_encoding::BASE64;
 use hmac::{Hmac, KeyInit, Mac};
@@ -38,10 +39,12 @@ pub fn fingerprint(key: &PublicKey) -> String {
     key.fingerprint(HashAlg::Sha256).to_string()
 }
 
-/// Handle on one `known_hosts` file. A missing file counts as empty.
+/// Handle on one `known_hosts` file. A missing file counts as empty. [`KnownHosts::in_memory`]
+/// is a file-less variant (shared between its clones) for callers that have nowhere to write.
 #[derive(Debug, Clone)]
 pub struct KnownHosts {
     path: PathBuf,
+    memory: Option<Arc<Mutex<Vec<u8>>>>,
 }
 
 /// One line that matches a host: where it lives in the file and what it stores.
@@ -57,7 +60,19 @@ struct Match {
 
 impl KnownHosts {
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        Self {
+            path: path.into(),
+            memory: None,
+        }
+    }
+
+    /// An empty store that lives only as long as its handles; nothing touches the disk. Same
+    /// matching, `add` and `replace` rules as the file-backed one.
+    pub fn in_memory() -> Self {
+        Self {
+            path: PathBuf::new(),
+            memory: Some(Arc::default()),
+        }
     }
 
     pub fn check(&self, host: &str, port: u16, key: &PublicKey) -> Result<HostKeyStatus, SshError> {
@@ -99,7 +114,7 @@ impl KnownHosts {
             return Ok(());
         }
         append_line(&mut bytes, &name, key)?;
-        write_atomic(&self.path, &bytes)
+        self.write(&bytes)
     }
 
     /// Drops the stored keys of the same algorithm for the host and port, then appends the new one.
@@ -133,10 +148,23 @@ impl KnownHosts {
         }
         out.extend_from_slice(&bytes[pos..]);
         append_line(&mut out, &name, key)?;
-        write_atomic(&self.path, &out)
+        self.write(&out)
+    }
+
+    fn write(&self, contents: &[u8]) -> Result<(), SshError> {
+        match &self.memory {
+            Some(memory) => {
+                *memory.lock().map_err(|_| SshError::Io)? = contents.to_vec();
+                Ok(())
+            }
+            None => write_atomic(&self.path, contents),
+        }
     }
 
     fn read(&self) -> Result<Vec<u8>, SshError> {
+        if let Some(memory) = &self.memory {
+            return Ok(memory.lock().map_err(|_| SshError::Io)?.clone());
+        }
         match fs::read(&self.path) {
             Ok(b) => Ok(b),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),

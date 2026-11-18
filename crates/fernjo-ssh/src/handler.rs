@@ -8,7 +8,8 @@ use russh::keys::PublicKey;
 
 use crate::SshError;
 use crate::interaction::{
-    HostKeyChangedDecision, HostKeyChangedPrompt, HostKeyDecision, HostKeyPrompt, Interaction,
+    HostKeyChangedDecision, HostKeyChangedPrompt, HostKeyDecision, HostKeyPrompt,
+    HostKeySyncedPrompt, Interaction,
 };
 use crate::known_hosts::{HostKeyStatus, KnownHosts, fingerprint};
 
@@ -20,6 +21,8 @@ pub(crate) struct ClientHandler<I: Interaction> {
     pub host: String,
     pub port: u16,
     pub known_hosts: KnownHosts,
+    /// Keys this device confirmed itself. `None`: the layer is off and `known_hosts` alone decides.
+    pub confirmed: Option<KnownHosts>,
     pub interaction: Arc<I>,
     pub rejection: Rejection,
     /// Set while a user decision is pending, so the handshake deadline does not count that time.
@@ -56,7 +59,7 @@ impl<I: Interaction> ClientHandler<I> {
             Err(e) => return self.reject(e),
         };
         match status {
-            HostKeyStatus::Known => true,
+            HostKeyStatus::Known => self.decide_synced(key).await,
             HostKeyStatus::Unknown => {
                 let prompt = HostKeyPrompt {
                     host: self.host.clone(),
@@ -72,7 +75,10 @@ impl<I: Interaction> ClientHandler<I> {
                     HostKeyDecision::TrustOnce => true,
                     HostKeyDecision::TrustAlways => {
                         match self.known_hosts.add(&self.host, self.port, key) {
-                            Ok(()) => true,
+                            Ok(()) => {
+                                self.confirm(key, false);
+                                true
+                            }
                             Err(e) => self.reject(e),
                         }
                     }
@@ -94,7 +100,10 @@ impl<I: Interaction> ClientHandler<I> {
                 match decision {
                     HostKeyChangedDecision::Replace => {
                         match self.known_hosts.replace(&self.host, self.port, key) {
-                            Ok(()) => true,
+                            Ok(()) => {
+                                self.confirm(key, true);
+                                true
+                            }
                             Err(e) => self.reject(e),
                         }
                     }
@@ -102,6 +111,53 @@ impl<I: Interaction> ClientHandler<I> {
                 }
             }
         }
+    }
+
+    /// The key is in the synced `known_hosts`. That file can be written by another device or a
+    /// sync tool, so it is only trusted silently when this device confirmed the same key.
+    async fn decide_synced(&self, key: &PublicKey) -> bool {
+        let Some(confirmed) = &self.confirmed else {
+            return true;
+        };
+        // An unreadable confirmed file counts as "not confirmed": it asks, it never trusts.
+        let previous = match confirmed.check(&self.host, self.port, key) {
+            Ok(HostKeyStatus::Known) => return true,
+            Ok(HostKeyStatus::Unknown) | Err(_) => Vec::new(),
+            Ok(HostKeyStatus::Changed { stored }) => stored,
+        };
+        let replace = !previous.is_empty();
+        let prompt = HostKeySyncedPrompt {
+            host: self.host.clone(),
+            port: self.port,
+            key_type: key.algorithm().to_string(),
+            fingerprint: fingerprint(key),
+            previous,
+        };
+        let decision = {
+            let _prompting = Prompting::begin(&self.prompting);
+            self.interaction.host_key_synced(prompt).await
+        };
+        match decision {
+            HostKeyDecision::TrustOnce => true,
+            HostKeyDecision::TrustAlways => {
+                self.confirm(key, replace);
+                true
+            }
+            HostKeyDecision::Reject => self.reject(SshError::HostKeyRejected),
+        }
+    }
+
+    /// Records the key as confirmed on this device. Best effort: when the file cannot be written
+    /// the connect goes on and the next one asks again.
+    fn confirm(&self, key: &PublicKey, replace: bool) {
+        let Some(confirmed) = &self.confirmed else {
+            return;
+        };
+        let _ = if replace {
+            confirmed.replace(&self.host, self.port, key)
+        } else {
+            confirmed.add(&self.host, self.port, key)
+        };
     }
 }
 
@@ -123,3 +179,6 @@ impl<I: Interaction> Handler for ClientHandler<I> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
