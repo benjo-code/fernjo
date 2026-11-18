@@ -3,6 +3,7 @@ mod commands;
 mod connect_plan;
 mod data_folder;
 mod import_commands;
+mod nav_guard;
 mod session_commands;
 mod session_flow;
 mod sessions;
@@ -32,6 +33,7 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
+        .plugin(nav_guard::plugin())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::open_for_app(fernjo_core::locate()))

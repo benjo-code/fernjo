@@ -113,3 +113,22 @@ fn notices_are_a_bundle_resource() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative);
     assert!(path.is_file(), "missing resource {}", path.display());
 }
+
+#[test]
+fn lib_registers_the_navigation_guard_after_single_instance() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs");
+    let text = fs::read_to_string(&path).unwrap();
+    let single = text
+        .find(".plugin(tauri_plugin_single_instance::init")
+        .expect("lib.rs must register the single-instance plugin");
+    let first = text.find(".plugin(").expect("lib.rs registers plugins");
+    assert_eq!(first, single, "single-instance must stay the first plugin");
+    let guard = text
+        .find(".plugin(nav_guard::plugin())")
+        .expect("lib.rs must register nav_guard::plugin()");
+    assert!(
+        guard > single,
+        "the navigation guard comes after single-instance"
+    );
+    assert!(text.contains("mod nav_guard;"));
+}
