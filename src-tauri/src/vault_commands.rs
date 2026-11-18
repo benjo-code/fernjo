@@ -181,6 +181,9 @@ pub fn vault_unlock_older(
     password: SecretString,
     remember: bool,
 ) -> Result<VaultStatus, CommandError> {
+    // Re-stamping the file is a write, so a pending data-folder restart refuses it like the other
+    // writers.
+    ensure_writable(state)?;
     with_vault(state, |v| {
         v.unlock_accepting_older(&password)?;
         if remember {
@@ -1286,6 +1289,8 @@ mod tests {
         let results = [
             code(vault_create(&w.st, sec(MASTER), false)),
             code(vault_change_password(&w.st, sec(MASTER), sec(NEW_MASTER))),
+            // re-stamps the vault file, so it is a writer like the others
+            code(vault_unlock_older(&w.st, sec(MASTER), false)),
             code(vault_set_auto_unlock(&w.st, true)),
             code(create_credential(&w.st, draft(pw_draft("x")))),
             code(update_credential(&w.st, id, update(json!({"name": "y"})))),
