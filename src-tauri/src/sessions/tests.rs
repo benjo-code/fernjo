@@ -392,6 +392,9 @@ fn open_external_url_accepts_only_http_and_https() {
         "http:///",
         "https://:80",
         "ms-settings:",
+        // UNC paths: a webview-supplied string must never reach the shell as a file share
+        r"\\server\share\file",
+        "//server/share/file",
     ] {
         assert_eq!(
             code(check_external_url(bad)),
