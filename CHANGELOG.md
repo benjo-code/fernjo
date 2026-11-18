@@ -32,7 +32,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 - Third-party notices (M6): the licences of the bundled Rust crates, npm packages and the two fonts ship inside every installer (`THIRD-PARTY-NOTICES.md`).
 - Per-user Windows install (M6): the setup installs under `%LOCALAPPDATA%\fernjo` without administrator rights; uninstalling keeps `%APPDATA%\fernjo`.
 - Security hardening (M6, from the pre-release security review in `Docs/release-checklist.md`):
-  - On Unix the data files (`connections.json`, `settings.json`, `vault.fernjo`, `known_hosts` and their `.bak` copies) are created with mode 0600 and a data folder fernjo creates with 0700; before, they followed the default umask. Windows ACLs are unchanged. The new tests have been type-checked for Linux but only run in CI.
+  - On Unix the data files (`connections.json`, `settings.json`, `vault.fernjo`, `known_hosts` and their `.bak` copies) are created with mode 0600 and a data folder fernjo creates with 0700; before, they followed the default umask. Windows ACLs are unchanged. The new tests ran green in CI on Linux (run 44218999770); macOS was not run.
   - Host names that cannot be written safely to `known_hosts` (separators, whitespace, control characters) are refused before any traffic with the error `invalid_host`.
   - An oversize `vault.fernjo` (over 64 MiB) is refused as unusable instead of being read whole, and is never overwritten.
   - Importing a hostile mRemoteNG file is bounded: too many attributes or namespace declarations are refused (`too_complex`), long names are shortened, over-long host names are dropped and over-long password attributes are not decrypted.

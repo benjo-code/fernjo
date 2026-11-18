@@ -100,7 +100,7 @@ cargo deny check                                       # licences, advisories, s
 
 Please report vulnerabilities privately, see [SECURITY.md](SECURITY.md).
 
-**Privacy.** fernjo's own code makes no network connections except the SSH sessions you open. It has no update check, no telemetry and no analytics. Your connections, settings and encrypted vault stay in your data folder on your computer. The window itself is drawn by your operating system's web view (WebView2 on Windows, WebKit on macOS and Linux), a separate component that makes background connections of its own: on Windows we saw one HTTPS connection from the Windows web view (WebView2) about a minute after start, to an address registered to Microsoft, and have not found a way to disable it. macOS and Linux were not checked. Notes on the synced data folder are in [SECURITY.md](SECURITY.md).
+**Privacy.** fernjo's own code makes no network connections except the SSH sessions you open. It has no update check, no telemetry and no analytics. Your connections, settings and encrypted vault stay in your data folder on your computer. The window itself is drawn by your operating system's web view (WebView2 on Windows, WebKit on macOS and Linux), a separate component that is outside fernjo's code: on Windows we saw one HTTPS connection from the Windows web view (WebView2) about a minute after start, to an address registered to Microsoft, and have not found a way to disable it. The web views on macOS and Linux may make background connections of their own; they were not checked. Notes on the synced data folder are in [SECURITY.md](SECURITY.md).
 
 ## License
 
