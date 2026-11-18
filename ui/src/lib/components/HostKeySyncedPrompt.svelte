@@ -53,7 +53,7 @@
   {#if prompt.previous.length > 0}
     <div class="previous">
       <span>This device previously trusted</span>
-      {#each prompt.previous as fingerprint (fingerprint)}
+      {#each prompt.previous as fingerprint, i (i)}
         <code class="fingerprint">{fingerprint}</code>
       {/each}
     </div>

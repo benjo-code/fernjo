@@ -50,7 +50,7 @@
   </p>
   <div class="group">
     <span class="label">Stored fingerprint{prompt.old.length === 1 ? "" : "s"}</span>
-    {#each prompt.old as fingerprint (fingerprint)}
+    {#each prompt.old as fingerprint, i (i)}
       <code class="fingerprint">{fingerprint}</code>
     {/each}
   </div>

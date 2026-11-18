@@ -95,3 +95,17 @@ test("host_key_changed_tab_cycles_between_the_two_buttons_only", async () => {
   expect(document.activeElement).toBe(cancel);
   expect(document.querySelector('[role="alertdialog"]')).not.toBeNull();
 });
+
+test("host_key_changed_lists_a_repeated_stored_fingerprint_without_a_keying_error", async () => {
+  const t = await startedTab();
+  const repeated: Changed = { ...prompt, old: ["SHA256:SAME", "SHA256:SAME"] };
+  t.emit({ kind: "prompt", id: 3, prompt: repeated });
+  mounted = mount(HostKeyChangedPrompt, {
+    target: document.body,
+    props: { tab: t.tab, sessions: t.sessions, prompt: repeated },
+  });
+  flushSync();
+  await tick();
+  const codes = [...document.querySelectorAll<HTMLElement>("code")].map((c) => c.textContent);
+  expect(codes).toEqual(["SHA256:SAME", "SHA256:SAME", "SHA256:NEWKEY"]);
+});

@@ -168,3 +168,17 @@ test("synced_host_key_prompt_lists_the_previously_trusted_fingerprints", async (
   expect(codes).toEqual(expect.arrayContaining([FINGERPRINT, "SHA256:old1", "SHA256:old2"]));
   expect(document.querySelectorAll("code")).toHaveLength(3);
 });
+
+test("synced_host_key_prompt_lists_a_repeated_previous_fingerprint_without_a_keying_error", async () => {
+  const t = await startedTab();
+  const repeated: HostKey = { ...prompt, previous: ["SHA256:SAME", "SHA256:SAME"] };
+  t.emit({ kind: "prompt", id: 7, prompt: repeated });
+  mounted = mount(HostKeySyncedPrompt, {
+    target: document.body,
+    props: { tab: t.tab, sessions: t.sessions, prompt: repeated },
+  });
+  flushSync();
+  await tick();
+  const codes = [...document.querySelectorAll<HTMLElement>("code")].map((c) => c.textContent);
+  expect(codes).toEqual([FINGERPRINT, "SHA256:SAME", "SHA256:SAME"]);
+});
