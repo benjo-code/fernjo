@@ -729,6 +729,7 @@ mod tests {
         HostKeyChangedDecision, HostKeyChangedPrompt, HostKeyDecision, HostKeyPrompt,
     };
     use russh::client::Prompt;
+    use russh::keys::EcdsaCurve;
     use std::collections::VecDeque;
 
     /// Answers every keyboard-interactive prompt with "x"; nothing else is asked in these tests.
@@ -823,44 +824,112 @@ mod tests {
         assert_eq!(client_config(0).keepalive_interval, None);
     }
 
-    /// The offered algorithms are pinned: a russh upgrade that adds a weak one fails here and has
-    /// to be looked at (Docs/DECISIONS.md, "M6 security review: SSH algorithm policy").
+    fn offered<T: AsRef<str>>(list: &[T]) -> Vec<&str> {
+        list.iter().map(AsRef::as_ref).collect()
+    }
+
+    /// The exact offered lists, in preference order (Docs/DECISIONS.md, "M6 security review: SSH
+    /// algorithm policy"). Any algorithm a russh upgrade adds, drops or reorders fails here and has
+    /// to be reviewed; update this test and the decision together.
+    #[test]
+    fn client_config_offers_exactly_the_reviewed_algorithms() {
+        let p = client_config(30).preferred;
+        assert_eq!(
+            offered(&p.kex),
+            [
+                "mlkem768x25519-sha256",
+                "curve25519-sha256",
+                "curve25519-sha256@libssh.org",
+                "diffie-hellman-group-exchange-sha256",
+                "diffie-hellman-group18-sha512",
+                "diffie-hellman-group17-sha512",
+                "diffie-hellman-group16-sha512",
+                "diffie-hellman-group15-sha512",
+                "diffie-hellman-group14-sha256",
+                // extension markers, not algorithms
+                "ext-info-c",
+                "ext-info-s",
+                "kex-strict-c-v00@openssh.com",
+                "kex-strict-s-v00@openssh.com",
+            ],
+            "key exchange"
+        );
+        assert_eq!(
+            offered(&p.cipher),
+            [
+                "chacha20-poly1305@openssh.com",
+                "aes256-gcm@openssh.com",
+                "aes256-ctr",
+                "aes192-ctr",
+                "aes128-ctr",
+            ],
+            "ciphers"
+        );
+        assert_eq!(
+            offered(&p.mac),
+            [
+                "hmac-sha2-512-etm@openssh.com",
+                "hmac-sha2-256-etm@openssh.com",
+                "hmac-sha2-512",
+                "hmac-sha2-256",
+            ],
+            "MACs"
+        );
+        assert_eq!(
+            p.key.as_ref(),
+            [
+                Algorithm::Ed25519,
+                Algorithm::Ecdsa {
+                    curve: EcdsaCurve::NistP256
+                },
+                Algorithm::Ecdsa {
+                    curve: EcdsaCurve::NistP384
+                },
+                Algorithm::Ecdsa {
+                    curve: EcdsaCurve::NistP521
+                },
+                Algorithm::Rsa {
+                    hash: Some(HashAlg::Sha512)
+                },
+                Algorithm::Rsa {
+                    hash: Some(HashAlg::Sha256)
+                },
+            ],
+            "host key algorithms"
+        );
+        assert_eq!(
+            offered(&p.compression),
+            ["none", "zlib", "zlib@openssh.com"],
+            "compression"
+        );
+    }
+
+    /// Second line of defence with its own message: even if the exact lists above are updated by
+    /// mistake, a SHA-1, CBC, 3DES, group1 or plain `ssh-rsa` entry must not slip in.
     #[test]
     fn client_config_offers_no_weak_algorithms() {
         let p = client_config(30).preferred;
-        let names = |list: Vec<&str>| list.join(",");
-        let kex = names(p.kex.iter().map(AsRef::as_ref).collect());
-        let cipher = names(p.cipher.iter().map(AsRef::as_ref).collect());
-        let mac = names(p.mac.iter().map(AsRef::as_ref).collect());
-        for weak in [
-            "sha1",
-            "group1-",
-            "group14-sha1",
-            "diffie-hellman-group-exchange-sha1",
-        ] {
-            assert!(!kex.contains(weak), "kex {kex} offers {weak}");
+        for name in offered(&p.kex) {
+            for weak in ["sha1", "group1-"] {
+                assert!(!name.contains(weak), "weak key exchange offered: {name}");
+            }
         }
-        for weak in ["cbc", "3des", "arcfour", "none"] {
-            assert!(!cipher.contains(weak), "cipher {cipher} offers {weak}");
+        for name in offered(&p.cipher) {
+            for weak in ["cbc", "3des", "arcfour", "none"] {
+                assert!(!name.contains(weak), "weak cipher offered: {name}");
+            }
         }
-        assert!(!mac.contains("sha1") && !mac.contains("md5"), "mac {mac}");
+        for name in offered(&p.mac) {
+            for weak in ["sha1", "md5", "none"] {
+                assert!(!name.contains(weak), "weak MAC offered: {name}");
+            }
+        }
         // plain `ssh-rsa` (an RSA signature over SHA-1) is no longer offered by OpenSSH either
         assert!(
             !p.key.contains(&Algorithm::Rsa { hash: None }),
-            "host key algorithms: {:?}",
+            "ssh-rsa (SHA-1) host key offered: {:?}",
             p.key
         );
-        for wanted in [
-            Algorithm::Ed25519,
-            Algorithm::Rsa {
-                hash: Some(HashAlg::Sha256),
-            },
-            Algorithm::Rsa {
-                hash: Some(HashAlg::Sha512),
-            },
-        ] {
-            assert!(p.key.contains(&wanted), "{wanted:?} missing");
-        }
     }
 
     #[test]
