@@ -249,7 +249,8 @@
     {
       "version": "0.1.0",
       "title": "Daily SSH driver",
-      "status": "open",
+      "status": "done",
+      "date": "2026-11-18",
       "afterMilestone": "6",
       "covers": ["0", "1", "2", "3", "4", "5", "6"],
       "intro": "First installable version: connection tree, vault, SSH tabs and mRemoteNG import on Windows, macOS and Linux."
