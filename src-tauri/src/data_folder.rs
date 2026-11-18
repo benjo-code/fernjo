@@ -197,7 +197,8 @@ pub fn apply_data_folder(state: &AppState, target: &Path) -> Result<DataFolderIn
     check_writable(target).map_err(|e| not_usable(target, e))?;
     let canonical_target = fs::canonicalize(target).map_err(|e| not_usable(target, e))?;
     // The device folder holds state that must never sync, so no data folder may be, hold or sit
-    // inside it. A device folder that does not exist yet is compared as spelled.
+    // inside it. A device folder that does not exist yet is resolved
+    // with `canonical_lenient` (its existing part canonicalised, the rest appended lexically).
     if let Some(device) = &state.device_dir {
         let device = canonical_lenient(device);
         if canonical_target.starts_with(&device) || device.starts_with(&canonical_target) {
