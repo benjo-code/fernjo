@@ -235,10 +235,20 @@ impl Tree {
         index: Option<usize>,
         node: Node,
     ) -> Result<NodeId, TreeError> {
-        let id = node.id;
         // a bad parent reports as such; then the depth, then the position
         self.siblings_mut(parent)?;
         self.check_depth(parent, &node)?;
+        self.insert_unchecked(parent, index, node)
+    }
+
+    /// `insert` without the depth check, for a node that keeps its level (a reorder).
+    fn insert_unchecked(
+        &mut self,
+        parent: Option<NodeId>,
+        index: Option<usize>,
+        node: Node,
+    ) -> Result<NodeId, TreeError> {
+        let id = node.id;
         let siblings = self.siblings_mut(parent)?;
         let at = index.unwrap_or(siblings.len());
         if at > siblings.len() {
@@ -399,7 +409,8 @@ impl Tree {
 
     /// Moves `id` (with its subtree) below `new_parent`. `index` counts among the new parent's
     /// children after `id` was taken out; `index == len` appends. Refuses with `TooDeep` when the
-    /// moved subtree would reach past `MAX_TREE_DEPTH`. Nothing changes on error.
+    /// moved subtree would reach past `MAX_TREE_DEPTH`; a move inside the same parent is never
+    /// refused for that. Nothing changes on error.
     pub fn move_node(
         &mut self,
         id: NodeId,
@@ -430,11 +441,19 @@ impl Tree {
             return Err(TreeError::IndexOutOfRange);
         }
         // the new parent is not inside the moved subtree, so taking the node out does not change
-        // its level: check the whole subtree before anything is taken out
-        self.check_depth(new_parent, node)?;
+        // its level: check the whole subtree before anything is taken out. A move inside the same
+        // parent keeps every level as it is (the tree may already be deeper than the limit, as
+        // an older version could write it), so reordering is never refused as too deep.
+        if old_parent != new_parent {
+            self.check_depth(new_parent, node)?;
+        }
 
         let moved = self.take(id).ok_or(TreeError::NotFound(id))?;
-        self.insert(new_parent, Some(index), moved)?;
+        if old_parent == new_parent {
+            self.insert_unchecked(new_parent, Some(index), moved)?;
+        } else {
+            self.insert(new_parent, Some(index), moved)?;
+        }
         Ok(())
     }
 
@@ -1313,6 +1332,52 @@ mod tests {
         // reordering inside a folder at the limit is not a deeper move
         t.move_node(leaf_id, Some(mid), 1).unwrap();
         assert_eq!(t.depth(), MAX_TREE_DEPTH);
+    }
+
+    #[test]
+    fn reordering_inside_an_already_too_deep_folder_is_allowed() {
+        // a tree from an older version (or a hand-edited file) at the deepest level that still
+        // loads: 60 folders, a bottom folder at level 61, two connections at level 62
+        let mut node = branch("bottom", vec![leaf("a"), leaf("b")]);
+        for i in 0..60 {
+            node = branch(&format!("level-{i}"), vec![node]);
+        }
+        let mut t = Tree::from_children(vec![node]);
+        assert_eq!(t.depth(), MAX_TREE_DEPTH + 2);
+        let ids = nested_ids(&t);
+        let (bottom, level_59) = (ids[60], ids[58]);
+        let children_of = |t: &Tree, id: NodeId| -> Vec<String> {
+            match &t.get(id).unwrap().kind {
+                NodeKind::Folder { children } => children.iter().map(|c| c.name.clone()).collect(),
+                NodeKind::Connection { .. } => unreachable!(),
+            }
+        };
+        let a = match &t.get(bottom).unwrap().kind {
+            NodeKind::Folder { children } => children[0].id,
+            NodeKind::Connection { .. } => unreachable!(),
+        };
+
+        // same parent: no level changes, so the move cannot be "too deep"
+        t.move_node(a, Some(bottom), 1).unwrap();
+        assert_eq!(children_of(&t, bottom), ["b", "a"]);
+        t.move_node(a, Some(bottom), 0).unwrap();
+        assert_eq!(children_of(&t, bottom), ["a", "b"]);
+        assert_eq!(t.depth(), MAX_TREE_DEPTH + 2);
+
+        // a subtree that gets deeper still fails: folder x with a connection, below the bottom
+        let x = folder(&mut t, None, "x");
+        ssh(&mut t, Some(x), "x-leaf");
+        let before = t.clone();
+        assert_eq!(
+            t.move_node(x, Some(bottom), 0).unwrap_err(),
+            TreeError::TooDeep
+        );
+        assert_eq!(t, before);
+
+        // moving upward still works: a connection below the folder at level 59 sits at level 60
+        t.move_node(a, Some(level_59), 0).unwrap();
+        t.move_node(a, None, 0).unwrap();
+        assert_eq!(t.children()[0].id, a);
     }
 
     #[test]
