@@ -3,6 +3,8 @@
 /// Failure of an SSH operation. `Display` output is a fixed sentence per variant.
 #[derive(Debug, thiserror::Error)]
 pub enum SshError {
+    #[error("The host name is not valid.")]
+    InvalidHost,
     #[error("Could not connect to the host.")]
     ConnectFailed,
     #[error("The connection timed out.")]
@@ -35,6 +37,7 @@ impl SshError {
     /// Stable machine-readable code for the UI.
     pub fn code(&self) -> &'static str {
         match self {
+            Self::InvalidHost => "invalid_host",
             Self::ConnectFailed => "connect_failed",
             Self::Timeout => "timeout",
             Self::HostKeyRejected => "host_key_rejected",
@@ -57,6 +60,7 @@ mod tests {
         // No variant takes free text, so SENTINEL has no way in; the fixed sentences are the guarantee.
         const SENTINEL: &str = "SENTINEL";
         let all = [
+            SshError::InvalidHost,
             SshError::ConnectFailed,
             SshError::Timeout,
             SshError::HostKeyRejected,
@@ -73,6 +77,7 @@ mod tests {
         assert_eq!(
             codes,
             [
+                "invalid_host",
                 "connect_failed",
                 "timeout",
                 "host_key_rejected",

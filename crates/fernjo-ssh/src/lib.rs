@@ -15,6 +15,6 @@ pub use interaction::{
     HostKeyChangedDecision, HostKeyChangedPrompt, HostKeyDecision, HostKeyPrompt, Interaction,
     KiPrompt, KiRound,
 };
-pub use known_hosts::{HostKeyStatus, KnownHosts, fingerprint};
+pub use known_hosts::{HostKeyStatus, KnownHosts, fingerprint, validate_host};
 pub use params::{ConnectParams, Credential};
 pub use session::{CloseReason, Session, SessionEvent};

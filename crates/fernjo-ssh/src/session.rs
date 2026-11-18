@@ -525,6 +525,9 @@ impl Session {
         params: ConnectParams,
         interaction: Arc<I>,
     ) -> Result<(Session, mpsc::Receiver<SessionEvent>), SshError> {
+        // Before any file access or network traffic: a host that cannot be recorded safely in
+        // `known_hosts` is never connected to.
+        crate::known_hosts::validate_host(&params.host)?;
         let known_hosts = KnownHosts::new(&params.known_hosts);
         let mut config = client_config(params.keepalive_secs);
         let stored = known_hosts.stored_algorithms(&params.host, params.port)?;
