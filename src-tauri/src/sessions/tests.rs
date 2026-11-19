@@ -26,6 +26,61 @@ fn code<T>(r: Result<T, CommandError>) -> String {
 
 // ---------- no server needed ----------
 
+#[test]
+fn ki_prompts_are_capped_in_count_and_length() {
+    use fernjo_ssh::KiPrompt;
+    let long = |n: usize| "\u{e9}".repeat(n);
+    let round = KiRound {
+        name: long(5000),
+        instructions: long(5000),
+        prompts: (0..40)
+            .map(|i| KiPrompt {
+                text: if i == 0 { long(5000) } else { format!("p{i}") },
+                echo: i % 2 == 0,
+            })
+            .collect(),
+    };
+    let PromptView::KeyboardInteractive {
+        name,
+        instructions,
+        prompts,
+    } = cap_ki_round(round)
+    else {
+        panic!("wrong view");
+    };
+    assert_eq!(prompts.len(), 16);
+    assert_eq!(
+        prompts[0].text.chars().count(),
+        1025,
+        "1024 plus the ellipsis"
+    );
+    assert!(prompts[0].text.ends_with('\u{2026}'));
+    assert_eq!(prompts[1].text, "p1");
+    assert!(prompts[2].echo && !prompts[1].echo);
+    assert_eq!(instructions.chars().count(), 4097);
+    assert_eq!(name.chars().count(), 1025);
+    // a round within the limits passes unchanged
+    let small = KiRound {
+        name: "n".into(),
+        instructions: "i".into(),
+        prompts: vec![KiPrompt {
+            text: "Password: ".into(),
+            echo: false,
+        }],
+    };
+    assert_eq!(
+        cap_ki_round(small),
+        PromptView::KeyboardInteractive {
+            name: "n".into(),
+            instructions: "i".into(),
+            prompts: vec![KiPromptView {
+                text: "Password: ".into(),
+                echo: false
+            }]
+        }
+    );
+}
+
 fn answer(v: Value) -> PromptAnswer {
     serde_json::from_value(v).unwrap()
 }

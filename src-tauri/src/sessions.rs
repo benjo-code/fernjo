@@ -328,6 +328,42 @@ impl Sink {
     }
 }
 
+/// Most keyboard-interactive prompts shown in one round.
+const KI_MAX_PROMPTS: usize = 16;
+/// Longest text of one prompt and of the round's name (characters).
+const KI_MAX_PROMPT_CHARS: usize = 1024;
+/// Longest instruction text of a round (characters).
+const KI_MAX_INSTRUCTION_CHARS: usize = 4096;
+
+/// `text` cut to `max` characters, an ellipsis at the end when something was cut.
+fn cap_chars(text: String, max: usize) -> String {
+    match text.char_indices().nth(max) {
+        None => text,
+        Some((end, _)) => format!("{}\u{2026}", &text[..end]),
+    }
+}
+
+/// The prompt view of a server's keyboard-interactive round with its sizes bounded: at most 16
+/// prompts of 1024 characters each and 4096 characters of instructions, so a hostile server cannot
+/// flood the dialog. Only the view is capped; the caller still checks the answer against the
+/// original prompt count, so a capped round cannot be answered in full and the login fails the
+/// safe way instead of sending answers to prompts the user never saw.
+fn cap_ki_round(round: KiRound) -> PromptView {
+    PromptView::KeyboardInteractive {
+        name: cap_chars(round.name, KI_MAX_PROMPT_CHARS),
+        instructions: cap_chars(round.instructions, KI_MAX_INSTRUCTION_CHARS),
+        prompts: round
+            .prompts
+            .into_iter()
+            .take(KI_MAX_PROMPTS)
+            .map(|p| KiPromptView {
+                text: cap_chars(p.text, KI_MAX_PROMPT_CHARS),
+                echo: p.echo,
+            })
+            .collect(),
+    }
+}
+
 /// Answers the SSH layer's questions through prompt events. A dropped or closed hub, a cancel
 /// or an answer of the wrong shape is the safe answer (reject, no secret).
 pub struct TauriInteraction {
@@ -403,19 +439,10 @@ impl Interaction for TauriInteraction {
     }
 
     async fn keyboard_interactive(&self, round: KiRound) -> Option<Vec<SecretString>> {
+        // The server decides how many prompts it sends; the UI is shown a capped copy, and the
+        // answer must still match the count the server asked for.
         let expected = round.prompts.len();
-        let view = PromptView::KeyboardInteractive {
-            name: round.name,
-            instructions: round.instructions,
-            prompts: round
-                .prompts
-                .into_iter()
-                .map(|p| KiPromptView {
-                    text: p.text,
-                    echo: p.echo,
-                })
-                .collect(),
-        };
+        let view = cap_ki_round(round);
         self.ask_secrets(view)
             .await
             .filter(|values| values.len() == expected)
