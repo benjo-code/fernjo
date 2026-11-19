@@ -109,6 +109,7 @@ pub fn run() {
             commands::handlers::create_connection,
             commands::handlers::update_node,
             commands::handlers::move_node,
+            commands::handlers::move_nodes,
             commands::handlers::duplicate_node,
             commands::handlers::delete_node,
             vault_commands::handlers::vault_status,

@@ -1681,6 +1681,9 @@ mod tests {
             entry("move_node", |w| {
                 j(commands::move_node(&w.st, w.conn, None, 0))
             }),
+            entry("move_nodes", |w| {
+                j(commands::move_nodes(&w.st, vec![w.conn], None, 0))
+            }),
             entry("duplicate_node", |w| {
                 j(commands::duplicate_node(&w.st, w.conn))
             }),

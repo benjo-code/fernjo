@@ -163,6 +163,16 @@ impl Store {
         self.mutate(|t| t.move_node(id, new_parent, index))
     }
 
+    /// Moves several nodes in one saved step (see `Tree::move_nodes`); all or nothing.
+    pub fn move_nodes(
+        &mut self,
+        ids: &[NodeId],
+        new_parent: Option<NodeId>,
+        index: usize,
+    ) -> Result<(), StoreError> {
+        self.mutate(|t| t.move_nodes(ids, new_parent, index))
+    }
+
     pub fn duplicate(&mut self, id: NodeId) -> Result<NodeId, StoreError> {
         self.mutate(|t| t.duplicate(id))
     }
@@ -250,6 +260,23 @@ mod tests {
         let copy = store.duplicate(a).unwrap();
         assert_eq!(store.delete(copy).unwrap(), 2);
         assert_eq!(open(dir.path()).tree(), store.tree());
+    }
+
+    #[test]
+    fn move_nodes_is_saved_and_a_refused_batch_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = open(dir.path());
+        let a = store.create_folder(None, None, "a").unwrap();
+        let b = store.create_folder(None, None, "b").unwrap();
+        let c = store.create_folder(None, None, "c").unwrap();
+        store.move_nodes(&[c, a], Some(b), 0).unwrap();
+        assert_eq!(open(dir.path()).tree(), store.tree());
+        let before = store.tree().clone();
+        let on_disk = fs::read(dir.path().join(FILE_NAME)).unwrap();
+        // b into its own child: refused as a whole
+        assert!(store.move_nodes(&[b, a], Some(a), 0).is_err());
+        assert_eq!(store.tree(), &before);
+        assert_eq!(fs::read(dir.path().join(FILE_NAME)).unwrap(), on_disk);
     }
 
     #[test]

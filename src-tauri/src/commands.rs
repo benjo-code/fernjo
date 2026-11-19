@@ -179,6 +179,18 @@ pub fn move_node(
     })
 }
 
+/// Moves several nodes at once, all or nothing. The mutation carries no single id.
+pub fn move_nodes(
+    state: &AppState,
+    ids: Vec<NodeId>,
+    parent_id: Option<NodeId>,
+    index: usize,
+) -> Result<Mutation, CommandError> {
+    mutate(state, |s| {
+        s.move_nodes(&ids, parent_id, index).map(|()| None)
+    })
+}
+
 pub fn duplicate_node(state: &AppState, id: NodeId) -> Result<Mutation, CommandError> {
     mutate(state, |s| s.duplicate(id).map(Some))
 }
@@ -246,6 +258,16 @@ pub mod handlers {
         index: usize,
     ) -> Result<Mutation, CommandError> {
         super::move_node(&state, id, parent_id, index)
+    }
+
+    #[tauri::command]
+    pub fn move_nodes(
+        state: State<'_, AppState>,
+        ids: Vec<NodeId>,
+        parent_id: Option<NodeId>,
+        index: usize,
+    ) -> Result<Mutation, CommandError> {
+        super::move_nodes(&state, ids, parent_id, index)
     }
 
     #[tauri::command]
@@ -621,6 +643,62 @@ mod tests {
         assert_eq!(err.code, "not_a_folder");
         let err = move_node(&st, c, Some(c), 0).unwrap_err();
         assert_eq!(err.code, "invalid_move");
+    }
+
+    #[test]
+    fn move_nodes_returns_the_full_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = state(dir.path());
+        let a = create_folder(&st, None, None, "a".into())
+            .unwrap()
+            .id
+            .unwrap();
+        let b = create_folder(&st, None, None, "b".into())
+            .unwrap()
+            .id
+            .unwrap();
+        let dst = create_folder(&st, None, None, "dst".into())
+            .unwrap()
+            .id
+            .unwrap();
+        let moved = move_nodes(&st, vec![b, a], Some(dst), 0).unwrap();
+        assert_eq!(moved.snapshot.children.len(), 1);
+        assert_eq!(moved.snapshot.children[0].id, dst);
+        let ids: Vec<_> = match &moved.snapshot.children[0].kind {
+            fernjo_core::NodeKind::Folder { children } => children.iter().map(|n| n.id).collect(),
+            _ => panic!("not a folder"),
+        };
+        assert_eq!(ids, [b, a]);
+        // the persisted file agrees
+        assert_eq!(
+            Store::open(dir.path()).unwrap().store.tree().children(),
+            moved.snapshot.children.as_slice()
+        );
+    }
+
+    #[test]
+    fn move_nodes_error_leaves_the_file_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = state(dir.path());
+        let a = create_folder(&st, None, None, "a".into())
+            .unwrap()
+            .id
+            .unwrap();
+        let inner = create_folder(&st, Some(a), None, "inner".into())
+            .unwrap()
+            .id
+            .unwrap();
+        let c = create_connection(&st, None, None, "c".into(), Protocol::Ssh, "h".into())
+            .unwrap()
+            .id
+            .unwrap();
+        let on_disk = fs::read(dir.path().join(FILE_NAME)).unwrap();
+        let err = move_nodes(&st, vec![c, a], Some(inner), 0).unwrap_err();
+        assert_eq!(err.code, "invalid_move");
+        let err = move_nodes(&st, vec![a], Some(c), 0).unwrap_err();
+        assert_eq!(err.code, "not_a_folder");
+        assert_eq!(fs::read(dir.path().join(FILE_NAME)).unwrap(), on_disk);
+        assert_eq!(list_tree(&st).unwrap().children.len(), 2);
     }
 
     #[test]
