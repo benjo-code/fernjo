@@ -1734,6 +1734,7 @@ mod tests {
                         font_family: Some("Fira Code".into()),
                         font_size: 14,
                         scrollback: 5000,
+                        close_on_exit: true,
                     },
                 ))
             }),

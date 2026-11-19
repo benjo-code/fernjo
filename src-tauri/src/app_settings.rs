@@ -135,6 +135,7 @@ mod tests {
                 font_family: None,
                 font_size: 15,
                 scrollback: 2000,
+                close_on_exit: true,
             },
         )
         .unwrap();
@@ -228,6 +229,7 @@ mod tests {
                 font_family: None,
                 font_size: 14,
                 scrollback: 3000,
+                close_on_exit: true,
             },
         )
         .unwrap();

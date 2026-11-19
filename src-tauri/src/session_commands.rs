@@ -4,7 +4,9 @@
 //! wrappers in [`handlers`].
 
 use fernjo_core::NodeId;
-use fernjo_core::{DEFAULT_FONT_SIZE, DEFAULT_SCROLLBACK, DataDirSource, TerminalPrefs};
+use fernjo_core::{
+    DEFAULT_CLOSE_ON_EXIT, DEFAULT_FONT_SIZE, DEFAULT_SCROLLBACK, DataDirSource, TerminalPrefs,
+};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, InvokeResponseBody};
 
@@ -30,6 +32,8 @@ pub struct TerminalSettingsInfo {
     pub font_family: Option<String>,
     pub font_size: u16,
     pub scrollback: u32,
+    /// Close a tab when its remote shell ended cleanly (the UI applies it).
+    pub close_on_exit: bool,
     /// `false` when the values only live in memory (`FERNJO_DATA_DIR` is set, `settings.json`
     /// is unusable or there is no settings folder).
     pub persistent: bool,
@@ -57,6 +61,13 @@ pub struct TerminalSettingsInput {
     pub font_family: Option<String>,
     pub font_size: u16,
     pub scrollback: u32,
+    /// An input without the key (an older UI) means the default, `true`.
+    #[serde(default = "default_close_on_exit")]
+    pub close_on_exit: bool,
+}
+
+fn default_close_on_exit() -> bool {
+    DEFAULT_CLOSE_ON_EXIT
 }
 
 /// Why settings cannot be saved, in order of precedence; `None` when they can.
@@ -81,6 +92,7 @@ fn info(state: &AppState, prefs: &TerminalPrefs) -> TerminalSettingsInfo {
         font_family: prefs.font_family.clone(),
         font_size: prefs.font_size.unwrap_or(DEFAULT_FONT_SIZE),
         scrollback: prefs.scrollback.unwrap_or(DEFAULT_SCROLLBACK),
+        close_on_exit: prefs.close_on_exit.unwrap_or(DEFAULT_CLOSE_ON_EXIT),
         persistent: persistent(state),
         unsaved_reason: unsaved_reason(state),
     }
@@ -107,6 +119,7 @@ pub fn set_terminal_settings(
             .filter(|f| !f.is_empty()),
         font_size: Some(input.font_size),
         scrollback: Some(input.scrollback),
+        close_on_exit: Some(input.close_on_exit),
     };
     prefs.validate().map_err(|code| {
         let message = match code {
@@ -337,6 +350,7 @@ mod tests {
             font_family: Some("Fira Code".into()),
             font_size: size,
             scrollback,
+            close_on_exit: true,
         }
     }
 
@@ -381,6 +395,23 @@ mod tests {
         let info = get_terminal_settings(&st).unwrap();
         assert_eq!(info.unsaved_reason, None);
         assert!(serde_json::to_value(&info).unwrap()["unsavedReason"].is_null());
+    }
+
+    #[test]
+    fn close_on_exit_defaults_to_true_and_persists() {
+        let [data, config] = dirs();
+        let st = state(data.path(), config.path(), DataDirSource::Default);
+        assert!(get_terminal_settings(&st).unwrap().close_on_exit);
+        let mut off = input(14, 2000);
+        off.close_on_exit = false;
+        assert!(!set_terminal_settings(&st, off).unwrap().close_on_exit);
+        assert!(!get_terminal_settings(&st).unwrap().close_on_exit);
+        let saved = settings::load(&settings_path(config.path())).unwrap();
+        assert_eq!(saved.terminal.unwrap().close_on_exit, Some(false));
+        // An input without the key (an older UI) means true.
+        let parsed: TerminalSettingsInput =
+            serde_json::from_str(r#"{"fontSize":14,"scrollback":2000}"#).unwrap();
+        assert!(parsed.close_on_exit);
     }
 
     #[test]

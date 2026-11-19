@@ -9,7 +9,11 @@
 //! * **Terminal output** is `InvokeResponseBody::Raw`: the JS `onmessage` handler receives an
 //!   `ArrayBuffer` (batches of about 16 ms or at most [`MAX_BATCH`] bytes).
 //! * **Events** are `InvokeResponseBody::Json`: the handler receives the parsed object
-//!   ([`UiEvent`]): `{kind:"state", state, detail}` or `{kind:"prompt", id, prompt}`.
+//!   ([`UiEvent`]): `{kind:"state", state, detail, exitStatus, endedCleanly}` or
+//!   `{kind:"prompt", id, prompt}`. `exitStatus` (the remote shell's exit code, else `null`) and
+//!   `endedCleanly` (`true` only for exit status 0 after a session that lasted at least
+//!   [`MIN_AUTO_CLOSE_SESSION`]) are set on the `disconnected` event that ends a connected
+//!   session and are `null`/`false` on every other event; the UI decides what to do with them.
 //!
 //! The UI tells them apart with `message instanceof ArrayBuffer`. Input travels the other way as
 //! the raw request body of `session_input` (the session id in the `x-fernjo-session` header).
@@ -61,6 +65,10 @@ use crate::state::AppState;
 pub const MAX_BATCH: usize = 32 * 1024;
 /// How long output is collected before it is sent.
 pub const BATCH_INTERVAL: Duration = Duration::from_millis(16);
+/// A session that ended with exit status 0 counts as a deliberate, clean end only after it was
+/// connected at least this long, so a shell that dies at once (a broken profile script) keeps its
+/// tab and its message.
+pub const MIN_AUTO_CLOSE_SESSION: Duration = Duration::from_secs(5);
 
 fn error(code: &str, message: impl Into<String>) -> CommandError {
     CommandError {
@@ -93,11 +101,19 @@ pub enum ConnState {
 
 /// A JSON message on the session channel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum UiEvent {
     State {
         state: ConnState,
         detail: Option<String>,
+        /// The remote shell's exit code; set only when a connected session ended with one.
+        exit_status: Option<u32>,
+        /// See [`classify_end`]; `false` for every state except a clean end.
+        ended_cleanly: bool,
     },
     Prompt {
         id: u64,
@@ -318,7 +334,22 @@ impl Sink {
     }
 
     fn state(&self, state: ConnState, detail: Option<String>) {
-        self.event(&UiEvent::State { state, detail });
+        self.event(&UiEvent::State {
+            state,
+            detail,
+            exit_status: None,
+            ended_cleanly: false,
+        });
+    }
+
+    /// The disconnect that ends an attempt or a session.
+    fn ended(&self, detail: String, exit_status: Option<u32>, ended_cleanly: bool) {
+        self.event(&UiEvent::State {
+            state: ConnState::Disconnected,
+            detail: Some(detail),
+            exit_status,
+            ended_cleanly,
+        });
     }
 
     fn output(&self, bytes: Vec<u8>) {
@@ -521,9 +552,18 @@ impl Shared {
     }
 
     /// Ends the attempt: phase first, so a reconnect issued on seeing the event is accepted.
-    fn disconnected(&self, detail: String) {
+    fn disconnected(&self, ended: Ended) {
         self.set_phase(Phase::Disconnected);
-        self.sink.state(ConnState::Disconnected, Some(detail));
+        self.sink.ended(ended.text, ended.exit_status, ended.clean);
+    }
+
+    /// A failed attempt: no shell ran, so there is no status and nothing ended cleanly.
+    fn failed(&self, text: String) {
+        self.disconnected(Ended {
+            text,
+            exit_status: None,
+            clean: false,
+        });
     }
 }
 
@@ -562,12 +602,32 @@ const CONFIRMED_HOSTS_FILE: &str = "known_hosts.confirmed";
 
 const GONE: &str = "the connection no longer exists";
 
-fn close_text(reason: CloseReason) -> String {
-    match reason {
+/// How a connected session ended.
+pub(crate) struct Ended {
+    pub text: String,
+    pub exit_status: Option<u32>,
+    pub clean: bool,
+}
+
+/// Classifies the end of a session that was connected for `connected_for`. `clean` means the
+/// user left the shell deliberately: exit status 0 and a session of at least
+/// [`MIN_AUTO_CLOSE_SESSION`]. Anything else (another status, no status, a lost connection, a
+/// close request) is not clean.
+pub(crate) fn classify_end(reason: CloseReason, connected_for: Duration) -> Ended {
+    let exit_status = match reason {
+        CloseReason::Exit(code) => code,
+        CloseReason::ConnectionLost | CloseReason::ClosedByUser => None,
+    };
+    let text = match reason {
         CloseReason::Exit(Some(code)) => format!("The remote shell ended (exit status {code})."),
         CloseReason::Exit(None) => "The remote shell ended.".to_string(),
         CloseReason::ConnectionLost => "The connection was lost.".to_string(),
         CloseReason::ClosedByUser => "The session was closed.".to_string(),
+    };
+    Ended {
+        text,
+        exit_status,
+        clean: exit_status == Some(0) && connected_for >= MIN_AUTO_CLOSE_SESSION,
     }
 }
 
@@ -690,7 +750,7 @@ impl SessionManager {
                 } else {
                     e.message
                 };
-                entry.shared.disconnected(text);
+                entry.shared.failed(text);
             }
         }
         Ok(())
@@ -851,7 +911,7 @@ async fn run(shared: Arc<Shared>, params: ConnectParams) {
     let (session, rx) = match Session::connect(params, interaction).await {
         Ok(connected) => connected,
         Err(e) => {
-            shared.disconnected(e.to_string());
+            shared.failed(e.to_string());
             return;
         }
     };
@@ -871,12 +931,13 @@ async fn run(shared: Arc<Shared>, params: ConnectParams) {
     }
     shared.set_phase(Phase::Connected);
     shared.sink.state(ConnState::Connected, None);
-    let detail = forward(&shared, rx).await;
+    let connected_at = Instant::now();
+    let ended = forward(&shared, rx, connected_at).await;
     if let Ok(mut slot) = shared.ops.lock() {
         // Dropping the sender ends the writer, which drops (and so closes) the session.
         *slot = None;
     }
-    shared.disconnected(detail);
+    shared.disconnected(ended);
 }
 
 /// Applies input, resizes and the close request to the session, in the order they were queued.
@@ -929,7 +990,7 @@ fn flush(shared: &Shared, pending: &mut Vec<u8>) {
 /// Forwards output in batches while the flow control allows, until the session ends. While the
 /// UI is behind, nothing is read from the SSH layer, so its bounded queue fills and the server
 /// is held back by the SSH window: memory stays bounded and Ctrl+C is not stuck behind a backlog.
-async fn forward(shared: &Shared, mut rx: Receiver<SessionEvent>) -> String {
+async fn forward(shared: &Shared, mut rx: Receiver<SessionEvent>, connected_at: Instant) -> Ended {
     let mut pending: Vec<u8> = Vec::new();
     let mut deadline = Instant::now();
     loop {
@@ -959,11 +1020,11 @@ async fn forward(shared: &Shared, mut rx: Receiver<SessionEvent>) -> String {
             }
             Some(SessionEvent::Closed(reason)) => {
                 flush(shared, &mut pending);
-                return close_text(reason);
+                return classify_end(reason, connected_at.elapsed());
             }
             None => {
                 flush(shared, &mut pending);
-                return close_text(CloseReason::ConnectionLost);
+                return classify_end(CloseReason::ConnectionLost, connected_at.elapsed());
             }
         }
     }

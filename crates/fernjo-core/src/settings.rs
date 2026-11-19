@@ -57,6 +57,8 @@ fn lenient_theme<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Theme>, D::Er
 
 /// Default terminal font size in pixels.
 pub const DEFAULT_FONT_SIZE: u16 = 13;
+/// Whether a tab closes itself when its shell ended cleanly, unless set.
+pub const DEFAULT_CLOSE_ON_EXIT: bool = true;
 /// Default number of scrollback lines.
 pub const DEFAULT_SCROLLBACK: u32 = 10_000;
 /// Allowed terminal font sizes.
@@ -74,6 +76,9 @@ pub struct TerminalPrefs {
     pub font_size: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scrollback: Option<u32>,
+    /// Close the tab when the remote shell ended cleanly; unset means [`DEFAULT_CLOSE_ON_EXIT`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close_on_exit: Option<bool>,
 }
 
 impl TerminalPrefs {
@@ -266,6 +271,7 @@ mod tests {
                 font_family: Some("Fira Code".into()),
                 font_size: Some(15),
                 scrollback: Some(5000),
+                close_on_exit: Some(false),
             }),
             theme: None,
         };
@@ -276,7 +282,8 @@ mod tests {
         assert_eq!(
             v,
             json!({"schemaVersion": 1, "dataDir": "/srv/fernjo",
-                   "terminal": {"fontFamily": "Fira Code", "fontSize": 15, "scrollback": 5000}})
+                   "terminal": {"fontFamily": "Fira Code", "fontSize": 15, "scrollback": 5000,
+                                "closeOnExit": false}})
         );
     }
 
@@ -286,6 +293,7 @@ mod tests {
             font_family: None,
             font_size,
             scrollback,
+            close_on_exit: None,
         };
         assert_eq!(p(Some(7), None).validate(), Err("invalid_font_size"));
         assert_eq!(p(Some(33), None).validate(), Err("invalid_font_size"));
@@ -301,6 +309,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(path(dir.path()), r#"{"schemaVersion":1,"dataDir":"/x"}"#).unwrap();
         assert_eq!(load(&path(dir.path())).unwrap(), with_dir("/x"));
+    }
+
+    #[test]
+    fn settings_without_close_on_exit_still_load() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            path(dir.path()),
+            r#"{"schemaVersion":1,"terminal":{"fontSize":14,"scrollback":2000}}"#,
+        )
+        .unwrap();
+        let terminal = load(&path(dir.path())).unwrap().terminal.unwrap();
+        assert_eq!(terminal.font_size, Some(14));
+        assert_eq!(terminal.close_on_exit, None);
     }
 
     #[test]

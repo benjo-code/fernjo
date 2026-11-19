@@ -253,24 +253,108 @@ async fn a_prompt_open_when_the_hub_closes_gets_the_safe_answer() {
     assert_eq!(d, HostKeyDecision::Reject);
 }
 
+// ---------- how a session ended ----------
+
+const FIVE: Duration = MIN_AUTO_CLOSE_SESSION;
+
+#[test]
+fn classify_end_exit_zero_after_five_seconds_is_clean() {
+    let e = classify_end(CloseReason::Exit(Some(0)), FIVE);
+    assert!(e.clean);
+    assert_eq!(e.exit_status, Some(0));
+    assert_eq!(e.text, "The remote shell ended (exit status 0).");
+}
+
+#[test]
+fn classify_end_exit_zero_within_five_seconds_is_not_clean() {
+    let e = classify_end(CloseReason::Exit(Some(0)), Duration::from_millis(4900));
+    assert!(!e.clean);
+    assert_eq!(e.exit_status, Some(0));
+}
+
+#[test]
+fn classify_end_nonzero_exit_is_not_clean() {
+    let e = classify_end(CloseReason::Exit(Some(3)), Duration::from_secs(60));
+    assert!(!e.clean);
+    assert_eq!(e.exit_status, Some(3));
+}
+
+#[test]
+fn classify_end_without_status_is_not_clean() {
+    let e = classify_end(CloseReason::Exit(None), Duration::from_secs(60));
+    assert!(!e.clean);
+    assert_eq!(e.exit_status, None);
+    assert_eq!(e.text, "The remote shell ended.");
+}
+
+#[test]
+fn classify_end_connection_lost_is_not_clean() {
+    let e = classify_end(CloseReason::ConnectionLost, Duration::from_secs(60));
+    assert!(!e.clean);
+    assert_eq!(e.exit_status, None);
+    assert_eq!(e.text, "The connection was lost.");
+}
+
+#[test]
+fn classify_end_closed_by_user_is_not_clean() {
+    let e = classify_end(CloseReason::ClosedByUser, Duration::from_secs(60));
+    assert!(!e.clean);
+    assert_eq!(e.exit_status, None);
+}
+
+#[test]
+fn state_event_json_carries_exit_status_and_ended_cleanly() {
+    let ended = UiEvent::State {
+        state: ConnState::Disconnected,
+        detail: Some("The remote shell ended (exit status 0).".into()),
+        exit_status: Some(0),
+        ended_cleanly: true,
+    };
+    assert_eq!(
+        serde_json::to_value(&ended).unwrap(),
+        json!({"kind": "state", "state": "disconnected",
+               "detail": "The remote shell ended (exit status 0).",
+               "exitStatus": 0, "endedCleanly": true})
+    );
+    let connected = UiEvent::State {
+        state: ConnState::Connected,
+        detail: None,
+        exit_status: None,
+        ended_cleanly: false,
+    };
+    assert_eq!(
+        serde_json::to_value(&connected).unwrap(),
+        json!({"kind": "state", "state": "connected", "detail": null,
+               "exitStatus": null, "endedCleanly": false})
+    );
+}
+
 #[test]
 fn session_event_json_has_no_secret_field() {
     let events = [
         UiEvent::State {
             state: ConnState::Connecting,
             detail: None,
+            exit_status: None,
+            ended_cleanly: false,
         },
         UiEvent::State {
             state: ConnState::NeedsVault,
             detail: None,
+            exit_status: None,
+            ended_cleanly: false,
         },
         UiEvent::State {
             state: ConnState::Connected,
             detail: None,
+            exit_status: None,
+            ended_cleanly: false,
         },
         UiEvent::State {
             state: ConnState::Disconnected,
             detail: Some("gone".into()),
+            exit_status: None,
+            ended_cleanly: false,
         },
         UiEvent::Prompt {
             id: 1,
@@ -334,7 +418,8 @@ fn session_event_json_has_no_secret_field() {
         .collect();
     assert_eq!(
         json[0],
-        json!({"kind": "state", "state": "connecting", "detail": null})
+        json!({"kind": "state", "state": "connecting", "detail": null,
+               "exitStatus": null, "endedCleanly": false})
     );
     assert_eq!(json[1]["state"], "needsVault");
     assert_eq!(json[3]["detail"], "gone");
