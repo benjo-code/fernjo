@@ -3,9 +3,11 @@
   import type { SessionStore } from "../sessions.svelte";
   import type { TreeStore } from "../store.svelte";
   import type { VaultStore } from "../vault.svelte";
+  import { LayoutStore, SIDEBAR_MIN, sidebarMax } from "../layout.svelte";
   import FilterBox from "./FilterBox.svelte";
   import Icon from "./Icon.svelte";
   import NoticeBar from "./NoticeBar.svelte";
+  import Splitter from "./Splitter.svelte";
   import TreeView from "./TreeView.svelte";
   import VaultChip from "./VaultChip.svelte";
   import VaultNote from "./VaultNote.svelte";
@@ -19,6 +21,7 @@
     onimport,
     restartPending = false,
     onRestart,
+    layout = new LayoutStore(),
     children,
   }: {
     store: TreeStore;
@@ -32,6 +35,7 @@
     onimport?: () => void;
     restartPending?: boolean;
     onRestart?: () => void;
+    layout?: LayoutStore;
     children?: Snippet;
   } = $props();
 
@@ -69,10 +73,20 @@
       <Icon name="import" />
     </button>
   </div>
+  <Splitter
+    orientation="vertical"
+    label="Resize sidebar"
+    value={layout.effectiveSidebarWidth}
+    min={SIDEBAR_MIN}
+    max={sidebarMax(layout.viewportWidth)}
+    onchange={(px) => layout.setSidebarWidth(px)}
+    onreset={() => layout.resetSidebarWidth()}
+  />
 </aside>
 
 <style>
   .sidebar {
+    position: relative;
     display: flex;
     flex-direction: column;
     min-height: 0;

@@ -1,12 +1,61 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+  import { PANEL_MIN, LayoutStore, clampPanelHeight } from "../layout.svelte";
   import type { TreeStore } from "../store.svelte";
   import type { VaultStore } from "../vault.svelte";
   import type { FieldInfo, NodePatch, Protocol } from "../types";
   import Icon from "./Icon.svelte";
+  import Splitter from "./Splitter.svelte";
   import PropertyRow from "./PropertyRow.svelte";
   import TextField from "./TextField.svelte";
 
-  let { store, vault }: { store: TreeStore; vault: VaultStore } = $props();
+  let {
+    store,
+    vault,
+    layout = new LayoutStore(),
+  }: { store: TreeStore; vault: VaultStore; layout?: LayoutStore } = $props();
+
+  const ROW_HEIGHT_TREE = 24; // --row-height-tree
+  let section: HTMLElement | undefined = $state();
+  let measured = $state(0);
+  // the tallest the panel may be; generous until the sidebar has been measured
+  let maxHeight = $state(4000);
+
+  /** Mirrors the tree slot's min-height in Sidebar.svelte. */
+  const treeMin = () => Math.min(ROW_HEIGHT_TREE * 23, window.innerHeight - 120);
+
+  function measure() {
+    if (section) measured = section.offsetHeight;
+    const aside = section?.parentElement;
+    if (!section || !aside || aside.clientHeight === 0) return;
+    const slot = aside.querySelector<HTMLElement>(".tree-slot");
+    if (!slot) return;
+    // everything that is neither tree nor panel (filter, notices, footer, margins); scrollHeight
+    // keeps this right while the sidebar overflows
+    const chrome = aside.scrollHeight - slot.clientHeight - section.offsetHeight;
+    maxHeight = clampPanelHeight(4000, aside.clientHeight - chrome, treeMin());
+  }
+
+  onMount(() => {
+    measure();
+    const aside = section?.parentElement;
+    let ro: ResizeObserver | null = null;
+    try {
+      ro = new ResizeObserver(measure);
+      if (aside) for (const child of Array.from(aside.children)) ro.observe(child);
+    } catch {
+      // no ResizeObserver (a test environment): the window resize listener has to do
+    }
+    window.addEventListener("resize", measure);
+    return () => {
+      try {
+        ro?.disconnect();
+      } catch {
+        // nothing to release
+      }
+      window.removeEventListener("resize", measure);
+    };
+  });
 
   let open = $state(true);
   let errors = $state<Record<string, string | null>>({});
@@ -106,7 +155,27 @@
   const show = (n: number | null) => (n === null ? "" : String(n));
 </script>
 
-<section class="panel" aria-label="Properties">
+<section
+  class="panel"
+  class:sized={open && layout.propertiesHeight !== null}
+  style:height={open && layout.propertiesHeight !== null
+    ? `${Math.min(layout.propertiesHeight, maxHeight)}px`
+    : null}
+  aria-label="Properties"
+  bind:this={section}
+>
+  {#if open}
+    <Splitter
+      orientation="horizontal"
+      invert
+      label="Resize properties panel"
+      value={Math.min(Math.max(measured, PANEL_MIN), maxHeight)}
+      min={PANEL_MIN}
+      max={maxHeight}
+      onchange={(px) => layout.setPropertiesHeight(px)}
+      onreset={() => layout.resetPropertiesHeight()}
+    />
+  {/if}
   <button type="button" class="header" aria-expanded={open} onclick={() => (open = !open)}>
     <span class="chevron" class:closed={!open}><Icon name="folder-chevron" size={14} /></span>
     <span class="title" title={detail?.name}>{detail?.name ?? "Properties"}</span>
@@ -290,11 +359,16 @@
 
 <style>
   .panel {
+    position: relative;
     display: flex;
     flex: 0 1 auto;
     flex-direction: column;
     min-height: 26px;
     border-top: 1px solid var(--color-border);
+  }
+
+  .panel.sized {
+    flex: none;
   }
 
   .header {

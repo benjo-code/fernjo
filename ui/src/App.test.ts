@@ -152,3 +152,26 @@ test("an_applied_import_reloads_the_vault_credential_list", async () => {
   expect(calls.listCredentials.length).toBe(listed + 1);
   unmount(app);
 });
+
+test("the shell grid uses the stored sidebar width", async () => {
+  localStorage.setItem("fernjo.layout.v1", '{"sidebarWidth":420,"propertiesHeight":null}');
+  try {
+    const { api } = mockApi([]);
+    const app = mount(App, { target: document.body, props: { api } });
+    await new Promise((r) => setTimeout(r, 0));
+    const shell = document.querySelector<HTMLElement>(".shell")!;
+    expect(shell.style.gridTemplateColumns).toBe("420px 1fr");
+    unmount(app);
+  } finally {
+    localStorage.clear();
+  }
+});
+
+test("without a stored width the shell grid keeps the token default", async () => {
+  localStorage.clear();
+  const { api } = mockApi([]);
+  const app = mount(App, { target: document.body, props: { api } });
+  await new Promise((r) => setTimeout(r, 0));
+  expect(document.querySelector<HTMLElement>(".shell")!.style.gridTemplateColumns).toBe("");
+  unmount(app);
+});

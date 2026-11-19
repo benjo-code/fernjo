@@ -9,6 +9,7 @@
   import TabStrip from "./lib/components/TabStrip.svelte";
   import VaultManager from "./lib/components/VaultManager.svelte";
   import { ImportStore } from "./lib/import.svelte";
+  import { LayoutStore, SIDEBAR_DEFAULT } from "./lib/layout.svelte";
   import { findNode } from "./lib/rows";
   import { SessionStore } from "./lib/sessions.svelte";
   import { isMac, routeKey } from "./lib/shortcuts";
@@ -38,6 +39,14 @@
 
   // svelte-ignore state_referenced_locally
   const theme = new ThemeStore(api);
+
+  const layout = new LayoutStore();
+  // nothing stored: the grid keeps the stylesheet's token, so the default layout is unchanged
+  const gridColumns = $derived(
+    layout.effectiveSidebarWidth === SIDEBAR_DEFAULT
+      ? null
+      : `${layout.effectiveSidebarWidth}px 1fr`,
+  );
 
   /** Until Rust answers (or when it cannot), terminals use these. */
   const DEFAULT_TERMINAL: TerminalSettings = {
@@ -155,9 +164,14 @@
   });
 </script>
 
-<svelte:window onpagehide={endSessions} onbeforeunload={endSessions} {onkeydown} />
+<svelte:window
+  onresize={() => (layout.viewportWidth = window.innerWidth)}
+  onpagehide={endSessions}
+  onbeforeunload={endSessions}
+  {onkeydown}
+/>
 
-<div class="shell">
+<div class="shell" style:grid-template-columns={gridColumns}>
   <Sidebar
     bind:this={sidebar}
     {store}
@@ -168,8 +182,9 @@
     onimport={() => (importOpen = true)}
     {restartPending}
     onRestart={() => void restart()}
+    {layout}
   >
-    <PropertiesPanel {store} {vault} />
+    <PropertiesPanel {store} {vault} {layout} />
   </Sidebar>
   <main class="main">
     {#if sessions.tabs.length > 0}
