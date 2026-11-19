@@ -268,3 +268,40 @@ fn the_file_may_be_nested_to_the_limit_that_still_fits_below_the_import_folder()
         "{err:?}"
     );
 }
+
+#[test]
+fn json_import_strips_control_characters_and_caps_lengths() {
+    let long_host = "h".repeat(300);
+    let doc = json!({"format": "fernjo-connections", "exportedAt": AT, "schemaVersion": persist::CURRENT_VERSION,
+    "children": [
+        {"id": "6f0c1c2a-0000-4000-8000-000000000001", "name": format!("web\u{1b}[2J{}", "n".repeat(400)),
+         "description": format!("line1\nline2\u{7}{}", "d".repeat(5000)),
+         "type": "connection", "protocol": "ssh", "host": "ok\u{0}host"},
+        {"id": "6f0c1c2a-0000-4000-8000-000000000002", "name": "far", "type": "connection",
+         "protocol": "rdp", "host": long_host}
+    ]});
+    let p = plan(doc.to_string().as_bytes(), TODAY, &[]).unwrap();
+    let NodeKind::Folder { children } = &p.folder.kind else {
+        panic!("folder")
+    };
+    let a = &children[0];
+    assert_eq!(a.name.chars().count(), 256);
+    assert!(a.name.starts_with("web[2J") && !a.name.chars().any(char::is_control));
+    assert_eq!(a.description.chars().count(), 4096);
+    assert!(a.description.starts_with("line1\nline2d"));
+    assert!(matches!(&a.kind, NodeKind::Connection { host, .. } if host == "okhost"));
+    assert!(matches!(&children[1].kind, NodeKind::Connection { host, .. } if host.is_empty()));
+    assert_eq!(p.report.counts.partial, p.report.partial.len());
+    assert!(
+        p.report
+            .partial
+            .iter()
+            .any(|l| l.text.contains("shortened or cleaned"))
+    );
+    assert!(
+        p.report
+            .partial
+            .iter()
+            .any(|l| l.text.contains("longer than"))
+    );
+}

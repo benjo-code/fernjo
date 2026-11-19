@@ -1,6 +1,6 @@
 //! Application state shared by all commands.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
@@ -148,6 +148,26 @@ impl std::fmt::Debug for AppState {
             .field("settings_unusable", &self.settings_unusable)
             .finish_non_exhaustive()
     }
+}
+
+/// The notice for a `settings.json` data folder that contains the device-local folder. Only
+/// for `DataDirSource::Settings`: with `FERNJO_DATA_DIR` the device folder is `<data>/.device`
+/// by design, and the default data folder is the config folder.
+fn device_folder_notice(
+    source: DataDirSource,
+    data_dir: Option<&Path>,
+    device_dir: Option<&Path>,
+) -> Option<Notice> {
+    if source != DataDirSource::Settings {
+        return None;
+    }
+    let (data, device) = (data_dir?, device_dir?);
+    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    (device.starts_with(data) || canon(device).starts_with(canon(data))).then(|| {
+        Notice::DeviceFolderInsideDataDir {
+            path: device.to_path_buf(),
+        }
+    })
 }
 
 impl AppState {
@@ -310,6 +330,11 @@ impl AppState {
             };
         }
         notices.extend(settings_notice);
+        notices.extend(device_folder_notice(
+            source,
+            dir.as_deref(),
+            device_dir.as_deref(),
+        ));
         AppState {
             store: Mutex::new(store),
             notices: Mutex::new(notices),
@@ -339,12 +364,16 @@ impl AppState {
     }
 
     /// Drops the pending import or restore (every page load does this, next to closing the
-    /// sessions); a poisoned lock is recovered.
+    /// sessions); a poisoned lock is recovered. It never waits: while an apply holds the lock
+    /// (disk work on another thread) the call is skipped, which is safe because the apply
+    /// takes the pending value itself and so clears it. A pick or inspect holds the lock only
+    /// to swap the value, never across I/O.
     pub fn clear_pending(&self) {
-        *self
-            .pending
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        match self.pending.try_lock() {
+            Ok(mut guard) => *guard = None,
+            Err(std::sync::TryLockError::Poisoned(p)) => *p.into_inner() = None,
+            Err(std::sync::TryLockError::WouldBlock) => {}
+        }
     }
 
     /// The vault's state as commands report it.
@@ -362,5 +391,47 @@ impl AppState {
                 path: path.clone(),
             },
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fernjo_core::{DataDirSource, Notice};
+
+    #[test]
+    fn startup_notice_when_data_dir_contains_the_device_folder() {
+        let data = Path::new("/sync/fernjo");
+        let inside = Path::new("/sync/fernjo/dev");
+        let outside = Path::new("/local/fernjo-device");
+        assert_eq!(
+            device_folder_notice(DataDirSource::Settings, Some(data), Some(inside)),
+            Some(Notice::DeviceFolderInsideDataDir {
+                path: inside.to_path_buf()
+            })
+        );
+        assert_eq!(
+            device_folder_notice(DataDirSource::Settings, Some(data), Some(data)),
+            Some(Notice::DeviceFolderInsideDataDir {
+                path: data.to_path_buf()
+            })
+        );
+        assert_eq!(
+            device_folder_notice(DataDirSource::Settings, Some(data), Some(outside)),
+            None
+        );
+        // FERNJO_DATA_DIR puts the device folder in `<data>/.device` by design
+        assert_eq!(
+            device_folder_notice(DataDirSource::Env, Some(data), Some(inside)),
+            None
+        );
+        assert_eq!(
+            device_folder_notice(DataDirSource::Default, Some(data), Some(inside)),
+            None
+        );
+        assert_eq!(
+            device_folder_notice(DataDirSource::Settings, None, Some(inside)),
+            None
+        );
     }
 }

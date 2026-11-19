@@ -47,4 +47,16 @@ describe("NoticeBar", () => {
     expect(store.changedOnDisk).toBe(false);
     expect(document.body.textContent).not.toContain("changed by another program");
   });
+
+  test("tells that the device folder lies inside the data folder", async () => {
+    const store = new TreeStore(mockApi([conn("a")]).api);
+    await store.init();
+    store.notices = [{ kind: "deviceFolderInsideDataDir", path: "/sync/fernjo/dev" }];
+    mounted = mount(NoticeBar, { target: document.body, props: { store } });
+    await settle();
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("/sync/fernjo/dev");
+    expect(text).toContain("device-local folder");
+    expect(text).toContain("data folder");
+  });
 });

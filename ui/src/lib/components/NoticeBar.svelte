@@ -26,6 +26,8 @@
         return `Sync conflicts found next to your data: ${notice.files.join(", ")}. Resolve them in your sync tool; fernjo does not merge them.`;
       case "settingsUnreadable":
         return `The settings file could not be used, so the default data folder is in effect. ${notice.message}`;
+      case "deviceFolderInsideDataDir":
+        return `The device-local folder (${notice.path}) lies inside your data folder, so it is synced with your data. Choose a data folder that does not contain it.`;
     }
   }
 </script>

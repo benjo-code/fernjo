@@ -35,6 +35,10 @@ pub enum Notice {
     /// `settings.json` could not be used; the default data folder is in effect and the file
     /// is left untouched.
     SettingsUnreadable { message: String },
+    /// `settings.json` names a data folder that contains the device-local folder (a
+    /// hand-edited file; the data-folder dialog refuses that choice). The device folder is
+    /// then synced with the data, which defeats its purpose.
+    DeviceFolderInsideDataDir { path: PathBuf },
 }
 
 /// Result of a successful load.
@@ -986,5 +990,17 @@ mod tests {
         })
         .unwrap();
         assert_eq!(v, json!({ "kind": "settingsUnreadable", "message": "bad" }));
+    }
+
+    #[test]
+    fn notice_serialises_as_device_folder_inside_data_dir() {
+        let v = serde_json::to_value(Notice::DeviceFolderInsideDataDir {
+            path: PathBuf::from("dev"),
+        })
+        .unwrap();
+        assert_eq!(
+            v,
+            json!({ "kind": "deviceFolderInsideDataDir", "path": "dev" })
+        );
     }
 }

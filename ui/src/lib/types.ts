@@ -71,7 +71,8 @@ export interface NodePatch {
 export type Notice =
   | { kind: "restoredFromBackup"; badFile: string | null }
   | { kind: "syncConflicts"; files: string[] }
-  | { kind: "settingsUnreadable"; message: string };
+  | { kind: "settingsUnreadable"; message: string }
+  | { kind: "deviceFolderInsideDataDir"; path: string };
 
 export interface Snapshot {
   children: TreeNode[];

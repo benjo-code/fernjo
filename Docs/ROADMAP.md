@@ -277,8 +277,8 @@ Goal: The first release's known gaps are closed: no silent data loss, a clearer 
 - [ ] Linux title bar icon: run the diagnostics, fix it if the fix is cheap, otherwise add a known-limits sentence to the README
 - [ ] Find out what the Windows WebView2 background connection is and whether a setting turns it off; check macOS and Linux; update the README privacy statement
 - [ ] Release binaries no longer embed the runner's cargo registry paths (`--remap-path-prefix` in `release.yml`), verified on a CI-built installer
-- [ ] The five deferred follow-ups of the M6 security fixes are fixed or recorded as accepted with a reason
-- [ ] Triage of the vault, SSH and import Low findings: each is fixed, accepted with a reason in `Docs/DECISIONS.md`, or moved back to the backlog
+- [x] The five deferred follow-ups of the M6 security fixes are fixed or recorded as accepted with a reason
+- [x] Triage of the vault, SSH and import Low findings: each is fixed, accepted with a reason in `Docs/DECISIONS.md`, or moved back to the backlog
 
 **Acceptance criteria**
 - [ ] Test: a `connections.json` replaced on disk by another process while the app runs is not overwritten by the next save
@@ -287,7 +287,7 @@ Goal: The first release's known gaps are closed: no silent data loss, a clearer 
 - [ ] Manual, owner: the owner finds the vault, Import & backup and Settings without a hint; the agreed review list is implemented or each item recorded as declined
 - [ ] Manual: both panels resize with mouse and keyboard and keep their size after a restart; the tree still shows its rows at 1280×800
 - [ ] Tests: multi-select store, batch move command (including depth and validity rules) and drag; manual check on Windows
-- [ ] Every item of the vault, SSH and import Low findings and of the M6 deferred follow-ups has a recorded outcome
+- [x] Every item of the vault, SSH and import Low findings and of the M6 deferred follow-ups has a recorded outcome – The three `Docs/DECISIONS.md` entries "M7: vault Low findings triage", "M7: SSH Low findings triage" and "M7: import Low findings and M6 follow-ups triage" list every row with its disposition
 - [ ] Build, test and lint are green
 
 **Source: Confirm quit with live sessions**
@@ -384,6 +384,7 @@ RDP sessions in tabs next to SSH.
 
 Deliberately not scheduled. Ideas that `/ideen` files here are listed; if needed, one becomes a milestone.
 
+- **Restore confirmation wording:** A restored backup replaces the tree and the vault entries by design; the confirmation dialog could name more than counts (for example what is replaced and what is kept). UI wording only, no safety effect (moved back from the M7 triage of the import Low findings).
 - **Built-in device sync:** End-to-end-encrypted sync of connections and vault between devices. Until then the data folder can be synced with Syncthing/Nextcloud/iCloud.
 - **SFTP file browser:** Browse and transfer files over an open SSH connection.
 - **Port forwarding and jump hosts:** Local/remote forwards and ProxyJump per connection or folder.
