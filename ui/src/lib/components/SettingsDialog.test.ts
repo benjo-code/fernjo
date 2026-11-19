@@ -315,7 +315,10 @@ describe("SettingsDialog", () => {
 
   test("non_persistent_note_is_shown_when_persistent_is_false", async () => {
     const note = "Applies to this run only; settings are not saved while FERNJO_DATA_DIR is set";
-    await setup({ getTerminalSettings: async () => terminalSettings({ persistent: false }) });
+    await setup({
+      getTerminalSettings: async () =>
+        terminalSettings({ persistent: false, unsavedReason: "env" }),
+    });
     expect(document.body.textContent).toContain(note);
     unmount(mounted!);
     mounted = null;
@@ -407,7 +410,7 @@ describe("appearance", () => {
 
   test("a_memory_only_theme_says_it_is_not_remembered", async () => {
     const note = "Applies to this run only; settings are not saved while FERNJO_DATA_DIR is set";
-    await setup({ getTheme: async () => themeInfo({ persistent: false }) });
+    await setup({ getTheme: async () => themeInfo({ persistent: false, unsavedReason: "env" }) });
     // the terminal section is persistent here, so the note comes from the appearance section
     expect(document.body.textContent).toContain(note);
     unmount(mounted!);
@@ -482,5 +485,24 @@ describe("short windows", () => {
     expect(rule).not.toBeNull();
     expect(rule![1]).toMatch(/max-height:\s*calc\(100vh - var\(--space-6\)\)/);
     expect(rule![1]).toMatch(/overflow-y:\s*auto/);
+  });
+
+  test("an_unusable_settings_json_shows_its_own_note_not_the_FERNJO_DATA_DIR_one", async () => {
+    const own = "Not saved: settings.json cannot be read";
+    const env = "FERNJO_DATA_DIR is set";
+    await setup({
+      getTerminalSettings: async () =>
+        terminalSettings({ persistent: false, unsavedReason: "settingsUnusable" }),
+    });
+    expect(document.body.textContent).toContain(own);
+    expect(document.body.textContent).not.toContain(env);
+    unmount(mounted!);
+    mounted = null;
+    document.body.innerHTML = "";
+    await setup({
+      getTheme: async () => themeInfo({ persistent: false, unsavedReason: "settingsUnusable" }),
+    });
+    expect(document.body.textContent).toContain(own);
+    expect(document.body.textContent).not.toContain(env);
   });
 });

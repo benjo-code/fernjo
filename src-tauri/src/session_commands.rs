@@ -33,6 +33,20 @@ pub struct TerminalSettingsInfo {
     /// `false` when the values only live in memory (`FERNJO_DATA_DIR` is set, `settings.json`
     /// is unusable or there is no settings folder).
     pub persistent: bool,
+    /// Why the values are not saved; `None` when they are.
+    pub unsaved_reason: Option<UnsavedReason>,
+}
+
+/// Why settings only live in memory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UnsavedReason {
+    /// `FERNJO_DATA_DIR` is set.
+    Env,
+    /// `settings.json` is unreadable or from a newer version.
+    SettingsUnusable,
+    /// The device has no settings folder.
+    NoConfigDir,
 }
 
 /// What the settings dialog sends.
@@ -45,8 +59,21 @@ pub struct TerminalSettingsInput {
     pub scrollback: u32,
 }
 
+/// Why settings cannot be saved, in order of precedence; `None` when they can.
+pub(crate) fn unsaved_reason(state: &AppState) -> Option<UnsavedReason> {
+    if state.source == DataDirSource::Env {
+        Some(UnsavedReason::Env)
+    } else if state.settings_unusable {
+        Some(UnsavedReason::SettingsUnusable)
+    } else if state.config_dir.is_none() {
+        Some(UnsavedReason::NoConfigDir)
+    } else {
+        None
+    }
+}
+
 pub(crate) fn persistent(state: &AppState) -> bool {
-    state.source != DataDirSource::Env && !state.settings_unusable && state.config_dir.is_some()
+    unsaved_reason(state).is_none()
 }
 
 fn info(state: &AppState, prefs: &TerminalPrefs) -> TerminalSettingsInfo {
@@ -55,6 +82,7 @@ fn info(state: &AppState, prefs: &TerminalPrefs) -> TerminalSettingsInfo {
         font_size: prefs.font_size.unwrap_or(DEFAULT_FONT_SIZE),
         scrollback: prefs.scrollback.unwrap_or(DEFAULT_SCROLLBACK),
         persistent: persistent(state),
+        unsaved_reason: unsaved_reason(state),
     }
 }
 
@@ -314,6 +342,45 @@ mod tests {
 
     fn settings_path(config: &Path) -> PathBuf {
         config.join(settings::FILE_NAME)
+    }
+
+    #[test]
+    fn unsaved_reason_distinguishes_env_unusable_and_no_config_dir() {
+        let [data, config] = dirs();
+        let st = state(data.path(), config.path(), DataDirSource::Env);
+        assert_eq!(unsaved_reason(&st), Some(UnsavedReason::Env));
+        assert!(!persistent(&st));
+        // Env wins over an unusable file.
+        let mut both = state(data.path(), config.path(), DataDirSource::Env);
+        both.settings_unusable = true;
+        assert_eq!(unsaved_reason(&both), Some(UnsavedReason::Env));
+        let mut bad = state(data.path(), config.path(), DataDirSource::Default);
+        bad.settings_unusable = true;
+        assert_eq!(unsaved_reason(&bad), Some(UnsavedReason::SettingsUnusable));
+        let mut none = state(data.path(), config.path(), DataDirSource::Default);
+        none.config_dir = None;
+        assert_eq!(unsaved_reason(&none), Some(UnsavedReason::NoConfigDir));
+        let info = get_terminal_settings(&bad).unwrap();
+        assert_eq!(info.unsaved_reason, Some(UnsavedReason::SettingsUnusable));
+        assert_eq!(
+            serde_json::to_value(&info).unwrap()["unsavedReason"],
+            "settingsUnusable"
+        );
+        assert_eq!(
+            serde_json::to_value(UnsavedReason::NoConfigDir).unwrap(),
+            "noConfigDir"
+        );
+    }
+
+    #[test]
+    fn unsaved_reason_is_none_when_saved() {
+        let [data, config] = dirs();
+        let st = state(data.path(), config.path(), DataDirSource::Default);
+        assert_eq!(unsaved_reason(&st), None);
+        assert!(persistent(&st));
+        let info = get_terminal_settings(&st).unwrap();
+        assert_eq!(info.unsaved_reason, None);
+        assert!(serde_json::to_value(&info).unwrap()["unsavedReason"].is_null());
     }
 
     #[test]

@@ -5,6 +5,7 @@
   import type { TerminalSettingsStore } from "../terminal-settings.svelte";
   import type { ThemeStore } from "../theme.svelte";
   import type { Api, DataFolderInfo, Theme } from "../types";
+  import { unsavedNote } from "../unsaved";
   import Icon from "./Icon.svelte";
 
   let {
@@ -229,10 +230,8 @@
         </label>
       {/each}
     </div>
-    {#if theme.info && !theme.info.persistent}
-      <p class="note">
-        Applies to this run only; settings are not saved while FERNJO_DATA_DIR is set
-      </p>
+    {#if theme.info?.unsavedReason}
+      <p class="note">{unsavedNote(theme.info.unsavedReason)}</p>
     {/if}
     {#if themeError}
       <p class="error" role="alert">{themeError}</p>
@@ -278,10 +277,8 @@
         />
       </label>
     </div>
-    {#if terminal.info && !terminal.info.persistent}
-      <p class="note">
-        Applies to this run only; settings are not saved while FERNJO_DATA_DIR is set
-      </p>
+    {#if terminal.info?.unsavedReason}
+      <p class="note">{unsavedNote(terminal.info.unsavedReason)}</p>
     {/if}
     {#if terminalLoadError}
       <p class="error" role="alert">Could not load the terminal settings</p>

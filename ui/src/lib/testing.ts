@@ -95,11 +95,18 @@ export function dataFolder(partial: Partial<DataFolderInfo> = {}): DataFolderInf
 }
 
 export function terminalSettings(partial: Partial<TerminalSettings> = {}): TerminalSettings {
-  return { fontFamily: null, fontSize: 14, scrollback: 10000, persistent: true, ...partial };
+  return {
+    fontFamily: null,
+    fontSize: 14,
+    scrollback: 10000,
+    persistent: true,
+    unsavedReason: null,
+    ...partial,
+  };
 }
 
 export function themeInfo(partial: Partial<ThemeInfo> = {}): ThemeInfo {
-  return { theme: "system", persistent: true, ...partial };
+  return { theme: "system", persistent: true, unsavedReason: null, ...partial };
 }
 
 export function report(partial: Partial<Report> = {}): Report {

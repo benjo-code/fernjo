@@ -356,10 +356,15 @@ export type PromptAnswer =
 
 export type Theme = "system" | "light" | "dark";
 
+/** Why settings only live in memory. */
+export type UnsavedReason = "env" | "settingsUnusable" | "noConfigDir";
+
 export interface ThemeInfo {
   theme: Theme;
   /** `false` when the choice only lives in memory. */
   persistent: boolean;
+  /** Why it is not saved; `null` when it is. */
+  unsavedReason: UnsavedReason | null;
 }
 
 export interface TerminalSettings {
@@ -369,4 +374,6 @@ export interface TerminalSettings {
   scrollback: number;
   /** `false` when the values only live in memory. */
   persistent: boolean;
+  /** Why they are not saved; `null` when they are. */
+  unsavedReason: UnsavedReason | null;
 }

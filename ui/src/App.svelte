@@ -41,6 +41,7 @@
     fontSize: 13,
     scrollback: 10000,
     persistent: true,
+    unsavedReason: null,
   };
   const terminalSettings = $derived(terminal.info ?? DEFAULT_TERMINAL);
 
