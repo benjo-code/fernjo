@@ -31,7 +31,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 | 5 | mRemoteNG import & export | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-16-milestone-05-mremoteng-import.md) | 2026-11-17 |
 | 6 | Packaging, app settings & release readiness | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-17-milestone-06-packaging-release-readiness.md) | 2026-11-18 |
 | – | **Release `v0.1.0`** – Daily SSH driver (M0 to M6) | – | ✅ done | – | 2026-11-18 |
-| 7 | Daily-use polish and hardening | 1 – fernjo app | ⬜ open | – | – |
+| 7 | Daily-use polish and hardening | 1 – fernjo app | 🟡 planned | [Plan](superpowers/plans/2026-11-19-milestone-07-polish-hardening.md) | – |
 | – | **Release `v0.1.1`** – Polish and hardening (M7) | – | ⬜ open | – | – |
 | 8 | RDP sessions | 1 – fernjo app | ⬜ open | – | – |
 | – | **Release `v0.2.0`** – RDP (M8) | – | ⬜ open | – | – |
@@ -259,7 +259,7 @@ Goal: fernjo installs from a GitHub release on Windows, macOS and Linux, can rep
 First installable version: connection tree, vault, SSH tabs and mRemoteNG import on Windows, macOS and Linux.
 
 ## Milestone 7 – Daily-use polish and hardening
-**Status:** ⬜ open · **Plan:** – · **Prerequisites:** M6
+**Status:** 🟡 planned · **Plan:** [2026-11-19-milestone-07-polish-hardening.md](superpowers/plans/2026-11-19-milestone-07-polish-hardening.md) · **Prerequisites:** M6
 
 Goal: The first release's known gaps are closed: no silent data loss, a clearer and more flexible UI, and the Low findings of the M6 reviews triaged.
 

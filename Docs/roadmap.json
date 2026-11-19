@@ -231,7 +231,8 @@
         {
           "id": "7",
           "title": "Daily-use polish and hardening",
-          "status": "open",
+          "status": "planned",
+          "plan": "superpowers/plans/2026-11-19-milestone-07-polish-hardening.md",
           "prerequisites": ["6"],
           "goal": "The first release's known gaps are closed: no silent data loss, a clearer and more flexible UI, and the Low findings of the M6 reviews triaged.",
           "tasks": [
