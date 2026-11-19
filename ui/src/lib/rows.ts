@@ -123,3 +123,17 @@ export function flattenRows(
   }
   return filtered(children, q, 0, null);
 }
+
+/** The selected ids whose ancestors are not selected, in row order. */
+export function selectionTops(rows: Row[], selected: ReadonlySet<string>): string[] {
+  const covered = new Set<string>();
+  const out: string[] = [];
+  for (const row of rows) {
+    const id = row.node.id;
+    const underSelected =
+      row.parentId !== null && (selected.has(row.parentId) || covered.has(row.parentId));
+    if (underSelected) covered.add(id);
+    else if (selected.has(id)) out.push(id);
+  }
+  return out;
+}

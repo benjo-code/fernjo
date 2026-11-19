@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { conn, folder } from "./testing";
-import { countDescendants, findNode, flattenRows, matchesFilter } from "./rows";
+import { countDescendants, findNode, flattenRows, matchesFilter, selectionTops } from "./rows";
 
 const tree = () => [
   folder("Homelab", [conn("pve-01"), conn("DC01", "rdp", { description: "domain controller" })]),
@@ -107,5 +107,17 @@ describe("findNode", () => {
     expect(findNode(tree(), "DC01")?.name).toBe("DC01");
     expect(findNode(tree(), "web-01")?.name).toBe("web-01");
     expect(findNode(tree(), "nope")).toBeUndefined();
+  });
+});
+
+describe("selectionTops", () => {
+  test("selectionTops drops a node whose ancestor is selected", () => {
+    const rows = flattenRows(tree(), new Set(["Homelab"]), "");
+    expect(selectionTops(rows, new Set(["Homelab", "pve-01", "web-01"]))).toEqual([
+      "Homelab",
+      "web-01",
+    ]);
+    expect(selectionTops(rows, new Set(["DC01", "pve-01"]))).toEqual(["pve-01", "DC01"]);
+    expect(selectionTops(rows, new Set())).toEqual([]);
   });
 });

@@ -375,3 +375,110 @@ describe("TreeStore.applySnapshot", () => {
     expect(store.selectedId).toBeNull();
   });
 });
+
+describe("TreeStore selection", () => {
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  const open = async () => {
+    const r = await started(tree(), { getNode: async (id: string) => resolved({ id, name: id }) });
+    r.store.expand("Homelab");
+    return r;
+  };
+
+  test("selectOnly replaces the selection", async () => {
+    const { store } = await open();
+    store.selectOnly("pve-01");
+    store.toggleSelect("web-01");
+    store.selectOnly("DC01");
+    expect([...store.selectedIds]).toEqual(["DC01"]);
+    expect(store.selectedId).toBe("DC01");
+    expect(store.anchorId).toBe("DC01");
+    store.selectOnly(null);
+    expect(store.selectedIds.size).toBe(0);
+    expect(store.selectedId).toBeNull();
+    expect(store.anchorId).toBeNull();
+  });
+
+  test("toggleSelect adds and removes one id and keeps the anchor sensible", async () => {
+    const { store } = await open();
+    store.selectOnly("pve-01");
+    store.toggleSelect("web-01");
+    expect([...store.selectedIds].sort()).toEqual(["pve-01", "web-01"]);
+    expect(store.anchorId).toBe("web-01");
+    expect(store.selectedId).toBe("web-01");
+    expect(store.isSelected("pve-01")).toBe(true);
+    store.toggleSelect("web-01");
+    expect([...store.selectedIds]).toEqual(["pve-01"]);
+    expect(store.selectedId).toBe("pve-01");
+    expect(store.anchorId).toBe("pve-01");
+    store.toggleSelect("pve-01");
+    expect(store.selectedIds.size).toBe(0);
+    expect(store.selectedId).toBeNull();
+    expect(store.anchorId).toBeNull();
+  });
+
+  test("selectRange selects the visible rows between anchor and target in either direction", async () => {
+    const { store } = await open();
+    store.selectOnly("pve-01");
+    store.selectRange("web-01");
+    expect([...store.selectedIds].sort()).toEqual(["DC01", "pve-01", "web-01"]);
+    expect(store.anchorId).toBe("pve-01");
+    store.selectOnly("web-01");
+    store.selectRange("Homelab");
+    expect([...store.selectedIds].sort()).toEqual(["DC01", "Homelab", "pve-01", "web-01"]);
+    expect(store.anchorId).toBe("web-01");
+    store.selectOnly("DC01");
+    store.selectRange("pve-01");
+    expect([...store.selectedIds].sort()).toEqual(["DC01", "pve-01"]);
+  });
+
+  test("selectRange without an anchor behaves like selectOnly", async () => {
+    const { store } = await open();
+    store.selectRange("DC01");
+    expect([...store.selectedIds]).toEqual(["DC01"]);
+    expect(store.anchorId).toBe("DC01");
+  });
+
+  test("selectRange skips children of collapsed folders", async () => {
+    const { store } = await started();
+    store.selectOnly("Homelab");
+    store.selectRange("web-01");
+    expect([...store.selectedIds].sort()).toEqual(["Homelab", "web-01"]);
+  });
+
+  test("selectionTops drops a node whose ancestor is selected", async () => {
+    const { store } = await open();
+    store.selectOnly("Homelab");
+    store.toggleSelect("pve-01");
+    store.toggleSelect("web-01");
+    expect(store.selectionTops()).toEqual(["Homelab", "web-01"]);
+  });
+
+  test("deleting nodes prunes the selection", async () => {
+    const { store, setTree } = await open();
+    store.selectOnly("pve-01");
+    store.toggleSelect("web-01");
+    setTree([folder("Homelab", [conn("pve-01"), conn("DC01", "rdp")])]);
+    await store.remove("web-01");
+    expect([...store.selectedIds]).toEqual(["pve-01"]);
+    expect(store.selectedId).toBe("pve-01");
+    store.selectOnly("DC01");
+    setTree([]);
+    await store.remove("Homelab");
+    expect(store.selectedIds.size).toBe(0);
+    expect(store.anchorId).toBeNull();
+    expect(store.selectedId).toBeNull();
+  });
+
+  test("detail is cleared while several nodes are selected", async () => {
+    const { store } = await open();
+    store.select("web-01");
+    await tick();
+    expect(store.detail?.id).toBe("web-01");
+    store.toggleSelect("pve-01");
+    await tick();
+    expect(store.detail).toBeNull();
+    store.toggleSelect("pve-01");
+    await tick();
+    expect(store.detail?.id).toBe("web-01");
+  });
+});

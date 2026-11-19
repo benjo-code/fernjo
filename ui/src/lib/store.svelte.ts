@@ -2,7 +2,7 @@
 // only source of the tree; every mutation goes through one queue so commands never overlap.
 import { SvelteSet } from "svelte/reactivity";
 import { toApiError } from "./api";
-import { collectIds, flattenRows, type Row } from "./rows";
+import { collectIds, flattenRows, selectionTops, type Row } from "./rows";
 import type { Api, ApiError, NodePatch, Notice, ResolvedNode, Snapshot, TreeNode } from "./types";
 
 const STORAGE_KEY = "fernjo.expanded.v1";
@@ -33,7 +33,12 @@ interface RunOptions {
 export class TreeStore {
   children = $state<TreeNode[]>([]);
   notices = $state<Notice[]>([]);
+  /** The single primary node: drives `detail` and the properties panel. */
   selectedId = $state<string | null>(null);
+  /** Every selected node; `selectedId` is always one of them (or `null` when empty). */
+  selectedIds = new SvelteSet<string>();
+  /** Start of a Shift range: the node last selected without Shift. */
+  anchorId = $state<string | null>(null);
   expanded = new SvelteSet<string>();
   filter = $state("");
   renamingId = $state<string | null>(null);
@@ -66,9 +71,60 @@ export class TreeStore {
   }
 
   select(id: string | null) {
-    const changed = id !== this.selectedId;
+    this.selectOnly(id);
+  }
+
+  /** Makes `id` the whole selection (and the range anchor); `null` clears it. */
+  selectOnly(id: string | null) {
+    const before = this.#detailTarget();
+    this.selectedIds.clear();
+    if (id !== null) this.selectedIds.add(id);
     this.selectedId = id;
-    if (changed) void this.#refreshDetail();
+    this.anchorId = id;
+    this.#detailMaybeChanged(before);
+  }
+
+  /** Ctrl/Cmd click: adds or removes one node. An added node becomes anchor and primary. */
+  toggleSelect(id: string) {
+    const before = this.#detailTarget();
+    if (this.selectedIds.delete(id)) {
+      if (this.selectedId === id) {
+        const rest = [...this.selectedIds];
+        this.selectedId = rest.length > 0 ? rest[rest.length - 1] : null;
+      }
+      if (this.anchorId === id) this.anchorId = this.selectedId;
+    } else {
+      this.selectedIds.add(id);
+      this.selectedId = id;
+      this.anchorId = id;
+    }
+    this.#detailMaybeChanged(before);
+  }
+
+  /** Shift click: the visible rows from the anchor to `id` become the selection; the anchor stays. */
+  selectRange(id: string) {
+    const anchor = this.anchorId;
+    const from = anchor === null ? -1 : this.rows.findIndex((r) => r.node.id === anchor);
+    const to = this.rows.findIndex((r) => r.node.id === id);
+    if (from < 0 || to < 0) {
+      this.selectOnly(id);
+      return;
+    }
+    const before = this.#detailTarget();
+    this.selectedIds.clear();
+    const [lo, hi] = from <= to ? [from, to] : [to, from];
+    for (let i = lo; i <= hi; i++) this.selectedIds.add(this.rows[i].node.id);
+    this.selectedId = id;
+    this.#detailMaybeChanged(before);
+  }
+
+  isSelected(id: string): boolean {
+    return this.selectedIds.has(id);
+  }
+
+  /** The selected nodes whose ancestors are not selected, in row order. */
+  selectionTops(): string[] {
+    return selectionTops(this.rows, this.selectedIds);
   }
 
   toggle(id: string) {
@@ -179,7 +235,7 @@ export class TreeStore {
   /** Asks Rust for the selected node's effective values; late answers for an old selection are dropped. */
   async #refreshDetail(): Promise<void> {
     const token = ++this.#detailToken;
-    const id = this.selectedId;
+    const id = this.#detailTarget();
     if (id === null) {
       this.detail = null;
       return;
@@ -191,6 +247,15 @@ export class TreeStore {
       // the node vanished or Rust is unavailable: show the empty state, not an error
     }
     if (token === this.#detailToken) this.detail = detail;
+  }
+
+  /** The node whose details are shown: the primary one, only while it is the sole selection. */
+  #detailTarget(): string | null {
+    return this.selectedIds.size === 1 ? this.selectedId : null;
+  }
+
+  #detailMaybeChanged(before: string | null) {
+    if (this.#detailTarget() !== before) void this.#refreshDetail();
   }
 
   #afterCreate(parentId: string | null, id: string | null) {
@@ -207,7 +272,12 @@ export class TreeStore {
     this.children = children;
     if (notices.length > 0) this.notices = [...this.notices, ...notices];
     const { all, folders } = collectIds(children);
-    if (this.selectedId !== null && !all.has(this.selectedId)) this.selectedId = null;
+    for (const id of [...this.selectedIds]) if (!all.has(id)) this.selectedIds.delete(id);
+    if (this.selectedId !== null && !this.selectedIds.has(this.selectedId)) {
+      const rest = [...this.selectedIds];
+      this.selectedId = rest.length > 0 ? rest[rest.length - 1] : null;
+    }
+    if (this.anchorId !== null && !all.has(this.anchorId)) this.anchorId = this.selectedId;
     if (this.renamingId !== null && !all.has(this.renamingId)) this.renamingId = null;
     let pruned = false;
     for (const id of [...this.expanded]) {
