@@ -4,7 +4,6 @@
 //! folder is). Same rules as `connections.json`: atomic write with `.bak`, missing means
 //! defaults, a newer schema is refused and never overwritten.
 
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -12,7 +11,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use crate::error::{LoadError, SaveError};
-use crate::persist::{move_aside, with_suffix, write_atomic};
+use crate::persist::{move_aside, read_capped, with_suffix, write_atomic};
 
 /// Name of the settings file inside the config folder.
 pub const FILE_NAME: &str = "settings.json";
@@ -114,7 +113,7 @@ enum Read {
 }
 
 fn read_file(path: &Path) -> Result<Read, LoadError> {
-    let bytes = match fs::read(path) {
+    let bytes = match read_capped(path) {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Read::Missing),
         Err(e) => {
@@ -221,6 +220,20 @@ mod tests {
             terminal: None,
             theme: None,
         }
+    }
+
+    #[test]
+    fn settings_load_refuses_a_file_over_the_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = path(dir.path());
+        let file = fs::File::create(&p).unwrap();
+        file.set_len(crate::persist::MAX_DATA_FILE_LEN + 1).unwrap();
+        drop(file);
+        assert!(matches!(load(&p), Err(LoadError::Unreadable { .. })));
+        assert_eq!(
+            fs::metadata(&p).unwrap().len(),
+            crate::persist::MAX_DATA_FILE_LEN + 1
+        );
     }
 
     #[test]

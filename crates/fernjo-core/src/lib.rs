@@ -21,8 +21,8 @@ pub use paths::{
     locate, locate_from,
 };
 pub use persist::{
-    CURRENT_VERSION, FILE_NAME, Loaded, Notice, document, load, migrate_with, parse_document, save,
-    write_exact,
+    CURRENT_VERSION, FILE_NAME, Loaded, MAX_DATA_FILE_LEN, Notice, document, load, migrate_with,
+    parse_document, save, write_exact,
 };
 pub use resolve::resolve;
 pub use settings::{

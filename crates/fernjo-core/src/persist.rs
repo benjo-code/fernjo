@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read as _, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -199,8 +199,38 @@ enum Read {
     Bad(String),
 }
 
+/// Largest `connections.json` or `settings.json` (and `.bak`) `load` reads: 64 MiB, far above
+/// any real tree. A larger file is refused as unreadable and left untouched.
+pub const MAX_DATA_FILE_LEN: u64 = 64 * 1024 * 1024;
+
+/// Reads `path` unless it is longer than [`MAX_DATA_FILE_LEN`] (`InvalidData`). The length is
+/// checked before reading, and the read itself is bounded in case the file grows meanwhile.
+pub(crate) fn read_capped(path: &Path) -> io::Result<Vec<u8>> {
+    let too_large = || {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "the file is larger than {} MiB",
+                MAX_DATA_FILE_LEN / (1024 * 1024)
+            ),
+        )
+    };
+    let file = fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    if len > MAX_DATA_FILE_LEN {
+        return Err(too_large());
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
+    file.take(MAX_DATA_FILE_LEN.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_DATA_FILE_LEN {
+        return Err(too_large());
+    }
+    Ok(bytes)
+}
+
 fn read_file(path: &Path) -> Result<Read, LoadError> {
-    let bytes = match fs::read(path) {
+    let bytes = match read_capped(path) {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Read::Missing),
         Err(e) => {
@@ -390,6 +420,32 @@ mod tests {
             .collect();
         v.sort();
         v
+    }
+
+    #[test]
+    fn load_refuses_a_file_over_the_cap_as_unreadable() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = main_path(dir.path());
+        let file = fs::File::create(&main).unwrap();
+        file.set_len(MAX_DATA_FILE_LEN + 1).unwrap();
+        drop(file);
+        match load(&main) {
+            Err(LoadError::Unreadable { reason, .. }) => assert!(reason.contains("larger than")),
+            other => panic!("expected Unreadable, got {other:?}"),
+        }
+        assert_eq!(fs::metadata(&main).unwrap().len(), MAX_DATA_FILE_LEN + 1);
+    }
+
+    #[test]
+    fn read_capped_accepts_up_to_the_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("f");
+        fs::write(&p, b"abc").unwrap();
+        assert_eq!(read_capped(&p).unwrap(), b"abc");
+        assert_eq!(
+            read_capped(&dir.path().join("none")).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
     }
 
     fn main_path(dir: &Path) -> PathBuf {
