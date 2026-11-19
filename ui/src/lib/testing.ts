@@ -143,6 +143,7 @@ type Calls = Record<keyof Api, unknown[][]>;
 export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
   const calls: Calls = {
     listTree: [],
+    reloadTree: [],
     getNode: [],
     createFolder: [],
     createConnection: [],
@@ -193,6 +194,10 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     listTree: async () => {
       calls.listTree.push([]);
       return impl.listTree ? impl.listTree() : snapshot(current);
+    },
+    reloadTree: async () => {
+      calls.reloadTree.push([]);
+      return impl.reloadTree ? impl.reloadTree() : snapshot(current);
     },
     getNode: async (id) => {
       calls.getNode.push([id]);

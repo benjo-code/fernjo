@@ -39,6 +39,8 @@ export class TreeStore {
   renamingId = $state<string | null>(null);
   error = $state<string | null>(null);
   loadError = $state<string | null>(null);
+  /** connections.json changed under us and the last edit was refused; `reload()` clears it. */
+  changedOnDisk = $state(false);
   /** The selected node with effective values and sources, as resolved by Rust. */
   detail = $state<ResolvedNode | null>(null);
   /** True once the first load has finished, whether it worked or not. */
@@ -157,6 +159,15 @@ export class TreeStore {
     });
   }
 
+  /** Re-reads connections.json (Rust adopts what is on disk) and clears the changed-on-disk state. */
+  reload() {
+    return this.#run(async () => {
+      const snapshot = await this.#api.reloadTree();
+      this.#apply(snapshot.children, snapshot.notices);
+      this.changedOnDisk = false;
+    });
+  }
+
   /** Adopts a snapshot that another command returned (for example deleting a credential). */
   applySnapshot(snapshot: Snapshot) {
     return this.#run(async () => {
@@ -217,6 +228,8 @@ export class TreeStore {
       } catch (e) {
         const err = toApiError(e);
         if (err.code === "load_failed") this.loadError = err.message;
+        // the bar with its Reload button replaces the error bar for this one
+        else if (err.code === "changed_on_disk") this.changedOnDisk = true;
         // a pending data folder change blocks every write: always tell the user, even for
         // callers that show their own errors
         else if (!options.silent || err.code === "restart_required") this.error = err.message;

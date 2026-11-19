@@ -42,6 +42,24 @@ describe("TreeStore", () => {
     expect(store.loadError).toBeNull();
   });
 
+  test("changed_on_disk shows the reload state, keeps the error bar empty, and reload clears it", async () => {
+    const { store, setTree, calls } = await started(tree(), {
+      createFolder: async () => {
+        throw apiError("changed_on_disk");
+      },
+    });
+    const err = await store.createFolder(null, null);
+    expect(err?.code).toBe("changed_on_disk");
+    expect(store.changedOnDisk).toBe(true);
+    expect(store.error).toBeNull();
+
+    setTree([conn("theirs")]);
+    expect(await store.reload()).toBeNull();
+    expect(calls.reloadTree).toHaveLength(1);
+    expect(store.changedOnDisk).toBe(false);
+    expect(store.children.map((n) => n.name)).toEqual(["theirs"]);
+  });
+
   test("selection_is_cleared_when_snapshot_no_longer_contains_it", async () => {
     const { store, setTree, api } = await started();
     store.select("web-01");

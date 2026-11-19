@@ -44,6 +44,16 @@
   </div>
 {/if}
 
+{#if store.changedOnDisk}
+  <div class="bar error" role="alert">
+    <Icon name="alert" size={14} />
+    <span class="text"
+      >connections.json was changed by another program or device. Your last edit was not saved.</span
+    >
+    <button type="button" class="dismiss" onclick={() => void store.reload()}>Reload</button>
+  </div>
+{/if}
+
 {#if store.error}
   <div class="bar error" role="alert">
     <Icon name="alert" size={14} />

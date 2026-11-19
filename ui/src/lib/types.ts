@@ -170,6 +170,8 @@ export interface DataFolderInfo {
 /** The Tauri commands as a typed interface (replaced by a mock in tests). */
 export interface Api {
   listTree(): Promise<Snapshot>;
+  /** Re-reads connections.json after it changed on disk and returns the adopted tree. */
+  reloadTree(): Promise<Snapshot>;
   getNode(id: string): Promise<ResolvedNode>;
   createFolder(parentId: string | null, index: number | null, name: string): Promise<Mutation>;
   createConnection(

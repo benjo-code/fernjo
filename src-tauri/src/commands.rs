@@ -117,6 +117,18 @@ pub fn list_tree(state: &AppState) -> Result<Snapshot, CommandError> {
     })
 }
 
+/// Re-reads `connections.json` after it changed on disk and returns the adopted tree. Read-only
+/// with respect to the file, so it is allowed while a data folder change waits for a restart.
+pub fn reload_tree(state: &AppState) -> Result<Snapshot, CommandError> {
+    with_store(state, |store| {
+        let notice = store.reload().map_err(|e| CommandError {
+            code: "load_failed".to_string(),
+            message: e.to_string(),
+        })?;
+        Ok(snapshot(store, notice.into_iter().collect()))
+    })
+}
+
 pub fn get_node(state: &AppState, id: NodeId) -> Result<ResolvedNode, CommandError> {
     with_store(state, |store| Ok(store.tree().resolve_node(id)?))
 }
@@ -181,6 +193,11 @@ pub mod handlers {
     #[tauri::command]
     pub fn list_tree(state: State<'_, AppState>) -> Result<Snapshot, CommandError> {
         super::list_tree(&state)
+    }
+
+    #[tauri::command]
+    pub fn reload_tree(state: State<'_, AppState>) -> Result<Snapshot, CommandError> {
+        super::reload_tree(&state)
     }
 
     #[tauri::command]
@@ -262,6 +279,28 @@ mod tests {
         let snapshot = list_tree(&state(dir.path())).unwrap();
         assert!(snapshot.children.is_empty());
         assert!(snapshot.notices.is_empty());
+    }
+
+    #[test]
+    fn reload_tree_returns_the_other_devices_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = state(dir.path());
+        create_folder(&st, None, None, "mine".into()).unwrap();
+        // another device writes a different tree
+        let other = tempfile::tempdir().unwrap();
+        let other_st = state(other.path());
+        create_folder(&other_st, None, None, "theirs".into()).unwrap();
+        fs::copy(other.path().join(FILE_NAME), dir.path().join(FILE_NAME)).unwrap();
+
+        let err = create_folder(&st, None, None, "blocked".into()).unwrap_err();
+        assert_eq!(err.code, "changed_on_disk");
+
+        let snapshot = reload_tree(&st).unwrap();
+        assert_eq!(snapshot.children.len(), 1);
+        assert_eq!(snapshot.children[0].name, "theirs");
+
+        let m = create_folder(&st, None, None, "after".into()).unwrap();
+        assert_eq!(m.snapshot.children.len(), 2);
     }
 
     #[test]

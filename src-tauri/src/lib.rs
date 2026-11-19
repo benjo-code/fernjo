@@ -52,6 +52,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::handlers::list_tree,
+            commands::handlers::reload_tree,
             commands::handlers::get_node,
             commands::handlers::create_folder,
             commands::handlers::create_connection,

@@ -22,6 +22,7 @@ async function call<T>(command: string, args?: InvokeArgs, options?: InvokeOptio
 
 export const tauriApi: Api = {
   listTree: () => call("list_tree"),
+  reloadTree: () => call("reload_tree"),
   getNode: (id) => call("get_node", { id }),
   createFolder: (parentId, index, name) => call("create_folder", { parentId, index, name }),
   createConnection: (parentId, index, name, protocol, host) =>

@@ -1656,6 +1656,7 @@ mod tests {
         }
         vec![
             entry("list_tree", |w| j(commands::list_tree(&w.st))),
+            entry("reload_tree", |w| j(commands::reload_tree(&w.st))),
             entry("get_node", |w| j(commands::get_node(&w.st, w.conn))),
             entry("create_folder", |w| {
                 j(commands::create_folder(&w.st, None, None, "n".into()))
