@@ -125,11 +125,33 @@ jobs:
           BUNDLES: ${{ matrix.bundles }}
           TARGET: ${{ matrix.target }}
         run: |
+          # Keep build paths out of panic messages and debug info. rustc matches the native
+          # path form, so Windows needs C:\Users\... (cygpath -w), not /c/Users/....
+          workspace="$GITHUB_WORKSPACE"
+          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+          if command -v cygpath >/dev/null 2>&1; then
+            workspace="$(cygpath -w "$workspace")"
+            cargo_home="$(cygpath -w "$cargo_home")"
+          fi
+          export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }--remap-path-prefix=$workspace=/build --remap-path-prefix=$cargo_home=/cargo"
           if [ -n "$TARGET" ]; then
             pnpm tauri build --bundles "$BUNDLES" --target "$TARGET"
           else
             pnpm tauri build --bundles "$BUNDLES"
           fi
+
+      # The remap above only helps if it took effect: fail when the app binary still names a
+      # runner path. Tested on synthetic files in tools/test-release-scripts.sh.
+      - name: Check the binary for build paths
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          dir=target/release
+          if [ -n "$TARGET" ]; then dir="target/$TARGET/release"; fi
+          bin="$dir/fernjo"
+          if [ -f "$bin.exe" ]; then bin="$bin.exe"; fi
+          bash tools/check-no-build-paths.sh "$bin"
 
       # Fails loudly when a glob matches nothing, listing what the bundler actually produced,
       # so a naming surprise shows up in the first run instead of as an empty release.
