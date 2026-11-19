@@ -265,10 +265,10 @@ First installable version: connection tree, vault, SSH tabs and mRemoteNG import
 Goal: The first release's known gaps are closed: no silent data loss, a clearer and more flexible UI, and the Low findings of the M6 reviews triaged.
 
 **Tasks**
-- [ ] Data safety: `connections.json` is checked against a fingerprint of the last bytes read or written before every save, and a file changed by a sync tool is refused or offered for reload instead of overwritten (same check-then-write idea as `Vault::save`)
+- [x] Data safety: `connections.json` is checked against a fingerprint of the last bytes read or written before every save, and a file changed by a sync tool is refused or offered for reload instead of overwritten (same check-then-write idea as `Vault::save`)
 - [ ] Closing the window asks for confirmation when at least one session is connected
-- [ ] Settings dialog names the real cause when settings are not saved (`FERNJO_DATA_DIR` set versus unusable `settings.json`)
-- [ ] SSH agent sign step gets its own, longer limit (or a paused clock) so a touch or confirmation per signature does not hit the 15 s connect timeout
+- [x] Settings dialog names the real cause when settings are not saved (`FERNJO_DATA_DIR` set versus unusable `settings.json`)
+- [x] SSH agent sign step gets its own, longer limit (or a paused clock) so a touch or confirmation per signature does not hit the 15 s connect timeout
 - [ ] Close the tab when the shell ends on purpose (clean exit status), keep it yellow with Reconnect on connection loss; setting in Settings, `exitStatus` in the session wire contract, tests for each ending kind
 - [ ] Discoverability review of the whole app: design critique with real screenshots (`impeccable`), findings agreed with the owner as a short list
 - [ ] Implement the agreed discoverability changes (vault recognisable and self-explanatory, Import & backup, Export and Settings easy to find and consistently named, empty states, first-run guidance)
@@ -281,7 +281,8 @@ Goal: The first release's known gaps are closed: no silent data loss, a clearer 
 - [x] Triage of the vault, SSH and import Low findings: each is fixed, accepted with a reason in `Docs/DECISIONS.md`, or moved back to the backlog
 
 **Acceptance criteria**
-- [ ] Test: a `connections.json` replaced on disk by another process while the app runs is not overwritten by the next save
+- [x] Test: a `connections.json` replaced on disk by another process while the app runs is not overwritten by the next save – `cargo test --workspace` on 2026-11-19 at fe1bcdb: `store::tests::save_is_refused_when_the_file_changed_on_disk` (`fernjo-core`: the next save is `ChangedOnDisk`, the file keeps the external content, tree and `.bak` unchanged) and `commands::tests::reload_tree_returns_the_other_devices_edit` (`fernjo-app`: `create_folder` returns `changed_on_disk`, `reload_tree` returns the external tree, the next save works) pass
+- [ ] Manual, owner: an SSH agent that confirms each signature (`ssh-add -c <key>`) still logs in when the confirmation comes after more than 15 s (the sign step has its own 120 s limit; the unit test `params::tests::new_sets_the_agent_sign_timeout_apart_from_the_connect_timeout` covers the setting, not the wait)
 - [ ] Manual: closing the window with a connected session asks first; with no connected session it closes at once
 - [ ] SSH container tests: `exit 0` closes the tab, `exit 3` and a killed connection keep it with Reconnect (or the agreed rule for non-zero)
 - [ ] Manual, owner: the owner finds the vault, Import & backup and Settings without a hint; the agreed review list is implemented or each item recorded as declined
