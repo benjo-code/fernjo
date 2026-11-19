@@ -348,15 +348,17 @@ async fn agent_attempt<H: client::Handler>(
     agent: &mut Agent,
     key: &PublicKey,
     limit: Duration,
+    sign_limit: Duration,
 ) -> Result<Outcome, SshError> {
     let hash = if key.algorithm().is_rsa() {
         rsa_hash(handle, limit).await?
     } else {
         None
     };
-    // The agent signs inside this call, so its answer time is bounded together with the server's.
+    // The agent signs inside this call, so its answer time is bounded together with the server's;
+    // an agent that waits for a touch or a confirmation gets the longer sign limit.
     match tokio::time::timeout(
-        limit,
+        sign_limit,
         handle.authenticate_publickey_with(user, key.clone(), hash, agent),
     )
     .await
@@ -446,7 +448,15 @@ async fn authenticate<H: client::Handler, I: Interaction>(
         let outcome = match attempt {
             Attempt::Agent(i) => match (agent.as_mut(), identities.get(i)) {
                 (Some(agent), Some(identity)) => {
-                    agent_attempt(handle, &user, agent, identity, limit).await?
+                    agent_attempt(
+                        handle,
+                        &user,
+                        agent,
+                        identity,
+                        limit,
+                        params.agent_sign_timeout,
+                    )
+                    .await?
                 }
                 _ => Outcome::Skipped,
             },

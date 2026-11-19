@@ -49,10 +49,13 @@ pub struct ConnectParams {
     pub cols: u32,
     pub rows: u32,
     pub connect_timeout: Duration,
+    /// Limit for the agent's signature step alone; an agent may wait for a touch or a confirmation.
+    pub agent_sign_timeout: Duration,
 }
 
 impl ConnectParams {
     pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
+    pub const DEFAULT_AGENT_SIGN_TIMEOUT: Duration = Duration::from_secs(120);
 
     /// Parameters with defaults: no username or credential, keepalive 30 s, 80x24, 15 s timeout.
     pub fn new(host: impl Into<String>, port: u16, known_hosts: PathBuf) -> Self {
@@ -68,6 +71,7 @@ impl ConnectParams {
             cols: 80,
             rows: 24,
             connect_timeout: Self::DEFAULT_TIMEOUT,
+            agent_sign_timeout: Self::DEFAULT_AGENT_SIGN_TIMEOUT,
         }
     }
 }
@@ -102,5 +106,15 @@ mod tests {
         assert_eq!(p.connect_timeout, ConnectParams::DEFAULT_TIMEOUT);
         assert_eq!((p.cols, p.rows, p.keepalive_secs), (80, 24, 30));
         assert!(p.username.is_none() && p.credential.is_none());
+    }
+
+    #[test]
+    fn new_sets_the_agent_sign_timeout_apart_from_the_connect_timeout() {
+        let p = ConnectParams::new("h", 22, PathBuf::from("kh"));
+        assert_eq!(
+            p.agent_sign_timeout,
+            ConnectParams::DEFAULT_AGENT_SIGN_TIMEOUT
+        );
+        assert!(p.agent_sign_timeout > p.connect_timeout);
     }
 }
