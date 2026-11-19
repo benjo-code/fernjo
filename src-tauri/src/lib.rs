@@ -39,6 +39,14 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::open_for_app(fernjo_core::locate()))
+        // Set the window icon explicitly: on Linux (Wayland) the title bar otherwise shows a
+        // placeholder while the taskbar icon is right. A failure is ignored, never fatal.
+        .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_icon(tauri::include_image!("icons/32x32.png"));
+            }
+            Ok(())
+        })
         // A reload or a crashed page leaves its sessions running without a UI (the page's
         // `closeAll` on `pagehide` is fire-and-forget), so every page load ends them. The first
         // load of the app finds none.
