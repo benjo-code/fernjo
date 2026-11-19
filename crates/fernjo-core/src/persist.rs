@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::error::{DocumentError, LoadError, SaveError};
 use crate::model::{Node, NodeId, NodeKind};
@@ -78,12 +79,29 @@ pub fn document(tree: &Tree) -> Value {
 
 /// Writes `tree` atomically: temp file in the same folder, flushed to disk, the current
 /// file copied to `.bak`, then the temp file renamed over the target.
-pub fn save(path: &Path, tree: &Tree) -> Result<(), SaveError> {
+/// Returns the fingerprint of exactly the bytes written (the trailing newline included).
+pub fn save(path: &Path, tree: &Tree) -> Result<Fingerprint, SaveError> {
     let json = serde_json::to_string_pretty(&file_out(tree)).map_err(|e| SaveError {
         path: path.to_path_buf(),
         source: io::Error::other(e),
     })?;
-    write_atomic(path, json.as_bytes())
+    write_atomic(path, json.as_bytes())?;
+    let mut hasher = Sha256::new();
+    hasher.update(json.as_bytes());
+    hasher.update(b"\n");
+    Ok(hasher.finalize().into())
+}
+
+/// SHA-256 of a file's bytes, used to notice that another program changed the file.
+pub type Fingerprint = [u8; 32];
+
+/// Fingerprint of the bytes in `path` (read with the size cap); `None` when it is missing.
+pub fn fingerprint(path: &Path) -> io::Result<Option<Fingerprint>> {
+    match read_capped(path) {
+        Ok(bytes) => Ok(Some(Sha256::digest(&bytes).into())),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 /// Shared by every file in the data and config folders: creates the parent folder, writes a

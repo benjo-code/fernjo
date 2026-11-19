@@ -80,6 +80,10 @@ pub enum StoreError {
     Tree(#[from] TreeError),
     #[error(transparent)]
     Save(#[from] SaveError),
+    #[error(
+        "connections.json was changed by another program or device since fernjo last read it; reload to see those changes"
+    )]
+    ChangedOnDisk,
 }
 
 impl StoreError {
@@ -88,6 +92,7 @@ impl StoreError {
         match self {
             StoreError::Tree(e) => e.code(),
             StoreError::Save(_) => "save_failed",
+            StoreError::ChangedOnDisk => "changed_on_disk",
         }
     }
 }
