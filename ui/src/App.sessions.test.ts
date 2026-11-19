@@ -237,7 +237,15 @@ async function startConnected(tree: TreeNode[] = [conn("web-01"), conn("db-01")]
   const mock = await start(tree, {
     openSession: async (_id, onEvent) => {
       handlers.push(onEvent);
-      queueMicrotask(() => onEvent({ kind: "state", state: "connected", detail: null }));
+      queueMicrotask(() =>
+        onEvent({
+          kind: "state",
+          state: "connected",
+          detail: null,
+          exitStatus: null,
+          endedCleanly: false,
+        }),
+      );
       return `sid-${handlers.length}`;
     },
   });

@@ -39,7 +39,11 @@ async function setup(
     props: {
       store,
       vault,
-      sessions: new SessionStore(mock.api, (id) => id),
+      sessions: new SessionStore(
+        mock.api,
+        (id) => id,
+        () => true,
+      ),
       onOpenVault: () => {},
     },
   });
@@ -218,7 +222,14 @@ describe("TreeView", () => {
     const store = new TreeStore(mock.api);
     mounted = mount(TreeView, {
       target: document.body,
-      props: { store, sessions: new SessionStore(mock.api, (id) => id) },
+      props: {
+        store,
+        sessions: new SessionStore(
+          mock.api,
+          (id) => id,
+          () => true,
+        ),
+      },
     });
     flushSync();
     expect(document.querySelector("button")).toBeNull(); // not loaded yet
@@ -274,7 +285,11 @@ describe("TreeView", () => {
       props: {
         store,
         vault,
-        sessions: new SessionStore(mock.api, (id) => id),
+        sessions: new SessionStore(
+          mock.api,
+          (id) => id,
+          () => true,
+        ),
         onOpenVault: () => {},
       },
     });

@@ -589,7 +589,15 @@ describe("ImportDialog", () => {
     const onimport = vi.fn();
     mounted = mount(TreeView, {
       target: document.body,
-      props: { store: tree, sessions: new SessionStore(m.api, (id) => id), onimport },
+      props: {
+        store: tree,
+        sessions: new SessionStore(
+          m.api,
+          (id) => id,
+          () => true,
+        ),
+        onimport,
+      },
     });
     flushSync();
     expect(button("New folder")).toBeTruthy();

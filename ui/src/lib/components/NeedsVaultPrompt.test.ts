@@ -18,7 +18,13 @@ async function setup(impl: Partial<Api> = {}) {
     vaultStatus: async () => vaultStatus({ state: "locked" }),
     ...impl,
   });
-  t.emit({ kind: "state", state: "needsVault", detail: null });
+  t.emit({
+    kind: "state",
+    state: "needsVault",
+    detail: null,
+    exitStatus: null,
+    endedCleanly: false,
+  });
   const vault = new VaultStore(t.api);
   await vault.init();
   mounted = mount(NeedsVaultPrompt, {

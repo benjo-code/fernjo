@@ -118,10 +118,38 @@
       fontFamily: fontFamily.trim() === "" ? null : fontFamily.trim(),
       fontSize: toWire(fontSize, 65535),
       scrollback: toWire(scrollback, 4294967295),
+      closeOnExit: terminal.info.closeOnExit,
     });
     saving = false;
     if (err) terminalError = TERMINAL_ERRORS[err.code] ?? "Could not save the terminal settings";
     else saved = true;
+  }
+
+  /**
+   * Saves only this switch: the other fields go out as stored, so unsaved edits above stay unsaved
+   * and a save never resets the flag (Rust treats a missing `closeOnExit` as `true`).
+   */
+  async function toggleCloseOnExit(e: Event) {
+    const box = e.currentTarget as HTMLInputElement;
+    const stored = terminal.info;
+    if (saving || !stored) {
+      box.checked = stored?.closeOnExit ?? true;
+      return;
+    }
+    saving = true;
+    saved = false;
+    terminalError = null;
+    const err = await terminal.save({
+      fontFamily: stored.fontFamily,
+      fontSize: stored.fontSize,
+      scrollback: stored.scrollback,
+      closeOnExit: box.checked,
+    });
+    saving = false;
+    if (err) {
+      terminalError = "Could not save the terminal settings";
+      box.checked = terminal.info?.closeOnExit ?? true;
+    } else saved = true;
   }
 
   onMount(() => {
@@ -277,6 +305,16 @@
         />
       </label>
     </div>
+    <label class="choice close-on-exit">
+      <input
+        type="checkbox"
+        aria-label="Close the tab when the shell exits"
+        checked={terminal.info?.closeOnExit ?? true}
+        disabled={!terminal.info}
+        onchange={(e) => void toggleCloseOnExit(e)}
+      />
+      <span>Close the tab when the shell exits</span>
+    </label>
     {#if terminal.info?.unsavedReason}
       <p class="note">{unsavedNote(terminal.info.unsavedReason)}</p>
     {/if}
@@ -440,6 +478,10 @@
   .choice input {
     margin: 0;
     accent-color: var(--color-accent);
+  }
+
+  .close-on-exit {
+    margin-top: var(--space-3);
   }
 
   .choice input:focus-visible {

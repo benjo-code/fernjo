@@ -10,9 +10,9 @@ const enc = new TextEncoder();
 const buf = (s: string) => enc.encode(s).buffer as ArrayBuffer;
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 
-function setup(impl: Parameters<typeof mockApi>[1] = {}) {
+function setup(impl: Parameters<typeof mockApi>[1] = {}, closeOnExit: () => boolean = () => true) {
   const m = mockApi([], impl);
-  const store = new SessionStore(m.api, (id) => `host-${id}`);
+  const store = new SessionStore(m.api, (id) => `host-${id}`, closeOnExit);
   const emits: Emit[] = [];
   const origOpen = m.api.openSession;
   m.api.openSession = (nodeId, onEvent, cols, rows) => {
@@ -94,9 +94,21 @@ describe("SessionStore", () => {
   test("state_events_update_the_tab_and_detail", async () => {
     const s = setup();
     const { tab, emit } = await openAttached(s);
-    emit({ kind: "state", state: "connected", detail: null });
+    emit({
+      kind: "state",
+      state: "connected",
+      detail: null,
+      exitStatus: null,
+      endedCleanly: false,
+    });
     expect(s.store.tabs[0]).toMatchObject({ id: tab.id, state: "connected", detail: null });
-    emit({ kind: "state", state: "disconnected", detail: "connection reset" });
+    emit({
+      kind: "state",
+      state: "disconnected",
+      detail: "connection reset",
+      exitStatus: null,
+      endedCleanly: false,
+    });
     expect(s.store.tabs[0]).toMatchObject({ state: "disconnected", detail: "connection reset" });
   });
 
@@ -168,7 +180,13 @@ describe("SessionStore", () => {
   test("reconnect_calls_reconnectSession_with_the_current_size", async () => {
     const s = setup({ openSession: async () => "S1" });
     const { tab, emit, b } = await openAttached(s);
-    emit({ kind: "state", state: "disconnected", detail: "gone" });
+    emit({
+      kind: "state",
+      state: "disconnected",
+      detail: "gone",
+      exitStatus: null,
+      endedCleanly: false,
+    });
     b.size = { cols: 120, rows: 40 };
     s.store.reconnect(tab.id);
     expect(s.calls.reconnectSession).toEqual([["S1", 120, 40]]);
@@ -179,7 +197,13 @@ describe("SessionStore", () => {
     const s = setup({ openSession: async () => "S1" });
     const { tab, emit, b } = await openAttached(s);
     emit(buf("before"));
-    emit({ kind: "state", state: "disconnected", detail: null });
+    emit({
+      kind: "state",
+      state: "disconnected",
+      detail: null,
+      exitStatus: null,
+      endedCleanly: false,
+    });
     s.store.reconnect(tab.id);
     await tick();
     expect(b.out).toEqual(["before", "\r\n\x1b[2m— reconnected —\x1b[0m\r\n"]);
@@ -198,7 +222,13 @@ describe("SessionStore", () => {
   test("ack_and_input_forward_to_the_api", async () => {
     const s = setup({ openSession: async () => "S1" });
     const { tab, emit } = await openAttached(s);
-    emit({ kind: "state", state: "connected", detail: null });
+    emit({
+      kind: "state",
+      state: "connected",
+      detail: null,
+      exitStatus: null,
+      endedCleanly: false,
+    });
     const bytes = new Uint8Array([1, 2]);
     s.store.input(tab.id, bytes);
     s.store.ack(tab.id, 512);
@@ -218,12 +248,30 @@ describe("SessionStore", () => {
       prompt: { kind: "password", user: "u", host: "h" },
     });
     s.store.input(tab.id, bytes);
-    emit({ kind: "state", state: "needsVault", detail: null });
+    emit({
+      kind: "state",
+      state: "needsVault",
+      detail: null,
+      exitStatus: null,
+      endedCleanly: false,
+    });
     s.store.input(tab.id, bytes);
-    emit({ kind: "state", state: "disconnected", detail: null });
+    emit({
+      kind: "state",
+      state: "disconnected",
+      detail: null,
+      exitStatus: null,
+      endedCleanly: false,
+    });
     s.store.input(tab.id, bytes);
     expect(s.calls.sessionInput).toHaveLength(0);
-    emit({ kind: "state", state: "connected", detail: null });
+    emit({
+      kind: "state",
+      state: "connected",
+      detail: null,
+      exitStatus: null,
+      endedCleanly: false,
+    });
     s.store.input(tab.id, bytes);
     expect(s.calls.sessionInput).toEqual([["S1", bytes]]);
   });
@@ -233,13 +281,37 @@ describe("SessionStore", () => {
     const one = await openAttached(s, "a");
     const two = await openAttached(s, "a");
     expect(s.store.lampFor("a")).toBe("connecting");
-    one.emit({ kind: "state", state: "disconnected", detail: null });
+    one.emit({
+      kind: "state",
+      state: "disconnected",
+      detail: null,
+      exitStatus: null,
+      endedCleanly: false,
+    });
     expect(s.store.lampFor("a")).toBe("connecting");
-    two.emit({ kind: "state", state: "needsVault", detail: null });
+    two.emit({
+      kind: "state",
+      state: "needsVault",
+      detail: null,
+      exitStatus: null,
+      endedCleanly: false,
+    });
     expect(s.store.lampFor("a")).toBe("connecting");
-    two.emit({ kind: "state", state: "disconnected", detail: null });
+    two.emit({
+      kind: "state",
+      state: "disconnected",
+      detail: null,
+      exitStatus: null,
+      endedCleanly: false,
+    });
     expect(s.store.lampFor("a")).toBe("dropped");
-    two.emit({ kind: "state", state: "connected", detail: null });
+    two.emit({
+      kind: "state",
+      state: "connected",
+      detail: null,
+      exitStatus: null,
+      endedCleanly: false,
+    });
     expect(s.store.lampFor("a")).toBe("live");
   });
 
@@ -277,7 +349,13 @@ describe("SessionStore", () => {
       },
     });
     const { tab, emit, b } = await openAttached(s);
-    emit({ kind: "state", state: "disconnected", detail: "gone" });
+    emit({
+      kind: "state",
+      state: "disconnected",
+      detail: "gone",
+      exitStatus: null,
+      endedCleanly: false,
+    });
     s.store.reconnect(tab.id);
     await tick();
     expect(s.store.tabs[0]).toMatchObject({ state: "disconnected", detail: "no route to host" });
@@ -310,7 +388,13 @@ describe("SessionStore", () => {
       },
     });
     const { tab, emit } = await openAttached(s);
-    emit({ kind: "state", state: "needsVault", detail: null });
+    emit({
+      kind: "state",
+      state: "needsVault",
+      detail: null,
+      exitStatus: null,
+      endedCleanly: false,
+    });
     s.store.resume(tab.id, false);
     await tick();
     expect(s.store.tabs[0]).toMatchObject({ state: "disconnected", detail: "the vault is locked" });
@@ -327,7 +411,13 @@ describe("SessionStore", () => {
       answerPrompt: active,
     });
     const { tab, emit, b } = await openAttached(s);
-    emit({ kind: "state", state: "needsVault", detail: null });
+    emit({
+      kind: "state",
+      state: "needsVault",
+      detail: null,
+      exitStatus: null,
+      endedCleanly: false,
+    });
     s.store.resume(tab.id, true);
     await tick();
     expect(s.store.tabs[0]).toMatchObject({ state: "needsVault", detail: null });
@@ -337,7 +427,13 @@ describe("SessionStore", () => {
     await tick();
     expect(s.store.tabs[0]!.state).toBe("needsVault");
 
-    emit({ kind: "state", state: "disconnected", detail: "gone" });
+    emit({
+      kind: "state",
+      state: "disconnected",
+      detail: "gone",
+      exitStatus: null,
+      endedCleanly: false,
+    });
     s.store.reconnect(tab.id);
     await tick();
     // the optimistic "connecting" is undone and no separator line is written
@@ -349,7 +445,13 @@ describe("SessionStore", () => {
     const s = setup({ openSession: async () => "S1" });
     const { tab, emit, b } = await openAttached(s);
     s.store.reconnect(tab.id);
-    emit({ kind: "state", state: "connected", detail: null });
+    emit({
+      kind: "state",
+      state: "connected",
+      detail: null,
+      exitStatus: null,
+      endedCleanly: false,
+    });
     s.store.reconnect(tab.id);
     await tick();
     expect(s.calls.reconnectSession).toHaveLength(0);
@@ -361,10 +463,22 @@ describe("SessionStore", () => {
     const s = setup({ openSession: async () => "S1" });
     const { tab, emit } = await openAttached(s);
     s.store.resume(tab.id, false);
-    emit({ kind: "state", state: "connected", detail: null });
+    emit({
+      kind: "state",
+      state: "connected",
+      detail: null,
+      exitStatus: null,
+      endedCleanly: false,
+    });
     s.store.resume(tab.id, true);
     expect(s.calls.resumeSession).toHaveLength(0);
-    emit({ kind: "state", state: "needsVault", detail: null });
+    emit({
+      kind: "state",
+      state: "needsVault",
+      detail: null,
+      exitStatus: null,
+      endedCleanly: false,
+    });
     s.store.resume(tab.id, true);
     expect(s.calls.resumeSession).toEqual([["S1", true]]);
   });
@@ -411,5 +525,84 @@ describe("SessionStore", () => {
     s.store.previous();
     s.store.previous();
     expect(s.store.activeId).toBe(c);
+  });
+
+  describe("closing on a clean end", () => {
+    const end = (exitStatus: number | null, endedCleanly: boolean): SessionEvent => ({
+      kind: "state",
+      state: "disconnected",
+      detail: null,
+      exitStatus,
+      endedCleanly,
+    });
+
+    test("a clean end closes the tab", async () => {
+      const s = setup({ openSession: async () => "S1" });
+      const { emit } = await openAttached(s);
+      emit({
+        kind: "state",
+        state: "connected",
+        detail: null,
+        exitStatus: null,
+        endedCleanly: false,
+      });
+      emit(end(0, true));
+      expect(s.store.tabs).toHaveLength(0);
+    });
+
+    test("a clean end keeps the tab when the setting is off", async () => {
+      const s = setup({ openSession: async () => "S1" }, () => false);
+      const { emit } = await openAttached(s);
+      emit({
+        kind: "state",
+        state: "connected",
+        detail: null,
+        exitStatus: null,
+        endedCleanly: false,
+      });
+      emit(end(0, true));
+      expect(s.store.tabs[0]).toMatchObject({ state: "disconnected" });
+    });
+
+    test("exit status 3 keeps the tab with Reconnect", async () => {
+      const s = setup({ openSession: async () => "S1" });
+      const { emit } = await openAttached(s);
+      emit({
+        kind: "state",
+        state: "connected",
+        detail: null,
+        exitStatus: null,
+        endedCleanly: false,
+      });
+      emit(end(3, false));
+      expect(s.store.tabs[0]).toMatchObject({ state: "disconnected" });
+    });
+
+    test("a lost connection keeps the tab", async () => {
+      const s = setup({ openSession: async () => "S1" });
+      const { emit } = await openAttached(s);
+      emit({
+        kind: "state",
+        state: "connected",
+        detail: null,
+        exitStatus: null,
+        endedCleanly: false,
+      });
+      emit({
+        kind: "state",
+        state: "disconnected",
+        detail: "connection lost",
+        exitStatus: null,
+        endedCleanly: false,
+      });
+      expect(s.store.tabs[0]).toMatchObject({ state: "disconnected", detail: "connection lost" });
+    });
+
+    test("a clean end of a session that never connected closes nothing", async () => {
+      const s = setup({ openSession: async () => "S1" });
+      const { emit } = await openAttached(s);
+      emit(end(null, false));
+      expect(s.store.tabs[0]).toMatchObject({ state: "disconnected" });
+    });
   });
 });

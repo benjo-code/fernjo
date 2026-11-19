@@ -228,6 +228,7 @@ export interface Api {
     fontFamily: string | null;
     fontSize: number;
     scrollback: number;
+    closeOnExit: boolean;
   }): Promise<TerminalSettings>;
   getTheme(): Promise<ThemeInfo>;
   setTheme(theme: Theme): Promise<ThemeInfo>;
@@ -344,7 +345,15 @@ export type Prompt =
 
 /** A JSON message on a session channel. */
 export type SessionEvent =
-  | { kind: "state"; state: SessionState; detail: string | null }
+  | {
+      kind: "state";
+      state: SessionState;
+      detail: string | null;
+      /** The shell's exit status when the remote reported one. */
+      exitStatus: number | null;
+      /** `true` only for an orderly end of a connected session; the tab may then close itself. */
+      endedCleanly: boolean;
+    }
   | { kind: "prompt"; id: number; prompt: Prompt };
 
 /** The user's answer to a prompt (UI to Rust only). */
@@ -373,6 +382,8 @@ export interface TerminalSettings {
   fontFamily: string | null;
   fontSize: number;
   scrollback: number;
+  /** Close the tab when the shell ends cleanly. */
+  closeOnExit: boolean;
   /** `false` when the values only live in memory. */
   persistent: boolean;
   /** Why they are not saved; `null` when they are. */

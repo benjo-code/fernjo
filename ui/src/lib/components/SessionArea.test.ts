@@ -62,7 +62,11 @@ function setup(hidden = false, count = 2) {
     },
     vaultStatus: async () => vaultStatus({ state: "locked" }),
   });
-  const sessions = new SessionStore(mock.api, (id) => id);
+  const sessions = new SessionStore(
+    mock.api,
+    (id) => id,
+    () => true,
+  );
   for (let i = 0; i < count; i++) sessions.open(String.fromCharCode(97 + i));
   mounted = mount(SessionArea, {
     target: document.body,
@@ -158,12 +162,24 @@ test("after_the_vault_prompt_the_terminal_takes_the_focus_when_the_tab_connects"
   const sessions = setup(false, 1);
   await tick();
   await new Promise((r) => setTimeout(r, 0));
-  handlers[0]!({ kind: "state", state: "needsVault", detail: null });
+  handlers[0]!({
+    kind: "state",
+    state: "needsVault",
+    detail: null,
+    exitStatus: null,
+    endedCleanly: false,
+  });
   flushSync();
   await tick();
   expect(document.querySelector('[role="dialog"]')).not.toBeNull();
   const before = h.made[0]!.calls.filter((c) => c === "focus").length;
-  handlers[0]!({ kind: "state", state: "connecting", detail: null });
+  handlers[0]!({
+    kind: "state",
+    state: "connecting",
+    detail: null,
+    exitStatus: null,
+    endedCleanly: false,
+  });
   flushSync();
   await tick();
   expect(document.querySelector('[role="dialog"]')).toBeNull();
@@ -196,11 +212,23 @@ test("the_terminal_is_inert_while_a_prompt_or_the_vault_wait_covers_it_and_free_
   // the terminal gets the focus back once it is no longer inert
   expect(h.made[0]!.calls.filter((c) => c === "focus").length).toBeGreaterThan(before);
 
-  handlers[0]!({ kind: "state", state: "needsVault", detail: null });
+  handlers[0]!({
+    kind: "state",
+    state: "needsVault",
+    detail: null,
+    exitStatus: null,
+    endedCleanly: false,
+  });
   flushSync();
   await tick();
   expect(inert()).toBe(true);
-  handlers[0]!({ kind: "state", state: "connecting", detail: null });
+  handlers[0]!({
+    kind: "state",
+    state: "connecting",
+    detail: null,
+    exitStatus: null,
+    endedCleanly: false,
+  });
   flushSync();
   await tick();
   expect(inert()).toBe(false);

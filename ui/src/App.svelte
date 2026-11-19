@@ -27,10 +27,14 @@
   const vault = new VaultStore(api, (message) => store.showError(message));
 
   // svelte-ignore state_referenced_locally
-  const sessions = new SessionStore(api, (id) => findNode(store.children, id)?.name ?? "Session");
+  const terminal = new TerminalSettingsStore(api);
 
   // svelte-ignore state_referenced_locally
-  const terminal = new TerminalSettingsStore(api);
+  const sessions = new SessionStore(
+    api,
+    (id) => findNode(store.children, id)?.name ?? "Session",
+    () => (terminal.info ?? DEFAULT_TERMINAL).closeOnExit,
+  );
 
   // svelte-ignore state_referenced_locally
   const theme = new ThemeStore(api);
@@ -40,6 +44,7 @@
     fontFamily: null,
     fontSize: 13,
     scrollback: 10000,
+    closeOnExit: true,
     persistent: true,
     unsavedReason: null,
   };

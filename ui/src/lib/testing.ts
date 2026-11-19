@@ -99,6 +99,7 @@ export function terminalSettings(partial: Partial<TerminalSettings> = {}): Termi
     fontFamily: null,
     fontSize: 14,
     scrollback: 10000,
+    closeOnExit: true,
     persistent: true,
     unsavedReason: null,
     ...partial,
@@ -446,7 +447,11 @@ export async function startedTab(impl: Partial<Api> = {}) {
       return "sid";
     },
   });
-  const sessions = new SessionStore(mock.api, (id) => id);
+  const sessions = new SessionStore(
+    mock.api,
+    (id) => id,
+    () => true,
+  );
   sessions.open("n1");
   const tab = sessions.tabs[0]!;
   sessions.attachTerminal(tab.id, { write() {}, size: () => ({ cols: 80, rows: 24 }) });

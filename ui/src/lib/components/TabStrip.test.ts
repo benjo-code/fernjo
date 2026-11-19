@@ -17,7 +17,11 @@ afterEach(() => {
 /** Tabs for nodes `a`, `b`, ... with the given states; the last one opened is active. */
 function setup(states: SessionState[], opts: { protocol?: (id: string) => "ssh" | "rdp" } = {}) {
   const mock = mockApi();
-  const sessions = new SessionStore(mock.api, (id) => `Name ${id}`);
+  const sessions = new SessionStore(
+    mock.api,
+    (id) => `Name ${id}`,
+    () => true,
+  );
   states.forEach((state, i) => {
     sessions.open(String.fromCharCode(97 + i));
     sessions.tabs[i]!.state = state;

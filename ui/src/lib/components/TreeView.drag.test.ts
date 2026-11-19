@@ -34,7 +34,14 @@ async function setup(impl: Partial<Api> = {}) {
   store.expand("Homelab");
   mounted = mount(TreeView, {
     target: document.body,
-    props: { store, sessions: new SessionStore(mock.api, (id) => id) },
+    props: {
+      store,
+      sessions: new SessionStore(
+        mock.api,
+        (id) => id,
+        () => true,
+      ),
+    },
   });
   flushSync();
   return { store, ...mock };

@@ -29,7 +29,11 @@ async function setup() {
   const store = new TreeStore(mock.api);
   await store.init();
   store.expand("Homelab");
-  const sessions = new SessionStore(mock.api, (id) => id);
+  const sessions = new SessionStore(
+    mock.api,
+    (id) => id,
+    () => true,
+  );
   mounted = mount(TreeView, { target: document.body, props: { store, sessions } });
   flushSync();
   return { store, sessions, ...mock };

@@ -261,7 +261,7 @@ describe("SettingsDialog", () => {
     button("Save").click();
     await settle();
     expect(calls.setTerminalSettings[0]).toEqual([
-      { fontFamily: null, fontSize: 18, scrollback: 2500 },
+      { fontFamily: null, fontSize: 18, scrollback: 2500, closeOnExit: true },
     ]);
     expect(alert()).toBeNull();
 
@@ -282,7 +282,35 @@ describe("SettingsDialog", () => {
     button("Save").click();
     await settle();
     expect(calls.setTerminalSettings.at(-1)).toEqual([
-      { fontFamily: null, fontSize: 0, scrollback: 2000 },
+      { fontFamily: null, fontSize: 0, scrollback: 2000, closeOnExit: true },
+    ]);
+  });
+
+  test("the close-on-exit checkbox saves through setTerminalSettings", async () => {
+    const { calls } = await setup({
+      getTerminalSettings: async () => terminalSettings({ closeOnExit: true }),
+      setTerminalSettings: async (s) => terminalSettings(s),
+    });
+    const box = field("Close the tab when the shell exits");
+    expect(box.checked).toBe(true);
+    box.click();
+    await settle();
+    expect(box.checked).toBe(false);
+    expect(calls.setTerminalSettings.at(-1)).toEqual([
+      { fontFamily: null, fontSize: 14, scrollback: 10000, closeOnExit: false },
+    ]);
+  });
+
+  test("saving another terminal field sends the stored closeOnExit unchanged", async () => {
+    const { calls } = await setup({
+      getTerminalSettings: async () => terminalSettings({ closeOnExit: false }),
+      setTerminalSettings: async (s) => terminalSettings(s),
+    });
+    type(field("Font size"), "18");
+    button("Save").click();
+    await settle();
+    expect(calls.setTerminalSettings.at(-1)).toEqual([
+      { fontFamily: null, fontSize: 18, scrollback: 10000, closeOnExit: false },
     ]);
   });
 
@@ -306,7 +334,7 @@ describe("SettingsDialog", () => {
       button("Save").click();
       await settle();
       expect(calls.setTerminalSettings.at(-1)).toEqual([
-        { fontFamily: null, fontSize: wireSize, scrollback: wireLines },
+        { fontFamily: null, fontSize: wireSize, scrollback: wireLines, closeOnExit: true },
       ]);
     }
     // never the raw serde text
