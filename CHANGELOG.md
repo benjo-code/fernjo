@@ -11,6 +11,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 - Resizable panels (M7): drag the right edge of the sidebar or the top edge of the properties panel, or focus the separator and use the arrow keys (Shift for bigger steps, Home and End for the limits); double-click resets. The sizes are remembered on this device, and the tree always keeps its rows.
 - Multi-select in the connection tree (M7): Ctrl or Cmd+click toggles a row, Shift+click or Shift+arrow selects a range, and dragging a selected row moves the whole selection in one step. Deleting several asks first and says how many connections and folders go; the context menu on a selection offers Delete only, and the properties panel shows how many items are selected.
 
+### Changed
+
+- The Windows web view no longer runs its component updater (M7): about a minute after start it contacted `edge.microsoft.com` once while fernjo sat idle; `--disable-component-update` stops that (measured, see `Docs/DECISIONS.md`)
+
 ## [0.1.0] - 2026-11-18
 
 First release, the "Daily SSH driver": milestones M0 to M6 (project foundation, design, connection tree, credential vault, SSH sessions in tabs, mRemoteNG import with export and backup, packaging and security fixes).
