@@ -837,11 +837,29 @@ impl SessionManager {
         }
     }
 
+    /// Number of sessions whose shell is connected. Sessions still connecting, waiting for the
+    /// vault or already disconnected do not count: closing the window loses nothing there.
+    pub fn connected_count(&self) -> usize {
+        let entries: Vec<Arc<Entry>> = match self.entries.lock() {
+            Ok(map) => map.values().cloned().collect(),
+            Err(poisoned) => poisoned.into_inner().values().cloned().collect(),
+        };
+        entries
+            .iter()
+            .filter(|entry| matches!(entry.shared.phase(), Ok(Phase::Connected)))
+            .count()
+    }
+
     /// Number of sessions that exist (open, connecting, prompting or disconnected).
     #[cfg(test)]
     pub fn len(&self) -> usize {
         self.entries.lock().map_or(0, |map| map.len())
     }
+}
+
+/// Closing the main window asks first only while a session is connected.
+pub(crate) fn needs_close_confirmation(connected: usize) -> bool {
+    connected > 0
 }
 
 /// Mutes the channel, answers every prompt with the safe answer, tells the writer task to close

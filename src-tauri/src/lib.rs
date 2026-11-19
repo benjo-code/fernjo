@@ -10,7 +10,9 @@ mod sessions;
 mod state;
 mod vault_commands;
 
+use std::sync::atomic::Ordering;
 use tauri::Manager;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 pub use state::AppState;
 
@@ -48,6 +50,55 @@ pub fn run() {
                 state.sessions.close_all();
                 // a picked or inspected import must not outlive the page that asked for it
                 state.clear_pending();
+            }
+        })
+        // Closing the window ends every session, so ask first while one is connected. The dialog
+        // is non-blocking (the handler runs on the main thread); its callback runs on another
+        // thread and ends the window with `destroy`, which does not raise `CloseRequested` again.
+        .on_window_event(|window, event| {
+            if window.label() != "main" {
+                return;
+            }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let state = window.state::<AppState>();
+                let connected = state.sessions.connected_count();
+                if !sessions::needs_close_confirmation(connected) {
+                    return;
+                }
+                api.prevent_close();
+                if state.close_prompt_open.swap(true, Ordering::SeqCst) {
+                    return;
+                }
+                let noun = if connected == 1 {
+                    "session is"
+                } else {
+                    "sessions are"
+                };
+                let window = window.clone();
+                window
+                    .dialog()
+                    .message(format!(
+                        "{connected} {noun} still connected. Closing fernjo ends them."
+                    ))
+                    .title("Close fernjo?")
+                    .kind(MessageDialogKind::Warning)
+                    .buttons(MessageDialogButtons::OkCancelCustom(
+                        "Close".into(),
+                        "Keep open".into(),
+                    ))
+                    .show({
+                        let window = window.clone();
+                        move |confirmed| {
+                            window
+                                .state::<AppState>()
+                                .close_prompt_open
+                                .store(false, Ordering::SeqCst);
+                            if confirmed {
+                                window.state::<AppState>().sessions.close_all();
+                                let _ = window.destroy();
+                            }
+                        }
+                    });
             }
         })
         .invoke_handler(tauri::generate_handler![

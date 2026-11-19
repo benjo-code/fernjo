@@ -125,6 +125,8 @@ pub struct AppState {
     /// `settings.json` has a newer schema (or was unusable): it must not be saved over.
     pub settings_unusable: bool,
     pub restart_required: AtomicBool,
+    /// A "close while connected" dialog is open; a second close request must not stack another.
+    pub close_prompt_open: AtomicBool,
     /// The folder chosen by `apply_data_folder` while a restart is pending (shown by
     /// `get_data_folder`) with the data files that already existed there; `None` otherwise.
     pub pending_data_dir: Mutex<Option<(PathBuf, Vec<String>)>>,
@@ -349,6 +351,7 @@ impl AppState {
             source,
             settings_unusable,
             restart_required: AtomicBool::new(false),
+            close_prompt_open: AtomicBool::new(false),
             pending_data_dir: Mutex::new(None),
             terminal: Mutex::new(TerminalPrefs::default()),
             theme: Mutex::new(Theme::default()),

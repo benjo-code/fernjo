@@ -1248,3 +1248,48 @@ fn the_confirmed_hosts_layer_is_the_device_file_or_memory_for_the_run() {
     // The synced data folder never holds the confirmed file.
     assert!(!some.confirmed_hosts.unwrap().starts_with(dir.path()));
 }
+
+// ---------- close confirmation ----------
+
+fn entry_in(phase: Phase) -> Arc<Entry> {
+    let (channel, _rec) = recorder();
+    Arc::new(Entry {
+        node_id: uuid::Uuid::new_v4(),
+        shared: Arc::new(Shared {
+            sink: Arc::new(Sink::new(channel)),
+            hub: Arc::new(PromptHub::default()),
+            flow: Mutex::new(FlowControl::default()),
+            wake: Notify::new(),
+            phase: Mutex::new(phase),
+            size: Mutex::new((80, 24)),
+            ops: Mutex::new(None),
+        }),
+        task: Mutex::new(None),
+    })
+}
+
+#[test]
+fn connected_count_counts_only_connected_sessions() {
+    let manager = SessionManager::default();
+    assert_eq!(manager.connected_count(), 0);
+    for (id, phase) in [
+        ("a", Phase::Connecting),
+        ("b", Phase::NeedsVault),
+        ("c", Phase::Connected),
+        ("d", Phase::Disconnected),
+    ] {
+        manager
+            .entries
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), entry_in(phase));
+    }
+    assert_eq!(manager.connected_count(), 1);
+}
+
+#[test]
+fn a_confirmation_is_needed_only_with_a_connected_session() {
+    assert!(!needs_close_confirmation(0));
+    assert!(needs_close_confirmation(1));
+    assert!(needs_close_confirmation(3));
+}

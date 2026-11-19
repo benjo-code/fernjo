@@ -97,6 +97,7 @@ Postponed by the owner on 2026-11-15 until a macOS and a Linux machine are at ha
 - Navigation guard origins (gap 25): macOS: the window loaded with the UI on an Intel Mac per the owner's report of 2026-11-18 (the `location.href` leave-unchanged probe was not reported). Linux: the window loaded with the UI on the owner's CachyOS laptop under Wayland (reported 2026-11-18), so `tauri://localhost` is allowed; the `location.href = 'http://127.0.0.1:1/'` probe was not run on either platform, optional (WebView2 on Windows may still send one blind GET).
 - First start of this build with your existing vault and `known_hosts` (gap 26): the vault opens untouched, `%LOCALAPPDATA%\fernjo-device` appears only after the first save, and each existing `known_hosts` host asks once ('Confirm and connect'). The same flow ran 2026-11-18 on a copy of the committed golden v1 fixture in a scratch folder (opens without a prompt, bytes unchanged until the first save, `.bak` equals the original, `.device` appears after that save); the run with your real vault and `known_hosts` stays yours.
 - Recommended before release: a short run against a real host on Windows (gap 13).
+- M7: closing the window with a connected session (Windows first, then macOS and Linux, where the dialog is opened from the close handler without blocking it): open a connection, close the window, expect 'Close fernjo?' with 'Close' and 'Keep open'; 'Keep open' keeps the app and the session, 'Close' ends the app; clicking the close button repeatedly shows one dialog; with no connected session (or only a connecting or disconnected one) the window closes at once. The roadmap criterion 'Manual: closing the window with a connected session asks first' stays open until this is run.
 
 ---
 
@@ -266,7 +267,7 @@ Goal: The first release's known gaps are closed: no silent data loss, a clearer 
 
 **Tasks**
 - [x] Data safety: `connections.json` is checked against a fingerprint of the last bytes read or written before every save, and a file changed by a sync tool is refused or offered for reload instead of overwritten (same check-then-write idea as `Vault::save`)
-- [ ] Closing the window asks for confirmation when at least one session is connected
+- [x] Closing the window asks for confirmation when at least one session is connected
 - [x] Settings dialog names the real cause when settings are not saved (`FERNJO_DATA_DIR` set versus unusable `settings.json`)
 - [x] SSH agent sign step gets its own, longer limit (or a paused clock) so a touch or confirmation per signature does not hit the 15 s connect timeout
 - [x] Close the tab when the shell ends on purpose (clean exit status), keep it yellow with Reconnect on connection loss; setting in Settings, `exitStatus` in the session wire contract, tests for each ending kind
