@@ -184,6 +184,8 @@ export interface Api {
   ): Promise<Mutation>;
   updateNode(id: string, patch: NodePatch): Promise<Mutation>;
   moveNode(id: string, parentId: string | null, index: number): Promise<Mutation>;
+  /** Moves several nodes in one atomic step; `index` counts the new parent's children after all were taken out. */
+  moveNodes(ids: string[], parentId: string | null, index: number): Promise<Mutation>;
   duplicateNode(id: string): Promise<Mutation>;
   deleteNode(id: string): Promise<Mutation>;
   vaultStatus(): Promise<VaultStatus>;

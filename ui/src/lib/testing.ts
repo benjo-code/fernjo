@@ -157,6 +157,7 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     createConnection: [],
     updateNode: [],
     moveNode: [],
+    moveNodes: [],
     duplicateNode: [],
     deleteNode: [],
     vaultStatus: [],
@@ -227,6 +228,10 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     moveNode: async (...args) => {
       calls.moveNode.push(args);
       return impl.moveNode ? impl.moveNode(...args) : mutation(args[0]);
+    },
+    moveNodes: async (...args) => {
+      calls.moveNodes.push(args);
+      return impl.moveNodes ? impl.moveNodes(...args) : mutation(null);
     },
     duplicateNode: async (...args) => {
       calls.duplicateNode.push(args);

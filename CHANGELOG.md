@@ -9,6 +9,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 ### Added
 
 - Resizable panels (M7): drag the right edge of the sidebar or the top edge of the properties panel, or focus the separator and use the arrow keys (Shift for bigger steps, Home and End for the limits); double-click resets. The sizes are remembered on this device, and the tree always keeps its rows.
+- Multi-select in the connection tree (M7): Ctrl or Cmd+click toggles a row, Shift+click or Shift+arrow selects a range, and dragging a selected row moves the whole selection in one step. Deleting several asks first and says how many connections and folders go; the context menu on a selection offers Delete only, and the properties panel shows how many items are selected.
 
 ## [0.1.0] - 2026-11-18
 

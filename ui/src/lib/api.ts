@@ -29,6 +29,7 @@ export const tauriApi: Api = {
     call("create_connection", { parentId, index, name, protocol, host }),
   updateNode: (id, patch) => call("update_node", { id, patch }),
   moveNode: (id, parentId, index) => call("move_node", { id, parentId, index }),
+  moveNodes: (ids, parentId, index) => call("move_nodes", { ids, parentId, index }),
   duplicateNode: (id) => call("duplicate_node", { id }),
   deleteNode: (id) => call("delete_node", { id }),
   vaultStatus: () => call("vault_status"),

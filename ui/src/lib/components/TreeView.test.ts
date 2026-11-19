@@ -309,3 +309,130 @@ describe("TreeView", () => {
     expect(document.querySelector('[role="alert"]')).toBeNull();
   });
 });
+
+describe("multi-select", () => {
+  const dialog = () => document.querySelector<HTMLElement>('[role="alertdialog"]');
+  const selectedNames = () =>
+    items()
+      .filter((el) => el.getAttribute("aria-selected") === "true")
+      .map((el) => el.dataset.nodeId);
+  const click = (id: string, init: MouseEventInit = {}) => {
+    row(id).dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ...init }));
+    flushSync();
+  };
+  const bigTree = (): TreeNode[] => [
+    folder("Homelab", [conn("pve-01"), conn("DC01", "rdp")]),
+    conn("web-01"),
+    conn("db-01"),
+  ];
+
+  test("ctrl click toggles", async () => {
+    const { store } = await setup(bigTree());
+    click("web-01");
+    click("db-01", { ctrlKey: true });
+    expect(selectedNames()).toEqual(["web-01", "db-01"]);
+    expect(store.selectedId).toBe("db-01");
+    click("web-01", { ctrlKey: true });
+    expect(selectedNames()).toEqual(["db-01"]);
+    click("Homelab", { metaKey: true });
+    expect(selectedNames()).toEqual(["Homelab", "db-01"]);
+    // a plain click selects only that row again
+    click("web-01");
+    expect(selectedNames()).toEqual(["web-01"]);
+  });
+
+  test("shift click selects the range", async () => {
+    const { store } = await setup(bigTree());
+    click("Homelab");
+    click("db-01", { shiftKey: true });
+    expect(selectedNames()).toEqual(["Homelab", "web-01", "db-01"]);
+    expect(store.anchorId).toBe("Homelab");
+    click("web-01", { shiftKey: true });
+    expect(selectedNames()).toEqual(["Homelab", "web-01"]);
+  });
+
+  test("shift arrow extends the selection from the anchor", async () => {
+    const { store } = await setup(bigTree());
+    click("Homelab");
+    await key(row("Homelab"), "ArrowDown", { shiftKey: true });
+    expect(selectedNames()).toEqual(["Homelab", "web-01"]);
+    await key(row("web-01"), "ArrowDown", { shiftKey: true });
+    expect(selectedNames()).toEqual(["Homelab", "web-01", "db-01"]);
+    await key(row("db-01"), "ArrowUp", { shiftKey: true });
+    expect(selectedNames()).toEqual(["Homelab", "web-01"]);
+    expect(store.anchorId).toBe("Homelab");
+    // without Shift the selection collapses to the moved-to row
+    await key(row("web-01"), "ArrowDown");
+    expect(selectedNames()).toEqual(["db-01"]);
+  });
+
+  test("deleting several asks first and names the count", async () => {
+    const { calls } = await setup(bigTree());
+    openHomelab();
+    click("web-01");
+    click("db-01", { ctrlKey: true });
+    click("Homelab", { ctrlKey: true });
+    await key(row("Homelab"), "Delete");
+    expect(dialog()!.querySelector(".title")!.textContent).toBe("Delete 3 items?");
+    expect(dialog()!.textContent).toContain("4 connections and 1 folder");
+    expect(calls.deleteNode).toHaveLength(0);
+    [...document.querySelectorAll<HTMLElement>('[role="alertdialog"] button')]
+      .find((b) => b.textContent?.trim() === "Delete")!
+      .click();
+    await tick();
+    await new Promise((r) => setTimeout(r, 0));
+    flushSync();
+    expect(calls.deleteNode).toEqual([["Homelab"], ["web-01"], ["db-01"]]);
+    expect(dialog()).toBeNull();
+  });
+
+  test("escape cancels the confirmation", async () => {
+    const { calls } = await setup(bigTree());
+    click("web-01");
+    click("db-01", { ctrlKey: true });
+    await key(row("db-01"), "Delete");
+    expect(dialog()).not.toBeNull();
+    await key(dialog()!, "Escape");
+    expect(dialog()).toBeNull();
+    expect(calls.deleteNode).toHaveLength(0);
+    expect(selectedNames()).toEqual(["web-01", "db-01"]);
+  });
+
+  test("one selected keeps the single delete text", async () => {
+    await setup(bigTree());
+    click("web-01");
+    await key(row("web-01"), "Delete");
+    expect(dialog()!.querySelector(".title")!.textContent).toBe("Delete “web-01”?");
+  });
+
+  test("the context menu on a multi-selection offers Delete only and keeps the selection", async () => {
+    await setup(bigTree());
+    click("web-01");
+    click("db-01", { ctrlKey: true });
+    row("web-01").dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 }),
+    );
+    flushSync();
+    expect(
+      [...document.querySelectorAll('[role="menuitem"]')].map((el) => el.textContent?.trim()),
+    ).toEqual(["Delete"]);
+    expect(selectedNames()).toEqual(["web-01", "db-01"]);
+  });
+
+  test("the context menu on an unselected row selects just that row", async () => {
+    await setup(bigTree());
+    click("web-01");
+    click("db-01", { ctrlKey: true });
+    row("Homelab").dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 }),
+    );
+    flushSync();
+    expect(selectedNames()).toEqual(["Homelab"]);
+    expect(document.querySelectorAll('[role="menuitem"]').length).toBeGreaterThan(1);
+  });
+
+  function openHomelab() {
+    row("Homelab").querySelector<HTMLElement>(".chevron")!.click();
+    flushSync();
+  }
+});

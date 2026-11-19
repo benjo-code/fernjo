@@ -260,4 +260,58 @@ describe("pointer drag and drop", () => {
     await settle();
     expect(calls.moveNode).toHaveLength(0);
   });
+
+  test("dragging_a_selection_onto_one_of_its_own_members_sends_nothing", async () => {
+    const after = [folder("Homelab", [conn("pve-01"), conn("DC01", "rdp"), conn("web-01")])];
+    const { store, calls } = await setup({
+      moveNodes: async () => ({ id: null, snapshot: snapshot(after) }),
+    });
+    store.selectOnly("web-01");
+    store.toggleSelect("pve-01");
+    store.toggleSelect("Homelab");
+    flushSync();
+    // Homelab is selected together with its child pve-01
+    layout(() => row("Homelab"));
+    pointer("pointerdown", row("web-01"), 50, 80);
+    pointer("pointermove", tree(), 50, 12);
+    pointer("pointerup", tree(), 50, 12);
+    await settle();
+    // Homelab is itself dragged, so it is no valid target: nothing is sent
+    expect(calls.moveNodes).toEqual([]);
+    expect(calls.moveNode).toEqual([]);
+  });
+
+  test("dragging_two_selected_connections_into_a_folder_moves_them_together", async () => {
+    const after = [folder("Homelab", [conn("pve-01"), conn("DC01", "rdp"), conn("web-01")])];
+    const { store, calls } = await setup({
+      moveNodes: async () => ({ id: null, snapshot: snapshot(after) }),
+    });
+    store.selectOnly("web-01");
+    store.toggleSelect("DC01");
+    flushSync();
+    layout(() => row("Homelab"));
+    pointer("pointerdown", row("web-01"), 50, 80);
+    pointer("pointermove", tree(), 50, 12);
+    expect(row("web-01").classList.contains("dragging")).toBe(true);
+    expect(row("DC01").classList.contains("dragging")).toBe(true);
+    expect(row("pve-01").classList.contains("dragging")).toBe(false);
+    pointer("pointerup", tree(), 50, 12);
+    await settle();
+    expect(calls.moveNodes).toEqual([[["DC01", "web-01"], "Homelab", 1]]);
+    expect(calls.moveNode).toEqual([]);
+  });
+
+  test("dragging_an_unselected_row_leaves_the_selection_alone_and_moves_only_it", async () => {
+    const { store, calls } = await setup();
+    store.selectOnly("DC01");
+    store.toggleSelect("pve-01");
+    flushSync();
+    layout(() => row("Homelab"));
+    pointer("pointerdown", row("web-01"), 50, 80);
+    pointer("pointermove", tree(), 50, 12);
+    pointer("pointerup", tree(), 50, 12);
+    await settle();
+    expect(calls.moveNode).toEqual([["web-01", "Homelab", 2]]);
+    expect(calls.moveNodes).toEqual([]);
+  });
 });

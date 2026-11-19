@@ -61,9 +61,11 @@
   let errors = $state<Record<string, string | null>>({});
 
   const detail = $derived(store.detail);
+  const selectedCount = $derived(store.selectedIds.size);
+  const several = $derived(selectedCount > 1);
   const nodeId = $derived(detail?.id ?? null);
   const kindLabel = $derived(
-    !detail
+    !detail || several
       ? ""
       : detail.kind === "folder"
         ? "Folder"
@@ -178,14 +180,20 @@
   {/if}
   <button type="button" class="header" aria-expanded={open} onclick={() => (open = !open)}>
     <span class="chevron" class:closed={!open}><Icon name="folder-chevron" size={14} /></span>
-    <span class="title" title={detail?.name}>{detail?.name ?? "Properties"}</span>
+    <span class="title" title={several ? undefined : detail?.name}>
+      {several ? `${selectedCount} items selected` : (detail?.name ?? "Properties")}
+    </span>
     <span class="kind">{kindLabel}</span>
   </button>
 
   {#if open}
     <div class="body">
       {#if !detail}
-        <p class="empty">Select a connection or folder to see its settings.</p>
+        <p class="empty">
+          {several
+            ? "Select a single item to see its settings."
+            : "Select a connection or folder to see its settings."}
+        </p>
       {:else}
         <PropertyRow name="name" label="Name" error={errors.name}>
           {#snippet children(id)}

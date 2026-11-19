@@ -549,4 +549,18 @@ describe("PropertiesPanel credential row", () => {
     }
     expect(selectEl("credential").selectedOptions[0].textContent).toBe("Prod root");
   });
+
+  test("shows the count instead of fields while several nodes are selected", async () => {
+    const { store } = await setup({
+      "web-01": resolved({ id: "web-01", name: "web-01" }),
+    });
+    store.toggleSelect("DC01");
+    await settle();
+    expect(document.querySelector(".title")!.textContent!.trim()).toBe("2 items selected");
+    expect(document.querySelector(".kind")!.textContent!.trim()).toBe("");
+    expect(hasField("name")).toBe(false);
+    store.toggleSelect("DC01");
+    await settle();
+    expect(document.querySelector(".title")!.textContent!.trim()).toBe("web-01");
+  });
 });

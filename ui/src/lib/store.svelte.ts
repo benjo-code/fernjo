@@ -130,6 +130,7 @@ export class TreeStore {
   toggle(id: string) {
     if (!this.expanded.delete(id)) this.expanded.add(id);
     saveExpanded(this.expanded);
+    this.#pruneHidden();
   }
 
   expand(id: string) {
@@ -140,6 +141,7 @@ export class TreeStore {
 
   setFilter(query: string) {
     this.filter = query;
+    this.#pruneHidden();
   }
 
   startRename(id: string) {
@@ -200,6 +202,16 @@ export class TreeStore {
     });
   }
 
+  /** Moves several nodes in one atomic command; nothing is sent for an empty list. */
+  moveMany(ids: string[], parentId: string | null, index: number) {
+    if (ids.length === 0) return Promise.resolve(null);
+    return this.#run(async () => {
+      const m = await this.#api.moveNodes(ids, parentId, index);
+      this.#apply(m.snapshot.children, m.snapshot.notices);
+      if (parentId) this.expand(parentId);
+    });
+  }
+
   duplicate(id: string) {
     return this.#run(async () => {
       const m = await this.#api.duplicateNode(id);
@@ -213,6 +225,12 @@ export class TreeStore {
       const m = await this.#api.deleteNode(id);
       this.#apply(m.snapshot.children, m.snapshot.notices);
     });
+  }
+
+  /** Deletes the tops among `ids` (a node inside another listed node goes with it), in row order. */
+  removeMany(ids: string[]) {
+    const tops = selectionTops(this.rows, new SvelteSet(ids));
+    return Promise.all(tops.map((id) => this.remove(id)));
   }
 
   /** Re-reads connections.json (Rust adopts what is on disk) and clears the changed-on-disk state. */
@@ -252,6 +270,27 @@ export class TreeStore {
   /** The node whose details are shown: the primary one, only while it is the sole selection. */
   #detailTarget(): string | null {
     return this.selectedIds.size === 1 ? this.selectedId : null;
+  }
+
+  /**
+   * A collapse or a filter can hide selected rows. With several selected they leave the selection,
+   * so the count, Delete and drag always agree with what is visible. A single selection stays
+   * (the properties panel keeps showing it) and so does one whose nodes are all hidden.
+   */
+  #pruneHidden() {
+    if (this.selectedIds.size < 2) return;
+    const visible = new SvelteSet(this.rows.map((r) => r.node.id));
+    const keep = [...this.selectedIds].filter((id) => visible.has(id));
+    if (keep.length === this.selectedIds.size || keep.length === 0) return;
+    const before = this.#detailTarget();
+    for (const id of [...this.selectedIds]) if (!visible.has(id)) this.selectedIds.delete(id);
+    if (this.selectedId === null || !this.selectedIds.has(this.selectedId)) {
+      this.selectedId = keep[keep.length - 1];
+    }
+    if (this.anchorId === null || !this.selectedIds.has(this.anchorId)) {
+      this.anchorId = this.selectedId;
+    }
+    this.#detailMaybeChanged(before);
   }
 
   #detailMaybeChanged(before: string | null) {

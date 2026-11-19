@@ -481,4 +481,68 @@ describe("TreeStore selection", () => {
     await tick();
     expect(store.detail?.id).toBe("web-01");
   });
+  test("collapsing_a_folder_prunes_hidden_selected_nodes", async () => {
+    const { store } = await open();
+    store.selectOnly("Homelab");
+    store.toggleSelect("pve-01");
+    store.toggleSelect("DC01");
+    store.toggleSelect("web-01");
+    expect(store.selectedIds.size).toBe(4);
+    store.toggle("Homelab"); // collapses: pve-01 and DC01 are no longer visible
+    expect([...store.selectedIds].sort()).toEqual(["Homelab", "web-01"]);
+    // the count the user sees is what delete would remove
+    expect(store.selectionTops()).toEqual(["Homelab", "web-01"]);
+    expect(store.selectedIds.size).toBe(store.selectionTops().length);
+  });
+
+  test("collapsing_the_folder_of_the_primary_hands_the_primary_to_a_visible_node", async () => {
+    const { store } = await open();
+    store.selectOnly("web-01");
+    store.toggleSelect("pve-01");
+    expect(store.selectedId).toBe("pve-01");
+    store.toggle("Homelab");
+    expect([...store.selectedIds]).toEqual(["web-01"]);
+    expect(store.selectedId).toBe("web-01");
+  });
+
+  test("filtering_prunes_hidden_selected_nodes", async () => {
+    const { store } = await open();
+    store.selectOnly("pve-01");
+    store.toggleSelect("DC01");
+    store.toggleSelect("web-01");
+    store.setFilter("web");
+    expect([...store.selectedIds]).toEqual(["web-01"]);
+    expect(store.selectionTops()).toEqual(["web-01"]);
+  });
+
+  test("a_single_selection_survives_a_filter_that_hides_it", async () => {
+    const { store } = await open();
+    store.selectOnly("pve-01");
+    store.setFilter("web");
+    expect([...store.selectedIds]).toEqual(["pve-01"]);
+    expect(store.selectedId).toBe("pve-01");
+  });
+
+  test("moveMany sends one batch command and applies the snapshot", async () => {
+    const after = [folder("Homelab", [conn("pve-01"), conn("DC01", "rdp"), conn("web-01")])];
+    const { store, calls } = await started(tree(), {
+      moveNodes: async () => ({ id: null, snapshot: snapshot(after) }),
+    });
+    await store.moveMany(["web-01", "pve-01"], "Homelab", 0);
+    expect(calls.moveNodes).toEqual([[["web-01", "pve-01"], "Homelab", 0]]);
+    expect(store.children).toEqual(after);
+    expect(store.expanded.has("Homelab")).toBe(true);
+  });
+
+  test("moveMany with no ids sends nothing", async () => {
+    const { store, calls } = await started();
+    await store.moveMany([], null, 0);
+    expect(calls.moveNodes).toEqual([]);
+  });
+
+  test("removeMany deletes the tops in row order, one command each", async () => {
+    const { store, calls } = await open();
+    await store.removeMany(["web-01", "pve-01", "Homelab"]);
+    expect(calls.deleteNode).toEqual([["Homelab"], ["web-01"]]);
+  });
 });

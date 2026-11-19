@@ -35,6 +35,22 @@ export function countDescendants(node: TreeNode): number {
   return node.children.reduce((sum, child) => sum + 1 + countDescendants(child), 0);
 }
 
+/** How many connections and folders `nodes` and everything beneath them hold. */
+export function countKinds(nodes: TreeNode[]): { connections: number; folders: number } {
+  let connections = 0;
+  let folders = 0;
+  const walk = (list: TreeNode[]) => {
+    for (const node of list) {
+      if (node.type === "folder") {
+        folders += 1;
+        walk(node.children);
+      } else connections += 1;
+    }
+  };
+  walk(nodes);
+  return { connections, folders };
+}
+
 /** The node with `id` anywhere in the tree, or `undefined`. */
 export function findNode(children: TreeNode[], id: string): TreeNode | undefined {
   for (const node of children) {

@@ -45,10 +45,41 @@ describe("DragController", () => {
     ctrl.pointerMove(10, 40, { rowId: "C", position: "inside" });
     expect(ctrl.pointerUp()).toBe(true);
     expect(onMove).toHaveBeenCalledTimes(1);
-    expect(onMove).toHaveBeenCalledWith("B", "C", 0);
+    expect(onMove).toHaveBeenCalledWith(["B"], "C", 0);
     expect(ctrl.state).toBe("idle");
     expect(ctrl.pointerUp()).toBe(false);
     expect(onMove).toHaveBeenCalledTimes(1);
+  });
+
+  test("dragging a selected row moves the whole selection", () => {
+    const { ctrl, onMove } = setup();
+    ctrl.pointerDown("B", 10, 10, ["B", "C"]);
+    ctrl.pointerMove(10, 40, { rowId: "A", position: "inside" });
+    expect(ctrl.dragIds).toEqual(["B", "C"]);
+    expect(ctrl.target).toEqual({ rowId: "A", position: "inside", parentId: "A", index: 2 });
+    ctrl.pointerUp();
+    expect(onMove).toHaveBeenCalledWith(["B", "C"], "A", 2);
+  });
+
+  test("dragging an unselected row moves only that row", () => {
+    const { ctrl, onMove } = setup();
+    ctrl.pointerDown("B", 10, 10);
+    ctrl.pointerMove(10, 40, { rowId: "A", position: "inside" });
+    expect(ctrl.dragIds).toEqual(["B"]);
+    ctrl.pointerUp();
+    expect(onMove).toHaveBeenCalledWith(["B"], "A", 2);
+    // a one-element selection is just that row
+    ctrl.pointerDown("C", 10, 10, ["C"]);
+    expect(ctrl.dragIds).toEqual(["C"]);
+  });
+
+  test("a_target_among_the_dragged_rows_is_no_target", () => {
+    const { ctrl, onMove } = setup();
+    ctrl.pointerDown("B", 10, 10, ["B", "C"]);
+    ctrl.pointerMove(10, 40, { rowId: "C", position: "inside" });
+    expect(ctrl.target).toBeNull();
+    ctrl.pointerUp();
+    expect(onMove).not.toHaveBeenCalled();
   });
 
   test("target_is_exposed_for_the_indicator", () => {
