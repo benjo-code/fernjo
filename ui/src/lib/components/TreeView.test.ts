@@ -375,6 +375,9 @@ describe("multi-select", () => {
     await key(row("Homelab"), "Delete");
     expect(dialog()!.querySelector(".title")!.textContent).toBe("Delete 3 items?");
     expect(dialog()!.textContent).toContain("4 connections and 1 folder");
+    expect(dialog()!.textContent).toContain(
+      "This removes 4 connections and 1 folder, including everything inside. This cannot be undone.",
+    );
     expect(calls.deleteNode).toHaveLength(0);
     [...document.querySelectorAll<HTMLElement>('[role="alertdialog"] button')]
       .find((b) => b.textContent?.trim() === "Delete")!
@@ -384,6 +387,17 @@ describe("multi-select", () => {
     flushSync();
     expect(calls.deleteNode).toEqual([["Homelab"], ["web-01"], ["db-01"]]);
     expect(dialog()).toBeNull();
+  });
+
+  test("deleting only connections says exactly what goes", async () => {
+    await setup(bigTree());
+    click("web-01");
+    click("db-01", { ctrlKey: true });
+    await key(row("db-01"), "Delete");
+    expect(dialog()!.querySelector(".title")!.textContent).toBe("Delete 2 items?");
+    expect(dialog()!.querySelector(".detail, p")!.textContent!.trim()).toBe(
+      "This removes 2 connections. This cannot be undone.",
+    );
   });
 
   test("escape cancels the confirmation", async () => {

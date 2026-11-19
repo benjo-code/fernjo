@@ -523,6 +523,31 @@ describe("TreeStore selection", () => {
     expect(store.selectedId).toBe("pve-01");
   });
 
+  test("ctrl_click_after_a_collapse_does_not_bring_the_hidden_node_back_into_the_count", async () => {
+    const { store, calls } = await open();
+    store.selectOnly("pve-01");
+    store.toggle("Homelab"); // a single selection stays although it is hidden now
+    expect([...store.selectedIds]).toEqual(["pve-01"]);
+    store.toggleSelect("web-01");
+    expect([...store.selectedIds]).toEqual(["web-01"]);
+    expect(store.selectedId).toBe("web-01");
+    expect(store.anchorId).toBe("web-01");
+    expect(store.selectedIds.size).toBe(store.selectionTops().length);
+    await store.removeMany([...store.selectedIds]);
+    expect(calls.deleteNode).toEqual([["web-01"]]);
+  });
+
+  test("ctrl_click_after_a_filter_hid_everything_selected_starts_from_the_new_row", async () => {
+    const { store } = await open();
+    store.selectOnly("pve-01");
+    store.toggleSelect("DC01");
+    store.setFilter("web"); // both hidden: the selection is left alone
+    expect([...store.selectedIds].sort()).toEqual(["DC01", "pve-01"]);
+    store.toggleSelect("web-01");
+    expect([...store.selectedIds]).toEqual(["web-01"]);
+    expect(store.selectedIds.size).toBe(store.selectionTops().length);
+  });
+
   test("moveMany sends one batch command and applies the snapshot", async () => {
     const after = [folder("Homelab", [conn("pve-01"), conn("DC01", "rdp"), conn("web-01")])];
     const { store, calls } = await started(tree(), {

@@ -94,6 +94,10 @@ export class TreeStore {
       }
       if (this.anchorId === id) this.anchorId = this.selectedId;
     } else {
+      // nodes hidden by a collapse or a filter must not join the new selection
+      const visible = new SvelteSet(this.rows.map((r) => r.node.id));
+      for (const hidden of [...this.selectedIds])
+        if (!visible.has(hidden)) this.selectedIds.delete(hidden);
       this.selectedIds.add(id);
       this.selectedId = id;
       this.anchorId = id;

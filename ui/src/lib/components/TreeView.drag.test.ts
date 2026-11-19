@@ -27,8 +27,8 @@ const sample = (): TreeNode[] => [
   conn("web-01"),
 ];
 
-async function setup(impl: Partial<Api> = {}) {
-  const mock = mockApi(sample(), impl);
+async function setup(impl: Partial<Api> = {}, children: TreeNode[] = sample()) {
+  const mock = mockApi(children, impl);
   const store = new TreeStore(mock.api);
   await store.init();
   store.expand("Homelab");
@@ -313,5 +313,31 @@ describe("pointer drag and drop", () => {
     await settle();
     expect(calls.moveNode).toEqual([["web-01", "Homelab", 2]]);
     expect(calls.moveNodes).toEqual([]);
+  });
+
+  test("a_folder_and_its_child_selected_drag_the_folder_whichever_is_pressed", async () => {
+    for (const pressed of ["pve-01", "Homelab"]) {
+      if (mounted) unmount(mounted);
+      mounted = null;
+      document.body.innerHTML = "";
+      const { store, calls } = await setup({}, [
+        folder("Homelab", [conn("pve-01"), conn("DC01", "rdp")]),
+        folder("Other"),
+        conn("web-01"),
+      ]);
+      store.selectOnly("Homelab");
+      store.toggleSelect("pve-01");
+      flushSync();
+      expect(store.selectionTops()).toEqual(["Homelab"]);
+      layout(() => row("Other"));
+      pointer("pointerdown", row(pressed), 50, 40);
+      pointer("pointermove", tree(), 50, 84); // middle of Other = inside
+      expect(row("Homelab").classList.contains("dragging")).toBe(true);
+      pointer("pointerup", tree(), 50, 84);
+      await settle();
+      // one move, of the folder only: the child travels with it and is never moved alone
+      expect(calls.moveNode).toEqual([["Homelab", "Other", 0]]);
+      expect(calls.moveNodes).toEqual([]);
+    }
   });
 });

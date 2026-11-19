@@ -73,6 +73,16 @@ describe("DragController", () => {
     expect(ctrl.dragIds).toEqual(["C"]);
   });
 
+  test("a single selection top is dragged even when another row was pressed", () => {
+    const { ctrl, onMove } = setup();
+    // A and its child a1 are selected: the tops are just [A], the pressed row is a1
+    ctrl.pointerDown("a1", 10, 10, ["A"]);
+    expect(ctrl.dragIds).toEqual(["A"]);
+    ctrl.pointerMove(10, 40, { rowId: "C", position: "inside" });
+    ctrl.pointerUp();
+    expect(onMove).toHaveBeenCalledWith(["A"], "C", 0);
+  });
+
   test("a_target_among_the_dragged_rows_is_no_target", () => {
     const { ctrl, onMove } = setup();
     ctrl.pointerDown("B", 10, 10, ["B", "C"]);

@@ -37,12 +37,12 @@ export class DragController {
     this.#opts = opts;
   }
 
-  /** `ids` is the selection (tops) to drag along; fewer than two means only the pressed row. */
+  /** `ids` are the selection tops to drag along (even a single one: a folder pressed through its selected child); none means only the pressed row. */
   pointerDown(id: string, x: number, y: number, ids?: string[]) {
     this.#reset();
     this.state = "pending";
     this.dragId = id;
-    this.dragIds = ids && ids.length > 1 ? [...ids] : [id];
+    this.dragIds = ids && ids.length > 0 ? [...ids] : [id];
     this.#startX = x;
     this.#startY = y;
   }

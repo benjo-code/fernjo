@@ -554,6 +554,7 @@ describe("PropertiesPanel credential row", () => {
     const { store } = await setup({
       "web-01": resolved({ id: "web-01", name: "web-01" }),
     });
+    store.expand("Homelab"); // both nodes must be visible rows to join a selection
     store.toggleSelect("DC01");
     await settle();
     expect(document.querySelector(".title")!.textContent!.trim()).toBe("2 items selected");
