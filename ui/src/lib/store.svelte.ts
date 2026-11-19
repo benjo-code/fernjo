@@ -165,6 +165,7 @@ export class TreeStore {
       const snapshot = await this.#api.reloadTree();
       this.#apply(snapshot.children, snapshot.notices);
       this.changedOnDisk = false;
+      this.error = null;
     });
   }
 

@@ -119,10 +119,12 @@ pub fn list_tree(state: &AppState) -> Result<Snapshot, CommandError> {
 
 /// Re-reads `connections.json` after it changed on disk and returns the adopted tree. Read-only
 /// with respect to the file, so it is allowed while a data folder change waits for a restart.
+/// A file that cannot be read is `reload_failed` (not the startup `load_failed`): the old tree
+/// stays in place and the UI keeps showing it.
 pub fn reload_tree(state: &AppState) -> Result<Snapshot, CommandError> {
     with_store(state, |store| {
         let notice = store.reload().map_err(|e| CommandError {
-            code: "load_failed".to_string(),
+            code: "reload_failed".to_string(),
             message: e.to_string(),
         })?;
         Ok(snapshot(store, notice.into_iter().collect()))
@@ -301,6 +303,33 @@ mod tests {
 
         let m = create_folder(&st, None, None, "after".into()).unwrap();
         assert_eq!(m.snapshot.children.len(), 2);
+    }
+
+    #[test]
+    fn reload_tree_on_a_corrupt_file_fails_softly_and_keeps_the_old_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = state(dir.path());
+        create_folder(&st, None, None, "mine".into()).unwrap();
+        create_folder(&st, None, None, "again".into()).unwrap(); // makes a .bak
+        let file = dir.path().join(FILE_NAME);
+        fs::write(&file, "not json").unwrap();
+        fs::write(file.with_extension("json.bak"), "not json").unwrap();
+
+        let err = reload_tree(&st).unwrap_err();
+        assert_eq!(err.code, "reload_failed");
+        assert!(!err.message.is_empty());
+        // the store still serves the old tree
+        let names: Vec<_> = list_tree(&st)
+            .unwrap()
+            .children
+            .into_iter()
+            .map(|n| n.name)
+            .collect();
+        assert_eq!(names, ["mine", "again"]);
+
+        // the file is repaired: a later reload works
+        fs::write(&file, r#"{"schemaVersion":1,"children":[]}"#).unwrap();
+        assert!(reload_tree(&st).is_ok());
     }
 
     #[test]

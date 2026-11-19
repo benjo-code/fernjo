@@ -60,6 +60,33 @@ describe("TreeStore", () => {
     expect(store.children.map((n) => n.name)).toEqual(["theirs"]);
   });
 
+  test("a failed reload keeps the tree and the reload state, a later reload clears both", async () => {
+    let fail = true;
+    const { store, setTree } = await started(tree(), {
+      createFolder: async () => {
+        throw apiError("changed_on_disk");
+      },
+      reloadTree: async () => {
+        if (fail) throw apiError("reload_failed", "could not read connections.json");
+        return snapshot([conn("theirs")]);
+      },
+    });
+    await store.createFolder(null, null);
+    const err = await store.reload();
+    expect(err?.code).toBe("reload_failed");
+    expect(store.changedOnDisk).toBe(true);
+    expect(store.loadError).toBeNull();
+    expect(store.error).toBe("could not read connections.json");
+    expect(store.children.map((n) => n.name)).toEqual(["Homelab", "web-01"]);
+
+    fail = false;
+    setTree([conn("theirs")]);
+    expect(await store.reload()).toBeNull();
+    expect(store.changedOnDisk).toBe(false);
+    expect(store.error).toBeNull();
+    expect(store.children.map((n) => n.name)).toEqual(["theirs"]);
+  });
+
   test("selection_is_cleared_when_snapshot_no_longer_contains_it", async () => {
     const { store, setTree, api } = await started();
     store.select("web-01");
