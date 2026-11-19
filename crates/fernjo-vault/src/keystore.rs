@@ -109,8 +109,26 @@ fn map_err(e: &keyring::Error) -> KeyStoreError {
     KeyStoreError::new(format!("OS keychain: {e}"))
 }
 
-fn entry(vault: VaultId) -> Result<keyring::Entry, KeyStoreError> {
-    keyring::Entry::new(SERVICE, &vault.to_string()).map_err(|e| map_err(&e))
+fn entry(vault: VaultId) -> Result<keyring_core::Entry, KeyStoreError> {
+    // The `keyring` crate picks and installs the platform store on first use; its own `Entry`
+    // has no way to pass modifiers, so the entry itself comes from `keyring-core`.
+    if let Err(e) = keyring::Entry::store_status() {
+        return Err(map_err(e));
+    }
+    let user = vault.to_string();
+    // Windows: the store's default is "Enterprise" persistence, which lets the item roam with
+    // the domain profile (credential roaming). The data key is device-local, so ask for "Local".
+    // The modifier is applied whenever the secret is written, so an item an older build wrote as
+    // Enterprise is rewritten as Local on the next `set`.
+    #[cfg(windows)]
+    let result = keyring_core::Entry::new_with_modifiers(
+        SERVICE,
+        &user,
+        &HashMap::from([("persistence", "Local")]),
+    );
+    #[cfg(not(windows))]
+    let result = keyring_core::Entry::new(SERVICE, &user);
+    result.map_err(|e| map_err(&e))
 }
 
 impl KeyStore for OsKeyStore {

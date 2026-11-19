@@ -273,6 +273,12 @@ fn os_keystore_round_trip() {
     store.set(id, &key).unwrap();
     let back = store.get(id).unwrap().expect("key present");
     assert_eq!(back.as_bytes(), key.as_bytes());
+    // Windows: the item must not roam with the domain profile
+    #[cfg(windows)]
+    {
+        let attributes = super::entry(id).unwrap().get_attributes().unwrap();
+        assert_eq!(attributes["persistence"], "Local");
+    }
     store.delete(id).unwrap();
     assert!(store.get(id).unwrap().is_none());
     // Deleting a missing item is not an error.

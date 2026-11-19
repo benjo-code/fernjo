@@ -69,6 +69,8 @@ pub struct Vault {
     /// below it is a rollback. Never lowered (accepting an older file keeps it).
     floor: u64,
     generations: Option<Arc<dyn GenerationStore>>,
+    /// The cost `change_password` raises a weaker stored cost to (never lowers a stronger one).
+    upgrade_target: KdfParams,
 }
 
 impl fmt::Debug for Vault {
@@ -152,6 +154,7 @@ impl Vault {
             }),
             floor: 0,
             generations: None,
+            upgrade_target: kdf,
         };
         vault.save()?;
         Ok(vault)
@@ -175,6 +178,7 @@ impl Vault {
             unlocked: None,
             floor: 0,
             generations: None,
+            upgrade_target: KdfParams::DEFAULT,
         }))
     }
 
@@ -559,7 +563,9 @@ impl Vault {
 
     /// Changes the master password. Verifies the old one, then uses a new salt and wrap
     /// nonce, re-wraps the unchanged data key and saves once (the save re-seals the body
-    /// under the same data key with a fresh nonce, because the header is its AAD). A
+    /// under the same data key with a fresh nonce, because the header is its AAD). A stored KDF
+    /// cost below the current default is raised to it (the new password is derived at the
+    /// new cost; a stronger stored cost stays). A
     /// failure leaves the file and the header in memory as they were.
     ///
     /// # Errors
@@ -585,6 +591,15 @@ impl Vault {
             return Err(VaultError::WeakPassword);
         }
         let mut header = (*self.header).clone();
+        // a weaker stored cost is raised to the current target (per field, never lowered)
+        let stored = header.kdf;
+        let target = self.upgrade_target;
+        header.kdf = KdfParams {
+            memory_kib: stored.memory_kib.max(target.memory_kib),
+            iterations: stored.iterations.max(target.iterations),
+            parallelism: stored.parallelism.max(target.parallelism),
+        };
+        header.kdf.validate()?;
         header.salt = crypto::random_array()?;
         header.wrap_nonce = crypto::random_array()?;
         let kek = crypto::derive_key(new.as_bytes(), header.kdf, &header.salt)?;
@@ -714,21 +729,6 @@ fn open_body(
     serde_json::from_slice(&plain).map_err(|_| VaultError::Tampered)
 }
 
-/// Creates (truncating) `path` readable and writable by its owner only on Unix (mode 0600, also
-/// when a stale file of that name already exists); elsewhere the folder's inherited ACL applies.
-fn create_private_file(path: &Path) -> io::Result<fs::File> {
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let file = options.open(path)?;
-    owner_only(path)?;
-    Ok(file)
-}
-
 /// Creates `dir` and its missing parents; on Unix with mode 0700 (folders that already exist
 /// keep theirs).
 fn create_private_dir_all(dir: &Path) -> io::Result<()> {
@@ -754,13 +754,56 @@ fn owner_only(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Creates a new file (`create_new`: never an existing file, never through a symlink at that
+/// name) readable and writable by its owner only on Unix (mode 0600); elsewhere the folder's
+/// inherited ACL applies.
+fn create_new_private_file(path: &Path) -> io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)
+}
+
+/// A temp file next to `path` under a random name, so nobody can plant the name beforehand;
+/// a name that is taken anyway is never reused.
+fn create_temp_file(path: &Path) -> io::Result<(PathBuf, fs::File)> {
+    let mut last = None;
+    for _ in 0..8 {
+        let mut random = [0u8; 8];
+        getrandom::fill(&mut random).map_err(|e| io::Error::other(e.to_string()))?;
+        let hex: String = random.iter().map(|b| format!("{b:02x}")).collect();
+        let tmp = with_suffix(path, &format!(".{hex}.tmp"));
+        match create_new_private_file(&tmp) {
+            Ok(file) => return Ok((tmp, file)),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => last = Some(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| io::Error::other("no free temp file name")))
+}
+
+/// Unix: flushes the folder entry of the rename to disk. Elsewhere nothing to do.
+fn sync_dir(dir: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        fs::File::open(dir)?.sync_all()?;
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+    Ok(())
+}
+
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    if let Some(dir) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+    let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
+    if let Some(dir) = dir {
         create_private_dir_all(dir)?;
     }
-    let tmp = with_suffix(path, ".tmp");
+    let (tmp, mut file) = create_temp_file(path)?;
     let result = (|| -> io::Result<()> {
-        let mut file = create_private_file(&tmp)?;
         file.write_all(bytes)?;
         file.flush()?;
         file.sync_all()?;
@@ -774,6 +817,11 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     })();
     if result.is_err() {
         let _ = fs::remove_file(&tmp);
+        return result;
+    }
+    // the file is in place; a failed folder sync must not report the save as failed
+    if let Some(dir) = dir {
+        let _ = sync_dir(dir);
     }
     result
 }
@@ -787,7 +835,11 @@ mod tests {
     use secrecy::SecretString;
     use tempfile::TempDir;
 
-    use crate::format::{HEADER_LEN, MAX_FILE_LEN, OFF_KDF_MEMORY, OFF_VERSION, read_capped};
+    use crate::format::{
+        HEADER_LEN, MAX_FILE_LEN, OFF_KDF_ITERATIONS, OFF_KDF_MEMORY, OFF_KDF_PARALLELISM,
+        OFF_VERSION, read_capped,
+    };
+    use crate::vault::{with_suffix, write_atomic};
     use crate::{DataKey, FILE_NAME, KdfParams, Vault, VaultError};
 
     const PW: &str = "correct horse battery";
@@ -977,8 +1029,128 @@ mod tests {
         bytes[OFF_KDF_MEMORY..OFF_KDF_MEMORY + 4].copy_from_slice(&huge_kib.to_be_bytes());
         fs::write(&path, &bytes).unwrap();
         let started = std::time::Instant::now();
-        assert_eq!(code(Vault::open(&path)), "invalid_kdf_params");
+        assert_eq!(code(Vault::open(&path)), "unreadable");
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn load_refuses_a_header_with_an_excessive_kdf_cost() {
+        // each of memory, passes and lanes alone above 4 times the shipped default
+        let d = KdfParams::DEFAULT;
+        let cases: [(usize, u32, &str); 3] = [
+            (OFF_KDF_MEMORY, d.memory_kib * 4 + 1, "memory"),
+            (OFF_KDF_ITERATIONS, d.iterations * 4 + 1, "passes"),
+            (OFF_KDF_PARALLELISM, d.parallelism * 4 + 1, "lanes"),
+        ];
+        for (offset, value, what) in cases {
+            let dir = TempDir::new().unwrap();
+            let (vault, path) = new_vault(&dir);
+            drop(vault);
+            let mut bytes = fs::read(&path).unwrap();
+            bytes[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
+            fs::write(&path, &bytes).unwrap();
+            let err = Vault::open(&path).unwrap_err();
+            assert_eq!(err.code(), "unreadable", "{what}");
+            assert!(err.to_string().contains(what), "{what}: {err}");
+            assert_eq!(fs::read(&path).unwrap(), bytes, "file untouched");
+            assert!(!bak(&path).exists());
+        }
+    }
+
+    #[test]
+    fn load_accepts_exactly_four_times_the_default_cost() {
+        let d = KdfParams::DEFAULT;
+        let dir = TempDir::new().unwrap();
+        let (vault, path) = new_vault(&dir);
+        drop(vault);
+        let mut bytes = fs::read(&path).unwrap();
+        bytes[OFF_KDF_MEMORY..OFF_KDF_MEMORY + 4]
+            .copy_from_slice(&(d.memory_kib * 4).to_be_bytes());
+        bytes[OFF_KDF_ITERATIONS..OFF_KDF_ITERATIONS + 4]
+            .copy_from_slice(&(d.iterations * 4).to_be_bytes());
+        bytes[OFF_KDF_PARALLELISM..OFF_KDF_PARALLELISM + 4]
+            .copy_from_slice(&(d.parallelism * 4).to_be_bytes());
+        fs::write(&path, &bytes).unwrap();
+        assert!(Vault::open(&path).unwrap().is_some());
+    }
+
+    #[test]
+    fn save_never_writes_through_the_old_fixed_temp_name() {
+        let dir = TempDir::new().unwrap();
+        let (mut vault, path) = new_vault(&dir);
+        let old_tmp = with_suffix(&path, ".tmp");
+        fs::write(&old_tmp, b"planted").unwrap();
+        vault.save().unwrap();
+        assert_eq!(fs::read(&old_tmp).unwrap(), b"planted");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_never_follows_a_planted_temp_symlink() {
+        let dir = TempDir::new().unwrap();
+        let (mut vault, path) = new_vault(&dir);
+        let victim = dir.path().join("victim");
+        fs::write(&victim, b"victim data").unwrap();
+        std::os::unix::fs::symlink(&victim, with_suffix(&path, ".tmp")).unwrap();
+        vault.save().unwrap();
+        assert_eq!(fs::read(&victim).unwrap(), b"victim data");
+        // the vault itself is still intact
+        let mut reopened = Vault::open(&path).unwrap().unwrap();
+        reopened.unlock(&secret(PW)).unwrap();
+    }
+
+    #[test]
+    fn write_atomic_uses_a_fresh_temp_name_and_leaves_none_behind() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("file.bin");
+        write_atomic(&path, b"one").unwrap();
+        write_atomic(&path, b"two").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"two");
+        let mut names: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["file.bin", "file.bin.bak"]);
+    }
+
+    #[test]
+    fn change_password_upgrades_a_weak_cost_and_never_lowers_one() {
+        let target = KdfParams {
+            memory_kib: 64,
+            iterations: 2,
+            parallelism: 1,
+        };
+        let dir = TempDir::new().unwrap();
+        let (mut vault, path) = new_vault(&dir);
+        vault.upgrade_target = target;
+        vault
+            .change_password(&secret(PW), &secret("another long one"))
+            .unwrap();
+        let reopened = Vault::open(&path).unwrap().unwrap();
+        assert_eq!(reopened.header.kdf, target);
+        let mut reopened = reopened;
+        reopened.unlock(&secret("another long one")).unwrap();
+
+        // a stronger stored cost is kept, field by field
+        let mut vault = reopened;
+        vault.upgrade_target = KdfParams {
+            memory_kib: 8,
+            iterations: 5,
+            parallelism: 1,
+        };
+        vault
+            .change_password(&secret("another long one"), &secret(PW))
+            .unwrap();
+        let after = Vault::open(&path).unwrap().unwrap();
+        assert_eq!(
+            after.header.kdf,
+            KdfParams {
+                memory_kib: 64,
+                iterations: 5,
+                parallelism: 1
+            }
+        );
     }
 
     #[test]
