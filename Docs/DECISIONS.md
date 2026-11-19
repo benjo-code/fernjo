@@ -359,7 +359,7 @@ Handler table (`decide`): known and confirmed `Known`: connect. Known and confir
 **Rejected alternatives:** length plus mtime (sync tools can preserve both); keeping the pending edit for replay (about twice the work); a silent merge (unsafe for deletes and moves).
 **Limits:** it is a check, not a lock: a sync tool can still win the race between the check and the rename. `sha2` 0.11.1 was already in `Cargo.lock` (via another crate), so no new package version.
 
-## 2026-11-19 – M7: release binaries carry no build paths
+## 2026-11-19 â€“ M7: release binaries carry no build paths
 
 **Context:** Rust embeds source paths in panic messages and debug info, so a CI-built binary named `/home/runner/...`, `C:\Users\runneradmin\.cargo\registry\...` and similar, which leaks the build environment and adds noise.
 **Decision:** the release build passes `--remap-path-prefix` for `$GITHUB_WORKSPACE` (to `/build`) and the cargo home (to `/cargo`) through `RUSTFLAGS` (existing flags kept; on Windows both paths go through `cygpath -w` because rustc matches the native form). A step after the build runs `tools/check-no-build-paths.sh` on `target/[<triple>/]release/fernjo[.exe]`, a plain `grep -a -c` for the registry paths and the runner home names; exit 1 fails the job.
