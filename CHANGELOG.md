@@ -6,6 +6,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-20
+
+Polish and hardening: milestone M7 (no silent loss of synced data, quit confirmation, tabs that close on a deliberate shell exit, resizable panels, multi-select in the tree, a UI whose vault, import and settings can be found without a hint, and the Low findings of the M6 reviews settled).
+
 ### Added
 
 - Data safety (M7): fernjo no longer overwrites a `connections.json` that a sync tool or another device changed while the app was running. The save is refused, a bar above the tree says so and offers **Reload**, which loads the other version (your edit that was refused is not applied; make it again after the reload). If the changed file cannot be read, the tree you see stays and the error is shown. It is a check before the write, not a lock, so a sync tool can still win a race of a few milliseconds.
@@ -30,7 +34,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 - The SSH agent's sign step has its own limit of 120 seconds (M7), so an agent that waits for a touch or a confirmation per signature (`ssh-add -c`) no longer runs into the 15 second connect timeout.
 - The Settings dialog names the real reason when settings are not saved (M7): `FERNJO_DATA_DIR` is set, `settings.json` is unreadable or from a newer version, or the device has no settings folder. Before, it always blamed `FERNJO_DATA_DIR`.
 - The Windows web view no longer runs its component updater (M7): about a minute after start it contacted `edge.microsoft.com` once while fernjo sat idle; `--disable-component-update` stops that (measured, see `Docs/DECISIONS.md`)
-- Release binaries no longer embed the build machine's cargo registry paths (M7): the release workflow remaps the paths and fails when the built binary still contains one. This is proven only by the first release build.
+- Release binaries no longer embed the build machine's cargo registry paths (M7): the release workflow remaps the paths and fails when the built binary still contains one. The release workflow checks this on every release build; the dry run of pull request #16 passed that check on Windows, macOS (both architectures) and Linux.
 
 ### Fixed
 

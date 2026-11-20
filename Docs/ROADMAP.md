@@ -32,7 +32,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 | 6 | Packaging, app settings & release readiness | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-17-milestone-06-packaging-release-readiness.md) | 2026-11-18 |
 | – | **Release `v0.1.0`** – Daily SSH driver (M0 to M6) | – | ✅ done | – | 2026-11-18 |
 | 7 | Daily-use polish and hardening | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-19-milestone-07-polish-hardening.md) | 2026-11-20 |
-| – | **Release `v0.1.1`** – Polish and hardening (M7) | – | ⬜ open | – | – |
+| – | **Release `v0.1.1`** – Polish and hardening (M7) | – | ✅ done | – | 2026-11-20 |
 | 8 | RDP sessions | 1 – fernjo app | ⬜ open | – | – |
 | – | **Release `v0.2.0`** – RDP (M8) | – | ⬜ open | – | – |
 
@@ -414,6 +414,7 @@ RDP sessions in tabs next to SSH.
 Deliberately not scheduled. Ideas that `/ideen` files here are listed; if needed, one becomes a milestone.
 
 - **Restore confirmation wording:** A restored backup replaces the tree and the vault entries by design; the confirmation dialog could name more than counts (for example what is replaced and what is kept). UI wording only, no safety effect (moved back from the M7 triage of the import Low findings).
+- **Clean the username of JSON and backup imports:** From the v0.1.1 release security review (Low): `fernjo_import::limits::sanitize_nodes` cleans name, description and host of JSON and backup imports but not `settings.username`, which comes straight from the file (mRemoteNG usernames are cut to 256 characters at read time). A hostile file could put control characters or a very long string there; it renders as plain text and ends up as the SSH user name, with no code execution or secret exposure. Apply the same cap and cleaning as for the other fields.
 - **Built-in device sync:** End-to-end-encrypted sync of connections and vault between devices. Until then the data folder can be synced with Syncthing/Nextcloud/iCloud.
 - **SFTP file browser:** Browse and transfer files over an open SSH connection.
 - **Port forwarding and jump hosts:** Local/remote forwards and ProxyJump per connection or folder.

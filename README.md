@@ -4,7 +4,7 @@ A lightweight, cross-platform remote connection manager for **SSH and RDP** on W
 
 All your connections live in one folder tree in the sidebar, sessions open as tabs in a single window, and passwords and keys are kept in an encrypted vault. Existing connections can be imported from mRemoteNG, including saved passwords.
 
-**Status:** in development – see [Docs/ROADMAP.md](Docs/ROADMAP.md). The first release, v0.1.0, is published: SSH, the vault, import and backup are implemented, and the installers for Windows, macOS and Linux are on the [releases page](https://github.com/benjo-code/fernjo/releases). v0.2.0 adds RDP.
+**Status:** in development – see [Docs/ROADMAP.md](Docs/ROADMAP.md). The latest release, v0.1.1, is published: SSH, the vault, import and backup are implemented, and the installers for Windows, macOS and Linux are on the [releases page](https://github.com/benjo-code/fernjo/releases). v0.2.0 adds RDP.
 
 ## Features
 
@@ -25,7 +25,7 @@ Design and scope: [Docs/superpowers/specs/2026-11-15-fernjo-design.md](Docs/supe
 
 ## Install
 
-The GitHub release of v0.1.0 holds five installers and a checksum file:
+Each GitHub release holds five installers and a checksum file:
 
 | Platform | File |
 |---|---|
@@ -54,7 +54,7 @@ shasum -a 256 <file>                       # macOS: compare the printed hash wit
 
 ## Settings
 
-The gear in the sidebar opens Settings: the colour theme (System, Light or Dark; System follows the operating system and changes with it), the terminal (font family, size and scrollback) and the data folder (see [Docs/DECISIONS.md](Docs/DECISIONS.md) for how the folder is chosen). The choices are stored in `settings.json` in the config folder. By default that is also the data folder; once you choose a separate data folder, `settings.json` stays in the config folder, so syncing the data folder does not carry the settings to another machine.
+The gear in the sidebar opens Settings: the colour theme (System, Light or Dark; System follows the operating system and changes with it), the terminal (font family, size, scrollback and whether a tab closes when the shell exits) and the data folder (see [Docs/DECISIONS.md](Docs/DECISIONS.md) for how the folder is chosen). The choices are stored in `settings.json` in the config folder. By default that is also the data folder; once you choose a separate data folder, `settings.json` stays in the config folder, so syncing the data folder does not carry the settings to another machine.
 
 ## SSH
 
@@ -78,6 +78,8 @@ Plain Ctrl+letter and Alt+letter always go to the shell. App shortcuts are Ctrl+
 | Search in the terminal | Ctrl+Shift+F | Cmd+F |
 | Copy selection (terminal) | Ctrl+Shift+C | Cmd+C |
 | Paste (terminal) | Ctrl+Shift+V | Cmd+V |
+| Select several connections (tree) | Ctrl+click | Cmd+click |
+| Select a range (tree) | Shift+click | Shift+click |
 
 Copy and paste only apply while the terminal has focus; elsewhere the page keeps its normal behaviour.
 

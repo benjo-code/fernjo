@@ -318,7 +318,8 @@
     {
       "version": "0.1.1",
       "title": "Polish and hardening",
-      "status": "open",
+      "status": "done",
+      "date": "2026-11-20",
       "afterMilestone": "7",
       "covers": ["7"],
       "intro": "Closes the known gaps of 0.1.0: no silent loss of synced data, clearer UI, resizable panels, multi-select in the tree."
@@ -337,6 +338,7 @@
   ],
   "backlog": [
     { "title": "Restore confirmation wording", "text": "A restored backup replaces the tree and the vault entries by design; the confirmation dialog could name more than counts (for example what is replaced and what is kept). UI wording only, no safety effect (moved back from the M7 triage of the import Low findings)." },
+    { "title": "Clean the username of JSON and backup imports", "text": "From the v0.1.1 release security review (Low): `fernjo_import::limits::sanitize_nodes` cleans name, description and host of JSON and backup imports but not `settings.username`, which comes straight from the file (mRemoteNG usernames are cut to 256 characters at read time). A hostile file could put control characters or a very long string there; it renders as plain text and ends up as the SSH user name, with no code execution or secret exposure. Apply the same cap and cleaning as for the other fields." },
     { "title": "Built-in device sync", "text": "End-to-end-encrypted sync of connections and vault between devices. Until then the data folder can be synced with Syncthing/Nextcloud/iCloud." },
     { "title": "SFTP file browser", "text": "Browse and transfer files over an open SSH connection." },
     { "title": "Port forwarding and jump hosts", "text": "Local/remote forwards and ProxyJump per connection or folder." },
