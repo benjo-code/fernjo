@@ -445,6 +445,7 @@
     class="tree"
     class:dragging={dragView.dragIds.length > 0}
     role="tree"
+    aria-multiselectable="true"
     aria-label="Connections"
     tabindex="-1"
     {onclick}

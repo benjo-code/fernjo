@@ -75,6 +75,13 @@ describe("TreeView", () => {
     expect(row("web-01").hasAttribute("aria-expanded")).toBe(false);
   });
 
+  test("tree_container_is_marked_multiselectable", async () => {
+    await setup();
+    expect(document.querySelector('[role="tree"]')!.getAttribute("aria-multiselectable")).toBe(
+      "true",
+    );
+  });
+
   test("click_selects_and_chevron_click_toggles", async () => {
     const { store } = await setup();
     row("web-01").click();
