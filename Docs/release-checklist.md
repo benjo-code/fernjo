@@ -204,7 +204,7 @@ The live SSH integration tests skip locally without the throwaway container; the
 | 2 | Linux title bar icon attempt (`setup` hook) | Unproven until the owner looks at the CachyOS laptop; cosmetic; CHANGELOG says "unconfirmed" |
 | 3 | Apple Silicon dmg and the `.deb` on real hardware | Accepted, README says so |
 | 4 | SSH container tests | Count only through the CI `rust` job of the release PR (recorded in the evidence) |
-| 5 | Release dry run and the release run of this release | Recorded after the release (evidence lines below) |
+| 5 | Release dry run and the release run of this release | Done, see the evidence lines under "Release (2026-11-20)" |
 | 6 | Low findings 1 to 4 above | Accepted or backlog, see their dispositions |
 
 **Verdict**
@@ -217,7 +217,16 @@ The live SSH integration tests skip locally without the throwaway container; the
 | Performance | Go (Windows) | Unchanged since the M7 measurements in `Docs/performance.md`; not re-run for this release; Linux and macOS not measured |
 | Repo settings | Go | Required checks of `main` and `dev` as before; this release changes no setting |
 
-**Overall: no blocker for v0.1.1.** Evidence of the release itself (PR numbers, merge commit, release run, asset checks) follows in the evidence lines added after the release.
+**Overall: no blocker for v0.1.1.**
+
+**Release (2026-11-20).**
+
+- Release PR [#17](https://github.com/benjo-code/fernjo/pull/17) (`release/v0.1.1`, head `cf3ccb3`) merged into `main` with a merge commit, `4d5590d` (two parents: `2184295` and `cf3ccb3`); `main` then holds version `0.1.1`. All checks passed: `roadmap`, `rust` (including the SSH container tests: the steps "Start the SSH test server" and "Run cargo test --workspace" succeeded; CI fails when the server is missing), `ui`, `tauri-build`, `cargo-deny`, `workflows`, both CodeQL `analyze` jobs and the `CodeQL` result (no new alert), and the `release.yml` dry run [44747721142](https://github.com/benjo-code/fernjo/actions/runs/44747721142) with its four build jobs (`publish` skipped by design). The step "Check the binary for build paths" succeeded in all four build jobs (checklist step 8). Open code-scanning alerts after the merge: 0.
+- Release [v0.1.1](https://github.com/benjo-code/fernjo/releases/tag/v0.1.1) created with `gh release create v0.1.1 --target main` (notes from the CHANGELOG section); the tag points at `4d5590d`. `release.yml` run [44749438942](https://github.com/benjo-code/fernjo/actions/runs/44749438942): `build (windows)`, `build (macos-x64)`, `build (macos-arm64)`, `build (linux)` and `publish` all `success`.
+- Assets: `fernjo_0.1.1_x64-setup.exe`, `fernjo_0.1.1_aarch64.dmg`, `fernjo_0.1.1_x64.dmg`, `fernjo_0.1.1_amd64.deb`, `fernjo_0.1.1_amd64.AppImage` and `SHA256SUMS`. Downloaded into an empty folder: `sha256sum -c SHA256SUMS` reported `OK` for all five; `bash tools/verify-installers.sh 0.1.1 <dir>` exits 0 on a folder that holds only the five installers (it reports `SHA256SUMS` as unexpected when run in the download folder, because the workflow runs it before that file exists); `gh release view`: not a draft, not a pre-release, tag `v0.1.1`, target `main`.
+- Back-merge PR [#18](https://github.com/benjo-code/fernjo/pull/18) (`main` into `dev`) merged with a merge commit, `ec94bd7`; `origin/main` is an ancestor of `origin/dev`, which holds version `0.1.1`. All its checks passed.
+
+Still unverified after the release: the waived owner checks (gap 1), the Linux title bar icon (gap 2), the Apple Silicon dmg and the `.deb` on real hardware (gap 3). The installers were built and smoke-tested on CI runners; the downloaded files were checked by checksum and name only, not installed on a machine of ours.
 
 ## v0.1.0 security review
 
