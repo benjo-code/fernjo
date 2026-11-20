@@ -92,6 +92,23 @@ test("a_restart_required_error_from_a_vault_call_shows_in_the_notice_bar", async
   unmount(app);
 });
 
+test("the_sidebar_footer_buttons_show_their_labels_next_to_the_icons", async () => {
+  const { api } = mockApi();
+  const app = mount(App, { target: document.body, props: { api } });
+  await settle();
+  const buttons = [...document.querySelectorAll<HTMLButtonElement>(".sidebar .foot button")];
+  expect(buttons.map((b) => b.textContent?.trim())).toEqual(["Settings", "Import / Export"]);
+  // an icon stays in each button, and the accessible name equals the visible text (label in name)
+  expect(buttons.map((b) => b.querySelector("svg") !== null)).toEqual([true, true]);
+  expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual(["Settings", "Import / Export"]);
+  expect(buttons[1]!.getAttribute("title")).toBe("Import, export & backup");
+  // the Import / Export button opens the dialog under its new name
+  buttons[1]!.click();
+  await settle();
+  expect(document.querySelector("[role=dialog] h2")?.textContent).toBe("Import, export & backup");
+  unmount(app);
+});
+
 test("the_gear_button_opens_the_data_folder_dialog_and_escape_closes_it", async () => {
   const { api, calls } = mockApi();
   const app = mount(App, { target: document.body, props: { api } });
@@ -153,7 +170,7 @@ test("an_applied_import_reloads_the_vault_credential_list", async () => {
     [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === label)!.click();
     await settle();
   };
-  document.querySelector<HTMLButtonElement>("button[aria-label='Import & backup']")!.click();
+  document.querySelector<HTMLButtonElement>("button[aria-label='Import / Export']")!.click();
   await settle();
   await click("mRemoteNG file…");
   await click("Import");

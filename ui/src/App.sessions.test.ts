@@ -484,7 +484,7 @@ test("a_restore_closes_every_tab_and_the_lamps_go_out", async () => {
     [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === label)!.click();
     await settle();
   };
-  document.querySelector<HTMLButtonElement>("button[aria-label='Import & backup']")!.click();
+  document.querySelector<HTMLButtonElement>("button[aria-label='Import / Export']")!.click();
   await settle();
   await click("Backup file…");
   await click("Restore…");
