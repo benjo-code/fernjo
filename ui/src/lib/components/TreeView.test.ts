@@ -250,9 +250,7 @@ describe("TreeView", () => {
 
   test("filter_box_filters_rows_and_clears_with_escape", async () => {
     const { store } = await setup(sample(), {}, Sidebar);
-    const input = document.querySelector<HTMLInputElement>(
-      'input[placeholder="Filter connections"]',
-    )!;
+    const input = document.querySelector<HTMLInputElement>('input[placeholder="Filter"]')!;
     expect(input).not.toBeNull();
     input.value = "pve";
     input.dispatchEvent(new Event("input", { bubbles: true }));

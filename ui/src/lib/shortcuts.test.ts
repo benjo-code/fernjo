@@ -1,5 +1,13 @@
 import { describe, expect, test } from "vitest";
-import { isMac, routeKey } from "./shortcuts";
+import {
+  isMac,
+  routeKey,
+  SHORTCUTS,
+  shortcutEvent,
+  shortcutFor,
+  shortcutKeys,
+  type AppAction,
+} from "./shortcuts";
 
 const k = (
   key: string,
@@ -78,5 +86,56 @@ describe("isMac", () => {
     expect(isMac({ platform: "Win32" })).toBe(false);
     expect(isMac({})).toBe(false);
     expect(isMac(undefined)).toBe(false);
+  });
+});
+
+describe("SHORTCUTS", () => {
+  test("every_entry_with_a_chord_routes_to_its_action_on_both_platforms", () => {
+    const chords = SHORTCUTS.filter((s) => s.action);
+    expect(chords.map((s) => s.action).sort()).toEqual(
+      ["closeTab", "copy", "focusFilter", "nextTab", "paste", "prevTab", "terminalSearch"].sort(),
+    );
+    for (const mac of [false, true]) {
+      for (const s of chords) {
+        const event = shortcutEvent(s, mac);
+        expect(event).not.toBeNull();
+        expect(routeKey(event!, mac, true), `${s.label} (mac=${mac})`).toBe(s.action);
+      }
+    }
+  });
+
+  test("the_other_platforms_chord_does_not_route_to_the_action", () => {
+    const tabs: (AppAction | undefined)[] = ["nextTab", "prevTab"];
+    for (const s of SHORTCUTS.filter((x) => x.action && !tabs.includes(x.action))) {
+      expect(routeKey(shortcutEvent(s, true)!, false, true)).toBeNull();
+      expect(routeKey(shortcutEvent(s, false)!, true, true)).toBeNull();
+    }
+  });
+
+  test("labels_name_the_chord_the_platform_really_uses", () => {
+    const keys = (action: AppAction, mac: boolean) => shortcutKeys(shortcutFor(action)!, mac);
+    expect(keys("focusFilter", false)).toBe("Ctrl+Shift+K");
+    expect(keys("focusFilter", true)).toBe("Cmd+K");
+    expect(keys("closeTab", false)).toBe("Ctrl+Shift+W");
+    expect(keys("closeTab", true)).toBe("Cmd+W");
+    expect(keys("terminalSearch", false)).toBe("Ctrl+Shift+F");
+    expect(keys("terminalSearch", true)).toBe("Cmd+F");
+    expect(keys("nextTab", false)).toBe("Ctrl+Tab");
+    expect(keys("nextTab", true)).toBe("Ctrl+Tab");
+    expect(keys("prevTab", false)).toBe("Ctrl+Shift+Tab");
+    expect(keys("prevTab", true)).toBe("Ctrl+Shift+Tab");
+  });
+
+  test("mouse_and_tree_gestures_have_text_but_no_chord", () => {
+    const plain = SHORTCUTS.filter((s) => !s.action);
+    expect(plain.map((s) => shortcutKeys(s, false))).toEqual([
+      "Double-click or Enter",
+      "Ctrl+click",
+      "Shift+click",
+      "F2",
+      "Delete",
+    ]);
+    expect(shortcutKeys(plain[1], true)).toBe("Cmd+click");
+    for (const s of plain) expect(shortcutEvent(s, false)).toBeNull();
   });
 });

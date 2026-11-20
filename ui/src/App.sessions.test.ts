@@ -392,7 +392,9 @@ test("saving_terminal_settings_reaches_open_terminals", async () => {
   const size = document.querySelector<HTMLInputElement>("input[aria-label='Font size']")!;
   size.value = "20";
   size.dispatchEvent(new Event("input", { bubbles: true }));
-  [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Save")!.click();
+  [...document.querySelectorAll("button")]
+    .find((b) => b.textContent?.trim() === "Save terminal settings")!
+    .click();
   await settle();
   expect(seen).toContain(20);
 });

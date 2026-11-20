@@ -5,6 +5,7 @@
   import type { TerminalSettingsStore } from "../terminal-settings.svelte";
   import type { ThemeStore } from "../theme.svelte";
   import type { Api, DataFolderInfo, Theme } from "../types";
+  import { isMac, SHORTCUTS, shortcutKeys } from "../shortcuts";
   import { unsavedNote } from "../unsaved";
   import Icon from "./Icon.svelte";
 
@@ -14,6 +15,7 @@
     theme,
     onclose,
     onchange,
+    mac = isMac(),
   }: {
     api: Api;
     /** Holds the terminal settings the open terminals follow. */
@@ -23,6 +25,8 @@
     onclose: () => void;
     /** A folder was chosen (the info carries the pending restart). */
     onchange: (info: DataFolderInfo) => void;
+    /** Whether to show the Cmd variants of the shortcuts; the platform decides by default. */
+    mac?: boolean;
   } = $props();
 
   const uid = $props.id();
@@ -315,6 +319,7 @@
       />
       <span>Close the tab when the shell exits</span>
     </label>
+    <p class="note">Appearance and the checkbox apply at once.</p>
     {#if terminal.info?.unsavedReason}
       <p class="note">{unsavedNote(terminal.info.unsavedReason)}</p>
     {/if}
@@ -331,7 +336,7 @@
         type="button"
         class="btn"
         aria-disabled={saving || !terminal.info}
-        onclick={() => void saveTerminal()}>Save</button
+        onclick={() => void saveTerminal()}>Save terminal settings</button
       >
     </div>
 
@@ -378,6 +383,16 @@
         >
       {/if}
     </div>
+
+    <h3 class="section">Keyboard and mouse</h3>
+    <ul class="keys">
+      {#each SHORTCUTS as shortcut (shortcut.label)}
+        <li>
+          <span>{shortcut.label}</span>
+          <kbd>{shortcutKeys(shortcut, mac)}</kbd>
+        </li>
+      {/each}
+    </ul>
 
     <div class="actions footer">
       <button type="button" class="btn" onclick={onclose}>Close</button>
@@ -528,6 +543,26 @@
     color: var(--color-danger);
     font-size: var(--text-sm);
     overflow-wrap: anywhere;
+  }
+
+  .keys {
+    margin: var(--space-3) 0 0;
+    padding: 0;
+    list-style: none;
+    font-size: var(--text-sm);
+  }
+
+  .keys li {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-4);
+    padding: var(--space-1) 0;
+  }
+
+  .keys kbd {
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    text-align: right;
   }
 
   .actions {
