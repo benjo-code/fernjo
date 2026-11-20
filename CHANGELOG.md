@@ -6,6 +6,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 
 ## [Unreleased]
 
+### Fixed
+
+- The properties panel can now be dragged taller, not only smaller: once you set its height, the connection tree only has to keep 6 rows (before, it kept 23, which left no room to grow at the default size). Without a stored height the layout is unchanged, and a double-click on the bar still resets it.
+
 ## [0.1.1] - 2026-11-20
 
 Polish and hardening: milestone M7 (no silent loss of synced data, quit confirmation, tabs that close on a deliberate shell exit, resizable panels, multi-select in the tree, a UI whose vault, import and settings can be found without a hint, and the Low findings of the M6 reviews settled).
