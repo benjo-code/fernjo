@@ -112,13 +112,18 @@ impl CertStore {
     }
 }
 
+/// Whether `host` can be used as a host name here: not empty, at most 255 bytes, no whitespace or
+/// control characters.
+pub(crate) fn valid_host(host: &str) -> bool {
+    !(host.is_empty()
+        || host.len() > MAX_HOST_LEN
+        || host.chars().any(|c| c.is_whitespace() || c.is_control()))
+}
+
 /// `host:port`, the host lowercased. A host that is empty, longer than 255 bytes or holds
 /// whitespace or a control character is `invalid_host` (it could not be one field of a line).
 fn pin_key(host: &str, port: u16) -> Result<String, RdpError> {
-    if host.is_empty()
-        || host.len() > MAX_HOST_LEN
-        || host.chars().any(|c| c.is_whitespace() || c.is_control())
-    {
+    if !valid_host(host) {
         return Err(RdpError::InvalidHost);
     }
     Ok(format!("{}:{port}", host.to_ascii_lowercase()))
