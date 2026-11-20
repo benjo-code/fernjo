@@ -1,8 +1,11 @@
 <script lang="ts">
   import type { TreeStore } from "../store.svelte";
+  import { isMac, shortcutFor, shortcutKeys } from "../shortcuts";
   import Icon from "./Icon.svelte";
 
-  let { store }: { store: TreeStore } = $props();
+  let { store, mac = isMac() }: { store: TreeStore; mac?: boolean } = $props();
+
+  const hint = $derived(`Filter connections (${shortcutKeys(shortcutFor("focusFilter")!, mac)})`);
 
   let input = $state<HTMLInputElement>();
 
@@ -25,8 +28,9 @@
   <input
     bind:this={input}
     type="text"
-    placeholder="Filter connections"
+    placeholder="Filter"
     aria-label="Filter connections"
+    title={hint}
     autocomplete="off"
     spellcheck="false"
     value={store.filter}

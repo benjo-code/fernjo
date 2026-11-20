@@ -32,7 +32,14 @@ async function setup(impl: Partial<Api> = {}) {
   store.expand("Homelab");
   mounted = mount(TreeView, {
     target: document.body,
-    props: { store, sessions: new SessionStore(mock.api, (id) => id) },
+    props: {
+      store,
+      sessions: new SessionStore(
+        mock.api,
+        (id) => id,
+        () => true,
+      ),
+    },
   });
   flushSync();
   return { store, ...mock };
@@ -43,12 +50,21 @@ const row = (id: string) =>
     (el) => el.dataset.nodeId === id,
   )!;
 const menu = () => document.querySelector<HTMLElement>('[role="menu"]');
-const menuLabels = () =>
-  [...document.querySelectorAll('[role="menuitem"]')].map((el) => el.textContent?.trim());
+// the item's name: its label, not the shortcut hint next to it
+const labelOf = (el: Element) => el.querySelector(".label")?.textContent?.trim();
+const menuLabels = () => [...document.querySelectorAll('[role="menuitem"]')].map(labelOf);
 const item = (label: string) =>
   [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
-    (el) => el.textContent?.trim() === label,
+    (el) => labelOf(el) === label,
   )!;
+// label -> visible hint text ("" when the item has none)
+const hints = () =>
+  Object.fromEntries(
+    [...document.querySelectorAll('[role="menuitem"]')].map((el) => [
+      labelOf(el),
+      el.querySelector(".hint")?.textContent?.trim() ?? "",
+    ]),
+  );
 const dialog = () => document.querySelector<HTMLElement>('[role="alertdialog"]');
 const button = (label: string) =>
   [...document.querySelectorAll<HTMLElement>('[role="alertdialog"] button')].find(
@@ -74,6 +90,66 @@ async function key(el: Element, k: string, init: KeyboardEventInit = {}) {
 }
 
 describe("context menu", () => {
+  test("a_connection_row_menu_shows_the_keys_that_do_the_same_thing", async () => {
+    await setup();
+    contextMenu(row("web-01"));
+    expect(hints()).toEqual({
+      Connect: "Enter",
+      "New folder": "",
+      "New connection": "",
+      Duplicate: "",
+      Rename: "F2",
+      Delete: "Del",
+    });
+  });
+
+  test("a_folder_row_menu_has_no_connect_hint_but_keeps_rename_and_delete", async () => {
+    await setup();
+    contextMenu(row("Homelab"));
+    expect(hints()).toEqual({
+      "New folder": "",
+      "New connection": "",
+      Duplicate: "",
+      Rename: "F2",
+      Delete: "Del",
+    });
+  });
+
+  test("the_multi_selection_menu_keeps_its_delete_hint", async () => {
+    const { store } = await setup();
+    store.select("web-01");
+    store.toggleSelect("pve-01");
+    flushSync();
+    contextMenu(row("web-01"));
+    expect(hints()).toEqual({ Delete: "Del" });
+  });
+
+  test("the_empty_space_menu_has_no_hints", async () => {
+    await setup();
+    contextMenu(document.querySelector('[role="tree"]')!);
+    expect(hints()).toEqual({ "New folder": "", "New connection": "" });
+    expect(document.querySelector(".hint")).toBeNull();
+  });
+
+  test("hints_are_hidden_from_the_accessible_name_and_exposed_as_keyshortcuts", async () => {
+    await setup();
+    contextMenu(row("web-01"));
+    for (const [label, keys] of [
+      ["Connect", "Enter"],
+      ["Rename", "F2"],
+      ["Delete", "Delete"],
+    ] as const) {
+      const el = item(label);
+      expect(el.getAttribute("aria-keyshortcuts")).toBe(keys);
+      expect(el.querySelector(".hint")!.getAttribute("aria-hidden")).toBe("true");
+      // what remains for the accessible name once aria-hidden parts are skipped is the label
+      const clone = el.cloneNode(true) as HTMLElement;
+      clone.querySelectorAll("[aria-hidden='true']").forEach((n) => n.remove());
+      expect(clone.textContent?.trim()).toBe(label);
+    }
+    expect(item("Duplicate").hasAttribute("aria-keyshortcuts")).toBe(false);
+  });
+
   test("row_context_menu_lists_items_in_order_and_selects_the_row", async () => {
     const { store } = await setup();
     contextMenu(row("web-01"));

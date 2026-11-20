@@ -659,20 +659,37 @@ fn resolved(path: &Path) -> PathBuf {
     }
 }
 
-/// An export must never be written into the data folder: it could replace `vault.fernjo` or
-/// `connections.json` with something that is not them.
+/// An export must never be written into the data folder, the folder of `settings.json`, the
+/// device-local folder or a data folder chosen for the next start: it could replace the vault,
+/// `connections.json`, `settings.json` or the device marks with something that is not them.
 fn ensure_export_target_allowed(state: &AppState, path: &Path) -> Result<(), CommandError> {
-    let Some(data) = &state.data_dir else {
-        return Ok(());
-    };
-    if resolved(path).starts_with(resolved(data)) {
-        return Err(error(
-            "export_target_not_allowed",
-            format!(
-                "the file would be inside fernjo's data folder ({}), where it could overwrite the vault or the connections; choose another folder",
-                data.display()
-            ),
-        ));
+    let pending = state
+        .pending_data_dir
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+        .map(|(p, _)| p.clone());
+    let guarded = [
+        (state.data_dir.as_ref(), "fernjo's data folder"),
+        (state.config_dir.as_ref(), "fernjo's settings folder"),
+        (state.device_dir.as_ref(), "fernjo's device folder"),
+        (
+            pending.as_ref(),
+            "the data folder chosen for the next start",
+        ),
+    ];
+    let target = resolved(path);
+    for (folder, what) in guarded {
+        let Some(folder) = folder else { continue };
+        if target.starts_with(resolved(folder)) {
+            return Err(error(
+                "export_target_not_allowed",
+                format!(
+                    "the file would be inside {what} ({}), where it could overwrite the vault, the connections or the settings; choose another folder",
+                    folder.display()
+                ),
+            ));
+        }
     }
     Ok(())
 }
@@ -2075,6 +2092,70 @@ mod tests {
         fs::create_dir_all(&sibling).unwrap();
         export_connections_to(&s, &sibling.join("c.json")).unwrap();
         export_backup_to(&s, &sibling.join("b.fjbk"), &sec(BACKUP_PW)).unwrap();
+    }
+
+    #[test]
+    fn export_refuses_config_device_and_pending_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = st(&dir.path().join("d"));
+        let config = dir.path().join("config");
+        let device = dir.path().join("device");
+        let pending = dir.path().join("pending");
+        for p in [&config, &device, &pending] {
+            fs::create_dir_all(p).unwrap();
+        }
+        s.config_dir = Some(config.clone());
+        s.device_dir = Some(device.clone());
+        *s.pending_data_dir.lock().unwrap() = Some((pending.clone(), Vec::new()));
+        for target in [
+            config.join("settings.json"),
+            config.join("new").join("x.json"),
+            device.join("vault-marks.json"),
+            // a detour through a sibling and a relative `..`
+            device
+                .join("..")
+                .join("device")
+                .join("known_hosts.confirmed"),
+            pending.join("connections.json"),
+        ] {
+            let e = export_connections_to(&s, &target).unwrap_err();
+            assert_eq!(e.code, "export_target_not_allowed", "{target:?}");
+            let e = export_backup_to(&s, &target, &sec(BACKUP_PW)).unwrap_err();
+            assert_eq!(e.code, "export_target_not_allowed", "{target:?}");
+        }
+        assert!(!config.join("settings.json").exists());
+        assert!(!pending.join("connections.json").exists());
+        // folders next to them with a similar name stay fine
+        let ok = dir.path().join("config2");
+        fs::create_dir_all(&ok).unwrap();
+        export_connections_to(&s, &ok.join("c.json")).unwrap();
+    }
+
+    #[test]
+    fn clear_pending_does_not_block_while_an_apply_holds_the_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = st(&dir.path().join("d"));
+        let path = file(dir.path(), "c.xml", DEFAULT_KEY_XML);
+        inspect(&s, ImportKind::Mremoteng, &path, None).unwrap();
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let holder = &s;
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                let _g = holder.pending.lock().unwrap();
+                held_tx.send(()).unwrap();
+                let _ = release_rx.recv();
+            });
+            held_rx.recv().unwrap();
+            let started = std::time::Instant::now();
+            s.clear_pending(); // would deadlock the test (blocks) with a plain lock()
+            assert!(started.elapsed() < std::time::Duration::from_secs(1));
+            release_tx.send(()).unwrap();
+        });
+        // skipped while held: the value is still there; once free, a page load clears it
+        assert_eq!(pending_kind(&s), "mremoteng");
+        s.clear_pending();
+        assert_eq!(pending_kind(&s), "none");
     }
 
     #[test]

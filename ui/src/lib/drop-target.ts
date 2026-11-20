@@ -64,3 +64,54 @@ export function resolveDrop(
   if (drop.parentId === drag.parentId && drop.index === drag.index) return null;
   return drop;
 }
+
+/**
+ * Where dropping the nodes `dragIds` (given in the order they will end up in) on `targetId` would
+ * put them. `index` counts the new parent's children with every dragged node taken out. `null`
+ * when the target is a dragged node or inside a dragged subtree, or when nothing would change.
+ * `dragIds` are expected to be selection tops: none lies inside another's subtree.
+ */
+export function resolveDropMany(
+  rows: Row[],
+  dragIds: string[],
+  targetId: string,
+  position: DropPosition,
+): Drop | null {
+  if (dragIds.length === 0) return null;
+  const byId = new Map(rows.map((r) => [r.node.id, r]));
+  const target = byId.get(targetId);
+  if (!target) return null;
+  const dragged = new Set(dragIds);
+  const drags: Row[] = [];
+  for (const id of dragIds) {
+    const row = byId.get(id);
+    if (!row) return null;
+    drags.push(row);
+  }
+
+  for (let at: Row | undefined = target; at; at = at.parentId ? byId.get(at.parentId) : undefined) {
+    if (dragged.has(at.node.id)) return null;
+  }
+
+  const isFolder = target.node.type === "folder";
+  let drop: Drop;
+  if (
+    position === "inside" ||
+    (position === "after" && isFolder && target.expanded && target.hasChildren)
+  ) {
+    if (target.node.type !== "folder") return null;
+    const leaving = drags.filter((d) => d.parentId === target.node.id).length;
+    drop = {
+      parentId: target.node.id,
+      index: position === "inside" ? target.node.children.length - leaving : 0,
+    };
+  } else {
+    const raw = position === "before" ? target.index : target.index + 1;
+    const leaving = drags.filter((d) => d.parentId === target.parentId && d.index < raw).length;
+    drop = { parentId: target.parentId, index: raw - leaving };
+  }
+
+  // already there: the same parent, side by side, in this order, starting at the slot
+  const inPlace = drags.every((d, i) => d.parentId === drop.parentId && d.index === drop.index + i);
+  return inPlace ? null : drop;
+}

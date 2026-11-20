@@ -117,6 +117,20 @@ pub fn list_tree(state: &AppState) -> Result<Snapshot, CommandError> {
     })
 }
 
+/// Re-reads `connections.json` after it changed on disk and returns the adopted tree. Read-only
+/// with respect to the file, so it is allowed while a data folder change waits for a restart.
+/// A file that cannot be read is `reload_failed` (not the startup `load_failed`): the old tree
+/// stays in place and the UI keeps showing it.
+pub fn reload_tree(state: &AppState) -> Result<Snapshot, CommandError> {
+    with_store(state, |store| {
+        let notice = store.reload().map_err(|e| CommandError {
+            code: "reload_failed".to_string(),
+            message: e.to_string(),
+        })?;
+        Ok(snapshot(store, notice.into_iter().collect()))
+    })
+}
+
 pub fn get_node(state: &AppState, id: NodeId) -> Result<ResolvedNode, CommandError> {
     with_store(state, |store| Ok(store.tree().resolve_node(id)?))
 }
@@ -165,6 +179,18 @@ pub fn move_node(
     })
 }
 
+/// Moves several nodes at once, all or nothing. The mutation carries no single id.
+pub fn move_nodes(
+    state: &AppState,
+    ids: Vec<NodeId>,
+    parent_id: Option<NodeId>,
+    index: usize,
+) -> Result<Mutation, CommandError> {
+    mutate(state, |s| {
+        s.move_nodes(&ids, parent_id, index).map(|()| None)
+    })
+}
+
 pub fn duplicate_node(state: &AppState, id: NodeId) -> Result<Mutation, CommandError> {
     mutate(state, |s| s.duplicate(id).map(Some))
 }
@@ -181,6 +207,11 @@ pub mod handlers {
     #[tauri::command]
     pub fn list_tree(state: State<'_, AppState>) -> Result<Snapshot, CommandError> {
         super::list_tree(&state)
+    }
+
+    #[tauri::command]
+    pub fn reload_tree(state: State<'_, AppState>) -> Result<Snapshot, CommandError> {
+        super::reload_tree(&state)
     }
 
     #[tauri::command]
@@ -230,6 +261,16 @@ pub mod handlers {
     }
 
     #[tauri::command]
+    pub fn move_nodes(
+        state: State<'_, AppState>,
+        ids: Vec<NodeId>,
+        parent_id: Option<NodeId>,
+        index: usize,
+    ) -> Result<Mutation, CommandError> {
+        super::move_nodes(&state, ids, parent_id, index)
+    }
+
+    #[tauri::command]
     pub fn duplicate_node(
         state: State<'_, AppState>,
         id: NodeId,
@@ -262,6 +303,55 @@ mod tests {
         let snapshot = list_tree(&state(dir.path())).unwrap();
         assert!(snapshot.children.is_empty());
         assert!(snapshot.notices.is_empty());
+    }
+
+    #[test]
+    fn reload_tree_returns_the_other_devices_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = state(dir.path());
+        create_folder(&st, None, None, "mine".into()).unwrap();
+        // another device writes a different tree
+        let other = tempfile::tempdir().unwrap();
+        let other_st = state(other.path());
+        create_folder(&other_st, None, None, "theirs".into()).unwrap();
+        fs::copy(other.path().join(FILE_NAME), dir.path().join(FILE_NAME)).unwrap();
+
+        let err = create_folder(&st, None, None, "blocked".into()).unwrap_err();
+        assert_eq!(err.code, "changed_on_disk");
+
+        let snapshot = reload_tree(&st).unwrap();
+        assert_eq!(snapshot.children.len(), 1);
+        assert_eq!(snapshot.children[0].name, "theirs");
+
+        let m = create_folder(&st, None, None, "after".into()).unwrap();
+        assert_eq!(m.snapshot.children.len(), 2);
+    }
+
+    #[test]
+    fn reload_tree_on_a_corrupt_file_fails_softly_and_keeps_the_old_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = state(dir.path());
+        create_folder(&st, None, None, "mine".into()).unwrap();
+        create_folder(&st, None, None, "again".into()).unwrap(); // makes a .bak
+        let file = dir.path().join(FILE_NAME);
+        fs::write(&file, "not json").unwrap();
+        fs::write(file.with_extension("json.bak"), "not json").unwrap();
+
+        let err = reload_tree(&st).unwrap_err();
+        assert_eq!(err.code, "reload_failed");
+        assert!(!err.message.is_empty());
+        // the store still serves the old tree
+        let names: Vec<_> = list_tree(&st)
+            .unwrap()
+            .children
+            .into_iter()
+            .map(|n| n.name)
+            .collect();
+        assert_eq!(names, ["mine", "again"]);
+
+        // the file is repaired: a later reload works
+        fs::write(&file, r#"{"schemaVersion":1,"children":[]}"#).unwrap();
+        assert!(reload_tree(&st).is_ok());
     }
 
     #[test]
@@ -553,6 +643,62 @@ mod tests {
         assert_eq!(err.code, "not_a_folder");
         let err = move_node(&st, c, Some(c), 0).unwrap_err();
         assert_eq!(err.code, "invalid_move");
+    }
+
+    #[test]
+    fn move_nodes_returns_the_full_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = state(dir.path());
+        let a = create_folder(&st, None, None, "a".into())
+            .unwrap()
+            .id
+            .unwrap();
+        let b = create_folder(&st, None, None, "b".into())
+            .unwrap()
+            .id
+            .unwrap();
+        let dst = create_folder(&st, None, None, "dst".into())
+            .unwrap()
+            .id
+            .unwrap();
+        let moved = move_nodes(&st, vec![b, a], Some(dst), 0).unwrap();
+        assert_eq!(moved.snapshot.children.len(), 1);
+        assert_eq!(moved.snapshot.children[0].id, dst);
+        let ids: Vec<_> = match &moved.snapshot.children[0].kind {
+            fernjo_core::NodeKind::Folder { children } => children.iter().map(|n| n.id).collect(),
+            _ => panic!("not a folder"),
+        };
+        assert_eq!(ids, [b, a]);
+        // the persisted file agrees
+        assert_eq!(
+            Store::open(dir.path()).unwrap().store.tree().children(),
+            moved.snapshot.children.as_slice()
+        );
+    }
+
+    #[test]
+    fn move_nodes_error_leaves_the_file_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = state(dir.path());
+        let a = create_folder(&st, None, None, "a".into())
+            .unwrap()
+            .id
+            .unwrap();
+        let inner = create_folder(&st, Some(a), None, "inner".into())
+            .unwrap()
+            .id
+            .unwrap();
+        let c = create_connection(&st, None, None, "c".into(), Protocol::Ssh, "h".into())
+            .unwrap()
+            .id
+            .unwrap();
+        let on_disk = fs::read(dir.path().join(FILE_NAME)).unwrap();
+        let err = move_nodes(&st, vec![c, a], Some(inner), 0).unwrap_err();
+        assert_eq!(err.code, "invalid_move");
+        let err = move_nodes(&st, vec![a], Some(c), 0).unwrap_err();
+        assert_eq!(err.code, "not_a_folder");
+        assert_eq!(fs::read(dir.path().join(FILE_NAME)).unwrap(), on_disk);
+        assert_eq!(list_tree(&st).unwrap().children.len(), 2);
     }
 
     #[test]

@@ -95,11 +95,19 @@ export function dataFolder(partial: Partial<DataFolderInfo> = {}): DataFolderInf
 }
 
 export function terminalSettings(partial: Partial<TerminalSettings> = {}): TerminalSettings {
-  return { fontFamily: null, fontSize: 14, scrollback: 10000, persistent: true, ...partial };
+  return {
+    fontFamily: null,
+    fontSize: 14,
+    scrollback: 10000,
+    closeOnExit: true,
+    persistent: true,
+    unsavedReason: null,
+    ...partial,
+  };
 }
 
 export function themeInfo(partial: Partial<ThemeInfo> = {}): ThemeInfo {
-  return { theme: "system", persistent: true, ...partial };
+  return { theme: "system", persistent: true, unsavedReason: null, ...partial };
 }
 
 export function report(partial: Partial<Report> = {}): Report {
@@ -143,11 +151,13 @@ type Calls = Record<keyof Api, unknown[][]>;
 export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
   const calls: Calls = {
     listTree: [],
+    reloadTree: [],
     getNode: [],
     createFolder: [],
     createConnection: [],
     updateNode: [],
     moveNode: [],
+    moveNodes: [],
     duplicateNode: [],
     deleteNode: [],
     vaultStatus: [],
@@ -194,6 +204,10 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
       calls.listTree.push([]);
       return impl.listTree ? impl.listTree() : snapshot(current);
     },
+    reloadTree: async () => {
+      calls.reloadTree.push([]);
+      return impl.reloadTree ? impl.reloadTree() : snapshot(current);
+    },
     getNode: async (id) => {
       calls.getNode.push([id]);
       if (impl.getNode) return impl.getNode(id);
@@ -214,6 +228,10 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     moveNode: async (...args) => {
       calls.moveNode.push(args);
       return impl.moveNode ? impl.moveNode(...args) : mutation(args[0]);
+    },
+    moveNodes: async (...args) => {
+      calls.moveNodes.push(args);
+      return impl.moveNodes ? impl.moveNodes(...args) : mutation(null);
     },
     duplicateNode: async (...args) => {
       calls.duplicateNode.push(args);
@@ -434,7 +452,11 @@ export async function startedTab(impl: Partial<Api> = {}) {
       return "sid";
     },
   });
-  const sessions = new SessionStore(mock.api, (id) => id);
+  const sessions = new SessionStore(
+    mock.api,
+    (id) => id,
+    () => true,
+  );
   sessions.open("n1");
   const tab = sessions.tabs[0]!;
   sessions.attachTerminal(tab.id, { write() {}, size: () => ({ cols: 80, rows: 24 }) });

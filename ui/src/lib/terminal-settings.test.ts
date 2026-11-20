@@ -22,14 +22,24 @@ test("save_updates_info_and_surfaces_rust_error_codes", async () => {
     },
   });
   const store = new TerminalSettingsStore(api);
-  const ok = await store.save({ fontFamily: null, fontSize: 20, scrollback: 5000 });
+  const ok = await store.save({
+    fontFamily: null,
+    fontSize: 20,
+    scrollback: 5000,
+    closeOnExit: true,
+  });
   expect(ok).toBeNull();
   expect(calls.setTerminalSettings[0]).toEqual([
-    { fontFamily: null, fontSize: 20, scrollback: 5000 },
+    { fontFamily: null, fontSize: 20, scrollback: 5000, closeOnExit: true },
   ]);
   expect(store.info).toMatchObject({ fontSize: 20, scrollback: 5000, persistent: false });
 
-  const failed = await store.save({ fontFamily: null, fontSize: 99, scrollback: 5000 });
+  const failed = await store.save({
+    fontFamily: null,
+    fontSize: 99,
+    scrollback: 5000,
+    closeOnExit: true,
+  });
   expect(failed?.code).toBe("invalid_font_size");
   // the last good values stay
   expect(store.info?.fontSize).toBe(20);

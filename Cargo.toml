@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "src-tauri"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.90"
 license = "MIT OR Apache-2.0"
@@ -30,6 +30,7 @@ aes-gcm = { version = "0.11.1", features = ["zeroize"] }
 pbkdf2 = { version = "0.13.0", features = ["hmac"] }
 sha1 = "0.11.0"
 base64 = "0.23.1"
+sha2 = "0.11.1"
 
 [profile.release]
 strip = "symbols"

@@ -457,6 +457,89 @@ impl Tree {
         Ok(())
     }
 
+    /// Moves several nodes (each with its subtree) below `new_parent` in one step. Duplicate ids
+    /// are ignored; an id inside another listed id's subtree is skipped (it travels with its
+    /// ancestor). The moved nodes keep the order of `ids` and land contiguously; `index` counts
+    /// among the new parent's children after all of them were taken out (`index == len`
+    /// appends). Refuses with `NotFound`, `InvalidMove` (the target is, or lies inside, a moved
+    /// subtree), `NotAFolder`, `IndexOutOfRange` or `TooDeep` (for any moved subtree that
+    /// changes its parent; a node staying in its parent is never refused for depth). An empty
+    /// `ids` does nothing. Everything is validated before the first node is taken out, so
+    /// nothing changes on error.
+    pub fn move_nodes(
+        &mut self,
+        ids: &[NodeId],
+        new_parent: Option<NodeId>,
+        index: usize,
+    ) -> Result<(), TreeError> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let mut listed = Vec::with_capacity(ids.len());
+        let mut seen = HashSet::new();
+        for &id in ids {
+            if self.get(id).is_none() {
+                return Err(TreeError::NotFound(id));
+            }
+            if seen.insert(id) {
+                listed.push(id);
+            }
+        }
+        // keep only the roots of the selection: drop a node with a listed ancestor
+        let roots: Vec<NodeId> = listed
+            .iter()
+            .copied()
+            .filter(|&id| {
+                let mut trail = Vec::new();
+                ancestors(&self.children, id, &mut trail);
+                !trail.iter().any(|a| seen.contains(&a.id))
+            })
+            .collect();
+
+        let target_children = match new_parent {
+            None => self.children.as_slice(),
+            Some(pid) => {
+                let target = self.get(pid).ok_or(TreeError::NotFound(pid))?;
+                for &id in &roots {
+                    let node = self.get(id).ok_or(TreeError::NotFound(id))?;
+                    if find(std::slice::from_ref(node), pid).is_some() {
+                        return Err(TreeError::InvalidMove);
+                    }
+                }
+                match &target.kind {
+                    NodeKind::Folder { children } => children.as_slice(),
+                    NodeKind::Connection { .. } => return Err(TreeError::NotAFolder),
+                }
+            }
+        };
+        let moving_out_of_target = target_children
+            .iter()
+            .filter(|c| roots.contains(&c.id))
+            .count();
+        if index > target_children.len() - moving_out_of_target {
+            return Err(TreeError::IndexOutOfRange);
+        }
+        // the target is not inside any moved subtree, so taking nodes out does not change its
+        // level: check every subtree that changes its parent up front
+        for &id in &roots {
+            let node = self.get(id).ok_or(TreeError::NotFound(id))?;
+            let (old_parent, _) =
+                locate(&self.children, None, id).ok_or(TreeError::NotFound(id))?;
+            if old_parent != new_parent {
+                self.check_depth(new_parent, node)?;
+            }
+        }
+
+        let mut moved = Vec::with_capacity(roots.len());
+        for &id in &roots {
+            moved.push(self.take(id).ok_or(TreeError::NotFound(id))?);
+        }
+        for (offset, node) in moved.into_iter().enumerate() {
+            self.insert_unchecked(new_parent, Some(index + offset), node)?;
+        }
+        Ok(())
+    }
+
     /// Removes `id` (with its subtree) from wherever it is and returns it.
     fn take(&mut self, id: NodeId) -> Option<Node> {
         let (parent, index) = locate(&self.children, None, id)?;
@@ -1053,6 +1136,184 @@ mod tests {
         // index == len appends
         t.move_node(a, None, 1).unwrap();
         assert_eq!(names(t.children()), ["b", "a"]);
+    }
+
+    // ---- move_nodes ---------------------------------------------------
+
+    #[test]
+    fn move_nodes_moves_several_nodes_in_order() {
+        let mut t = Tree::new();
+        let a = ssh(&mut t, None, "a");
+        let b = ssh(&mut t, None, "b");
+        let c = ssh(&mut t, None, "c");
+        let dst = folder(&mut t, None, "dst");
+        ssh(&mut t, Some(dst), "x");
+        // the order of `ids` wins over the tree order
+        t.move_nodes(&[c, a, b], Some(dst), 0).unwrap();
+        assert_eq!(names(t.children()), ["dst"]);
+        assert_eq!(names(children_of(&t, dst)), ["c", "a", "b", "x"]);
+        // to the end, duplicates ignored
+        t.move_nodes(&[a, a, c], Some(dst), 2).unwrap();
+        assert_eq!(names(children_of(&t, dst)), ["b", "x", "a", "c"]);
+    }
+
+    #[test]
+    fn move_nodes_skips_a_descendant_of_another_selected_node() {
+        let mut t = Tree::new();
+        let src = folder(&mut t, None, "src");
+        let inner = ssh(&mut t, Some(src), "inner");
+        let sibling = ssh(&mut t, None, "sibling");
+        let dst = folder(&mut t, None, "dst");
+        // `inner` travels with `src`, it does not end up next to it
+        t.move_nodes(&[inner, src, sibling], Some(dst), 0).unwrap();
+        assert_eq!(names(children_of(&t, dst)), ["src", "sibling"]);
+        assert_eq!(names(children_of(&t, src)), ["inner"]);
+        assert_eq!(names(t.children()), ["dst"]);
+    }
+
+    #[test]
+    fn move_nodes_refuses_a_target_inside_a_moved_subtree_and_changes_nothing() {
+        let mut t = Tree::new();
+        let a = folder(&mut t, None, "a");
+        let b = folder(&mut t, Some(a), "b");
+        let other = ssh(&mut t, None, "other");
+        let free = folder(&mut t, None, "free");
+        let before = t.clone();
+        for target in [a, b] {
+            assert_eq!(
+                t.move_nodes(&[other, a], Some(target), 0).unwrap_err(),
+                TreeError::InvalidMove
+            );
+            assert_eq!(t, before);
+        }
+        // a target inside the moved subtree of the second id, with the first one fine
+        assert_eq!(
+            t.move_nodes(&[free, a], Some(b), 0).unwrap_err(),
+            TreeError::InvalidMove
+        );
+        assert_eq!(t, before);
+        // a non-folder target
+        assert_eq!(
+            t.move_nodes(&[a], Some(other), 0).unwrap_err(),
+            TreeError::NotAFolder
+        );
+        assert_eq!(t, before);
+    }
+
+    #[test]
+    fn move_nodes_into_the_same_parent_reorders_contiguously() {
+        let mut t = Tree::new();
+        let a = ssh(&mut t, None, "a");
+        let b = ssh(&mut t, None, "b");
+        let c = ssh(&mut t, None, "c");
+        let d = ssh(&mut t, None, "d");
+        // a and c go to the end, in the order given
+        t.move_nodes(&[c, a], None, 2).unwrap();
+        assert_eq!(names(t.children()), ["b", "d", "c", "a"]);
+        // inside a folder, together with an unrelated folder sibling
+        let f = folder(&mut t, None, "f");
+        let g = folder(&mut t, Some(f), "g");
+        let x = ssh(&mut t, Some(f), "x");
+        let y = ssh(&mut t, Some(f), "y");
+        t.move_nodes(&[y, g], Some(f), 0).unwrap();
+        assert_eq!(names(children_of(&t, f)), ["y", "g", "x"]);
+        let _ = (b, d, x);
+    }
+
+    #[test]
+    fn move_nodes_index_counts_after_removal() {
+        let mut t = Tree::new();
+        let a = ssh(&mut t, None, "a");
+        let b = ssh(&mut t, None, "b");
+        ssh(&mut t, None, "c");
+        ssh(&mut t, None, "d");
+        // after taking a and b out two nodes remain: 2 appends, 3 is out of range
+        assert_eq!(
+            t.move_nodes(&[a, b], None, 3).unwrap_err(),
+            TreeError::IndexOutOfRange
+        );
+        assert_eq!(names(t.children()), ["a", "b", "c", "d"]);
+        t.move_nodes(&[a, b], None, 1).unwrap();
+        assert_eq!(names(t.children()), ["c", "a", "b", "d"]);
+        // a target folder that receives nodes from elsewhere counts its own children only
+        let dst = folder(&mut t, None, "dst");
+        ssh(&mut t, Some(dst), "x");
+        assert_eq!(
+            t.move_nodes(&[a, b], Some(dst), 2).unwrap_err(),
+            TreeError::IndexOutOfRange
+        );
+        t.move_nodes(&[a, b], Some(dst), 1).unwrap();
+        assert_eq!(names(children_of(&t, dst)), ["x", "a", "b"]);
+    }
+
+    #[test]
+    fn move_nodes_refuses_too_deep_for_any_subtree() {
+        let mut t = Tree::new();
+        let ids = nested_folders(&mut t, MAX_TREE_DEPTH - 2); // levels 1..=58
+        let target = *ids.last().unwrap();
+        let small = ssh(&mut t, None, "small");
+        let outer = folder(&mut t, None, "outer");
+        let mid = folder(&mut t, Some(outer), "mid");
+        ssh(&mut t, Some(mid), "leaf");
+        let before = t.clone();
+        // `outer` would reach level 61: the whole batch is refused, `small` stays put
+        assert_eq!(
+            t.move_nodes(&[small, outer], Some(target), 0).unwrap_err(),
+            TreeError::TooDeep
+        );
+        assert_eq!(t, before);
+        assert_eq!(
+            t.move_nodes(&[outer, small], Some(target), 0).unwrap_err(),
+            TreeError::TooDeep
+        );
+        assert_eq!(t, before);
+        // the fitting ones go through
+        t.move_nodes(&[small, mid], Some(target), 0).unwrap();
+        assert_eq!(t.depth(), MAX_TREE_DEPTH);
+    }
+
+    #[test]
+    fn move_nodes_empty_is_a_no_op() {
+        let mut t = Tree::new();
+        let a = ssh(&mut t, None, "a");
+        let before = t.clone();
+        t.move_nodes(&[], None, 0).unwrap();
+        // nothing to move: not even the target is looked at
+        t.move_nodes(&[], Some(NodeId::new_v4()), 99).unwrap();
+        assert_eq!(t, before);
+        let _ = a;
+    }
+
+    #[test]
+    fn move_nodes_unknown_id_is_not_found() {
+        let mut t = Tree::new();
+        let a = ssh(&mut t, None, "a");
+        let dst = folder(&mut t, None, "dst");
+        let before = t.clone();
+        let ghost = NodeId::new_v4();
+        assert_eq!(
+            t.move_nodes(&[a, ghost], Some(dst), 0).unwrap_err(),
+            TreeError::NotFound(ghost)
+        );
+        assert_eq!(t, before);
+        assert_eq!(
+            t.move_nodes(&[a], Some(ghost), 0).unwrap_err(),
+            TreeError::NotFound(ghost)
+        );
+        assert_eq!(t, before);
+    }
+
+    #[test]
+    fn move_nodes_to_the_top_level_from_folders() {
+        let mut t = Tree::new();
+        let f = folder(&mut t, None, "f");
+        let x = ssh(&mut t, Some(f), "x");
+        let y = ssh(&mut t, Some(f), "y");
+        let z = ssh(&mut t, None, "z");
+        t.move_nodes(&[y, x], None, 1).unwrap();
+        assert_eq!(names(t.children()), ["f", "y", "x", "z"]);
+        assert!(children_of(&t, f).is_empty());
+        let _ = z;
     }
 
     #[test]

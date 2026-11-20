@@ -26,7 +26,7 @@ const settle = async () => {
   flushSync();
 };
 
-async function setup(impl: Partial<Api> = {}) {
+async function setup(impl: Partial<Api> = {}, mac?: boolean) {
   const m = mockApi([], impl);
   const onclose = vi.fn();
   const onchange = vi.fn();
@@ -38,6 +38,7 @@ async function setup(impl: Partial<Api> = {}) {
       theme: new ThemeStore(m.api),
       onclose,
       onchange,
+      ...(mac === undefined ? {} : { mac }),
     },
   });
   await settle();
@@ -258,31 +259,59 @@ describe("SettingsDialog", () => {
     type(field("Font family"), "  ");
     type(field("Font size"), "18");
     type(field("Scrollback"), "2500");
-    button("Save").click();
+    button("Save terminal settings").click();
     await settle();
     expect(calls.setTerminalSettings[0]).toEqual([
-      { fontFamily: null, fontSize: 18, scrollback: 2500 },
+      { fontFamily: null, fontSize: 18, scrollback: 2500, closeOnExit: true },
     ]);
     expect(alert()).toBeNull();
 
     type(field("Font size"), "5");
-    button("Save").click();
+    button("Save terminal settings").click();
     await settle();
     expect(alert()?.textContent).toBe("Font size must be between 8 and 32.");
 
     type(field("Font size"), "18");
     type(field("Scrollback"), "200000");
-    button("Save").click();
+    button("Save terminal settings").click();
     await settle();
     expect(alert()?.textContent).toBe("Scrollback must be between 1000 and 100000 lines.");
 
     // a field that is not a number is sent as 0 and rejected by Rust, never judged here
     type(field("Font size"), "");
     type(field("Scrollback"), "2000");
-    button("Save").click();
+    button("Save terminal settings").click();
     await settle();
     expect(calls.setTerminalSettings.at(-1)).toEqual([
-      { fontFamily: null, fontSize: 0, scrollback: 2000 },
+      { fontFamily: null, fontSize: 0, scrollback: 2000, closeOnExit: true },
+    ]);
+  });
+
+  test("the close-on-exit checkbox saves through setTerminalSettings", async () => {
+    const { calls } = await setup({
+      getTerminalSettings: async () => terminalSettings({ closeOnExit: true }),
+      setTerminalSettings: async (s) => terminalSettings(s),
+    });
+    const box = field("Close the tab when the shell exits");
+    expect(box.checked).toBe(true);
+    box.click();
+    await settle();
+    expect(box.checked).toBe(false);
+    expect(calls.setTerminalSettings.at(-1)).toEqual([
+      { fontFamily: null, fontSize: 14, scrollback: 10000, closeOnExit: false },
+    ]);
+  });
+
+  test("saving another terminal field sends the stored closeOnExit unchanged", async () => {
+    const { calls } = await setup({
+      getTerminalSettings: async () => terminalSettings({ closeOnExit: false }),
+      setTerminalSettings: async (s) => terminalSettings(s),
+    });
+    type(field("Font size"), "18");
+    button("Save terminal settings").click();
+    await settle();
+    expect(calls.setTerminalSettings.at(-1)).toEqual([
+      { fontFamily: null, fontSize: 18, scrollback: 10000, closeOnExit: false },
     ]);
   });
 
@@ -303,10 +332,10 @@ describe("SettingsDialog", () => {
     for (const [size, lines, wireSize, wireLines] of cases) {
       type(field("Font size"), size);
       type(field("Scrollback"), lines);
-      button("Save").click();
+      button("Save terminal settings").click();
       await settle();
       expect(calls.setTerminalSettings.at(-1)).toEqual([
-        { fontFamily: null, fontSize: wireSize, scrollback: wireLines },
+        { fontFamily: null, fontSize: wireSize, scrollback: wireLines, closeOnExit: true },
       ]);
     }
     // never the raw serde text
@@ -315,7 +344,10 @@ describe("SettingsDialog", () => {
 
   test("non_persistent_note_is_shown_when_persistent_is_false", async () => {
     const note = "Applies to this run only; settings are not saved while FERNJO_DATA_DIR is set";
-    await setup({ getTerminalSettings: async () => terminalSettings({ persistent: false }) });
+    await setup({
+      getTerminalSettings: async () =>
+        terminalSettings({ persistent: false, unsavedReason: "env" }),
+    });
     expect(document.body.textContent).toContain(note);
     unmount(mounted!);
     mounted = null;
@@ -407,7 +439,7 @@ describe("appearance", () => {
 
   test("a_memory_only_theme_says_it_is_not_remembered", async () => {
     const note = "Applies to this run only; settings are not saved while FERNJO_DATA_DIR is set";
-    await setup({ getTheme: async () => themeInfo({ persistent: false }) });
+    await setup({ getTheme: async () => themeInfo({ persistent: false, unsavedReason: "env" }) });
     // the terminal section is persistent here, so the note comes from the appearance section
     expect(document.body.textContent).toContain(note);
     unmount(mounted!);
@@ -428,7 +460,7 @@ describe("terminal section follow-ups", () => {
 
   test("saved_note_disappears_when_a_terminal_field_is_edited", async () => {
     await setup();
-    button("Save").click();
+    button("Save terminal settings").click();
     await settle();
     expect(document.querySelector("[role=status]")?.textContent).toBe("Saved");
     type(field("Font size"), "16");
@@ -454,8 +486,8 @@ describe("terminal section follow-ups", () => {
       },
     });
     expect(alert()?.textContent).toBe("Could not load the terminal settings");
-    expect(button("Save").getAttribute("aria-disabled")).toBe("true");
-    button("Save").click();
+    expect(button("Save terminal settings").getAttribute("aria-disabled")).toBe("true");
+    button("Save terminal settings").click();
     await settle();
     expect(calls.setTerminalSettings).toHaveLength(0);
   });
@@ -482,5 +514,99 @@ describe("short windows", () => {
     expect(rule).not.toBeNull();
     expect(rule![1]).toMatch(/max-height:\s*calc\(100vh - var\(--space-6\)\)/);
     expect(rule![1]).toMatch(/overflow-y:\s*auto/);
+  });
+
+  test("an_unusable_settings_json_shows_its_own_note_not_the_FERNJO_DATA_DIR_one", async () => {
+    const own = "Not saved: settings.json cannot be read";
+    const env = "FERNJO_DATA_DIR is set";
+    await setup({
+      getTerminalSettings: async () =>
+        terminalSettings({ persistent: false, unsavedReason: "settingsUnusable" }),
+    });
+    expect(document.body.textContent).toContain(own);
+    expect(document.body.textContent).not.toContain(env);
+    unmount(mounted!);
+    mounted = null;
+    document.body.innerHTML = "";
+    await setup({
+      getTheme: async () => themeInfo({ persistent: false, unsavedReason: "settingsUnusable" }),
+    });
+    expect(document.body.textContent).toContain(own);
+    expect(document.body.textContent).not.toContain(env);
+  });
+});
+
+describe("live versus saved controls", () => {
+  const field = (label: string) =>
+    document.querySelector<HTMLInputElement>(`input[aria-label='${label}']`)!;
+
+  test("the_terminal_save_button_says_what_it_saves", async () => {
+    await setup();
+    expect(button("Save")).toBeUndefined();
+    expect(button("Save terminal settings")).toBeTruthy();
+  });
+
+  test("one_hint_line_says_appearance_and_the_checkbox_apply_at_once", async () => {
+    await setup();
+    const hint = [...document.querySelectorAll("p")].filter(
+      (p) => p.textContent === "Appearance and the checkbox apply at once.",
+    );
+    expect(hint).toHaveLength(1);
+    // it sits in the terminal group, between the checkbox and the save button
+    const box = field("Close the tab when the shell exits");
+    const save = button("Save terminal settings");
+    expect(box.compareDocumentPosition(hint[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(hint[0].compareDocumentPosition(save) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
+describe("keyboard and mouse section", () => {
+  const section = () => {
+    const heading = [...document.querySelectorAll("h3")].find(
+      (h) => h.textContent === "Keyboard and mouse",
+    );
+    return heading?.nextElementSibling ?? null;
+  };
+  const rows = () =>
+    [...(section()?.querySelectorAll("li") ?? [])].map((li) =>
+      li.textContent!.replace(/\s+/g, " ").trim(),
+    );
+
+  test("the_section_comes_last_and_is_read_only", async () => {
+    await setup();
+    const headings = [...document.querySelectorAll("h3")].map((h) => h.textContent);
+    expect(headings.at(-1)).toBe("Keyboard and mouse");
+    expect(rows().length).toBeGreaterThan(5);
+    expect(section()?.querySelector("input, button")).toBeNull();
+  });
+
+  test("windows_and_linux_show_ctrl_shift_chords", async () => {
+    await setup({}, false);
+    const text = rows();
+    expect(text).toContain("Filter connections Ctrl+Shift+K");
+    expect(text).toContain("Next tab Ctrl+Tab");
+    expect(text).toContain("Previous tab Ctrl+Shift+Tab");
+    expect(text).toContain("Close tab Ctrl+Shift+W");
+    expect(text).toContain("Search in the terminal Ctrl+Shift+F");
+    expect(text).toContain("Copy in the terminal Ctrl+Shift+C");
+    expect(text).toContain("Paste in the terminal Ctrl+Shift+V");
+    expect(text).toContain("Open a connection Double-click or Enter");
+    expect(text).toContain("Select several Ctrl+click");
+    expect(text).toContain("Select a range Shift+click");
+    expect(text).toContain("Rename F2");
+    expect(text).toContain("Delete selected Delete");
+    expect(text.join(" ")).not.toContain("Cmd");
+  });
+
+  test("macos_shows_cmd_chords", async () => {
+    await setup({}, true);
+    const text = rows();
+    expect(text).toContain("Filter connections Cmd+K");
+    expect(text).toContain("Close tab Cmd+W");
+    expect(text).toContain("Search in the terminal Cmd+F");
+    expect(text).toContain("Copy in the terminal Cmd+C");
+    expect(text).toContain("Select several Cmd+click");
+    expect(text).toContain("Next tab Ctrl+Tab");
+    expect(text.join(" ")).not.toContain("Ctrl+Shift+K");
   });
 });

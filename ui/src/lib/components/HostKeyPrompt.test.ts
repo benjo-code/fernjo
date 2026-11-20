@@ -142,3 +142,16 @@ test("tab_and_shift_tab_wrap_inside_the_prompt", async () => {
   button("Trust once").focus();
   expect(press(false).defaultPrevented).toBe(false);
 });
+
+test("the_two_trust_buttons_are_explained_in_one_muted_line_under_the_buttons", async () => {
+  await setup();
+  const note = document.querySelector<HTMLElement>(".choice-note")!;
+  expect(note.textContent!.replace(/\s+/g, " ").trim()).toBe(
+    "Trust and connect remembers this key on this device. Trust once asks again next time.",
+  );
+  // the line sits after the buttons, and it is not a button or a second yellow key
+  const actions = document.querySelector<HTMLElement>(".actions")!;
+  expect(actions.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(note.closest("button")).toBeNull();
+  expect(document.querySelectorAll(".primary")).toHaveLength(1);
+});

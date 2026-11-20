@@ -6,7 +6,7 @@ use fernjo_core::{AppSettings, Theme, settings};
 use serde::Serialize;
 
 use crate::commands::CommandError;
-use crate::session_commands::persistent;
+use crate::session_commands::{UnsavedReason, persistent, unsaved_reason};
 use crate::state::AppState;
 
 fn error(code: &str, message: impl Into<String>) -> CommandError {
@@ -24,6 +24,8 @@ pub struct ThemeInfo {
     /// `false` when the value only lives in memory (`FERNJO_DATA_DIR` is set, `settings.json`
     /// is unusable or there is no settings folder).
     pub persistent: bool,
+    /// Why the value is not saved; `None` when it is.
+    pub unsaved_reason: Option<UnsavedReason>,
 }
 
 /// Loads `settings.json`, applies `change` and saves it, keeping every other field. Does
@@ -59,6 +61,7 @@ pub fn get_theme(state: &AppState) -> Result<ThemeInfo, CommandError> {
     Ok(ThemeInfo {
         theme,
         persistent: persistent(state),
+        unsaved_reason: unsaved_reason(state),
     })
 }
 
@@ -71,6 +74,7 @@ pub fn set_theme(state: &AppState, theme: Theme) -> Result<ThemeInfo, CommandErr
     Ok(ThemeInfo {
         theme,
         persistent: persistent(state),
+        unsaved_reason: unsaved_reason(state),
     })
 }
 
@@ -131,6 +135,7 @@ mod tests {
                 font_family: None,
                 font_size: 15,
                 scrollback: 2000,
+                close_on_exit: true,
             },
         )
         .unwrap();
@@ -139,7 +144,8 @@ mod tests {
             info,
             ThemeInfo {
                 theme: Theme::Dark,
-                persistent: true
+                persistent: true,
+                unsaved_reason: None
             }
         );
         let saved = settings::load(&settings_path(config.path())).unwrap();
@@ -168,7 +174,8 @@ mod tests {
             get_theme(&open()).unwrap(),
             ThemeInfo {
                 theme: Theme::Light,
-                persistent: true
+                persistent: true,
+                unsaved_reason: None
             }
         );
     }
@@ -179,6 +186,7 @@ mod tests {
         let st = state(data.path(), config.path(), DataDirSource::Env);
         let info = set_theme(&st, Theme::Dark).unwrap();
         assert!(!info.persistent);
+        assert_eq!(info.unsaved_reason, Some(UnsavedReason::Env));
         assert_eq!(get_theme(&st).unwrap().theme, Theme::Dark);
         assert!(!settings_path(config.path()).exists());
     }
@@ -193,6 +201,7 @@ mod tests {
         // Not persistent: applied in memory only, the file is never written.
         let info = set_theme(&st, Theme::Dark).unwrap();
         assert!(!info.persistent);
+        assert_eq!(info.unsaved_reason, Some(UnsavedReason::SettingsUnusable));
         assert_eq!(
             std::fs::read_to_string(settings_path(config.path())).unwrap(),
             text
@@ -220,6 +229,7 @@ mod tests {
                 font_family: None,
                 font_size: 14,
                 scrollback: 3000,
+                close_on_exit: true,
             },
         )
         .unwrap();

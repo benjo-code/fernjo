@@ -7,6 +7,7 @@
 //! exact names (`host`, `[host]:port`) and hashed `|1|` entries; wildcards, negations and `@marker`
 //! lines are left alone and never match.
 
+use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Write};
 use std::ops::Range;
@@ -20,6 +21,11 @@ use russh::keys::{Algorithm, PublicKey, parse_public_key_base64};
 use sha1::Sha1;
 
 use crate::SshError;
+
+/// Serialises every read-modify-write of a `known_hosts` file in this process (one lock for all
+/// files: the writes are rare and short). It stops two connects from losing each other's update.
+/// Another process (OpenSSH, a sync tool) is not covered; its changes are picked up by the next read.
+static WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 const BOM: &[u8] = b"\xEF\xBB\xBF";
 
@@ -53,8 +59,9 @@ struct Match {
     line: Range<usize>,
     /// The host-pattern field.
     hosts: Range<usize>,
-    /// Index of the matching entry within the comma-separated host field.
-    entry: usize,
+    /// Indices of every entry within the comma-separated host field that matches the name (a hand
+    /// edited `h,H` line can name the same host twice).
+    entries: Vec<usize>,
     key: PublicKey,
 }
 
@@ -108,47 +115,46 @@ impl KnownHosts {
 
     /// Appends the key unless it is already stored for the host and port.
     pub fn add(&self, host: &str, port: u16, key: &PublicKey) -> Result<(), SshError> {
-        let mut bytes = self.read()?;
         let name = host_port(host, port)?;
-        if find_matches(&bytes, &name).iter().any(|m| &m.key == key) {
-            return Ok(());
-        }
-        append_line(&mut bytes, &name, key)?;
-        self.write(&bytes)
+        self.modify(|bytes| {
+            if find_matches(bytes, &name).iter().any(|m| &m.key == key) {
+                return Ok(None);
+            }
+            let mut out = bytes.to_vec();
+            append_line(&mut out, &name, key)?;
+            Ok(Some(out))
+        })
+    }
+
+    /// Records the key as trusted: whatever is stored for the host and port under the key's
+    /// algorithm is replaced, a key of another algorithm stays. Same as [`KnownHosts::replace`],
+    /// which also works when nothing is stored yet.
+    pub fn trust(&self, host: &str, port: u16, key: &PublicKey) -> Result<(), SshError> {
+        self.replace(host, port, key)
     }
 
     /// Drops the stored keys of the same algorithm for the host and port, then appends the new one.
     pub fn replace(&self, host: &str, port: u16, key: &PublicKey) -> Result<(), SshError> {
-        let bytes = self.read()?;
         let name = host_port(host, port)?;
-        let drop_these: Vec<Match> = find_matches(&bytes, &name)
-            .into_iter()
-            .filter(|m| m.key.algorithm() == key.algorithm())
-            .collect();
-        let mut out = Vec::with_capacity(bytes.len() + 128);
-        let mut pos = 0;
-        // Matches come in file order and do not overlap.
-        for m in &drop_these {
-            out.extend_from_slice(&bytes[pos..m.line.start]);
-            let entries: Vec<&[u8]> = bytes[m.hosts.clone()].split(|&b| b == b',').collect();
-            // A line shared with other hosts loses only this host's entry; a line that belongs to
-            // this host alone is dropped entirely.
-            if entries.len() > 1 {
-                out.extend_from_slice(&bytes[m.line.start..m.hosts.start]);
-                let kept: Vec<&[u8]> = entries
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| *i != m.entry)
-                    .map(|(_, e)| *e)
-                    .collect();
-                out.extend_from_slice(&kept.join(&b","[..]));
-                out.extend_from_slice(&bytes[m.hosts.end..m.line.end]);
-            }
-            pos = m.line.end;
+        self.modify(|bytes| {
+            let mut out = rewrite_without(bytes, &name, key);
+            append_line(&mut out, &name, key)?;
+            Ok(Some(out))
+        })
+    }
+
+    /// Reads the file, lets `f` produce the new contents (`None`: nothing to write) and writes them,
+    /// all under the process-wide lock.
+    fn modify(
+        &self,
+        f: impl FnOnce(&[u8]) -> Result<Option<Vec<u8>>, SshError>,
+    ) -> Result<(), SshError> {
+        let _guard = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let bytes = self.read()?;
+        match f(&bytes)? {
+            Some(out) => self.write(&out),
+            None => Ok(()),
         }
-        out.extend_from_slice(&bytes[pos..]);
-        append_line(&mut out, &name, key)?;
-        self.write(&out)
     }
 
     fn write(&self, contents: &[u8]) -> Result<(), SshError> {
@@ -171,6 +177,36 @@ impl KnownHosts {
             Err(_) => Err(SshError::Io),
         }
     }
+}
+
+/// `bytes` without the entries for `name` whose key has the algorithm of `key`. A line shared with
+/// other hosts loses only this host's entries (every one of them, also a repeated name, so no stale
+/// key stays for the host); a line left with no host is dropped entirely.
+fn rewrite_without(bytes: &[u8], name: &str, key: &PublicKey) -> Vec<u8> {
+    let drop_these: Vec<Match> = find_matches(bytes, name)
+        .into_iter()
+        .filter(|m| m.key.algorithm() == key.algorithm())
+        .collect();
+    let mut out = Vec::with_capacity(bytes.len() + 128);
+    let mut pos = 0;
+    // Matches come in file order and do not overlap.
+    for m in &drop_these {
+        out.extend_from_slice(&bytes[pos..m.line.start]);
+        let kept: Vec<&[u8]> = bytes[m.hosts.clone()]
+            .split(|&b| b == b',')
+            .enumerate()
+            .filter(|(i, _)| !m.entries.contains(i))
+            .map(|(_, e)| e)
+            .collect();
+        if !kept.is_empty() {
+            out.extend_from_slice(&bytes[m.line.start..m.hosts.start]);
+            out.extend_from_slice(&kept.join(&b","[..]));
+            out.extend_from_slice(&bytes[m.hosts.end..m.line.end]);
+        }
+        pos = m.line.end;
+    }
+    out.extend_from_slice(&bytes[pos..]);
+    out
 }
 
 /// Longest host name accepted: the DNS limit for a name in text form.
@@ -290,15 +326,21 @@ fn parse_line(bytes: &[u8], line: Range<usize>, name: &str) -> Option<Match> {
         return None;
     }
     let hosts = (from + fields[0].start)..(from + fields[0].end);
-    let entry = bytes[hosts.clone()]
+    let entries: Vec<usize> = bytes[hosts.clone()]
         .split(|&b| b == b',')
-        .position(|e| entry_matches(e, name))?;
+        .enumerate()
+        .filter(|(_, e)| entry_matches(e, name))
+        .map(|(i, _)| i)
+        .collect();
+    if entries.is_empty() {
+        return None;
+    }
     let key_b64 = std::str::from_utf8(&content[fields[2].clone()]).ok()?;
     let key = parse_public_key_base64(key_b64).ok()?;
     Some(Match {
         line,
         hosts,
-        entry,
+        entries,
         key,
     })
 }
@@ -322,19 +364,54 @@ fn entry_matches(entry: &[u8], name: &str) -> bool {
     }
 }
 
-/// Creates (truncating) `path` readable and writable by its owner only on Unix (mode 0600, also
-/// when a stale file of that name already exists); elsewhere the folder's inherited ACL applies.
-fn create_private_file(path: &Path) -> io::Result<fs::File> {
+fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut name: OsString = path.as_os_str().to_owned();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
+/// Creates a new file (`create_new`: never an existing file, never through a symlink at that
+/// name) readable and writable by its owner only on Unix (mode 0600); elsewhere the folder's
+/// inherited ACL applies.
+fn create_new_private_file(path: &Path) -> io::Result<fs::File> {
     let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let file = options.open(path)?;
-    owner_only(path)?;
-    Ok(file)
+    options.open(path)
+}
+
+/// A temp file next to `path` under a random name, so nobody can plant the name beforehand;
+/// a name that is taken anyway is never reused. (Same approach as the vault's writer; this crate
+/// does not depend on `fernjo-vault`, so the few lines are repeated.)
+fn create_temp_file(path: &Path) -> io::Result<(PathBuf, fs::File)> {
+    let mut last = None;
+    for _ in 0..8 {
+        let mut random = [0u8; 8];
+        getrandom::fill(&mut random).map_err(|e| io::Error::other(e.to_string()))?;
+        let hex: String = random.iter().map(|b| format!("{b:02x}")).collect();
+        let tmp = with_suffix(path, &format!(".{hex}.tmp"));
+        match create_new_private_file(&tmp) {
+            Ok(file) => return Ok((tmp, file)),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => last = Some(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| io::Error::other("no free temp file name")))
+}
+
+/// Unix: flushes the folder entry of the rename to disk. Elsewhere nothing to do.
+fn sync_dir(dir: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        fs::File::open(dir)?.sync_all()?;
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+    Ok(())
 }
 
 /// Creates `dir` and its missing parents; on Unix with mode 0700 (folders that already exist
@@ -362,33 +439,37 @@ fn owner_only(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Temp file next to `path`, `sync_all`, current file copied to `.bak`, rename over `path`.
+/// Random-named temp file next to `path`, `sync_all`, current file copied to `.bak`, rename over
+/// `path`, folder sync on Unix.
 fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), SshError> {
-    let with_suffix = |suffix: &str| {
-        let mut s = path.as_os_str().to_owned();
-        s.push(suffix);
-        PathBuf::from(s)
-    };
-    let tmp = with_suffix(".tmp");
+    let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
+    let mut tmp: Option<PathBuf> = None;
     let result = (|| -> io::Result<()> {
-        if let Some(dir) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        if let Some(dir) = dir {
             create_private_dir_all(dir)?;
         }
-        let mut file = create_private_file(&tmp)?;
+        let (name, mut file) = create_temp_file(path)?;
+        let name = tmp.insert(name);
         file.write_all(contents)?;
         file.flush()?;
         file.sync_all()?;
         drop(file);
         if path.exists() {
-            let bak = with_suffix(".bak");
+            let bak = with_suffix(path, ".bak");
             fs::copy(path, &bak)?;
             owner_only(&bak)?;
         }
-        fs::rename(&tmp, path)
+        fs::rename(&*name, path)
     })();
     if result.is_err() {
-        let _ = fs::remove_file(&tmp);
+        if let Some(tmp) = &tmp {
+            let _ = fs::remove_file(tmp);
+        }
         return Err(SshError::Io);
+    }
+    // the file is in place; a failed folder sync must not report the write as failed
+    if let Some(dir) = dir {
+        let _ = sync_dir(dir);
     }
     Ok(())
 }
@@ -806,5 +887,94 @@ mod tests {
                 "{host:?}"
             );
         }
+    }
+
+    #[test]
+    fn replace_removes_every_matching_entry_of_a_comma_list_line() {
+        let (_d, kh, p) = setup();
+        // the same host twice on one hand-edited line, next to another host
+        fs::write(
+            &p,
+            format!("h,other,H ssh-ed25519 {ED_A}\nh,H ssh-ed25519 {ED_A}\n"),
+        )
+        .unwrap();
+        kh.replace("h", 22, &key(ED_B)).unwrap();
+        let text = fs::read_to_string(&p).unwrap();
+        assert_eq!(
+            text,
+            format!("other ssh-ed25519 {ED_A}\nh ssh-ed25519 {ED_B}\n")
+        );
+        assert_eq!(kh.check("h", 22, &key(ED_B)).unwrap(), HostKeyStatus::Known);
+        assert_eq!(
+            kh.check("other", 22, &key(ED_A)).unwrap(),
+            HostKeyStatus::Known,
+            "the other host keeps its trust"
+        );
+    }
+
+    #[test]
+    fn trust_always_replaces_a_different_key_of_the_same_type() {
+        let (_d, kh, p) = setup();
+        kh.add("h", 22, &key(ED_A)).unwrap();
+        kh.add("h", 22, &key(RSA)).unwrap();
+        kh.trust("h", 22, &key(ED_B)).unwrap();
+        let text = fs::read_to_string(&p).unwrap();
+        assert!(!text.contains(ED_A), "{text}");
+        assert_eq!(kh.check("h", 22, &key(ED_B)).unwrap(), HostKeyStatus::Known);
+        assert_eq!(kh.check("h", 22, &key(RSA)).unwrap(), HostKeyStatus::Known);
+        // nothing stored yet: same as add
+        kh.trust("new", 22, &key(ED_A)).unwrap();
+        assert_eq!(
+            kh.check("new", 22, &key(ED_A)).unwrap(),
+            HostKeyStatus::Known
+        );
+    }
+
+    #[test]
+    fn concurrent_confirmations_do_not_lose_an_update() {
+        let (_d, kh, _p) = setup();
+        let hosts: Vec<String> = (0..40).map(|i| format!("host{i}.example")).collect();
+        std::thread::scope(|scope| {
+            for half in hosts.chunks(20) {
+                let kh = kh.clone();
+                scope.spawn(move || {
+                    for h in half {
+                        kh.add(h, 22, &key(ED_A)).unwrap();
+                    }
+                });
+            }
+        });
+        for h in &hosts {
+            assert_eq!(
+                kh.check(h, 22, &key(ED_A)).unwrap(),
+                HostKeyStatus::Known,
+                "{h}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn temp_file_is_never_a_fixed_name() {
+        let (d, kh, p) = setup();
+        let victim = d.path().join("victim");
+        fs::write(&victim, "untouched").unwrap();
+        // the names the old code used
+        std::os::unix::fs::symlink(&victim, d.path().join("known_hosts.tmp")).unwrap();
+        kh.add("a", 22, &key(ED_A)).unwrap();
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "untouched");
+        assert!(fs::read_to_string(&p).unwrap().contains(ED_A));
+    }
+
+    #[test]
+    fn write_never_uses_the_old_fixed_temp_name() {
+        let (d, kh, _p) = setup();
+        // a stale file at the old fixed name is neither used nor removed
+        fs::write(d.path().join("known_hosts.tmp"), "stale").unwrap();
+        kh.add("a", 22, &key(ED_A)).unwrap();
+        assert_eq!(
+            fs::read_to_string(d.path().join("known_hosts.tmp")).unwrap(),
+            "stale"
+        );
     }
 }

@@ -90,7 +90,7 @@ describe("ImportDialog", () => {
     await setup();
     const dialog = document.querySelector("[role=dialog]")!;
     expect(dialog.getAttribute("aria-modal")).toBe("true");
-    expect(document.querySelector("h2")?.textContent).toBe("Import & backup");
+    expect(document.querySelector("h2")?.textContent).toBe("Import, export & backup");
     const labels = [...dialog.querySelectorAll("button")].map((b) => b.textContent?.trim());
     expect(labels).toEqual([
       "mRemoteNG file…",
@@ -589,7 +589,15 @@ describe("ImportDialog", () => {
     const onimport = vi.fn();
     mounted = mount(TreeView, {
       target: document.body,
-      props: { store: tree, sessions: new SessionStore(m.api, (id) => id), onimport },
+      props: {
+        store: tree,
+        sessions: new SessionStore(
+          m.api,
+          (id) => id,
+          () => true,
+        ),
+        onimport,
+      },
     });
     flushSync();
     expect(button("New folder")).toBeTruthy();

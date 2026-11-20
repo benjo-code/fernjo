@@ -4,7 +4,7 @@ A lightweight, cross-platform remote connection manager for **SSH and RDP** on W
 
 All your connections live in one folder tree in the sidebar, sessions open as tabs in a single window, and passwords and keys are kept in an encrypted vault. Existing connections can be imported from mRemoteNG, including saved passwords.
 
-**Status:** in development – see [Docs/ROADMAP.md](Docs/ROADMAP.md). The first release, v0.1.0, is published: SSH, the vault, import and backup are implemented, and the installers for Windows, macOS and Linux are on the [releases page](https://github.com/benjo-code/fernjo/releases). v0.2.0 adds RDP.
+**Status:** in development – see [Docs/ROADMAP.md](Docs/ROADMAP.md). The latest release, v0.1.1, is published: SSH, the vault, import and backup are implemented, and the installers for Windows, macOS and Linux are on the [releases page](https://github.com/benjo-code/fernjo/releases). v0.2.0 adds RDP.
 
 ## Features
 
@@ -25,7 +25,7 @@ Design and scope: [Docs/superpowers/specs/2026-11-15-fernjo-design.md](Docs/supe
 
 ## Install
 
-The GitHub release of v0.1.0 holds five installers and a checksum file:
+Each GitHub release holds five installers and a checksum file:
 
 | Platform | File |
 |---|---|
@@ -54,7 +54,7 @@ shasum -a 256 <file>                       # macOS: compare the printed hash wit
 
 ## Settings
 
-The gear in the sidebar opens Settings: the colour theme (System, Light or Dark; System follows the operating system and changes with it), the terminal (font family, size and scrollback) and the data folder (see [Docs/DECISIONS.md](Docs/DECISIONS.md) for how the folder is chosen). The choices are stored in `settings.json` in the config folder. By default that is also the data folder; once you choose a separate data folder, `settings.json` stays in the config folder, so syncing the data folder does not carry the settings to another machine.
+The gear in the sidebar opens Settings: the colour theme (System, Light or Dark; System follows the operating system and changes with it), the terminal (font family, size, scrollback and whether a tab closes when the shell exits) and the data folder (see [Docs/DECISIONS.md](Docs/DECISIONS.md) for how the folder is chosen). The choices are stored in `settings.json` in the config folder. By default that is also the data folder; once you choose a separate data folder, `settings.json` stays in the config folder, so syncing the data folder does not carry the settings to another machine.
 
 ## SSH
 
@@ -78,6 +78,8 @@ Plain Ctrl+letter and Alt+letter always go to the shell. App shortcuts are Ctrl+
 | Search in the terminal | Ctrl+Shift+F | Cmd+F |
 | Copy selection (terminal) | Ctrl+Shift+C | Cmd+C |
 | Paste (terminal) | Ctrl+Shift+V | Cmd+V |
+| Select several connections (tree) | Ctrl+click | Cmd+click |
+| Select a range (tree) | Shift+click | Shift+click |
 
 Copy and paste only apply while the terminal has focus; elsewhere the page keeps its normal behaviour.
 
@@ -100,7 +102,7 @@ cargo deny check                                       # licences, advisories, s
 
 Please report vulnerabilities privately, see [SECURITY.md](SECURITY.md).
 
-**Privacy.** fernjo's own code makes no network connections except the SSH sessions you open. It has no update check, no telemetry and no analytics. Your connections, settings and encrypted vault stay in your data folder on your computer. The window itself is drawn by your operating system's web view (WebView2 on Windows, WebKit on macOS and Linux), a separate component that is outside fernjo's code: on Windows we saw one HTTPS connection from the Windows web view (WebView2) about a minute after start, to an address registered to Microsoft, and have not found a way to disable it. The web views on macOS and Linux may make background connections of their own; they were not checked. Notes on the synced data folder are in [SECURITY.md](SECURITY.md).
+**Privacy.** fernjo's own code makes no network connections except the SSH sessions you open. It has no update check, no telemetry and no analytics. Your connections, settings and encrypted vault stay in your data folder on your computer. The window itself is drawn by your operating system's web view (WebView2 on Windows, WebKit on macOS and Linux), a separate component that is outside fernjo's code. On Windows we measured what that component does while fernjo sits idle (WebView2 runtime 157.0.4341.60 on Windows 11, every process that fernjo starts watched with `Get-NetTCPConnection`): in three runs of 100 to 180 s, about 62 s after start the WebView2 network process opened one HTTPS connection to an address that belongs to `edge.microsoft.com`, and a network log showed it was the runtime's component updater (a POST to `edge.microsoft.com/componentupdater/api/v1/update`). fernjo switches that updater off for its own window (`--disable-component-update`); with the switch no connection appeared in four runs of 100 to 180 s, the last one with the setting built into the release binary. This covers one machine, one runtime version and a few idle minutes: the Windows web view may still contact Microsoft for other reasons (for example crash reports), and keeping the installed WebView2 runtime itself up to date stays with Windows. The web views on macOS and Linux may make background connections of their own; they were not checked. Notes on the synced data folder are in [SECURITY.md](SECURITY.md).
 
 ## License
 

@@ -1,8 +1,9 @@
 <script lang="ts">
   import { tick } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
   import { DragController, type DragTarget, type Hit } from "../drag";
   import { dropPosition } from "../drop-target";
-  import { countDescendants, type Row } from "../rows";
+  import { countDescendants, countKinds, findNode, type Row } from "../rows";
   import type { SessionStore } from "../sessions.svelte";
   import type { TreeStore } from "../store.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
@@ -22,7 +23,11 @@
 
   let container = $state<HTMLElement>();
   let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
-  let pendingDelete = $state<{ id: string; title: string } | null>(null);
+  let pendingDelete = $state<{
+    ids: string[];
+    title: string;
+    detail: string;
+  } | null>(null);
 
   const rows = $derived(store.rows);
   const tabbableId = $derived(
@@ -34,8 +39,8 @@
   const DRAG_THRESHOLD = 4;
   const EDGE_SCROLL = 24;
 
-  let dragView = $state<{ dragId: string | null; target: DragTarget | null }>({
-    dragId: null,
+  let dragView = $state<{ dragIds: string[]; target: DragTarget | null }>({
+    dragIds: [],
     target: null,
   });
   let justDragged = false;
@@ -43,14 +48,17 @@
   const drag = new DragController({
     threshold: DRAG_THRESHOLD,
     rows: () => rows,
-    onMove: (id, parentId, index) => void store.move(id, parentId, index),
+    onMove: (ids, parentId, index) => {
+      if (ids.length === 1) void store.move(ids[0], parentId, index);
+      else void store.moveMany(ids, parentId, index);
+    },
   });
 
   const dragEnabled = () => query === "" && store.renamingId === null;
 
   function syncDrag() {
     const active = drag.state === "dragging";
-    dragView = { dragId: active ? drag.dragId : null, target: active ? drag.target : null };
+    dragView = { dragIds: active ? drag.dragIds : [], target: active ? drag.target : null };
   }
 
   function hitAt(x: number, y: number): Hit | null {
@@ -81,7 +89,12 @@
     const target = e.target as HTMLElement;
     if (target instanceof HTMLInputElement || target.closest(".chevron")) return;
     const el = target.closest<HTMLElement>("[data-node-id]");
-    if (el) drag.pointerDown(el.dataset.nodeId!, e.clientX, e.clientY);
+    if (!el) return;
+    const id = el.dataset.nodeId!;
+    // a press on a selected row of a multi-selection drags all of it; any other row drags alone
+    const along =
+      store.selectedIds.size > 1 && store.isSelected(id) ? store.selectionTops() : undefined;
+    drag.pointerDown(id, e.clientX, e.clientY, along);
   }
 
   function onpointermove(e: PointerEvent) {
@@ -145,14 +158,33 @@
     if (!active || active === document.body) rowElement(id)?.focus();
   }
 
-  /** The row to continue from after deleting `row`: the next sibling, else the one above. */
-  function neighbourAfterDelete(row: Row): string | null {
-    const at = rows.indexOf(row);
-    if (at < 0) return null;
-    for (let i = at + 1; i < rows.length && rows[i].depth >= row.depth; i++) {
-      if (rows[i].depth === row.depth) return rows[i].node.id;
+  /**
+   * The row to continue from after deleting `ids`: for one node the next sibling, else the one
+   * above; for several the first surviving row below the first of them, else the last above.
+   */
+  function neighbourAfterDelete(ids: string[]): string | null {
+    const first = rows.findIndex((r) => r.node.id === ids[0]);
+    if (first < 0) return null;
+    if (ids.length === 1) {
+      const row = rows[first];
+      for (let i = first + 1; i < rows.length && rows[i].depth >= row.depth; i++) {
+        if (rows[i].depth === row.depth) return rows[i].node.id;
+      }
+      return first > 0 ? rows[first - 1].node.id : null;
     }
-    return at > 0 ? rows[at - 1].node.id : null;
+    const gone = new SvelteSet<string>();
+    for (const r of rows) {
+      if (ids.includes(r.node.id) || (r.parentId !== null && gone.has(r.parentId))) {
+        gone.add(r.node.id);
+      }
+    }
+    for (let i = first + 1; i < rows.length; i++) {
+      if (!gone.has(rows[i].node.id)) return rows[i].node.id;
+    }
+    for (let i = first - 1; i >= 0; i--) {
+      if (!gone.has(rows[i].node.id)) return rows[i].node.id;
+    }
+    return null;
   }
 
   function rowElement(id: string): HTMLElement | undefined {
@@ -163,6 +195,12 @@
 
   async function selectAndFocus(id: string) {
     store.select(id);
+    await tick();
+    rowElement(id)?.focus();
+  }
+
+  async function extendAndFocus(id: string) {
+    store.selectRange(id);
     await tick();
     rowElement(id)?.focus();
   }
@@ -186,7 +224,14 @@
     else sessions.open(node.id);
   }
 
+  // The keys `onkeydown` handles: Enter connects a connection row, F2 renames, Delete deletes.
+  const DELETE_KEY = { hint: "Del", keys: "Delete" };
+
   function menuItemsFor(row: Row | null): MenuItem[] {
+    if (row && store.selectedIds.size > 1 && store.isSelected(row.node.id)) {
+      // Rename and Duplicate need a single node
+      return [{ label: "Delete", action: () => requestDelete(row), ...DELETE_KEY }];
+    }
     if (!row) {
       return [
         { label: "New folder", action: () => void store.createFolder(null, null) },
@@ -196,7 +241,12 @@
     const { parentId, index } = placement(row);
     const connectItems: MenuItem[] = [];
     if (row.node.type === "connection") {
-      connectItems.push({ label: "Connect", action: () => connect(row) });
+      connectItems.push({
+        label: "Connect",
+        action: () => connect(row),
+        hint: "Enter",
+        keys: "Enter",
+      });
       if (sessions.tabs.some((t) => t.nodeId === row.node.id)) {
         connectItems.push({ label: "Open another session", action: () => connect(row, true) });
       }
@@ -206,25 +256,45 @@
       { label: "New folder", action: () => void store.createFolder(parentId, index) },
       { label: "New connection", action: () => void store.createConnection(parentId, index) },
       { label: "Duplicate", action: () => void store.duplicate(row.node.id) },
-      { label: "Rename", action: () => store.startRename(row.node.id) },
-      { label: "Delete", action: () => requestDelete(row) },
+      { label: "Rename", action: () => store.startRename(row.node.id), hint: "F2", keys: "F2" },
+      { label: "Delete", action: () => requestDelete(row), ...DELETE_KEY },
     ];
   }
 
   function requestDelete(row: Row) {
+    if (store.selectedIds.size > 1 && store.isSelected(row.node.id)) {
+      const tops = store.selectionTops();
+      const { connections, folders } = countKinds(
+        tops.flatMap((id) => findNode(store.children, id) ?? []),
+      );
+      const parts = [
+        connections > 0 ? `${connections} ${connections === 1 ? "connection" : "connections"}` : "",
+        folders > 0 ? `${folders} ${folders === 1 ? "folder" : "folders"}` : "",
+      ].filter(Boolean);
+      pendingDelete = {
+        ids: tops,
+        title: `Delete ${store.selectedIds.size} items?`,
+        detail: `This removes ${parts.join(" and ")}${folders > 0 ? ", including everything inside" : ""}. This cannot be undone.`,
+      };
+      return;
+    }
     const { name } = row.node;
     const count = countDescendants(row.node);
     const inside = count > 0 ? ` and ${count} ${count === 1 ? "item" : "items"} inside` : "";
-    pendingDelete = { id: row.node.id, title: `Delete “${name}”${inside}?` };
+    pendingDelete = {
+      ids: [row.node.id],
+      title: `Delete “${name}”${inside}?`,
+      detail: "This cannot be undone.",
+    };
   }
 
   async function confirmDelete() {
     if (!pendingDelete) return;
-    const { id } = pendingDelete;
+    const { ids } = pendingDelete;
     pendingDelete = null;
-    const row = rows.find((r) => r.node.id === id);
-    const neighbour = row ? neighbourAfterDelete(row) : null;
-    await store.remove(id);
+    const neighbour = neighbourAfterDelete(ids);
+    if (ids.length === 1) await store.remove(ids[0]);
+    else await store.removeMany(ids);
     if (neighbour && store.selectedId === null && rowElement(neighbour) !== undefined) {
       store.select(neighbour);
     }
@@ -235,7 +305,8 @@
     e.preventDefault();
     const el = (e.target as HTMLElement).closest<HTMLElement>("[data-node-id]");
     const row = el ? rows.find((r) => r.node.id === el.dataset.nodeId) : undefined;
-    if (row) store.select(row.node.id);
+    // a right click inside a multi-selection keeps it; elsewhere it selects just that row
+    if (row && !store.isSelected(row.node.id)) store.select(row.node.id);
     menu = { x: e.clientX, y: e.clientY, items: menuItemsFor(row ?? null) };
   }
 
@@ -261,7 +332,9 @@
       store.toggle(id);
       return;
     }
-    store.select(id);
+    if (e.ctrlKey || e.metaKey) store.toggleSelect(id);
+    else if (e.shiftKey) store.selectRange(id);
+    else store.select(id);
   }
 
   function ondblclick(e: MouseEvent) {
@@ -290,7 +363,9 @@
     const current = index >= 0 ? rows[index] : null;
     const go = (to: number) => {
       e.preventDefault();
-      void selectAndFocus(rows[Math.max(0, Math.min(rows.length - 1, to))].node.id);
+      const id = rows[Math.max(0, Math.min(rows.length - 1, to))].node.id;
+      if (e.shiftKey && index >= 0) void extendAndFocus(id);
+      else void selectAndFocus(id);
     };
     switch (e.key) {
       case "ArrowDown":
@@ -306,6 +381,7 @@
         go(rows.length - 1);
         break;
       case "ArrowRight":
+        if (e.shiftKey) break;
         if (current?.node.type === "folder" && current.hasChildren) {
           e.preventDefault();
           if (!current.expanded) store.expand(current.node.id);
@@ -313,7 +389,7 @@
         }
         break;
       case "ArrowLeft":
-        if (!current) break;
+        if (!current || e.shiftKey) break;
         e.preventDefault();
         if (current.node.type === "folder" && current.expanded && !query) {
           store.toggle(current.node.id);
@@ -349,7 +425,6 @@
   <!-- nothing to show yet, or the data could not be opened (the notice bar says why) -->
 {:else if store.children.length === 0}
   <div class="empty">
-    <p>No connections yet</p>
     <div class="actions">
       <button type="button" class="btn" onclick={() => store.createFolder(null, null)}>
         New folder
@@ -368,8 +443,9 @@
   <div
     bind:this={container}
     class="tree"
-    class:dragging={dragView.dragId !== null}
+    class:dragging={dragView.dragIds.length > 0}
     role="tree"
+    aria-multiselectable="true"
     aria-label="Connections"
     tabindex="-1"
     {onclick}
@@ -384,11 +460,11 @@
     {#each rows as row (row.node.id)}
       <TreeRow
         {row}
-        selected={row.node.id === store.selectedId}
+        selected={store.isSelected(row.node.id)}
         tabbable={row.node.id === tabbableId}
         renaming={row.node.id === store.renamingId}
         drop={dragView.target?.rowId === row.node.id ? dragView.target.position : null}
-        dragging={dragView.dragId === row.node.id}
+        dragging={dragView.dragIds.includes(row.node.id)}
         lamp={row.node.type === "connection" ? sessions.lampFor(row.node.id) : null}
         onrename={(value) => {
           if (value.trim() === row.node.name) store.stopRename();
@@ -411,7 +487,7 @@
 {#if pendingDelete}
   <ConfirmDialog
     title={pendingDelete.title}
-    detail="This cannot be undone."
+    detail={pendingDelete.detail}
     confirmLabel="Delete"
     onConfirm={confirmDelete}
     onCancel={() => (pendingDelete = null)}
@@ -435,10 +511,6 @@
     padding: var(--space-5) var(--space-3);
     color: var(--color-text-muted);
     font-size: var(--text-sm);
-  }
-
-  .empty p {
-    margin: 0 0 var(--space-3);
   }
 
   .actions {

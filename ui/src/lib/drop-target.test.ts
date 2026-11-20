@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { dropPosition, resolveDrop } from "./drop-target";
+import { dropPosition, resolveDrop, resolveDropMany } from "./drop-target";
 import { flattenRows } from "./rows";
 import { conn, folder } from "./testing";
 
@@ -108,5 +108,70 @@ describe("resolveDrop", () => {
     expect(resolveDrop(rows(), "a1", "A", "inside")).toEqual({ parentId: "A", index: 1 });
     // a2 is already last: no-op
     expect(resolveDrop(rows(), "a2", "A", "inside")).toBeNull();
+  });
+});
+
+describe("resolveDropMany", () => {
+  const closed = () => flattenRows(tree(), new Set(), "");
+
+  test("inside_a_folder_appends_after_its_remaining_children", () => {
+    expect(resolveDropMany(rows(), ["B", "a1"], "C", "inside")).toEqual({
+      parentId: "C",
+      index: 0,
+    });
+    // a1 leaves A, so a2 is the only remaining child
+    expect(resolveDropMany(rows(), ["a1", "B"], "A", "inside")).toEqual({
+      parentId: "A",
+      index: 1,
+    });
+  });
+
+  test("before_and_after_count_the_remaining_siblings", () => {
+    expect(resolveDropMany(rows(), ["B", "C"], "A", "before")).toEqual({
+      parentId: null,
+      index: 0,
+    });
+    // A and B leave the root, so C is the only one left and the slot after it is 1
+    expect(resolveDropMany(rows(), ["A", "B"], "C", "after")).toEqual({
+      parentId: null,
+      index: 1,
+    });
+    // after an expanded folder means first child of it
+    expect(resolveDropMany(rows(), ["B", "C"], "A", "after")).toEqual({
+      parentId: "A",
+      index: 0,
+    });
+  });
+
+  test("a_target_inside_a_dragged_subtree_is_null", () => {
+    expect(resolveDropMany(rows(), ["A", "B"], "a1", "inside")).toBeNull();
+    expect(resolveDropMany(rows(), ["A", "B"], "a2", "before")).toBeNull();
+  });
+
+  test("a_target_that_is_itself_dragged_is_null", () => {
+    expect(resolveDropMany(rows(), ["B", "C"], "C", "before")).toBeNull();
+    expect(resolveDropMany(rows(), ["B", "C"], "B", "inside")).toBeNull();
+  });
+
+  test("same_parent_contiguous_reorder_moves_the_block", () => {
+    // B and C are already side by side right after A: dropping them there changes nothing
+    expect(resolveDropMany(closed(), ["B", "C"], "A", "after")).toBeNull();
+    // swapped order is a real change
+    expect(resolveDropMany(closed(), ["C", "B"], "A", "after")).toEqual({
+      parentId: null,
+      index: 1,
+    });
+    // A and B behind C
+    expect(resolveDropMany(closed(), ["A", "B"], "C", "after")).toEqual({
+      parentId: null,
+      index: 1,
+    });
+  });
+
+  test("a_drop_where_the_nodes_already_are_is_null", () => {
+    expect(resolveDropMany(rows(), ["a1", "a2"], "B", "before")).not.toBeNull();
+    expect(resolveDropMany(rows(), ["a1", "a2"], "A", "inside")).toBeNull();
+    expect(resolveDropMany(rows(), ["B"], "B", "before")).toBeNull();
+    expect(resolveDropMany(closed(), ["B", "C"], "C", "after")).toBeNull();
   });
 });

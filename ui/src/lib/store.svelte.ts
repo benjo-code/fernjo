@@ -2,7 +2,7 @@
 // only source of the tree; every mutation goes through one queue so commands never overlap.
 import { SvelteSet } from "svelte/reactivity";
 import { toApiError } from "./api";
-import { collectIds, flattenRows, type Row } from "./rows";
+import { collectIds, flattenRows, selectionTops, type Row } from "./rows";
 import type { Api, ApiError, NodePatch, Notice, ResolvedNode, Snapshot, TreeNode } from "./types";
 
 const STORAGE_KEY = "fernjo.expanded.v1";
@@ -33,12 +33,19 @@ interface RunOptions {
 export class TreeStore {
   children = $state<TreeNode[]>([]);
   notices = $state<Notice[]>([]);
+  /** The single primary node: drives `detail` and the properties panel. */
   selectedId = $state<string | null>(null);
+  /** Every selected node; `selectedId` is always one of them (or `null` when empty). */
+  selectedIds = new SvelteSet<string>();
+  /** Start of a Shift range: the node last selected without Shift. */
+  anchorId = $state<string | null>(null);
   expanded = new SvelteSet<string>();
   filter = $state("");
   renamingId = $state<string | null>(null);
   error = $state<string | null>(null);
   loadError = $state<string | null>(null);
+  /** connections.json changed under us and the last edit was refused; `reload()` clears it. */
+  changedOnDisk = $state(false);
   /** The selected node with effective values and sources, as resolved by Rust. */
   detail = $state<ResolvedNode | null>(null);
   /** True once the first load has finished, whether it worked or not. */
@@ -64,14 +71,70 @@ export class TreeStore {
   }
 
   select(id: string | null) {
-    const changed = id !== this.selectedId;
+    this.selectOnly(id);
+  }
+
+  /** Makes `id` the whole selection (and the range anchor); `null` clears it. */
+  selectOnly(id: string | null) {
+    const before = this.#detailTarget();
+    this.selectedIds.clear();
+    if (id !== null) this.selectedIds.add(id);
     this.selectedId = id;
-    if (changed) void this.#refreshDetail();
+    this.anchorId = id;
+    this.#detailMaybeChanged(before);
+  }
+
+  /** Ctrl/Cmd click: adds or removes one node. An added node becomes anchor and primary. */
+  toggleSelect(id: string) {
+    const before = this.#detailTarget();
+    if (this.selectedIds.delete(id)) {
+      if (this.selectedId === id) {
+        const rest = [...this.selectedIds];
+        this.selectedId = rest.length > 0 ? rest[rest.length - 1] : null;
+      }
+      if (this.anchorId === id) this.anchorId = this.selectedId;
+    } else {
+      // nodes hidden by a collapse or a filter must not join the new selection
+      const visible = new SvelteSet(this.rows.map((r) => r.node.id));
+      for (const hidden of [...this.selectedIds])
+        if (!visible.has(hidden)) this.selectedIds.delete(hidden);
+      this.selectedIds.add(id);
+      this.selectedId = id;
+      this.anchorId = id;
+    }
+    this.#detailMaybeChanged(before);
+  }
+
+  /** Shift click: the visible rows from the anchor to `id` become the selection; the anchor stays. */
+  selectRange(id: string) {
+    const anchor = this.anchorId;
+    const from = anchor === null ? -1 : this.rows.findIndex((r) => r.node.id === anchor);
+    const to = this.rows.findIndex((r) => r.node.id === id);
+    if (from < 0 || to < 0) {
+      this.selectOnly(id);
+      return;
+    }
+    const before = this.#detailTarget();
+    this.selectedIds.clear();
+    const [lo, hi] = from <= to ? [from, to] : [to, from];
+    for (let i = lo; i <= hi; i++) this.selectedIds.add(this.rows[i].node.id);
+    this.selectedId = id;
+    this.#detailMaybeChanged(before);
+  }
+
+  isSelected(id: string): boolean {
+    return this.selectedIds.has(id);
+  }
+
+  /** The selected nodes whose ancestors are not selected, in row order. */
+  selectionTops(): string[] {
+    return selectionTops(this.rows, this.selectedIds);
   }
 
   toggle(id: string) {
     if (!this.expanded.delete(id)) this.expanded.add(id);
     saveExpanded(this.expanded);
+    this.#pruneHidden();
   }
 
   expand(id: string) {
@@ -82,6 +145,7 @@ export class TreeStore {
 
   setFilter(query: string) {
     this.filter = query;
+    this.#pruneHidden();
   }
 
   startRename(id: string) {
@@ -142,6 +206,16 @@ export class TreeStore {
     });
   }
 
+  /** Moves several nodes in one atomic command; nothing is sent for an empty list. */
+  moveMany(ids: string[], parentId: string | null, index: number) {
+    if (ids.length === 0) return Promise.resolve(null);
+    return this.#run(async () => {
+      const m = await this.#api.moveNodes(ids, parentId, index);
+      this.#apply(m.snapshot.children, m.snapshot.notices);
+      if (parentId) this.expand(parentId);
+    });
+  }
+
   duplicate(id: string) {
     return this.#run(async () => {
       const m = await this.#api.duplicateNode(id);
@@ -157,6 +231,22 @@ export class TreeStore {
     });
   }
 
+  /** Deletes the tops among `ids` (a node inside another listed node goes with it), in row order. */
+  removeMany(ids: string[]) {
+    const tops = selectionTops(this.rows, new SvelteSet(ids));
+    return Promise.all(tops.map((id) => this.remove(id)));
+  }
+
+  /** Re-reads connections.json (Rust adopts what is on disk) and clears the changed-on-disk state. */
+  reload() {
+    return this.#run(async () => {
+      const snapshot = await this.#api.reloadTree();
+      this.#apply(snapshot.children, snapshot.notices);
+      this.changedOnDisk = false;
+      this.error = null;
+    });
+  }
+
   /** Adopts a snapshot that another command returned (for example deleting a credential). */
   applySnapshot(snapshot: Snapshot) {
     return this.#run(async () => {
@@ -167,7 +257,7 @@ export class TreeStore {
   /** Asks Rust for the selected node's effective values; late answers for an old selection are dropped. */
   async #refreshDetail(): Promise<void> {
     const token = ++this.#detailToken;
-    const id = this.selectedId;
+    const id = this.#detailTarget();
     if (id === null) {
       this.detail = null;
       return;
@@ -179,6 +269,36 @@ export class TreeStore {
       // the node vanished or Rust is unavailable: show the empty state, not an error
     }
     if (token === this.#detailToken) this.detail = detail;
+  }
+
+  /** The node whose details are shown: the primary one, only while it is the sole selection. */
+  #detailTarget(): string | null {
+    return this.selectedIds.size === 1 ? this.selectedId : null;
+  }
+
+  /**
+   * A collapse or a filter can hide selected rows. With several selected they leave the selection,
+   * so the count, Delete and drag always agree with what is visible. A single selection stays
+   * (the properties panel keeps showing it) and so does one whose nodes are all hidden.
+   */
+  #pruneHidden() {
+    if (this.selectedIds.size < 2) return;
+    const visible = new SvelteSet(this.rows.map((r) => r.node.id));
+    const keep = [...this.selectedIds].filter((id) => visible.has(id));
+    if (keep.length === this.selectedIds.size || keep.length === 0) return;
+    const before = this.#detailTarget();
+    for (const id of [...this.selectedIds]) if (!visible.has(id)) this.selectedIds.delete(id);
+    if (this.selectedId === null || !this.selectedIds.has(this.selectedId)) {
+      this.selectedId = keep[keep.length - 1];
+    }
+    if (this.anchorId === null || !this.selectedIds.has(this.anchorId)) {
+      this.anchorId = this.selectedId;
+    }
+    this.#detailMaybeChanged(before);
+  }
+
+  #detailMaybeChanged(before: string | null) {
+    if (this.#detailTarget() !== before) void this.#refreshDetail();
   }
 
   #afterCreate(parentId: string | null, id: string | null) {
@@ -195,7 +315,12 @@ export class TreeStore {
     this.children = children;
     if (notices.length > 0) this.notices = [...this.notices, ...notices];
     const { all, folders } = collectIds(children);
-    if (this.selectedId !== null && !all.has(this.selectedId)) this.selectedId = null;
+    for (const id of [...this.selectedIds]) if (!all.has(id)) this.selectedIds.delete(id);
+    if (this.selectedId !== null && !this.selectedIds.has(this.selectedId)) {
+      const rest = [...this.selectedIds];
+      this.selectedId = rest.length > 0 ? rest[rest.length - 1] : null;
+    }
+    if (this.anchorId !== null && !all.has(this.anchorId)) this.anchorId = this.selectedId;
     if (this.renamingId !== null && !all.has(this.renamingId)) this.renamingId = null;
     let pruned = false;
     for (const id of [...this.expanded]) {
@@ -217,6 +342,8 @@ export class TreeStore {
       } catch (e) {
         const err = toApiError(e);
         if (err.code === "load_failed") this.loadError = err.message;
+        // the bar with its Reload button replaces the error bar for this one
+        else if (err.code === "changed_on_disk") this.changedOnDisk = true;
         // a pending data folder change blocks every write: always tell the user, even for
         // callers that show their own errors
         else if (!options.silent || err.code === "restart_required") this.error = err.message;

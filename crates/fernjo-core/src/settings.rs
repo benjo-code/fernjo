@@ -4,7 +4,6 @@
 //! folder is). Same rules as `connections.json`: atomic write with `.bak`, missing means
 //! defaults, a newer schema is refused and never overwritten.
 
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -12,7 +11,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use crate::error::{LoadError, SaveError};
-use crate::persist::{move_aside, with_suffix, write_atomic};
+use crate::persist::{move_aside, read_capped, with_suffix, write_atomic};
 
 /// Name of the settings file inside the config folder.
 pub const FILE_NAME: &str = "settings.json";
@@ -58,6 +57,8 @@ fn lenient_theme<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Theme>, D::Er
 
 /// Default terminal font size in pixels.
 pub const DEFAULT_FONT_SIZE: u16 = 13;
+/// Whether a tab closes itself when its shell ended cleanly, unless set.
+pub const DEFAULT_CLOSE_ON_EXIT: bool = true;
 /// Default number of scrollback lines.
 pub const DEFAULT_SCROLLBACK: u32 = 10_000;
 /// Allowed terminal font sizes.
@@ -75,6 +76,9 @@ pub struct TerminalPrefs {
     pub font_size: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scrollback: Option<u32>,
+    /// Close the tab when the remote shell ended cleanly; unset means [`DEFAULT_CLOSE_ON_EXIT`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close_on_exit: Option<bool>,
 }
 
 impl TerminalPrefs {
@@ -114,7 +118,7 @@ enum Read {
 }
 
 fn read_file(path: &Path) -> Result<Read, LoadError> {
-    let bytes = match fs::read(path) {
+    let bytes = match read_capped(path) {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Read::Missing),
         Err(e) => {
@@ -224,6 +228,20 @@ mod tests {
     }
 
     #[test]
+    fn settings_load_refuses_a_file_over_the_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = path(dir.path());
+        let file = fs::File::create(&p).unwrap();
+        file.set_len(crate::persist::MAX_DATA_FILE_LEN + 1).unwrap();
+        drop(file);
+        assert!(matches!(load(&p), Err(LoadError::Unreadable { .. })));
+        assert_eq!(
+            fs::metadata(&p).unwrap().len(),
+            crate::persist::MAX_DATA_FILE_LEN + 1
+        );
+    }
+
+    #[test]
     fn missing_file_is_defaults() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(load(&path(dir.path())).unwrap(), AppSettings::default());
@@ -253,6 +271,7 @@ mod tests {
                 font_family: Some("Fira Code".into()),
                 font_size: Some(15),
                 scrollback: Some(5000),
+                close_on_exit: Some(false),
             }),
             theme: None,
         };
@@ -263,7 +282,8 @@ mod tests {
         assert_eq!(
             v,
             json!({"schemaVersion": 1, "dataDir": "/srv/fernjo",
-                   "terminal": {"fontFamily": "Fira Code", "fontSize": 15, "scrollback": 5000}})
+                   "terminal": {"fontFamily": "Fira Code", "fontSize": 15, "scrollback": 5000,
+                                "closeOnExit": false}})
         );
     }
 
@@ -273,6 +293,7 @@ mod tests {
             font_family: None,
             font_size,
             scrollback,
+            close_on_exit: None,
         };
         assert_eq!(p(Some(7), None).validate(), Err("invalid_font_size"));
         assert_eq!(p(Some(33), None).validate(), Err("invalid_font_size"));
@@ -288,6 +309,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(path(dir.path()), r#"{"schemaVersion":1,"dataDir":"/x"}"#).unwrap();
         assert_eq!(load(&path(dir.path())).unwrap(), with_dir("/x"));
+    }
+
+    #[test]
+    fn settings_without_close_on_exit_still_load() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            path(dir.path()),
+            r#"{"schemaVersion":1,"terminal":{"fontSize":14,"scrollback":2000}}"#,
+        )
+        .unwrap();
+        let terminal = load(&path(dir.path())).unwrap().terminal.unwrap();
+        assert_eq!(terminal.font_size, Some(14));
+        assert_eq!(terminal.close_on_exit, None);
     }
 
     #[test]

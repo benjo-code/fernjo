@@ -3,9 +3,11 @@
   import type { SessionStore } from "../sessions.svelte";
   import type { TreeStore } from "../store.svelte";
   import type { VaultStore } from "../vault.svelte";
+  import { LayoutStore, SIDEBAR_MIN, sidebarMax } from "../layout.svelte";
   import FilterBox from "./FilterBox.svelte";
   import Icon from "./Icon.svelte";
   import NoticeBar from "./NoticeBar.svelte";
+  import Splitter from "./Splitter.svelte";
   import TreeView from "./TreeView.svelte";
   import VaultChip from "./VaultChip.svelte";
   import VaultNote from "./VaultNote.svelte";
@@ -19,6 +21,7 @@
     onimport,
     restartPending = false,
     onRestart,
+    layout = new LayoutStore(),
     children,
   }: {
     store: TreeStore;
@@ -28,10 +31,11 @@
     onOpenVault: () => void;
     /** The settings button was clicked. */
     onsettings?: () => void;
-    /** The "Import & backup" button was clicked. */
+    /** The "Import / Export" button was clicked. */
     onimport?: () => void;
     restartPending?: boolean;
     onRestart?: () => void;
+    layout?: LayoutStore;
     children?: Snippet;
   } = $props();
 
@@ -40,6 +44,11 @@
   /** Focuses the tree filter (the Ctrl+Shift+K shortcut). */
   export function focusFilter() {
     filterBox?.focus();
+  }
+
+  /** Opens and focuses the vault form of the note (create or unlock); the Credential row calls it. */
+  export function focusVaultForm() {
+    void note?.focusForm();
   }
 
   let note: VaultNote | undefined = $state();
@@ -56,23 +65,39 @@
   <div class="tree-slot"><TreeView {store} {sessions} {onimport} /></div>
   {@render children?.()}
   <div class="foot">
-    <button type="button" class="gear" aria-label="Settings" title="Settings" onclick={onsettings}>
-      <Icon name="gear" />
+    <button
+      type="button"
+      class="foot-btn"
+      aria-label="Settings"
+      title="Settings"
+      onclick={onsettings}
+    >
+      <Icon name="gear" /><span>Settings</span>
     </button>
     <button
       type="button"
-      class="gear"
-      aria-label="Import & backup"
-      title="Import & backup"
+      class="foot-btn"
+      aria-label="Import / Export"
+      title="Import, export & backup"
       onclick={onimport}
     >
-      <Icon name="import" />
+      <Icon name="import" /><span>Import / Export</span>
     </button>
   </div>
+  <Splitter
+    orientation="vertical"
+    label="Resize sidebar"
+    value={layout.effectiveSidebarWidth}
+    min={SIDEBAR_MIN}
+    max={sidebarMax(layout.viewportWidth)}
+    onchange={(px) => layout.setSidebarWidth(px)}
+    onreset={() => layout.resetSidebarWidth()}
+  />
 </aside>
 
 <style>
   .sidebar {
+    position: relative;
     display: flex;
     flex-direction: column;
     min-height: 0;
@@ -99,13 +124,15 @@
     border-top: 1px solid var(--color-border);
   }
 
-  .gear {
+  .foot-btn {
     display: flex;
     align-items: center;
-    justify-content: center;
-    width: 28px;
+    gap: var(--space-2);
+    min-width: 0;
     height: 28px;
-    padding: 0;
+    padding: 0 var(--space-3);
+    font-size: var(--text-sm);
+    white-space: nowrap;
     border: 1px solid transparent;
     border-radius: var(--radius-sm);
     background: transparent;
@@ -113,7 +140,7 @@
     cursor: default;
   }
 
-  .gear:hover {
+  .foot-btn:hover {
     background: var(--color-hover);
     color: var(--color-text);
   }

@@ -4,7 +4,9 @@
 //! wrappers in [`handlers`].
 
 use fernjo_core::NodeId;
-use fernjo_core::{DEFAULT_FONT_SIZE, DEFAULT_SCROLLBACK, DataDirSource, TerminalPrefs};
+use fernjo_core::{
+    DEFAULT_CLOSE_ON_EXIT, DEFAULT_FONT_SIZE, DEFAULT_SCROLLBACK, DataDirSource, TerminalPrefs,
+};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, InvokeResponseBody};
 
@@ -30,9 +32,25 @@ pub struct TerminalSettingsInfo {
     pub font_family: Option<String>,
     pub font_size: u16,
     pub scrollback: u32,
+    /// Close a tab when its remote shell ended cleanly (the UI applies it).
+    pub close_on_exit: bool,
     /// `false` when the values only live in memory (`FERNJO_DATA_DIR` is set, `settings.json`
     /// is unusable or there is no settings folder).
     pub persistent: bool,
+    /// Why the values are not saved; `None` when they are.
+    pub unsaved_reason: Option<UnsavedReason>,
+}
+
+/// Why settings only live in memory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UnsavedReason {
+    /// `FERNJO_DATA_DIR` is set.
+    Env,
+    /// `settings.json` is unreadable or from a newer version.
+    SettingsUnusable,
+    /// The device has no settings folder.
+    NoConfigDir,
 }
 
 /// What the settings dialog sends.
@@ -43,10 +61,30 @@ pub struct TerminalSettingsInput {
     pub font_family: Option<String>,
     pub font_size: u16,
     pub scrollback: u32,
+    /// An input without the key (an older UI) means the default, `true`.
+    #[serde(default = "default_close_on_exit")]
+    pub close_on_exit: bool,
+}
+
+fn default_close_on_exit() -> bool {
+    DEFAULT_CLOSE_ON_EXIT
+}
+
+/// Why settings cannot be saved, in order of precedence; `None` when they can.
+pub(crate) fn unsaved_reason(state: &AppState) -> Option<UnsavedReason> {
+    if state.source == DataDirSource::Env {
+        Some(UnsavedReason::Env)
+    } else if state.settings_unusable {
+        Some(UnsavedReason::SettingsUnusable)
+    } else if state.config_dir.is_none() {
+        Some(UnsavedReason::NoConfigDir)
+    } else {
+        None
+    }
 }
 
 pub(crate) fn persistent(state: &AppState) -> bool {
-    state.source != DataDirSource::Env && !state.settings_unusable && state.config_dir.is_some()
+    unsaved_reason(state).is_none()
 }
 
 fn info(state: &AppState, prefs: &TerminalPrefs) -> TerminalSettingsInfo {
@@ -54,7 +92,9 @@ fn info(state: &AppState, prefs: &TerminalPrefs) -> TerminalSettingsInfo {
         font_family: prefs.font_family.clone(),
         font_size: prefs.font_size.unwrap_or(DEFAULT_FONT_SIZE),
         scrollback: prefs.scrollback.unwrap_or(DEFAULT_SCROLLBACK),
+        close_on_exit: prefs.close_on_exit.unwrap_or(DEFAULT_CLOSE_ON_EXIT),
         persistent: persistent(state),
+        unsaved_reason: unsaved_reason(state),
     }
 }
 
@@ -79,6 +119,7 @@ pub fn set_terminal_settings(
             .filter(|f| !f.is_empty()),
         font_size: Some(input.font_size),
         scrollback: Some(input.scrollback),
+        close_on_exit: Some(input.close_on_exit),
     };
     prefs.validate().map_err(|code| {
         let message = match code {
@@ -309,11 +350,68 @@ mod tests {
             font_family: Some("Fira Code".into()),
             font_size: size,
             scrollback,
+            close_on_exit: true,
         }
     }
 
     fn settings_path(config: &Path) -> PathBuf {
         config.join(settings::FILE_NAME)
+    }
+
+    #[test]
+    fn unsaved_reason_distinguishes_env_unusable_and_no_config_dir() {
+        let [data, config] = dirs();
+        let st = state(data.path(), config.path(), DataDirSource::Env);
+        assert_eq!(unsaved_reason(&st), Some(UnsavedReason::Env));
+        assert!(!persistent(&st));
+        // Env wins over an unusable file.
+        let mut both = state(data.path(), config.path(), DataDirSource::Env);
+        both.settings_unusable = true;
+        assert_eq!(unsaved_reason(&both), Some(UnsavedReason::Env));
+        let mut bad = state(data.path(), config.path(), DataDirSource::Default);
+        bad.settings_unusable = true;
+        assert_eq!(unsaved_reason(&bad), Some(UnsavedReason::SettingsUnusable));
+        let mut none = state(data.path(), config.path(), DataDirSource::Default);
+        none.config_dir = None;
+        assert_eq!(unsaved_reason(&none), Some(UnsavedReason::NoConfigDir));
+        let info = get_terminal_settings(&bad).unwrap();
+        assert_eq!(info.unsaved_reason, Some(UnsavedReason::SettingsUnusable));
+        assert_eq!(
+            serde_json::to_value(&info).unwrap()["unsavedReason"],
+            "settingsUnusable"
+        );
+        assert_eq!(
+            serde_json::to_value(UnsavedReason::NoConfigDir).unwrap(),
+            "noConfigDir"
+        );
+    }
+
+    #[test]
+    fn unsaved_reason_is_none_when_saved() {
+        let [data, config] = dirs();
+        let st = state(data.path(), config.path(), DataDirSource::Default);
+        assert_eq!(unsaved_reason(&st), None);
+        assert!(persistent(&st));
+        let info = get_terminal_settings(&st).unwrap();
+        assert_eq!(info.unsaved_reason, None);
+        assert!(serde_json::to_value(&info).unwrap()["unsavedReason"].is_null());
+    }
+
+    #[test]
+    fn close_on_exit_defaults_to_true_and_persists() {
+        let [data, config] = dirs();
+        let st = state(data.path(), config.path(), DataDirSource::Default);
+        assert!(get_terminal_settings(&st).unwrap().close_on_exit);
+        let mut off = input(14, 2000);
+        off.close_on_exit = false;
+        assert!(!set_terminal_settings(&st, off).unwrap().close_on_exit);
+        assert!(!get_terminal_settings(&st).unwrap().close_on_exit);
+        let saved = settings::load(&settings_path(config.path())).unwrap();
+        assert_eq!(saved.terminal.unwrap().close_on_exit, Some(false));
+        // An input without the key (an older UI) means true.
+        let parsed: TerminalSettingsInput =
+            serde_json::from_str(r#"{"fontSize":14,"scrollback":2000}"#).unwrap();
+        assert!(parsed.close_on_exit);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 // Pointer-drag state machine. It never touches the DOM: the view feeds it pointer positions and
 // what is under the pointer, and reads `state` / `target` back to draw the indicator.
-import { resolveDrop, type DropPosition } from "./drop-target";
+import { resolveDropMany, type DropPosition } from "./drop-target";
 import type { Row } from "./rows";
 
 export interface Hit {
@@ -18,12 +18,15 @@ export interface DragOptions {
   threshold: number;
   /** The rows currently shown, used to resolve drops. */
   rows: () => Row[];
-  onMove: (dragId: string, parentId: string | null, index: number) => void;
+  onMove: (dragIds: string[], parentId: string | null, index: number) => void;
 }
 
 export class DragController {
   state: "idle" | "pending" | "dragging" = "idle";
+  /** The row that was pressed. */
   dragId: string | null = null;
+  /** Every node that moves: the whole selection, or just the pressed row. */
+  dragIds: string[] = [];
   target: DragTarget | null = null;
 
   #opts: DragOptions;
@@ -34,10 +37,12 @@ export class DragController {
     this.#opts = opts;
   }
 
-  pointerDown(id: string, x: number, y: number) {
+  /** `ids` are the selection tops to drag along (even a single one: a folder pressed through its selected child); none means only the pressed row. */
+  pointerDown(id: string, x: number, y: number, ids?: string[]) {
     this.#reset();
     this.state = "pending";
     this.dragId = id;
+    this.dragIds = ids && ids.length > 0 ? [...ids] : [id];
     this.#startX = x;
     this.#startY = y;
   }
@@ -48,17 +53,19 @@ export class DragController {
       if (Math.hypot(x - this.#startX, y - this.#startY) < this.#opts.threshold) return;
       this.state = "dragging";
     }
-    const drop = hit ? resolveDrop(this.#opts.rows(), this.dragId, hit.rowId, hit.position) : null;
+    const drop = hit
+      ? resolveDropMany(this.#opts.rows(), this.dragIds, hit.rowId, hit.position)
+      : null;
     this.target = hit && drop ? { ...hit, ...drop } : null;
   }
 
   /** Ends the gesture. Returns `true` if it was a drag (so the click that follows must be ignored). */
   pointerUp(): boolean {
     const wasDrag = this.state === "dragging";
-    const { dragId, target } = this;
+    const { dragId, dragIds, target } = this;
     this.#reset();
     if (wasDrag && dragId !== null && target) {
-      this.#opts.onMove(dragId, target.parentId, target.index);
+      this.#opts.onMove(dragIds, target.parentId, target.index);
     }
     return wasDrag;
   }
@@ -70,6 +77,7 @@ export class DragController {
   #reset() {
     this.state = "idle";
     this.dragId = null;
+    this.dragIds = [];
     this.target = null;
   }
 }

@@ -27,6 +27,8 @@ export class TerminalSettingsStore {
     fontFamily: string | null;
     fontSize: number;
     scrollback: number;
+    /** Always sent: Rust reads a missing value as `true` and would reset a stored `false`. */
+    closeOnExit: boolean;
   }): Promise<ApiError | null> {
     try {
       this.info = await this.#api.setTerminalSettings(input);

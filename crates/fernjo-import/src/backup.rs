@@ -18,6 +18,7 @@ use serde_json::Value;
 use unicode_normalization::UnicodeNormalization;
 use zeroize::Zeroizing;
 
+use crate::limits::{MAX_MESSAGE_CHARS, clean, sanitize_nodes};
 use crate::mremoteng::file::MAX_NODES;
 
 pub const MAGIC: &[u8; 8] = b"FERNJOBK";
@@ -199,7 +200,7 @@ pub fn open(bytes: &[u8], password: &SecretString) -> Result<BackupContents, Bac
     if too_many_nodes(&body.connections) {
         return Err(damaged("the backup holds too many connections and folders"));
     }
-    let tree = parse_document(body.connections).map_err(|e| match e {
+    let mut tree = parse_document(body.connections).map_err(|e| match e {
         DocumentError::NewerSchema { found, .. } => BackupError::NewerVersion {
             found: u16::try_from(found).unwrap_or(u16::MAX),
         },
@@ -211,6 +212,11 @@ pub fn open(bytes: &[u8], password: &SecretString) -> Result<BackupContents, Bac
         return Err(BackupError::Damaged(format!(
             "the connections in the backup are nested deeper than {MAX_TREE_DEPTH} levels"
         )));
+    }
+    // Names, descriptions and hosts get the same caps as every other import path.
+    let mut top = tree.children().to_vec();
+    if sanitize_nodes(&mut top) != Default::default() {
+        tree = Tree::from_children(top);
     }
     let entries = body
         .entries
@@ -229,8 +235,9 @@ pub fn open(bytes: &[u8], password: &SecretString) -> Result<BackupContents, Bac
         })
         .collect();
     Ok(BackupContents {
-        created_at: body.created_at,
-        app: body.app,
+        // The header strings are shown in reports: bounded and free of control characters.
+        created_at: clean(&body.created_at, MAX_MESSAGE_CHARS, false),
+        app: clean(&body.app, MAX_MESSAGE_CHARS, false),
         tree,
         entries,
     })

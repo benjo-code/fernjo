@@ -32,15 +32,31 @@ async function setup(status: VaultStatus) {
 describe("VaultChip", () => {
   test("texts_for_none_locked_unlocked_and_unusable", async () => {
     const texts: Record<VaultStatus["state"], string> = {
-      none: "No vault",
-      locked: "Locked",
-      unlocked: "Unlocked",
+      none: "Vault: none",
+      locked: "Vault: locked",
+      unlocked: "Vault: unlocked",
       unusable: "Vault unusable",
     };
     for (const state of Object.keys(texts) as VaultStatus["state"][]) {
       const { chip } = await setup(vaultStatus({ state }));
       expect(chip.textContent?.trim()).toBe(texts[state]);
       expect(chip.getAttribute("aria-label")!.toLowerCase()).toContain(texts[state].toLowerCase());
+      unmount(mounted!);
+      mounted = null;
+      document.body.innerHTML = "";
+    }
+  });
+
+  test("every_state_carries_a_credential_vault_title", async () => {
+    const titles: Record<VaultStatus["state"], string> = {
+      none: "Credential vault",
+      locked: "Credential vault",
+      unlocked: "Credential vault, open the credentials",
+      unusable: "Credential vault",
+    };
+    for (const state of Object.keys(titles) as VaultStatus["state"][]) {
+      const { chip } = await setup(vaultStatus({ state }));
+      expect(chip.getAttribute("title")).toBe(titles[state]);
       unmount(mounted!);
       mounted = null;
       document.body.innerHTML = "";

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from "svelte";
-  import type { VaultStore } from "../vault.svelte";
+  import { KEYCHAIN_HINT, type VaultStore } from "../vault.svelte";
   import Icon from "./Icon.svelte";
   import PasswordField from "./PasswordField.svelte";
 
@@ -158,6 +158,7 @@
 {#if phase !== null && phase !== "unlocked"}
   <div
     class="note"
+    class:compact={phase === "none" && !creating}
     role="region"
     aria-labelledby="vault-note-title"
     tabindex="-1"
@@ -178,7 +179,7 @@
     </div>
 
     {#if phase === "locked"}
-      <p class="body">Connections with stored credentials ask for it.</p>
+      <p class="body">Connections that use a stored credential need the vault unlocked.</p>
       {#if issueLine}
         <p class="body" role="status">{issueLine}</p>
       {/if}
@@ -203,9 +204,9 @@
             />
             <span>Unlock automatically on this device</span>
           </label>
-          {#if remember || autoUnlock}
-            <p class="hint">Lock then lasts until the next start.</p>
-          {/if}
+          <p class="hint">
+            {KEYCHAIN_HINT}{remember || autoUnlock ? " Lock then lasts until the next start." : ""}
+          </p>
           <div class="actions">
             <button type="submit" class="btn small" aria-disabled={busy}>Unlock</button>
             {#if olderOffered}
@@ -223,10 +224,10 @@
         </form>
       {/if}
     {:else if phase === "none"}
-      <p class="body">
-        Credentials are stored in an encrypted vault protected by a master password.
-      </p>
       {#if creating}
+        <p class="body">
+          Credentials are stored in an encrypted vault protected by a master password.
+        </p>
         <form onsubmit={submitCreate}>
           <PasswordField
             bind:this={createField}
@@ -256,6 +257,7 @@
             />
             <span>Unlock automatically on this device</span>
           </label>
+          <p class="hint">{KEYCHAIN_HINT}</p>
           <div class="actions">
             <button type="submit" class="btn small primary" aria-disabled={busy}>
               Create vault
@@ -290,6 +292,22 @@
     background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-sm);
+  }
+
+  /*
+   * No vault, form closed: one slim line without a card, so a selected connection's properties
+   * keep room for the Credential row (the tree keeps its 23 rows, the panel gives way).
+   */
+  .note.compact {
+    margin: 0;
+    padding: 0 var(--space-3);
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .note.compact .small {
+    height: 20px;
   }
 
   .note:focus {

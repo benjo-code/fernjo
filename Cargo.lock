@@ -1390,7 +1390,7 @@ dependencies = [
 
 [[package]]
 name = "fernjo-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "fernjo-core",
@@ -1412,11 +1412,12 @@ dependencies = [
 
 [[package]]
 name = "fernjo-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "directories",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
  "uuid",
@@ -1424,7 +1425,7 @@ dependencies = [
 
 [[package]]
 name = "fernjo-import"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aes-gcm",
  "base64 0.23.1",
@@ -1444,9 +1445,10 @@ dependencies = [
 
 [[package]]
 name = "fernjo-ssh"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "data-encoding",
+ "getrandom 0.4.3",
  "hmac",
  "russh",
  "secrecy",
@@ -1458,12 +1460,13 @@ dependencies = [
 
 [[package]]
 name = "fernjo-vault"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "argon2",
  "chacha20poly1305",
  "getrandom 0.4.3",
  "keyring",
+ "keyring-core",
  "secrecy",
  "serde",
  "serde_json",

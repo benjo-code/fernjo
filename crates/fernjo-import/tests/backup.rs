@@ -288,3 +288,33 @@ fn creating_twice_gives_different_bytes() {
     let c = contents();
     assert_ne!(make(&c), make(&c));
 }
+
+#[test]
+fn long_backup_header_strings_are_cut_in_reports() {
+    let body = serde_json::json!({
+        "schemaVersion": 1,
+        "createdAt": format!("2026\u{1b}[2J{}", "x".repeat(10_000)),
+        "app": "é".repeat(10_000),
+        "connections": {"schemaVersion": 2, "children": []}, "entries": []
+    });
+    let back = backup::open(&seal(body.to_string().as_bytes()), &pw(PW)).unwrap();
+    assert_eq!(back.created_at.chars().count(), 256);
+    assert!(!back.created_at.chars().any(char::is_control));
+    assert_eq!(back.app.chars().count(), 256);
+}
+
+#[test]
+fn backup_tree_text_is_capped_like_the_other_importers() {
+    let long_name = "n".repeat(400);
+    let body = serde_json::json!({
+        "schemaVersion": 1, "createdAt": "x", "app": "y",
+        "connections": {"schemaVersion": 2, "children": [
+            {"id": "6f0c1c2a-0000-4000-8000-000000000001", "name": long_name, "type": "connection",
+             "protocol": "ssh", "host": "h".repeat(300)}]},
+        "entries": []
+    });
+    let back = backup::open(&seal(body.to_string().as_bytes()), &pw(PW)).unwrap();
+    let n = &back.tree.children()[0];
+    assert_eq!(n.name.chars().count(), 256);
+    assert!(matches!(&n.kind, NodeKind::Connection { host, .. } if host.is_empty()));
+}

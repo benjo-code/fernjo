@@ -1656,6 +1656,7 @@ mod tests {
         }
         vec![
             entry("list_tree", |w| j(commands::list_tree(&w.st))),
+            entry("reload_tree", |w| j(commands::reload_tree(&w.st))),
             entry("get_node", |w| j(commands::get_node(&w.st, w.conn))),
             entry("create_folder", |w| {
                 j(commands::create_folder(&w.st, None, None, "n".into()))
@@ -1679,6 +1680,9 @@ mod tests {
             }),
             entry("move_node", |w| {
                 j(commands::move_node(&w.st, w.conn, None, 0))
+            }),
+            entry("move_nodes", |w| {
+                j(commands::move_nodes(&w.st, vec![w.conn], None, 0))
             }),
             entry("duplicate_node", |w| {
                 j(commands::duplicate_node(&w.st, w.conn))
@@ -1733,6 +1737,7 @@ mod tests {
                         font_family: Some("Fira Code".into()),
                         font_size: 14,
                         scrollback: 5000,
+                        close_on_exit: true,
                     },
                 ))
             }),
