@@ -3,6 +3,7 @@
 pub mod backup;
 pub mod connections;
 pub mod error;
+pub mod limits;
 pub mod mremoteng;
 pub(crate) mod naming;
 pub mod report;

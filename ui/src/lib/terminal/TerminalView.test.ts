@@ -78,7 +78,11 @@ afterEach(() => {
 /** A store with one tab whose session events the test can inject. */
 function openTab() {
   const mock = mockApi();
-  const store = new SessionStore(mock.api, () => "host");
+  const store = new SessionStore(
+    mock.api,
+    () => "host",
+    () => true,
+  );
   store.open("n1");
   const tab = store.tabs[0]!;
   const view = (visible = true) =>
@@ -96,7 +100,11 @@ const focusCalls = () => h.made[0]!.calls.filter((c) => c === "focus").length;
 
 test("terminal_view_registers_the_bridge_and_disposes_on_destroy", async () => {
   const { api } = mockApi();
-  const store = new SessionStore(api, () => "host");
+  const store = new SessionStore(
+    api,
+    () => "host",
+    () => true,
+  );
   store.open("n1");
   const tab = store.tabs[0]!;
   const attach = vi.spyOn(store, "attachTerminal");
@@ -135,7 +143,7 @@ test("terminal_takes_focus_only_for_a_visible_connecting_or_connected_tab_withou
   expect(focusCalls()).toBe(1);
 
   // the move to connected does not steal focus again
-  emit({ kind: "state", state: "connected", detail: null });
+  emit({ kind: "state", state: "connected", detail: null, exitStatus: null, endedCleanly: false });
   await tick();
   flushSync();
   expect(focusCalls()).toBe(1);

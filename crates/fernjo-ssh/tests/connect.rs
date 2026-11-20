@@ -327,6 +327,56 @@ async fn close_ends_with_closed_by_user() {
     assert!(session.write(b"x".to_vec()).await.is_err());
 }
 
+/// Connects, runs `script` in the shell and returns how the session ended.
+async fn end_after(script: &[u8]) -> Option<CloseReason> {
+    let s = support::server()?;
+    let dir = tempfile::tempdir().unwrap();
+    let ia = Arc::new(ScriptedInteraction::new().host_key(HostKeyDecision::TrustOnce));
+    let (session, mut rx) = Session::connect(params(&s, &dir.path().join("kh")), ia)
+        .await
+        .unwrap();
+    session.write(script.to_vec()).await.unwrap();
+    Some(wait_closed(&mut rx).await)
+}
+
+async fn wait_closed(rx: &mut Receiver<SessionEvent>) -> CloseReason {
+    timeout(WAIT, async {
+        loop {
+            match rx.recv().await {
+                Some(SessionEvent::Closed(r)) => return r,
+                Some(_) => {}
+                None => panic!("events channel ended without a Closed event"),
+            }
+        }
+    })
+    .await
+    .expect("timeout waiting for the session to end")
+}
+
+#[tokio::test]
+async fn exit_zero_reports_exit_status_zero() {
+    if let Some(end) = end_after(
+        b"exit 0
+",
+    )
+    .await
+    {
+        assert_eq!(end, CloseReason::Exit(Some(0)));
+    }
+}
+
+#[tokio::test]
+async fn exit_three_reports_exit_status_three() {
+    if let Some(end) = end_after(
+        b"exit 3
+",
+    )
+    .await
+    {
+        assert_eq!(end, CloseReason::Exit(Some(3)));
+    }
+}
+
 #[tokio::test]
 async fn time_spent_on_the_host_key_prompt_does_not_count_towards_the_connect_timeout() {
     let Some(s) = support::server() else { return };

@@ -109,3 +109,9 @@ test("host_key_changed_lists_a_repeated_stored_fingerprint_without_a_keying_erro
   const codes = [...document.querySelectorAll<HTMLElement>("code")].map((c) => c.textContent);
   expect(codes).toEqual(["SHA256:SAME", "SHA256:SAME", "SHA256:NEWKEY"]);
 });
+
+test("the_changed_key_prompt_has_no_trust_once_explanation_because_it_has_no_such_button", async () => {
+  await setup();
+  expect(document.querySelector(".choice-note")).toBeNull();
+  expect(document.body.textContent).not.toContain("asks again next time");
+});

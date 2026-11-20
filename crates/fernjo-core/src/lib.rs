@@ -21,13 +21,13 @@ pub use paths::{
     locate, locate_from,
 };
 pub use persist::{
-    CURRENT_VERSION, FILE_NAME, Loaded, Notice, document, load, migrate_with, parse_document, save,
-    write_exact,
+    CURRENT_VERSION, FILE_NAME, Loaded, MAX_DATA_FILE_LEN, Notice, document, load, migrate_with,
+    parse_document, save, write_exact,
 };
 pub use resolve::resolve;
 pub use settings::{
-    AppSettings, DEFAULT_FONT_SIZE, DEFAULT_SCROLLBACK, FONT_SIZE_RANGE, SCROLLBACK_RANGE,
-    TerminalPrefs, Theme,
+    AppSettings, DEFAULT_CLOSE_ON_EXIT, DEFAULT_FONT_SIZE, DEFAULT_SCROLLBACK, FONT_SIZE_RANGE,
+    SCROLLBACK_RANGE, TerminalPrefs, Theme,
 };
 pub use store::{Opened, Store};
 pub use tree::{MAX_TREE_DEPTH, NodePatch, Patch, Tree, subtree_depth};

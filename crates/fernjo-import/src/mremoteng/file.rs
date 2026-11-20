@@ -135,7 +135,10 @@ pub struct RawDocument {
 }
 
 fn unsupported(msg: impl Into<String>) -> ImportError {
-    ImportError::UnsupportedFormat(msg.into())
+    ImportError::UnsupportedFormat(crate::limits::cut_chars(
+        &msg.into(),
+        crate::limits::MAX_MESSAGE_CHARS,
+    ))
 }
 
 /// Shortens an attribute value for use in a message.

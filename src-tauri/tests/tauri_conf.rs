@@ -34,6 +34,26 @@ fn csp_is_strict() {
 }
 
 #[test]
+fn webview2_arguments_keep_wry_defaults_and_turn_off_the_component_updater() {
+    let conf = load("tauri.conf.json");
+    let args = conf["app"]["windows"][0]["additionalBrowserArgs"]
+        .as_str()
+        .expect("app.windows[0].additionalBrowserArgs must be a string");
+    // Setting the key replaces wry's own default, so the three features it turns off stay.
+    assert!(
+        args.contains("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"),
+        "wry's default disable-features must be kept: {args}"
+    );
+    // The WebView2 runtime's component updater is the one background connection
+    // (Docs/DECISIONS.md, "M7: WebView2 background connection").
+    assert!(args.contains("--disable-component-update"), "{args}");
+    assert!(
+        !args.contains("remote-debugging-port") && !args.contains("--no-sandbox"),
+        "no debugging or sandbox flags in the shipped arguments: {args}"
+    );
+}
+
+#[test]
 fn global_tauri_is_off() {
     let conf = load("tauri.conf.json");
     let flag = &conf["app"]["withGlobalTauri"];

@@ -17,7 +17,11 @@ afterEach(() => {
 /** Tabs for nodes `a`, `b`, ... with the given states; the last one opened is active. */
 function setup(states: SessionState[], opts: { protocol?: (id: string) => "ssh" | "rdp" } = {}) {
   const mock = mockApi();
-  const sessions = new SessionStore(mock.api, (id) => `Name ${id}`);
+  const sessions = new SessionStore(
+    mock.api,
+    (id) => `Name ${id}`,
+    () => true,
+  );
   states.forEach((state, i) => {
     sessions.open(String.fromCharCode(97 + i));
     sessions.tabs[i]!.state = state;
@@ -84,7 +88,7 @@ describe("TabStrip", () => {
     expect(connected!.querySelector(".lamp")?.getAttribute("data-state")).toBe("live");
     expect(connected!.querySelector(".caption")).toBeNull();
 
-    expect(needsVault!.querySelector(".caption")?.textContent).toBe("Needs vault");
+    expect(needsVault!.querySelector(".caption")?.textContent).toBe("Unlock vault");
     expect(needsVault!.querySelector(".lamp")).toBeNull();
 
     expect(dropped!.querySelector(".lamp")?.getAttribute("data-state")).toBe("dropped");
@@ -138,7 +142,7 @@ describe("TabStrip", () => {
     expect(caption(0)).toBe("Confirm host key");
     expect(caption(1)).toBe("Confirm host key");
     expect(caption(2)).toBe("Needs input");
-    expect(caption(3)).toBe("Needs vault");
+    expect(caption(3)).toBe("Unlock vault");
     expect(caption(4)).toBe("Confirm host key");
     // answered: back to the plain state caption
     sessions.tabs[2]!.prompt = null;
@@ -146,11 +150,19 @@ describe("TabStrip", () => {
     expect(caption(2)).toBe("Connecting…");
   });
 
-  test("the_caption_of_a_disconnected_tab_is_its_detail_text", () => {
+  test("a_disconnected_tab_has_no_caption_but_keeps_title_mark_reconnect_and_the_reason_as_tooltip", () => {
     const { sessions } = setup(["disconnected"]);
-    sessions.tabs[0]!.detail = "Connection reset by peer";
+    sessions.tabs[0]!.detail = "The remote shell ended (exit status 3).";
     flushSync();
-    expect(tabs()[0]!.querySelector(".caption")?.textContent).toBe("Connection reset by peer");
+    const tab = tabs()[0]!;
+    // the reason lives in the bar above the terminal; a caption would cut the title short
+    expect(tab.querySelector(".caption")).toBeNull();
+    expect(tab.querySelector(".title")?.textContent).toBe("Name a");
+    expect(tab.querySelector(".lamp")?.getAttribute("data-state")).toBe("dropped");
+    expect(tab.querySelector("button.reconnect")).not.toBeNull();
+    expect(tab.querySelector("button.main")?.getAttribute("title")).toBe(
+      "Name a: The remote shell ended (exit status 3).",
+    );
   });
 
   test("the_protocol_icon_follows_the_connection", () => {
@@ -163,7 +175,12 @@ describe("TabStrip", () => {
     setup(["connecting", "connected", "needsVault", "disconnected", "disconnected"]);
     const withButton = tabs().map((el) => el.querySelector("button.reconnect") !== null);
     expect(withButton).toEqual([false, false, false, true, true]);
-    expect(tabs()[3]!.querySelector("button.reconnect")?.textContent).toContain("Reconnect");
+    // icon only: the labelled button is in the bar above the terminal, so the title keeps the room
+    const button = tabs()[3]!.querySelector("button.reconnect")!;
+    expect(button.textContent?.trim()).toBe("");
+    expect(button.querySelector("svg")).not.toBeNull();
+    expect(button.getAttribute("aria-label")).toBe("Reconnect Name d");
+    expect(button.getAttribute("title")).toBe("Reconnect");
   });
 
   test("clicking_reconnect_calls_the_store", () => {

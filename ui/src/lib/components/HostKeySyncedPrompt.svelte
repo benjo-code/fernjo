@@ -65,6 +65,9 @@
     <button type="button" class="btn" onclick={() => decide("once")}>Connect once</button>
     <button type="button" class="btn" onclick={() => decide("reject")}>Cancel</button>
   </div>
+  <p class="choice-note">
+    Confirm and connect remembers this key on this device. Connect once asks again next time.
+  </p>
 </PromptFrame>
 
 <style>
@@ -104,6 +107,13 @@
     gap: var(--space-2);
     color: var(--color-text-muted);
     font-size: var(--text-sm);
+  }
+
+  .choice-note {
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+    line-height: 1.3;
   }
 
   .actions {

@@ -1,20 +1,84 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+  import { PANEL_MIN, LayoutStore, clampPanelHeight } from "../layout.svelte";
   import type { TreeStore } from "../store.svelte";
   import type { VaultStore } from "../vault.svelte";
   import type { FieldInfo, NodePatch, Protocol } from "../types";
   import Icon from "./Icon.svelte";
+  import Splitter from "./Splitter.svelte";
   import PropertyRow from "./PropertyRow.svelte";
   import TextField from "./TextField.svelte";
 
-  let { store, vault }: { store: TreeStore; vault: VaultStore } = $props();
+  let {
+    store,
+    vault,
+    layout = new LayoutStore(),
+    onOpenVault,
+    onFocusVaultForm,
+    onNewCredential,
+  }: {
+    store: TreeStore;
+    vault: VaultStore;
+    layout?: LayoutStore;
+    /** "Manage…" (vault unlocked): open the credential manager. */
+    onOpenVault: () => void;
+    /** "Create vault" / "Unlock": bring the sidebar note's form into view and focus it. */
+    onFocusVaultForm: () => void;
+    /** "New credential…" in the dropdown: open the manager on a new entry. */
+    onNewCredential: () => void;
+  } = $props();
+
+  const ROW_HEIGHT_TREE = 24; // --row-height-tree
+  let section: HTMLElement | undefined = $state();
+  let measured = $state(0);
+  // the tallest the panel may be; generous until the sidebar has been measured
+  let maxHeight = $state(4000);
+
+  /** Mirrors the tree slot's min-height in Sidebar.svelte. */
+  const treeMin = () => Math.min(ROW_HEIGHT_TREE * 23, window.innerHeight - 120);
+
+  function measure() {
+    if (section) measured = section.offsetHeight;
+    const aside = section?.parentElement;
+    if (!section || !aside || aside.clientHeight === 0) return;
+    const slot = aside.querySelector<HTMLElement>(".tree-slot");
+    if (!slot) return;
+    // everything that is neither tree nor panel (filter, notices, footer, margins); scrollHeight
+    // keeps this right while the sidebar overflows
+    const chrome = aside.scrollHeight - slot.clientHeight - section.offsetHeight;
+    maxHeight = clampPanelHeight(4000, aside.clientHeight - chrome, treeMin());
+  }
+
+  onMount(() => {
+    measure();
+    const aside = section?.parentElement;
+    let ro: ResizeObserver | null = null;
+    try {
+      ro = new ResizeObserver(measure);
+      if (aside) for (const child of Array.from(aside.children)) ro.observe(child);
+    } catch {
+      // no ResizeObserver (a test environment): the window resize listener has to do
+    }
+    window.addEventListener("resize", measure);
+    return () => {
+      try {
+        ro?.disconnect();
+      } catch {
+        // nothing to release
+      }
+      window.removeEventListener("resize", measure);
+    };
+  });
 
   let open = $state(true);
   let errors = $state<Record<string, string | null>>({});
 
   const detail = $derived(store.detail);
+  const selectedCount = $derived(store.selectedIds.size);
+  const several = $derived(selectedCount > 1);
   const nodeId = $derived(detail?.id ?? null);
   const kindLabel = $derived(
-    !detail
+    !detail || several
       ? ""
       : detail.kind === "folder"
         ? "Folder"
@@ -90,9 +154,17 @@
       : (vault.credentials.find((c) => c.id === credentialId)?.name ?? null),
   );
 
+  /** The last dropdown entry is an action, not a credential; it is never stored or kept selected. */
+  const NEW_CREDENTIAL = "__new__";
+
   async function chooseCredential(select: HTMLSelectElement) {
     if (!detail) return;
     const chosen = select.value;
+    if (chosen === NEW_CREDENTIAL) {
+      select.value = detail.credential.effective ?? "";
+      onNewCredential();
+      return;
+    }
     const ok =
       chosen === ""
         ? // "None" clears a local value (same as Inherit); with nothing local there is nothing to clear
@@ -106,17 +178,43 @@
   const show = (n: number | null) => (n === null ? "" : String(n));
 </script>
 
-<section class="panel" aria-label="Properties">
+<section
+  class="panel"
+  class:sized={open && layout.propertiesHeight !== null}
+  style:height={open && layout.propertiesHeight !== null
+    ? `${Math.min(layout.propertiesHeight, maxHeight)}px`
+    : null}
+  aria-label="Properties"
+  bind:this={section}
+>
+  {#if open}
+    <Splitter
+      orientation="horizontal"
+      invert
+      label="Resize properties panel"
+      value={Math.min(Math.max(measured, PANEL_MIN), maxHeight)}
+      min={PANEL_MIN}
+      max={maxHeight}
+      onchange={(px) => layout.setPropertiesHeight(px)}
+      onreset={() => layout.resetPropertiesHeight()}
+    />
+  {/if}
   <button type="button" class="header" aria-expanded={open} onclick={() => (open = !open)}>
     <span class="chevron" class:closed={!open}><Icon name="folder-chevron" size={14} /></span>
-    <span class="title" title={detail?.name}>{detail?.name ?? "Properties"}</span>
+    <span class="title" title={several ? undefined : detail?.name}>
+      {several ? `${selectedCount} items selected` : (detail?.name ?? "Properties")}
+    </span>
     <span class="kind">{kindLabel}</span>
   </button>
 
   {#if open}
     <div class="body">
       {#if !detail}
-        <p class="empty">Select a connection or folder to see its settings.</p>
+        <p class="empty">
+          {several
+            ? "Select a single item to see its settings."
+            : "Select a connection or folder to see its settings."}
+        </p>
       {:else}
         <PropertyRow name="name" label="Name" error={errors.name}>
           {#snippet children(id)}
@@ -131,40 +229,7 @@
           {/snippet}
         </PropertyRow>
 
-        <PropertyRow name="description" label="Description" error={errors.description}>
-          {#snippet children(id)}
-            <TextField
-              {id}
-              label="Description"
-              value={detail.description}
-              onCommit={(text) =>
-                text === detail.description
-                  ? Promise.resolve(true)
-                  : save("description", { description: text })}
-              onedit={() => setError("description", null)}
-            />
-          {/snippet}
-        </PropertyRow>
-
         {#if !isFolder}
-          <PropertyRow name="protocol" label="Protocol" error={errors.protocol}>
-            {#snippet children(id)}
-              <select
-                {id}
-                aria-label="Protocol"
-                value={detail.protocol}
-                onchange={async (e) => {
-                  const select = e.currentTarget;
-                  const ok = await save("protocol", { protocol: select.value as Protocol });
-                  if (!ok) select.value = detail.protocol ?? "ssh";
-                }}
-              >
-                <option value="ssh">SSH</option>
-                <option value="rdp">RDP</option>
-              </select>
-            {/snippet}
-          </PropertyRow>
-
           <PropertyRow name="host" label="Host" error={errors.host}>
             {#snippet children(id)}
               <TextField
@@ -178,6 +243,74 @@
             {/snippet}
           </PropertyRow>
         {/if}
+
+        <PropertyRow
+          name="username"
+          label="Username"
+          source={detail.username.source}
+          hasValue={detail.username.effective !== null}
+          error={errors.username}
+          onreset={() => void save("username", { username: null })}
+        >
+          {#snippet children(id)}
+            <TextField
+              {id}
+              label="Username"
+              value={detail.username.effective ?? ""}
+              onCommit={(text) => commitText("username", "username", text, detail.username)}
+              onedit={() => setError("username", null)}
+            />
+          {/snippet}
+        </PropertyRow>
+
+        <PropertyRow
+          name="credential"
+          label="Credential"
+          source={detail.credential.source}
+          hasValue={detail.credential.effective !== null}
+          error={errors.credential}
+          wrapAux
+          onreset={listReady ? () => void save("credential", { credential: null }) : undefined}
+        >
+          {#snippet children(id)}
+            <div class="cred">
+              {#if !unlocked}
+                <span {id} class="static"
+                  >{vaultState === "locked" ? "Vault locked" : "No vault"}</span
+                >
+              {:else if vault.credentialsState === "loading"}
+                <span {id} class="static">Loading…</span>
+              {:else if vault.credentialsState === "failed"}
+                <span {id} class="static">Credentials unavailable</span>
+              {:else if credentialId !== null && credentialName === null}
+                <span {id} class="static">Missing credential</span>
+              {:else}
+                <select
+                  {id}
+                  aria-label="Credential"
+                  value={credentialId ?? ""}
+                  onchange={(e) => void chooseCredential(e.currentTarget)}
+                >
+                  <option value="">None</option>
+                  {#each vault.credentials as c (c.id)}
+                    <option value={c.id}>{c.name}</option>
+                  {/each}
+                  <option value={NEW_CREDENTIAL}>New credential…</option>
+                </select>
+              {/if}
+              <!-- the way into the vault; an unusable vault has none, its note explains -->
+              {#if vaultState === "none"}
+                <button type="button" class="btn small" onclick={onFocusVaultForm}>
+                  Create vault
+                </button>
+              {:else if vaultState === "locked"}
+                <button type="button" class="btn small" onclick={onFocusVaultForm}>Unlock</button>
+              {:else if listReady}
+                <button type="button" class="btn small" onclick={onOpenVault}>Manage…</button>
+              {/if}
+            </div>
+          {/snippet}
+        </PropertyRow>
 
         <PropertyRow
           name="port"
@@ -200,21 +333,17 @@
           {/snippet}
         </PropertyRow>
 
-        <PropertyRow
-          name="username"
-          label="Username"
-          source={detail.username.source}
-          hasValue={detail.username.effective !== null}
-          error={errors.username}
-          onreset={() => void save("username", { username: null })}
-        >
+        <PropertyRow name="description" label="Description" error={errors.description}>
           {#snippet children(id)}
             <TextField
               {id}
-              label="Username"
-              value={detail.username.effective ?? ""}
-              onCommit={(text) => commitText("username", "username", text, detail.username)}
-              onedit={() => setError("username", null)}
+              label="Description"
+              value={detail.description}
+              onCommit={(text) =>
+                text === detail.description
+                  ? Promise.resolve(true)
+                  : save("description", { description: text })}
+              onedit={() => setError("description", null)}
             />
           {/snippet}
         </PropertyRow>
@@ -249,40 +378,25 @@
           </PropertyRow>
         {/if}
 
-        <PropertyRow
-          name="credential"
-          label="Credential"
-          source={detail.credential.source}
-          hasValue={detail.credential.effective !== null}
-          error={errors.credential}
-          onreset={listReady ? () => void save("credential", { credential: null }) : undefined}
-        >
-          {#snippet children(id)}
-            {#if !unlocked}
-              <span {id} class="static"
-                >{vaultState === "locked" ? "Vault locked" : "No vault"}</span
-              >
-            {:else if vault.credentialsState === "loading"}
-              <span {id} class="static">Loading…</span>
-            {:else if vault.credentialsState === "failed"}
-              <span {id} class="static">Credentials unavailable</span>
-            {:else if credentialId !== null && credentialName === null}
-              <span {id} class="static">Missing credential</span>
-            {:else}
+        {#if !isFolder}
+          <PropertyRow name="protocol" label="Protocol" error={errors.protocol}>
+            {#snippet children(id)}
               <select
                 {id}
-                aria-label="Credential"
-                value={credentialId ?? ""}
-                onchange={(e) => void chooseCredential(e.currentTarget)}
+                aria-label="Protocol"
+                value={detail.protocol}
+                onchange={async (e) => {
+                  const select = e.currentTarget;
+                  const ok = await save("protocol", { protocol: select.value as Protocol });
+                  if (!ok) select.value = detail.protocol ?? "ssh";
+                }}
               >
-                <option value="">None</option>
-                {#each vault.credentials as c (c.id)}
-                  <option value={c.id}>{c.name}</option>
-                {/each}
+                <option value="ssh">SSH</option>
+                <option value="rdp">RDP</option>
               </select>
-            {/if}
-          {/snippet}
-        </PropertyRow>
+            {/snippet}
+          </PropertyRow>
+        {/if}
       {/if}
     </div>
   {/if}
@@ -290,11 +404,16 @@
 
 <style>
   .panel {
+    position: relative;
     display: flex;
     flex: 0 1 auto;
     flex-direction: column;
     min-height: 26px;
     border-top: 1px solid var(--color-border);
+  }
+
+  .panel.sized {
+    flex: none;
   }
 
   .header {
@@ -348,6 +467,29 @@
     margin: var(--space-2) 0;
     color: var(--color-text-muted);
     font-size: var(--text-sm);
+  }
+
+  /* the value and the vault button share the line and wrap when the sidebar is narrow */
+  .cred {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1) var(--space-2);
+    min-width: 0;
+  }
+
+  .cred > :global(select),
+  .cred > .static {
+    flex: 1 1 90px;
+    min-width: 0;
+  }
+
+  .small {
+    flex: none;
+    height: 22px;
+    padding: 0 var(--space-3);
+    font-size: var(--text-sm);
+    white-space: nowrap;
   }
 
   .static {

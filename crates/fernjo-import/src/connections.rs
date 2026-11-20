@@ -12,7 +12,8 @@ use fernjo_core::{DocumentError, Node, NodeId, NodeKind, Protocol, Settings, Tre
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::mremoteng::file::{MAX_DEPTH, MAX_FILE_BYTES, MAX_NODES};
+use crate::limits::{MAX_MESSAGE_CHARS, cut_chars, sanitize_nodes};
+use crate::mremoteng::file::{MAX_DEPTH, MAX_FILE_BYTES, MAX_HOST_CHARS, MAX_NODES};
 use crate::naming::unique_name;
 use crate::report::{Counts, Report, ReportLine};
 
@@ -174,14 +175,35 @@ pub fn plan(
         DocumentError::NewerSchema { found, supported } => {
             ConnectionsError::NewerSchema { found, supported }
         }
-        DocumentError::Invalid(m) => ConnectionsError::Invalid(m),
+        DocumentError::Invalid(m) => ConnectionsError::Invalid(cut_chars(&m, MAX_MESSAGE_CHARS)),
     })?;
 
     let mut children = tree.children().to_vec();
     let mut counts = Counts::default();
     let dropped = rebuild(&mut children, 1, &mut 0, &mut counts)?;
 
+    let cleaned = sanitize_nodes(&mut children);
     let mut partial = Vec::new();
+    if cleaned.changed > 0 {
+        let s = if cleaned.changed == 1 { "" } else { "s" };
+        partial.push(ReportLine::new(
+            "",
+            format!(
+                "{} name, description or host value{s} shortened or cleaned of control characters",
+                cleaned.changed
+            ),
+        ));
+    }
+    if cleaned.hosts_dropped > 0 {
+        partial.push(ReportLine::new(
+            "",
+            format!(
+                "{} host{} longer than {MAX_HOST_CHARS} characters imported with an empty host",
+                cleaned.hosts_dropped,
+                if cleaned.hosts_dropped == 1 { "" } else { "s" }
+            ),
+        ));
+    }
     if dropped > 0 {
         let s = if dropped == 1 { "" } else { "s" };
         partial.push(ReportLine::new(

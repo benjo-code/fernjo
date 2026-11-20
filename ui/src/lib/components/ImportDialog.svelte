@@ -302,7 +302,7 @@
     tabindex="-1"
     {onkeydown}
   >
-    <h2 class="title" id="{uid}-title">Import &amp; backup</h2>
+    <h2 class="title" id="{uid}-title">Import, export &amp; backup</h2>
 
     {#if step === "key"}
       <p class="file">{store.fileName}</p>

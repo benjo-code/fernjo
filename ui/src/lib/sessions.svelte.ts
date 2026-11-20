@@ -58,14 +58,16 @@ export class SessionStore {
 
   #api: Api;
   #nameOf: (nodeId: string) => string;
+  #closeOnExit: () => boolean;
   // A plain Map on purpose: plumbing, not view state; effects that call the bridge must not subscribe to it.
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   #runtime = new Map<string, Runtime>();
   #counter = 0;
 
-  constructor(api: Api, nameOf: (nodeId: string) => string) {
+  constructor(api: Api, nameOf: (nodeId: string) => string, closeOnExit: () => boolean) {
     this.#api = api;
     this.#nameOf = nameOf;
+    this.#closeOnExit = closeOnExit;
   }
 
   open(nodeId: string, opts: { another?: boolean } = {}): void {
@@ -290,7 +292,11 @@ export class SessionStore {
     } else if (e.kind === "state") {
       tab.state = e.state;
       tab.detail = e.detail;
-      if (e.state === "disconnected") tab.prompt = null;
+      if (e.state === "disconnected") {
+        tab.prompt = null;
+        // Rust decides what a clean end is; the setting only decides whether the tab stays.
+        if (e.endedCleanly && this.#closeOnExit()) this.close(id);
+      }
     } else {
       tab.prompt = { id: e.id, prompt: e.prompt };
     }

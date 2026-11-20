@@ -237,7 +237,15 @@ async function startConnected(tree: TreeNode[] = [conn("web-01"), conn("db-01")]
   const mock = await start(tree, {
     openSession: async (_id, onEvent) => {
       handlers.push(onEvent);
-      queueMicrotask(() => onEvent({ kind: "state", state: "connected", detail: null }));
+      queueMicrotask(() =>
+        onEvent({
+          kind: "state",
+          state: "connected",
+          detail: null,
+          exitStatus: null,
+          endedCleanly: false,
+        }),
+      );
       return `sid-${handlers.length}`;
     },
   });
@@ -384,7 +392,9 @@ test("saving_terminal_settings_reaches_open_terminals", async () => {
   const size = document.querySelector<HTMLInputElement>("input[aria-label='Font size']")!;
   size.value = "20";
   size.dispatchEvent(new Event("input", { bubbles: true }));
-  [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Save")!.click();
+  [...document.querySelectorAll("button")]
+    .find((b) => b.textContent?.trim() === "Save terminal settings")!
+    .click();
   await settle();
   expect(seen).toContain(20);
 });
@@ -476,7 +486,7 @@ test("a_restore_closes_every_tab_and_the_lamps_go_out", async () => {
     [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === label)!.click();
     await settle();
   };
-  document.querySelector<HTMLButtonElement>("button[aria-label='Import & backup']")!.click();
+  document.querySelector<HTMLButtonElement>("button[aria-label='Import / Export']")!.click();
   await settle();
   await click("Backup file…");
   await click("Restore…");

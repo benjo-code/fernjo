@@ -35,6 +35,22 @@ export function countDescendants(node: TreeNode): number {
   return node.children.reduce((sum, child) => sum + 1 + countDescendants(child), 0);
 }
 
+/** How many connections and folders `nodes` and everything beneath them hold. */
+export function countKinds(nodes: TreeNode[]): { connections: number; folders: number } {
+  let connections = 0;
+  let folders = 0;
+  const walk = (list: TreeNode[]) => {
+    for (const node of list) {
+      if (node.type === "folder") {
+        folders += 1;
+        walk(node.children);
+      } else connections += 1;
+    }
+  };
+  walk(nodes);
+  return { connections, folders };
+}
+
 /** The node with `id` anywhere in the tree, or `undefined`. */
 export function findNode(children: TreeNode[], id: string): TreeNode | undefined {
   for (const node of children) {
@@ -122,4 +138,18 @@ export function flattenRows(
     return out;
   }
   return filtered(children, q, 0, null);
+}
+
+/** The selected ids whose ancestors are not selected, in row order. */
+export function selectionTops(rows: Row[], selected: ReadonlySet<string>): string[] {
+  const covered = new Set<string>();
+  const out: string[] = [];
+  for (const row of rows) {
+    const id = row.node.id;
+    const underSelected =
+      row.parentId !== null && (selected.has(row.parentId) || covered.has(row.parentId));
+    if (underSelected) covered.add(id);
+    else if (selected.has(id)) out.push(id);
+  }
+  return out;
 }

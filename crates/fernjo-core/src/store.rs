@@ -2,9 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::error::{LoadError, StoreError, TreeError};
+use crate::error::{LoadError, SaveError, StoreError, TreeError};
 use crate::model::{CredentialId, Node, NodeId, Protocol};
-use crate::persist::{self, FILE_NAME, Notice};
+use crate::persist::{self, FILE_NAME, Fingerprint, Notice};
 use crate::tree::{MAX_TREE_DEPTH, NodePatch, Tree};
 
 /// A tree plus the file it is saved to.
@@ -12,6 +12,8 @@ use crate::tree::{MAX_TREE_DEPTH, NodePatch, Tree};
 pub struct Store {
     path: PathBuf,
     tree: Tree,
+    /// SHA-256 of the file bytes this store last read or wrote (`None`: there was no file).
+    fingerprint: Option<Fingerprint>,
 }
 
 /// A freshly opened store and anything the user should be told about.
@@ -21,6 +23,17 @@ pub struct Opened {
     pub notice: Option<Notice>,
 }
 
+/// The fingerprint of the file a load just adopted. After a restore from `.bak` the main file
+/// is written again (best effort) and the fingerprint is that of the new file.
+fn adopted_fingerprint(path: &Path, loaded: &persist::Loaded) -> Option<Fingerprint> {
+    if loaded.notice.is_some()
+        && let Ok(fingerprint) = persist::save(path, &loaded.tree)
+    {
+        return Some(fingerprint);
+    }
+    persist::fingerprint(path).ok().flatten()
+}
+
 impl Store {
     /// Opens (or starts) the store in `dir`. A missing file means an empty tree and is
     /// only created by the first mutation. After a restore from `.bak` the main file is
@@ -28,13 +41,12 @@ impl Store {
     pub fn open(dir: &Path) -> Result<Opened, LoadError> {
         let path = dir.join(FILE_NAME);
         let loaded = persist::load(&path)?;
-        if loaded.notice.is_some() {
-            let _ = persist::save(&path, &loaded.tree);
-        }
+        let fingerprint = adopted_fingerprint(&path, &loaded);
         Ok(Opened {
             store: Store {
                 path,
                 tree: loaded.tree,
+                fingerprint,
             },
             notice: loaded.notice,
         })
@@ -46,6 +58,38 @@ impl Store {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Re-reads the file and makes it current, adopting what another program or device wrote.
+    /// On an error nothing changes (a later save is still refused while the file differs).
+    pub fn reload(&mut self) -> Result<Option<Notice>, LoadError> {
+        let loaded = persist::load(&self.path)?;
+        self.fingerprint = adopted_fingerprint(&self.path, &loaded);
+        self.tree = loaded.tree;
+        Ok(loaded.notice)
+    }
+
+    /// Refuses with `ChangedOnDisk` when the file no longer holds the bytes this store last
+    /// read or wrote. A missing file is recreated. A check, not a lock: a sync tool can still
+    /// win the race between this check and the rename.
+    fn check_unchanged(&self) -> Result<(), StoreError> {
+        let current = persist::fingerprint(&self.path).map_err(|source| SaveError {
+            path: self.path.clone(),
+            source,
+        })?;
+        match current {
+            None => Ok(()),
+            Some(_) if current == self.fingerprint => Ok(()),
+            Some(_) => Err(StoreError::ChangedOnDisk),
+        }
+    }
+
+    /// Checks the file, saves `tree` and remembers what was written. Writes nothing when the
+    /// check refuses.
+    fn save_checked(&mut self, tree: &Tree) -> Result<(), StoreError> {
+        self.check_unchanged()?;
+        self.fingerprint = Some(persist::save(&self.path, tree)?);
+        Ok(())
     }
 
     /// Applies `f` to a copy, saves it and only then makes it current, so memory never
@@ -64,7 +108,7 @@ impl Store {
         if depth > MAX_TREE_DEPTH && depth > self.tree.depth() {
             return Err(TreeError::TooDeep.into());
         }
-        persist::save(&self.path, &next)?;
+        self.save_checked(&next)?;
         self.tree = next;
         Ok(out)
     }
@@ -81,7 +125,7 @@ impl Store {
         if tree.depth() > MAX_TREE_DEPTH {
             return Err(TreeError::TooDeep.into());
         }
-        persist::save(&self.path, &tree)?;
+        self.save_checked(&tree)?;
         self.tree = tree;
         Ok(())
     }
@@ -119,6 +163,16 @@ impl Store {
         self.mutate(|t| t.move_node(id, new_parent, index))
     }
 
+    /// Moves several nodes in one saved step (see `Tree::move_nodes`); all or nothing.
+    pub fn move_nodes(
+        &mut self,
+        ids: &[NodeId],
+        new_parent: Option<NodeId>,
+        index: usize,
+    ) -> Result<(), StoreError> {
+        self.mutate(|t| t.move_nodes(ids, new_parent, index))
+    }
+
     pub fn duplicate(&mut self, id: NodeId) -> Result<NodeId, StoreError> {
         self.mutate(|t| t.duplicate(id))
     }
@@ -133,7 +187,7 @@ impl Store {
         let mut next = self.tree.clone();
         let cleared = next.clear_credential(id);
         if cleared > 0 {
-            persist::save(&self.path, &next)?;
+            self.save_checked(&next)?;
             self.tree = next;
         }
         Ok(cleared)
@@ -209,6 +263,23 @@ mod tests {
     }
 
     #[test]
+    fn move_nodes_is_saved_and_a_refused_batch_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = open(dir.path());
+        let a = store.create_folder(None, None, "a").unwrap();
+        let b = store.create_folder(None, None, "b").unwrap();
+        let c = store.create_folder(None, None, "c").unwrap();
+        store.move_nodes(&[c, a], Some(b), 0).unwrap();
+        assert_eq!(open(dir.path()).tree(), store.tree());
+        let before = store.tree().clone();
+        let on_disk = fs::read(dir.path().join(FILE_NAME)).unwrap();
+        // b into its own child: refused as a whole
+        assert!(store.move_nodes(&[b, a], Some(a), 0).is_err());
+        assert_eq!(store.tree(), &before);
+        assert_eq!(fs::read(dir.path().join(FILE_NAME)).unwrap(), on_disk);
+    }
+
+    #[test]
     fn failed_save_rolls_back_memory() {
         let dir = tempfile::tempdir().unwrap();
         let blocker = dir.path().join("plain");
@@ -218,6 +289,7 @@ mod tests {
         let mut store = Store {
             path: blocker.join(FILE_NAME),
             tree: tree.clone(),
+            fingerprint: None,
         };
 
         let err = store.create_folder(None, None, "lost").unwrap_err();
@@ -328,6 +400,7 @@ mod tests {
         let store = Store {
             path: blocker.join(FILE_NAME),
             tree,
+            fingerprint: None,
         };
         (dir, store)
     }
@@ -579,5 +652,142 @@ mod tests {
         assert_eq!(err.code(), "too_deep");
         assert!(!dir.path().join(FILE_NAME).exists());
         assert!(store.tree().children().is_empty());
+    }
+
+    // ---- changed on disk ------------------------------------------------
+
+    fn external_document(name: &str) -> Vec<u8> {
+        let mut t = Tree::new();
+        t.create_folder(None, None, name).unwrap();
+        let mut bytes = serde_json::to_vec_pretty(&persist::document(&t)).unwrap();
+        bytes.push(b'\n');
+        bytes
+    }
+
+    #[test]
+    fn save_is_refused_when_the_file_changed_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = open(dir.path());
+        store.create_folder(None, None, "one").unwrap();
+        store.create_folder(None, None, "two").unwrap();
+        let bak = dir.path().join(format!("{FILE_NAME}.bak"));
+        let bak_before = fs::read(&bak).unwrap();
+        let tree_before = store.tree().clone();
+        let external = external_document("external");
+        fs::write(store.path(), &external).unwrap();
+
+        let err = store.create_folder(None, None, "three").unwrap_err();
+        assert!(matches!(err, StoreError::ChangedOnDisk), "{err:?}");
+        assert_eq!(fs::read(store.path()).unwrap(), external);
+        assert_eq!(store.tree(), &tree_before);
+        assert_eq!(fs::read(&bak).unwrap(), bak_before);
+    }
+
+    #[test]
+    fn a_refused_first_save_creates_no_bak() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = open(dir.path());
+        fs::write(store.path(), external_document("external")).unwrap();
+        assert!(store.create_folder(None, None, "x").is_err());
+        assert!(!dir.path().join(format!("{FILE_NAME}.bak")).exists());
+    }
+
+    #[test]
+    fn an_identical_rewrite_is_not_a_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = open(dir.path());
+        store.create_folder(None, None, "one").unwrap();
+        let bytes = fs::read(store.path()).unwrap();
+        fs::write(store.path(), bytes).unwrap();
+        store.create_folder(None, None, "two").unwrap();
+    }
+
+    #[test]
+    fn a_deleted_file_is_recreated() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = open(dir.path());
+        store.create_folder(None, None, "one").unwrap();
+        fs::remove_file(store.path()).unwrap();
+        store.create_folder(None, None, "two").unwrap();
+        assert!(store.path().exists());
+    }
+
+    #[test]
+    fn a_file_that_appears_after_an_empty_start_counts_as_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = open(dir.path());
+        fs::write(store.path(), external_document("external")).unwrap();
+        let err = store.create_folder(None, None, "mine").unwrap_err();
+        assert!(matches!(err, StoreError::ChangedOnDisk), "{err:?}");
+    }
+
+    #[test]
+    fn replace_tree_is_checked_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = open(dir.path());
+        store.create_folder(None, None, "one").unwrap();
+        fs::write(store.path(), external_document("external")).unwrap();
+        let err = store.replace_tree(Tree::new()).unwrap_err();
+        assert!(matches!(err, StoreError::ChangedOnDisk), "{err:?}");
+    }
+
+    #[test]
+    fn clear_credential_is_checked_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = open(dir.path());
+        let cred = CredentialId::new_v4();
+        let a = store.create_folder(None, None, "a").unwrap();
+        store
+            .update(
+                a,
+                NodePatch {
+                    credential: Patch::Set(cred),
+                    ..NodePatch::default()
+                },
+            )
+            .unwrap();
+        fs::write(store.path(), external_document("external")).unwrap();
+        let err = store.clear_credential(cred).unwrap_err();
+        assert!(matches!(err, StoreError::ChangedOnDisk), "{err:?}");
+    }
+
+    #[test]
+    fn reload_adopts_the_file_and_the_next_save_works() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = open(dir.path());
+        store.create_folder(None, None, "one").unwrap();
+        fs::write(store.path(), external_document("external")).unwrap();
+        assert!(store.create_folder(None, None, "x").is_err());
+
+        assert_eq!(store.reload().unwrap(), None);
+        let names: Vec<_> = store
+            .tree()
+            .children()
+            .iter()
+            .map(|n| n.name.clone())
+            .collect();
+        assert_eq!(names, ["external"]);
+        store.create_folder(None, None, "after").unwrap();
+        assert_eq!(open(dir.path()).tree(), store.tree());
+    }
+
+    #[test]
+    fn a_failed_reload_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = open(dir.path());
+        store.create_folder(None, None, "one").unwrap();
+        let before = store.tree().clone();
+        fs::write(store.path(), r#"{"schemaVersion":99,"children":[]}"#).unwrap();
+        assert!(store.reload().is_err());
+        assert_eq!(store.tree(), &before);
+        assert!(matches!(
+            store.create_folder(None, None, "x").unwrap_err(),
+            StoreError::ChangedOnDisk
+        ));
+    }
+
+    #[test]
+    fn changed_on_disk_has_its_stable_code() {
+        assert_eq!(StoreError::ChangedOnDisk.code(), "changed_on_disk");
     }
 }

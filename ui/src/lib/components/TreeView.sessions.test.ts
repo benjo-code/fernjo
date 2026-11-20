@@ -29,7 +29,11 @@ async function setup() {
   const store = new TreeStore(mock.api);
   await store.init();
   store.expand("Homelab");
-  const sessions = new SessionStore(mock.api, (id) => id);
+  const sessions = new SessionStore(
+    mock.api,
+    (id) => id,
+    () => true,
+  );
   mounted = mount(TreeView, { target: document.body, props: { store, sessions } });
   flushSync();
   return { store, sessions, ...mock };
@@ -40,10 +44,12 @@ const row = (id: string) =>
     (el) => el.dataset.nodeId === id,
   )!;
 const menuLabels = () =>
-  [...document.querySelectorAll('[role="menuitem"]')].map((el) => el.textContent?.trim());
+  [...document.querySelectorAll('[role="menuitem"]')].map((el) =>
+    el.querySelector(".label")?.textContent?.trim(),
+  );
 const item = (label: string) =>
   [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
-    (el) => el.textContent?.trim() === label,
+    (el) => el.querySelector(".label")?.textContent?.trim() === label,
   )!;
 
 function contextMenu(el: Element) {

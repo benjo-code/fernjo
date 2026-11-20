@@ -17,21 +17,25 @@
   const phase = $derived(vault.status?.state ?? null);
   const text = $derived(
     phase === "unlocked"
-      ? "Unlocked"
+      ? "Vault: unlocked"
       : phase === "locked"
-        ? "Locked"
+        ? "Vault: locked"
         : phase === "none"
-          ? "No vault"
+          ? "Vault: none"
           : "Vault unusable",
   );
   const label = $derived(
     phase === "unlocked"
-      ? "Vault unlocked, open credentials"
+      ? "Vault: unlocked, open the credentials"
       : phase === "locked"
-        ? "Vault locked, unlock"
+        ? "Vault: locked, unlock"
         : phase === "none"
-          ? "No vault yet, create one"
+          ? "Vault: none, create one"
           : "Vault unusable, show details",
+  );
+
+  const title = $derived(
+    phase === "unlocked" ? "Credential vault, open the credentials" : "Credential vault",
   );
 
   function onclick() {
@@ -44,7 +48,7 @@
   <span class="chip unavailable"><Icon name="alert" size={14} /><span>Vault unavailable</span></span
   >
 {:else if phase !== null}
-  <button type="button" class="chip" aria-label={label} {onclick}>
+  <button type="button" class="chip" aria-label={label} {title} {onclick}>
     <Icon
       name={phase === "unlocked" ? "unlock" : phase === "unusable" ? "alert" : "lock"}
       size={14}

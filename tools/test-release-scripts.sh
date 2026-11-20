@@ -222,6 +222,18 @@ else
   echo "skip smoke_ps1_refuses_outside_github_actions: no PowerShell on PATH"
 fi
 
+# check-no-build-paths.sh: synthetic binaries, the script only greps bytes.
+nbp="$root/tools/check-no-build-paths.sh"
+d="$tmp/nbp"
+mkdir -p "$d"
+printf '%s\n' 'clean binary /build/src/main.rs /cargo/registry/src/x.rs' >"$d/clean.bin"
+printf '%s\n' 'panic at /home/runner/.cargo/registry/x.rs' >"$d/linux.bin"
+printf '%s\n' 'panic at C:\Users\runneradmin\.cargo\registry\x.rs' >"$d/windows.bin"
+assert_exit no_build_paths_accepts_a_clean_binary 0 "" bash "$nbp" "$d/clean.bin"
+assert_exit no_build_paths_rejects_a_runner_home_path 1 "/home/runner" bash "$nbp" "$d/linux.bin"
+assert_exit no_build_paths_rejects_a_windows_registry_path 1 "runneradmin" bash "$nbp" "$d/windows.bin"
+assert_exit no_build_paths_fails_for_a_missing_file 2 "" bash "$nbp" "$d/nope.bin"
+
 echo
 echo "$((total - failures))/$total passed"
 [ "$failures" -eq 0 ]

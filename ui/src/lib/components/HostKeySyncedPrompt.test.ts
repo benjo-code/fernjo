@@ -182,3 +182,14 @@ test("synced_host_key_prompt_lists_a_repeated_previous_fingerprint_without_a_key
   const codes = [...document.querySelectorAll<HTMLElement>("code")].map((c) => c.textContent);
   expect(codes).toEqual([FINGERPRINT, "SHA256:SAME", "SHA256:SAME"]);
 });
+
+test("the_two_confirm_buttons_are_explained_in_one_muted_line_under_the_buttons", async () => {
+  await setup();
+  const note = document.querySelector<HTMLElement>(".choice-note")!;
+  expect(note.textContent!.replace(/\s+/g, " ").trim()).toBe(
+    "Confirm and connect remembers this key on this device. Connect once asks again next time.",
+  );
+  const actions = document.querySelector<HTMLElement>(".actions")!;
+  expect(actions.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(document.querySelectorAll(".primary")).toHaveLength(1);
+});

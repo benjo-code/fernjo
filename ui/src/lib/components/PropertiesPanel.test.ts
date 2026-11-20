@@ -1,5 +1,5 @@
 import { flushSync, mount, tick, unmount } from "svelte";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { TreeStore } from "../store.svelte";
 import { VaultStore } from "../vault.svelte";
 import { apiError, conn, credential, folder, mockApi, resolved, vaultStatus } from "../testing";
@@ -47,16 +47,28 @@ async function setup(
   await store.init();
   const vault = new VaultStore(mockApi([], vaultImpl).api);
   await vault.init();
-  mounted = mount(PropertiesPanel, { target: document.body, props: { store, vault } });
+  const onOpenVault = vi.fn();
+  const onFocusVaultForm = vi.fn();
+  const onNewCredential = vi.fn();
+  mounted = mount(PropertiesPanel, {
+    target: document.body,
+    props: { store, vault, onOpenVault, onFocusVaultForm, onNewCredential },
+  });
   if (select) store.select(select);
   await settle();
-  return { store, vault, ...mock };
+  return { store, vault, onOpenVault, onFocusVaultForm, onNewCredential, ...mock };
 }
 
 const field = (name: string) => document.querySelector<HTMLElement>(`[data-field="${name}"]`);
 const input = (name: string) => field(name)!.querySelector<HTMLInputElement>("input, select")!;
 const selectEl = (name: string) => field(name)!.querySelector<HTMLSelectElement>("select")!;
 const hasField = (name: string) => field(name) !== null;
+const buttonIn = (name: string, text: string) =>
+  [...field(name)!.querySelectorAll<HTMLButtonElement>("button")].find(
+    (b) => b.textContent?.trim() === text,
+  );
+const buttonTexts = (name: string) =>
+  [...field(name)!.querySelectorAll("button")].map((b) => b.textContent?.trim());
 
 async function commit(name: string, text: string, how: "Enter" | "blur" = "Enter") {
   const el = input(name);
@@ -355,6 +367,62 @@ describe("PropertiesPanel", () => {
   });
 });
 
+describe("PropertiesPanel row order", () => {
+  const order = () =>
+    [...document.querySelectorAll<HTMLElement>("[data-field]")].map((e) => e.dataset.field);
+
+  test("ssh_connection_rows_run_by_use_with_the_rarely_changed_ones_last", async () => {
+    await setup({ "web-01": resolved({ id: "web-01", name: "web-01" }) });
+    expect(order()).toEqual([
+      "name",
+      "host",
+      "username",
+      "credential",
+      "port",
+      "description",
+      "keepalive",
+      "protocol",
+    ]);
+  });
+
+  test("rdp_connection_has_no_keepalive_row_in_the_same_order", async () => {
+    await setup({ DC01: resolved({ id: "DC01", name: "DC01", protocol: "rdp" }) }, "DC01");
+    expect(order()).toEqual([
+      "name",
+      "host",
+      "username",
+      "credential",
+      "port",
+      "description",
+      "protocol",
+    ]);
+  });
+
+  test("folder_rows_have_no_host_or_protocol_and_credential_comes_before_port", async () => {
+    await setup(
+      {
+        Homelab: resolved({
+          id: "Homelab",
+          name: "Homelab",
+          kind: "folder",
+          protocol: null,
+          host: null,
+        }),
+      },
+      "Homelab",
+    );
+    expect(order()).toEqual(["name", "username", "credential", "port", "description", "keepalive"]);
+  });
+
+  test("only_the_credential_row_wraps_its_aux_column_under_the_value", async () => {
+    await setup({ "web-01": resolved({ id: "web-01", name: "web-01" }) });
+    const wrapping = [...document.querySelectorAll<HTMLElement>("[data-field].wrap")].map(
+      (e) => e.dataset.field,
+    );
+    expect(wrapping).toEqual(["credential"]);
+  });
+});
+
 describe("PropertiesPanel credential row", () => {
   const ID = "3f2b8c1e-aaaa-4bbb-8ccc-0123456789ab";
   const OTHER = "9d1e7a00-bbbb-4ccc-8ddd-ba9876543210";
@@ -382,6 +450,7 @@ describe("PropertiesPanel credential row", () => {
       "None",
       "Prod root",
       "Lab admin",
+      "New credential…",
     ]);
     expect(select.value).toBe("");
   });
@@ -424,13 +493,13 @@ describe("PropertiesPanel credential row", () => {
   test("inherited_credential_shows_from_folder_and_inherit_resets_it", async () => {
     await setup(node(folderCred), "web-01", {}, unlocked);
     expect(field("credential")!.textContent).toContain("from Homelab");
-    expect(field("credential")!.querySelector("button")).toBeNull();
+    expect(buttonIn("credential", "Inherit")).toBeUndefined();
     expect(selectEl("credential").selectedOptions[0].textContent).toBe("Prod root");
     // an inherited choice can be overridden; the local one then offers Inherit
     unmount(mounted!);
     document.body.innerHTML = "";
     const { calls } = await setup(node(localCred), "web-01", {}, unlocked);
-    const reset = field("credential")!.querySelector("button")!;
+    const reset = buttonIn("credential", "Inherit")!;
     expect(reset.textContent).toContain("Inherit");
     reset.click();
     await settle();
@@ -447,14 +516,16 @@ describe("PropertiesPanel credential row", () => {
       },
     );
     expect(field("credential")!.textContent).toContain("Vault locked");
-    expect(field("credential")!.querySelector("select, input, button")).toBeNull();
+    expect(field("credential")!.querySelector("select, input")).toBeNull();
+    expect(buttonTexts("credential")).toEqual(["Unlock"]);
     expect(calls.updateNode).toHaveLength(0);
   });
 
   test("no_vault_reads_no_vault_and_is_read_only", async () => {
     await setup(node(), "web-01", {}, { vaultStatus: async () => vaultStatus({ state: "none" }) });
     expect(field("credential")!.textContent).toContain("No vault");
-    expect(field("credential")!.querySelector("select, input, button")).toBeNull();
+    expect(field("credential")!.querySelector("select, input")).toBeNull();
+    expect(buttonTexts("credential")).toEqual(["Create vault"]);
   });
 
   test("unknown_credential_id_shows_missing_credential", async () => {
@@ -467,7 +538,7 @@ describe("PropertiesPanel credential row", () => {
     expect(field("credential")!.textContent).toContain("Missing credential");
     expect(field("credential")!.querySelector("select")).toBeNull();
     // a dangling local reference can still be cleared
-    field("credential")!.querySelector("button")!.click();
+    buttonIn("credential", "Inherit")!.click();
     await settle();
     expect(calls.updateNode).toEqual([["web-01", { credential: null }]]);
   });
@@ -504,7 +575,16 @@ describe("PropertiesPanel credential row", () => {
       }).api,
     );
     void vault.init(); // never finishes: the list stays "loading"
-    mounted = mount(PropertiesPanel, { target: document.body, props: { store, vault } });
+    mounted = mount(PropertiesPanel, {
+      target: document.body,
+      props: {
+        store,
+        vault,
+        onOpenVault: () => {},
+        onFocusVaultForm: () => {},
+        onNewCredential: () => {},
+      },
+    });
     store.select("web-01");
     await settle();
     expect(vault.status?.state).toBe("unlocked");
@@ -517,7 +597,7 @@ describe("PropertiesPanel credential row", () => {
   test("loaded_credential_list_shows_the_select_and_inherit", async () => {
     await setup(node(localCred), "web-01", {}, unlocked);
     expect(selectEl("credential")).not.toBeNull();
-    expect(field("credential")!.querySelector("button")).not.toBeNull();
+    expect(buttonIn("credential", "Inherit")).toBeDefined();
   });
 
   test("no_secret_or_id_text_is_shown_for_the_credential_value", async () => {
@@ -548,5 +628,129 @@ describe("PropertiesPanel credential row", () => {
       expect(el.getAttribute("title") ?? "").not.toContain(ID);
     }
     expect(selectEl("credential").selectedOptions[0].textContent).toBe("Prod root");
+  });
+
+  test("the_row_offers_create_vault_without_a_vault_and_it_focuses_the_create_form", async () => {
+    const { onFocusVaultForm, onOpenVault, calls } = await setup(
+      node(),
+      "web-01",
+      {},
+      { vaultStatus: async () => vaultStatus({ state: "none" }) },
+    );
+    const create = buttonIn("credential", "Create vault")!;
+    expect(create.classList.contains("btn")).toBe(true);
+    expect(create.classList.contains("small")).toBe(true);
+    create.click();
+    await settle();
+    expect(onFocusVaultForm).toHaveBeenCalledTimes(1);
+    expect(onOpenVault).not.toHaveBeenCalled();
+    expect(calls.updateNode).toHaveLength(0);
+  });
+
+  test("the_row_offers_unlock_while_locked_and_it_focuses_the_unlock_form", async () => {
+    const { onFocusVaultForm, onOpenVault } = await setup(
+      node(localCred),
+      "web-01",
+      {},
+      { vaultStatus: async () => vaultStatus({ state: "locked" }) },
+    );
+    buttonIn("credential", "Unlock")!.click();
+    await settle();
+    expect(onFocusVaultForm).toHaveBeenCalledTimes(1);
+    expect(onOpenVault).not.toHaveBeenCalled();
+  });
+
+  test("the_row_offers_manage_while_unlocked_and_it_opens_the_manager", async () => {
+    const { onOpenVault, onFocusVaultForm, onNewCredential, calls } = await setup(
+      node(localCred),
+      "web-01",
+      {},
+      unlocked,
+    );
+    expect(buttonTexts("credential")).toEqual(["Manage…", "Inherit"]);
+    buttonIn("credential", "Manage…")!.click();
+    await settle();
+    expect(onOpenVault).toHaveBeenCalledTimes(1);
+    expect(onFocusVaultForm).not.toHaveBeenCalled();
+    expect(onNewCredential).not.toHaveBeenCalled();
+    expect(calls.updateNode).toHaveLength(0);
+  });
+
+  test("an_unusable_vault_shows_no_button_in_the_row", async () => {
+    await setup(
+      node(),
+      "web-01",
+      {},
+      { vaultStatus: async () => vaultStatus({ state: "unusable", reason: "damaged" }) },
+    );
+    expect(field("credential")!.textContent).toContain("No vault");
+    expect(field("credential")!.querySelector("select, input, button")).toBeNull();
+  });
+
+  test("while_the_list_failed_to_load_there_is_no_manage_button", async () => {
+    await setup(
+      node(localCred),
+      "web-01",
+      {},
+      {
+        vaultStatus: async () => vaultStatus({ state: "unlocked" }),
+        listCredentials: async () => {
+          throw apiError("internal", "list broke");
+        },
+      },
+    );
+    expect(buttonIn("credential", "Manage…")).toBeUndefined();
+  });
+
+  test("the_dropdown_ends_with_new_credential_which_opens_the_manager_and_changes_nothing", async () => {
+    const { onNewCredential, onOpenVault, calls } = await setup(
+      node(localCred),
+      "web-01",
+      {},
+      unlocked,
+    );
+    const select = selectEl("credential");
+    expect([...select.options].map((o) => o.textContent)).toEqual([
+      "None",
+      "Prod root",
+      "Lab admin",
+      "New credential…",
+    ]);
+    const entry = select.options[select.options.length - 1]!;
+    select.value = entry.value;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await settle();
+    expect(onNewCredential).toHaveBeenCalledTimes(1);
+    expect(onOpenVault).not.toHaveBeenCalled();
+    expect(calls.updateNode).toHaveLength(0);
+    // the pseudo entry never stays selected: the value falls back to the stored credential
+    expect(select.value).toBe(ID);
+    expect(select.selectedOptions[0].textContent).toBe("Prod root");
+  });
+
+  test("new_credential_on_an_unset_connection_falls_back_to_none", async () => {
+    const { onNewCredential, calls } = await setup(node(), "web-01", {}, unlocked);
+    const select = selectEl("credential");
+    select.value = select.options[select.options.length - 1]!.value;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await settle();
+    expect(onNewCredential).toHaveBeenCalledTimes(1);
+    expect(calls.updateNode).toHaveLength(0);
+    expect(select.value).toBe("");
+  });
+
+  test("shows the count instead of fields while several nodes are selected", async () => {
+    const { store } = await setup({
+      "web-01": resolved({ id: "web-01", name: "web-01" }),
+    });
+    store.expand("Homelab"); // both nodes must be visible rows to join a selection
+    store.toggleSelect("DC01");
+    await settle();
+    expect(document.querySelector(".title")!.textContent!.trim()).toBe("2 items selected");
+    expect(document.querySelector(".kind")!.textContent!.trim()).toBe("");
+    expect(hasField("name")).toBe(false);
+    store.toggleSelect("DC01");
+    await settle();
+    expect(document.querySelector(".title")!.textContent!.trim()).toBe("web-01");
   });
 });

@@ -244,9 +244,10 @@ fn a_failed_restamp_keeps_the_unlock_and_the_next_save_still_goes_above_the_floo
     climb(&mut vault, &path, 3);
     put_back(&path, &fs::read(bak(&path)).unwrap());
     vault.lock();
-    // make the re-stamp fail: the temp file name is taken by a directory
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
+    // make the re-stamp fail: the `.bak` name is taken by a directory (the temp file name is
+    // random, so it cannot be blocked)
+    let tmp = bak(&path).into_os_string();
+    fs::remove_file(PathBuf::from(&tmp)).unwrap();
     fs::create_dir(PathBuf::from(&tmp)).unwrap();
     vault.unlock_accepting_older(&secret(PW)).unwrap();
     assert!(vault.is_unlocked());

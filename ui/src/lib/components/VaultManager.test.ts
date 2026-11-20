@@ -7,6 +7,7 @@ import { VaultStore } from "../vault.svelte";
 import VaultManager from "./VaultManager.svelte";
 
 const SENTINEL = "SENTINEL-secret-9f3a7c";
+const KEYCHAIN_HINT = "Keeps the key in the OS keychain so the vault unlocks at start.";
 
 let mounted: ReturnType<typeof mount> | null = null;
 
@@ -36,7 +37,12 @@ const entries: CredentialInfo[] = [
 
 async function setup(
   impl: Partial<Api> = {},
-  options: { fake?: boolean; list?: CredentialInfo[]; revealMs?: number } = {},
+  options: {
+    fake?: boolean;
+    list?: CredentialInfo[];
+    revealMs?: number;
+    newToken?: number | null;
+  } = {},
 ) {
   const mock = mockApi([], {
     vaultStatus: async () => vaultStatus({ state: "unlocked" }),
@@ -49,7 +55,7 @@ async function setup(
   const onclose = vi.fn();
   mounted = mount(VaultManager, {
     target: document.body,
-    props: { vault, tree, onclose, revealMs: options.revealMs },
+    props: { vault, tree, onclose, revealMs: options.revealMs, newToken: options.newToken },
   });
   if (options.fake) await settleFake();
   else await settle();
@@ -91,9 +97,33 @@ describe("VaultManager", () => {
     expect(input("cred-password").placeholder).toBe("unchanged");
   });
 
+  test("the_title_is_vault_and_credentials_heads_the_list_with_a_singular_plural_count", async () => {
+    const count = () => document.querySelector(".list-head .muted")?.textContent?.trim();
+    const reset = () => {
+      unmount(mounted!);
+      mounted = null;
+      document.body.innerHTML = "";
+    };
+    await setup();
+    expect(document.getElementById("vault-manager-title")?.textContent).toBe("Vault");
+    expect(document.querySelector(".list h3")?.textContent?.trim()).toBe("Credentials");
+    expect(count()).toBe("2 credentials");
+    expect(document.body.textContent).not.toContain("stored");
+    reset();
+
+    await setup({}, { list: [entries[0]!] });
+    expect(count()).toBe("1 credential");
+    reset();
+
+    await setup({}, { list: [] });
+    expect(count()).toBe("0 credentials");
+  });
+
   test("empty_state_offers_new", async () => {
     await setup({}, { list: [] });
-    expect(document.body.textContent).toContain("No credentials yet.");
+    expect(document.body.textContent!.replace(/\s+/g, " ")).toContain(
+      "No credentials yet. Create one with + New and pick it on a connection's Credential property.",
+    );
     expect(buttons().filter((b) => b.textContent?.trim() === "+ New").length).toBeGreaterThan(0);
   });
 
@@ -581,5 +611,34 @@ describe("VaultManager", () => {
     });
     expect((document.getElementById("vault-auto-unlock") as HTMLInputElement).checked).toBe(true);
     expect(document.body.textContent).toContain("Lock then lasts until the next start.");
+  });
+
+  test("the_keychain_hint_is_always_visible_and_the_lock_hint_only_while_ticked", async () => {
+    await setup();
+    expect(document.body.textContent).toContain(KEYCHAIN_HINT);
+    expect(document.body.textContent).not.toContain("Lock then lasts");
+    unmount(mounted!);
+    mounted = null;
+    document.body.innerHTML = "";
+
+    await setup({
+      vaultStatus: async () => vaultStatus({ state: "unlocked", autoUnlock: true }),
+    });
+    expect(document.body.textContent).toContain(KEYCHAIN_HINT);
+    expect(document.body.textContent).toContain("Lock then lasts until the next start.");
+  });
+
+  test("a_new_token_opens_the_manager_on_the_create_form", async () => {
+    await setup({}, { newToken: 1 });
+    expect(input("cred-name")).not.toBeNull();
+    expect(input("cred-name").value).toBe("");
+    expect((document.getElementById("cred-kind") as HTMLSelectElement).disabled).toBe(false);
+    expect(rows().every((r) => r.getAttribute("aria-current") !== "true")).toBe(true);
+  });
+
+  test("without_a_token_nothing_is_selected", async () => {
+    await setup({}, { newToken: null });
+    expect(input("cred-name")).toBeNull();
+    expect(document.body.textContent).toContain("Select a credential or create a new one.");
   });
 });

@@ -28,6 +28,8 @@
   });
 
   function caption(tab: Tab): string | null {
+    // A dropped tab has no caption: its reason is the bar above the terminal (SessionArea) and the
+    // tooltip, so the title keeps the room.
     // a pending prompt is state "connecting" in Rust; the caption tells that the tab waits for the user
     if (tab.prompt) {
       const kind = tab.prompt.prompt.kind;
@@ -39,9 +41,7 @@
       case "connecting":
         return "Connecting…";
       case "needsVault":
-        return "Needs vault";
-      case "disconnected":
-        return tab.detail ?? "Disconnected";
+        return "Unlock vault";
       default:
         return null;
     }
@@ -199,10 +199,10 @@
           type="button"
           class="reconnect"
           aria-label={`Reconnect ${tab.title}`}
+          title="Reconnect"
           onclick={() => sessions.reconnect(tab.id)}
         >
           <Icon name="reconnect" size={12} />
-          Reconnect
         </button>
       {/if}
       <button
@@ -361,16 +361,14 @@
     display: flex;
     flex: none;
     align-items: center;
-    gap: var(--space-2);
+    justify-content: center;
+    width: 20px;
     height: 20px;
-    padding: 0 var(--space-3) 0 var(--space-2);
+    padding: 0;
     border: 0;
     border-radius: var(--radius-sm);
     background: var(--color-accent);
     color: var(--color-accent-text);
-    font: inherit;
-    font-size: var(--text-xs);
-    font-weight: var(--weight-medium);
     cursor: default;
   }
 

@@ -9,6 +9,7 @@
   import TabStrip from "./lib/components/TabStrip.svelte";
   import VaultManager from "./lib/components/VaultManager.svelte";
   import { ImportStore } from "./lib/import.svelte";
+  import { LayoutStore, SIDEBAR_DEFAULT } from "./lib/layout.svelte";
   import { findNode } from "./lib/rows";
   import { SessionStore } from "./lib/sessions.svelte";
   import { isMac, routeKey } from "./lib/shortcuts";
@@ -27,20 +28,34 @@
   const vault = new VaultStore(api, (message) => store.showError(message));
 
   // svelte-ignore state_referenced_locally
-  const sessions = new SessionStore(api, (id) => findNode(store.children, id)?.name ?? "Session");
-
-  // svelte-ignore state_referenced_locally
   const terminal = new TerminalSettingsStore(api);
 
   // svelte-ignore state_referenced_locally
+  const sessions = new SessionStore(
+    api,
+    (id) => findNode(store.children, id)?.name ?? "Session",
+    () => (terminal.info ?? DEFAULT_TERMINAL).closeOnExit,
+  );
+
+  // svelte-ignore state_referenced_locally
   const theme = new ThemeStore(api);
+
+  const layout = new LayoutStore();
+  // nothing stored: the grid keeps the stylesheet's token, so the default layout is unchanged
+  const gridColumns = $derived(
+    layout.effectiveSidebarWidth === SIDEBAR_DEFAULT
+      ? null
+      : `${layout.effectiveSidebarWidth}px 1fr`,
+  );
 
   /** Until Rust answers (or when it cannot), terminals use these. */
   const DEFAULT_TERMINAL: TerminalSettings = {
     fontFamily: null,
     fontSize: 13,
     scrollback: 10000,
+    closeOnExit: true,
     persistent: true,
+    unsavedReason: null,
   };
   const terminalSettings = $derived(terminal.info ?? DEFAULT_TERMINAL);
 
@@ -110,6 +125,21 @@
 
   let sidebar: Sidebar | undefined = $state();
 
+  // Asks the manager to start on the new-credential form; a fresh token each time, so it also
+  // works while the manager is open. Opening it any other way clears the request.
+  let newCredentialToken = $state<number | null>(null);
+  let newCredentialCount = 0;
+
+  function openVault() {
+    newCredentialToken = null;
+    view = "vault";
+  }
+
+  function newCredential() {
+    newCredentialToken = ++newCredentialCount;
+    view = "vault";
+  }
+
   /**
    * Only the app chords are handled here: tab switching, closing and the filter. Copy, paste and
    * search belong to the terminal controller, which leaves the app chords unhandled so they get here.
@@ -149,21 +179,34 @@
   });
 </script>
 
-<svelte:window onpagehide={endSessions} onbeforeunload={endSessions} {onkeydown} />
+<svelte:window
+  onresize={() => (layout.viewportWidth = window.innerWidth)}
+  onpagehide={endSessions}
+  onbeforeunload={endSessions}
+  {onkeydown}
+/>
 
-<div class="shell">
+<div class="shell" style:grid-template-columns={gridColumns}>
   <Sidebar
     bind:this={sidebar}
     {store}
     {vault}
     {sessions}
-    onOpenVault={() => (view = "vault")}
+    onOpenVault={openVault}
     onsettings={() => (folderOpen = true)}
     onimport={() => (importOpen = true)}
     {restartPending}
     onRestart={() => void restart()}
+    {layout}
   >
-    <PropertiesPanel {store} {vault} />
+    <PropertiesPanel
+      {store}
+      {vault}
+      {layout}
+      onOpenVault={openVault}
+      onFocusVaultForm={() => sidebar?.focusVaultForm()}
+      onNewCredential={newCredential}
+    />
   </Sidebar>
   <main class="main">
     {#if sessions.tabs.length > 0}
@@ -171,12 +214,49 @@
     {/if}
     <div class="content">
       {#if view === "vault"}
-        <VaultManager {vault} tree={store} onclose={() => (view = "empty")} />
+        <VaultManager
+          {vault}
+          tree={store}
+          newToken={newCredentialToken}
+          onclose={() => (view = "empty")}
+        />
       {/if}
       {#if sessions.tabs.length > 0}
         <SessionArea {sessions} {vault} settings={terminalSettings} hidden={view === "vault"} />
       {:else if view !== "vault"}
-        <p class="empty">Open a connection from the tree</p>
+        {#if store.loadError || !store.loaded}
+          <!-- nothing to say until the tree is there (the notice bar explains a load failure) -->
+        {:else if store.children.length === 0}
+          <ol class="start">
+            <li>
+              <span>Add a connection</span>
+              <div class="actions">
+                <button
+                  type="button"
+                  class="btn"
+                  onclick={() => void store.createConnection(null, null)}
+                >
+                  New connection
+                </button>
+                <button type="button" class="btn" onclick={() => (importOpen = true)}>
+                  Import from mRemoteNG…
+                </button>
+              </div>
+            </li>
+            {#if vault.status?.state === "none"}
+              <li>
+                <span>Optional: create a vault to store logins</span>
+                <div class="actions">
+                  <button type="button" class="btn" onclick={() => sidebar?.focusVaultForm()}>
+                    Create vault
+                  </button>
+                </div>
+              </li>
+            {/if}
+          </ol>
+        {:else}
+          <p class="empty">Double-click a connection (or press Enter) to open it.</p>
+        {/if}
       {/if}
     </div>
   </main>
@@ -222,5 +302,30 @@
     margin: auto;
     color: var(--color-text-muted);
     font-size: var(--text-sm);
+  }
+
+  .start {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+    margin: auto;
+    padding: 0 0 0 var(--space-6);
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+
+  .start li {
+    padding-left: var(--space-2);
+  }
+
+  .start li > span {
+    display: block;
+    margin-bottom: var(--space-3);
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
   }
 </style>

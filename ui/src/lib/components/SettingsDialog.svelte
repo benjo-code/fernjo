@@ -5,6 +5,8 @@
   import type { TerminalSettingsStore } from "../terminal-settings.svelte";
   import type { ThemeStore } from "../theme.svelte";
   import type { Api, DataFolderInfo, Theme } from "../types";
+  import { isMac, SHORTCUTS, shortcutKeys } from "../shortcuts";
+  import { unsavedNote } from "../unsaved";
   import Icon from "./Icon.svelte";
 
   let {
@@ -13,6 +15,7 @@
     theme,
     onclose,
     onchange,
+    mac = isMac(),
   }: {
     api: Api;
     /** Holds the terminal settings the open terminals follow. */
@@ -22,6 +25,8 @@
     onclose: () => void;
     /** A folder was chosen (the info carries the pending restart). */
     onchange: (info: DataFolderInfo) => void;
+    /** Whether to show the Cmd variants of the shortcuts; the platform decides by default. */
+    mac?: boolean;
   } = $props();
 
   const uid = $props.id();
@@ -117,10 +122,38 @@
       fontFamily: fontFamily.trim() === "" ? null : fontFamily.trim(),
       fontSize: toWire(fontSize, 65535),
       scrollback: toWire(scrollback, 4294967295),
+      closeOnExit: terminal.info.closeOnExit,
     });
     saving = false;
     if (err) terminalError = TERMINAL_ERRORS[err.code] ?? "Could not save the terminal settings";
     else saved = true;
+  }
+
+  /**
+   * Saves only this switch: the other fields go out as stored, so unsaved edits above stay unsaved
+   * and a save never resets the flag (Rust treats a missing `closeOnExit` as `true`).
+   */
+  async function toggleCloseOnExit(e: Event) {
+    const box = e.currentTarget as HTMLInputElement;
+    const stored = terminal.info;
+    if (saving || !stored) {
+      box.checked = stored?.closeOnExit ?? true;
+      return;
+    }
+    saving = true;
+    saved = false;
+    terminalError = null;
+    const err = await terminal.save({
+      fontFamily: stored.fontFamily,
+      fontSize: stored.fontSize,
+      scrollback: stored.scrollback,
+      closeOnExit: box.checked,
+    });
+    saving = false;
+    if (err) {
+      terminalError = "Could not save the terminal settings";
+      box.checked = terminal.info?.closeOnExit ?? true;
+    } else saved = true;
   }
 
   onMount(() => {
@@ -229,10 +262,8 @@
         </label>
       {/each}
     </div>
-    {#if theme.info && !theme.info.persistent}
-      <p class="note">
-        Applies to this run only; settings are not saved while FERNJO_DATA_DIR is set
-      </p>
+    {#if theme.info?.unsavedReason}
+      <p class="note">{unsavedNote(theme.info.unsavedReason)}</p>
     {/if}
     {#if themeError}
       <p class="error" role="alert">{themeError}</p>
@@ -278,10 +309,19 @@
         />
       </label>
     </div>
-    {#if terminal.info && !terminal.info.persistent}
-      <p class="note">
-        Applies to this run only; settings are not saved while FERNJO_DATA_DIR is set
-      </p>
+    <label class="choice close-on-exit">
+      <input
+        type="checkbox"
+        aria-label="Close the tab when the shell exits"
+        checked={terminal.info?.closeOnExit ?? true}
+        disabled={!terminal.info}
+        onchange={(e) => void toggleCloseOnExit(e)}
+      />
+      <span>Close the tab when the shell exits</span>
+    </label>
+    <p class="note">Appearance and the checkbox apply at once.</p>
+    {#if terminal.info?.unsavedReason}
+      <p class="note">{unsavedNote(terminal.info.unsavedReason)}</p>
     {/if}
     {#if terminalLoadError}
       <p class="error" role="alert">Could not load the terminal settings</p>
@@ -296,7 +336,7 @@
         type="button"
         class="btn"
         aria-disabled={saving || !terminal.info}
-        onclick={() => void saveTerminal()}>Save</button
+        onclick={() => void saveTerminal()}>Save terminal settings</button
       >
     </div>
 
@@ -343,6 +383,16 @@
         >
       {/if}
     </div>
+
+    <h3 class="section">Keyboard and mouse</h3>
+    <ul class="keys">
+      {#each SHORTCUTS as shortcut (shortcut.label)}
+        <li>
+          <span>{shortcut.label}</span>
+          <kbd>{shortcutKeys(shortcut, mac)}</kbd>
+        </li>
+      {/each}
+    </ul>
 
     <div class="actions footer">
       <button type="button" class="btn" onclick={onclose}>Close</button>
@@ -445,6 +495,10 @@
     accent-color: var(--color-accent);
   }
 
+  .close-on-exit {
+    margin-top: var(--space-3);
+  }
+
   .choice input:focus-visible {
     outline: 1px solid var(--color-focus);
     outline-offset: 2px;
@@ -489,6 +543,26 @@
     color: var(--color-danger);
     font-size: var(--text-sm);
     overflow-wrap: anywhere;
+  }
+
+  .keys {
+    margin: var(--space-3) 0 0;
+    padding: 0;
+    list-style: none;
+    font-size: var(--text-sm);
+  }
+
+  .keys li {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-4);
+    padding: var(--space-1) 0;
+  }
+
+  .keys kbd {
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    text-align: right;
   }
 
   .actions {

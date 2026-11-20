@@ -71,7 +71,8 @@ export interface NodePatch {
 export type Notice =
   | { kind: "restoredFromBackup"; badFile: string | null }
   | { kind: "syncConflicts"; files: string[] }
-  | { kind: "settingsUnreadable"; message: string };
+  | { kind: "settingsUnreadable"; message: string }
+  | { kind: "deviceFolderInsideDataDir"; path: string };
 
 export interface Snapshot {
   children: TreeNode[];
@@ -170,6 +171,8 @@ export interface DataFolderInfo {
 /** The Tauri commands as a typed interface (replaced by a mock in tests). */
 export interface Api {
   listTree(): Promise<Snapshot>;
+  /** Re-reads connections.json after it changed on disk and returns the adopted tree. */
+  reloadTree(): Promise<Snapshot>;
   getNode(id: string): Promise<ResolvedNode>;
   createFolder(parentId: string | null, index: number | null, name: string): Promise<Mutation>;
   createConnection(
@@ -181,6 +184,8 @@ export interface Api {
   ): Promise<Mutation>;
   updateNode(id: string, patch: NodePatch): Promise<Mutation>;
   moveNode(id: string, parentId: string | null, index: number): Promise<Mutation>;
+  /** Moves several nodes in one atomic step; `index` counts the new parent's children after all were taken out. */
+  moveNodes(ids: string[], parentId: string | null, index: number): Promise<Mutation>;
   duplicateNode(id: string): Promise<Mutation>;
   deleteNode(id: string): Promise<Mutation>;
   vaultStatus(): Promise<VaultStatus>;
@@ -225,6 +230,7 @@ export interface Api {
     fontFamily: string | null;
     fontSize: number;
     scrollback: number;
+    closeOnExit: boolean;
   }): Promise<TerminalSettings>;
   getTheme(): Promise<ThemeInfo>;
   setTheme(theme: Theme): Promise<ThemeInfo>;
@@ -341,7 +347,15 @@ export type Prompt =
 
 /** A JSON message on a session channel. */
 export type SessionEvent =
-  | { kind: "state"; state: SessionState; detail: string | null }
+  | {
+      kind: "state";
+      state: SessionState;
+      detail: string | null;
+      /** The shell's exit status when the remote reported one. */
+      exitStatus: number | null;
+      /** `true` only for an orderly end of a connected session; the tab may then close itself. */
+      endedCleanly: boolean;
+    }
   | { kind: "prompt"; id: number; prompt: Prompt };
 
 /** The user's answer to a prompt (UI to Rust only). */
@@ -354,10 +368,15 @@ export type PromptAnswer =
 
 export type Theme = "system" | "light" | "dark";
 
+/** Why settings only live in memory. */
+export type UnsavedReason = "env" | "settingsUnusable" | "noConfigDir";
+
 export interface ThemeInfo {
   theme: Theme;
   /** `false` when the choice only lives in memory. */
   persistent: boolean;
+  /** Why it is not saved; `null` when it is. */
+  unsavedReason: UnsavedReason | null;
 }
 
 export interface TerminalSettings {
@@ -365,6 +384,10 @@ export interface TerminalSettings {
   fontFamily: string | null;
   fontSize: number;
   scrollback: number;
+  /** Close the tab when the shell ends cleanly. */
+  closeOnExit: boolean;
   /** `false` when the values only live in memory. */
   persistent: boolean;
+  /** Why they are not saved; `null` when they are. */
+  unsavedReason: UnsavedReason | null;
 }

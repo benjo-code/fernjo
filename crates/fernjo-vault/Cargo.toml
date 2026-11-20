@@ -20,6 +20,7 @@ zeroize.workspace = true
 unicode-normalization.workspace = true
 getrandom.workspace = true
 keyring = "4.2"
+keyring-core = "1"
 
 [dev-dependencies]
 tempfile.workspace = true

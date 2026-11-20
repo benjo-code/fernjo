@@ -76,7 +76,7 @@ impl<I: Interaction> ClientHandler<I> {
                     HostKeyDecision::TrustAlways => {
                         match self.known_hosts.add(&self.host, self.port, key) {
                             Ok(()) => {
-                                self.confirm(key, false);
+                                self.confirm(key);
                                 true
                             }
                             Err(e) => self.reject(e),
@@ -101,7 +101,7 @@ impl<I: Interaction> ClientHandler<I> {
                     HostKeyChangedDecision::Replace => {
                         match self.known_hosts.replace(&self.host, self.port, key) {
                             Ok(()) => {
-                                self.confirm(key, true);
+                                self.confirm(key);
                                 true
                             }
                             Err(e) => self.reject(e),
@@ -125,7 +125,6 @@ impl<I: Interaction> ClientHandler<I> {
             Ok(HostKeyStatus::Unknown) | Err(_) => Vec::new(),
             Ok(HostKeyStatus::Changed { stored }) => stored,
         };
-        let replace = !previous.is_empty();
         let prompt = HostKeySyncedPrompt {
             host: self.host.clone(),
             port: self.port,
@@ -140,7 +139,7 @@ impl<I: Interaction> ClientHandler<I> {
         match decision {
             HostKeyDecision::TrustOnce => true,
             HostKeyDecision::TrustAlways => {
-                self.confirm(key, replace);
+                self.confirm(key);
                 true
             }
             HostKeyDecision::Reject => self.reject(SshError::HostKeyRejected),
@@ -149,15 +148,13 @@ impl<I: Interaction> ClientHandler<I> {
 
     /// Records the key as confirmed on this device. Best effort: when the file cannot be written
     /// the connect goes on and the next one asks again.
-    fn confirm(&self, key: &PublicKey, replace: bool) {
+    fn confirm(&self, key: &PublicKey) {
         let Some(confirmed) = &self.confirmed else {
             return;
         };
-        let _ = if replace {
-            confirmed.replace(&self.host, self.port, key)
-        } else {
-            confirmed.add(&self.host, self.port, key)
-        };
+        // `trust` replaces a stored key of the same algorithm, so an earlier confirmation of a
+        // different key (or an unreadable-then-recovered file) never leaves a stale one behind.
+        let _ = confirmed.trust(&self.host, self.port, key);
     }
 }
 

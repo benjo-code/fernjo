@@ -26,6 +26,8 @@
         return `Sync conflicts found next to your data: ${notice.files.join(", ")}. Resolve them in your sync tool; fernjo does not merge them.`;
       case "settingsUnreadable":
         return `The settings file could not be used, so the default data folder is in effect. ${notice.message}`;
+      case "deviceFolderInsideDataDir":
+        return `The device-local folder (${notice.path}) lies inside your data folder, so it is synced with your data. Choose a data folder that does not contain it.`;
     }
   }
 </script>
@@ -41,6 +43,16 @@
   <div class="bar restart" role="status">
     <span class="text">Restart fernjo to use the new data folder.</span>
     <button type="button" class="dismiss" onclick={() => onRestart?.()}>Restart now</button>
+  </div>
+{/if}
+
+{#if store.changedOnDisk}
+  <div class="bar error" role="alert">
+    <Icon name="alert" size={14} />
+    <span class="text"
+      >connections.json was changed by another program or device. Your last edit was not saved.</span
+    >
+    <button type="button" class="dismiss" onclick={() => void store.reload()}>Reload</button>
   </div>
 {/if}
 

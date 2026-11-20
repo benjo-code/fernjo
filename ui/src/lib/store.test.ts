@@ -42,6 +42,51 @@ describe("TreeStore", () => {
     expect(store.loadError).toBeNull();
   });
 
+  test("changed_on_disk shows the reload state, keeps the error bar empty, and reload clears it", async () => {
+    const { store, setTree, calls } = await started(tree(), {
+      createFolder: async () => {
+        throw apiError("changed_on_disk");
+      },
+    });
+    const err = await store.createFolder(null, null);
+    expect(err?.code).toBe("changed_on_disk");
+    expect(store.changedOnDisk).toBe(true);
+    expect(store.error).toBeNull();
+
+    setTree([conn("theirs")]);
+    expect(await store.reload()).toBeNull();
+    expect(calls.reloadTree).toHaveLength(1);
+    expect(store.changedOnDisk).toBe(false);
+    expect(store.children.map((n) => n.name)).toEqual(["theirs"]);
+  });
+
+  test("a failed reload keeps the tree and the reload state, a later reload clears both", async () => {
+    let fail = true;
+    const { store, setTree } = await started(tree(), {
+      createFolder: async () => {
+        throw apiError("changed_on_disk");
+      },
+      reloadTree: async () => {
+        if (fail) throw apiError("reload_failed", "could not read connections.json");
+        return snapshot([conn("theirs")]);
+      },
+    });
+    await store.createFolder(null, null);
+    const err = await store.reload();
+    expect(err?.code).toBe("reload_failed");
+    expect(store.changedOnDisk).toBe(true);
+    expect(store.loadError).toBeNull();
+    expect(store.error).toBe("could not read connections.json");
+    expect(store.children.map((n) => n.name)).toEqual(["Homelab", "web-01"]);
+
+    fail = false;
+    setTree([conn("theirs")]);
+    expect(await store.reload()).toBeNull();
+    expect(store.changedOnDisk).toBe(false);
+    expect(store.error).toBeNull();
+    expect(store.children.map((n) => n.name)).toEqual(["theirs"]);
+  });
+
   test("selection_is_cleared_when_snapshot_no_longer_contains_it", async () => {
     const { store, setTree, api } = await started();
     store.select("web-01");
@@ -328,5 +373,201 @@ describe("TreeStore.applySnapshot", () => {
     await store.applySnapshot(snapshot([conn("other")]));
     expect(store.children.map((n) => n.name)).toEqual(["other"]);
     expect(store.selectedId).toBeNull();
+  });
+});
+
+describe("TreeStore selection", () => {
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  const open = async () => {
+    const r = await started(tree(), { getNode: async (id: string) => resolved({ id, name: id }) });
+    r.store.expand("Homelab");
+    return r;
+  };
+
+  test("selectOnly replaces the selection", async () => {
+    const { store } = await open();
+    store.selectOnly("pve-01");
+    store.toggleSelect("web-01");
+    store.selectOnly("DC01");
+    expect([...store.selectedIds]).toEqual(["DC01"]);
+    expect(store.selectedId).toBe("DC01");
+    expect(store.anchorId).toBe("DC01");
+    store.selectOnly(null);
+    expect(store.selectedIds.size).toBe(0);
+    expect(store.selectedId).toBeNull();
+    expect(store.anchorId).toBeNull();
+  });
+
+  test("toggleSelect adds and removes one id and keeps the anchor sensible", async () => {
+    const { store } = await open();
+    store.selectOnly("pve-01");
+    store.toggleSelect("web-01");
+    expect([...store.selectedIds].sort()).toEqual(["pve-01", "web-01"]);
+    expect(store.anchorId).toBe("web-01");
+    expect(store.selectedId).toBe("web-01");
+    expect(store.isSelected("pve-01")).toBe(true);
+    store.toggleSelect("web-01");
+    expect([...store.selectedIds]).toEqual(["pve-01"]);
+    expect(store.selectedId).toBe("pve-01");
+    expect(store.anchorId).toBe("pve-01");
+    store.toggleSelect("pve-01");
+    expect(store.selectedIds.size).toBe(0);
+    expect(store.selectedId).toBeNull();
+    expect(store.anchorId).toBeNull();
+  });
+
+  test("selectRange selects the visible rows between anchor and target in either direction", async () => {
+    const { store } = await open();
+    store.selectOnly("pve-01");
+    store.selectRange("web-01");
+    expect([...store.selectedIds].sort()).toEqual(["DC01", "pve-01", "web-01"]);
+    expect(store.anchorId).toBe("pve-01");
+    store.selectOnly("web-01");
+    store.selectRange("Homelab");
+    expect([...store.selectedIds].sort()).toEqual(["DC01", "Homelab", "pve-01", "web-01"]);
+    expect(store.anchorId).toBe("web-01");
+    store.selectOnly("DC01");
+    store.selectRange("pve-01");
+    expect([...store.selectedIds].sort()).toEqual(["DC01", "pve-01"]);
+  });
+
+  test("selectRange without an anchor behaves like selectOnly", async () => {
+    const { store } = await open();
+    store.selectRange("DC01");
+    expect([...store.selectedIds]).toEqual(["DC01"]);
+    expect(store.anchorId).toBe("DC01");
+  });
+
+  test("selectRange skips children of collapsed folders", async () => {
+    const { store } = await started();
+    store.selectOnly("Homelab");
+    store.selectRange("web-01");
+    expect([...store.selectedIds].sort()).toEqual(["Homelab", "web-01"]);
+  });
+
+  test("selectionTops drops a node whose ancestor is selected", async () => {
+    const { store } = await open();
+    store.selectOnly("Homelab");
+    store.toggleSelect("pve-01");
+    store.toggleSelect("web-01");
+    expect(store.selectionTops()).toEqual(["Homelab", "web-01"]);
+  });
+
+  test("deleting nodes prunes the selection", async () => {
+    const { store, setTree } = await open();
+    store.selectOnly("pve-01");
+    store.toggleSelect("web-01");
+    setTree([folder("Homelab", [conn("pve-01"), conn("DC01", "rdp")])]);
+    await store.remove("web-01");
+    expect([...store.selectedIds]).toEqual(["pve-01"]);
+    expect(store.selectedId).toBe("pve-01");
+    store.selectOnly("DC01");
+    setTree([]);
+    await store.remove("Homelab");
+    expect(store.selectedIds.size).toBe(0);
+    expect(store.anchorId).toBeNull();
+    expect(store.selectedId).toBeNull();
+  });
+
+  test("detail is cleared while several nodes are selected", async () => {
+    const { store } = await open();
+    store.select("web-01");
+    await tick();
+    expect(store.detail?.id).toBe("web-01");
+    store.toggleSelect("pve-01");
+    await tick();
+    expect(store.detail).toBeNull();
+    store.toggleSelect("pve-01");
+    await tick();
+    expect(store.detail?.id).toBe("web-01");
+  });
+  test("collapsing_a_folder_prunes_hidden_selected_nodes", async () => {
+    const { store } = await open();
+    store.selectOnly("Homelab");
+    store.toggleSelect("pve-01");
+    store.toggleSelect("DC01");
+    store.toggleSelect("web-01");
+    expect(store.selectedIds.size).toBe(4);
+    store.toggle("Homelab"); // collapses: pve-01 and DC01 are no longer visible
+    expect([...store.selectedIds].sort()).toEqual(["Homelab", "web-01"]);
+    // the count the user sees is what delete would remove
+    expect(store.selectionTops()).toEqual(["Homelab", "web-01"]);
+    expect(store.selectedIds.size).toBe(store.selectionTops().length);
+  });
+
+  test("collapsing_the_folder_of_the_primary_hands_the_primary_to_a_visible_node", async () => {
+    const { store } = await open();
+    store.selectOnly("web-01");
+    store.toggleSelect("pve-01");
+    expect(store.selectedId).toBe("pve-01");
+    store.toggle("Homelab");
+    expect([...store.selectedIds]).toEqual(["web-01"]);
+    expect(store.selectedId).toBe("web-01");
+  });
+
+  test("filtering_prunes_hidden_selected_nodes", async () => {
+    const { store } = await open();
+    store.selectOnly("pve-01");
+    store.toggleSelect("DC01");
+    store.toggleSelect("web-01");
+    store.setFilter("web");
+    expect([...store.selectedIds]).toEqual(["web-01"]);
+    expect(store.selectionTops()).toEqual(["web-01"]);
+  });
+
+  test("a_single_selection_survives_a_filter_that_hides_it", async () => {
+    const { store } = await open();
+    store.selectOnly("pve-01");
+    store.setFilter("web");
+    expect([...store.selectedIds]).toEqual(["pve-01"]);
+    expect(store.selectedId).toBe("pve-01");
+  });
+
+  test("ctrl_click_after_a_collapse_does_not_bring_the_hidden_node_back_into_the_count", async () => {
+    const { store, calls } = await open();
+    store.selectOnly("pve-01");
+    store.toggle("Homelab"); // a single selection stays although it is hidden now
+    expect([...store.selectedIds]).toEqual(["pve-01"]);
+    store.toggleSelect("web-01");
+    expect([...store.selectedIds]).toEqual(["web-01"]);
+    expect(store.selectedId).toBe("web-01");
+    expect(store.anchorId).toBe("web-01");
+    expect(store.selectedIds.size).toBe(store.selectionTops().length);
+    await store.removeMany([...store.selectedIds]);
+    expect(calls.deleteNode).toEqual([["web-01"]]);
+  });
+
+  test("ctrl_click_after_a_filter_hid_everything_selected_starts_from_the_new_row", async () => {
+    const { store } = await open();
+    store.selectOnly("pve-01");
+    store.toggleSelect("DC01");
+    store.setFilter("web"); // both hidden: the selection is left alone
+    expect([...store.selectedIds].sort()).toEqual(["DC01", "pve-01"]);
+    store.toggleSelect("web-01");
+    expect([...store.selectedIds]).toEqual(["web-01"]);
+    expect(store.selectedIds.size).toBe(store.selectionTops().length);
+  });
+
+  test("moveMany sends one batch command and applies the snapshot", async () => {
+    const after = [folder("Homelab", [conn("pve-01"), conn("DC01", "rdp"), conn("web-01")])];
+    const { store, calls } = await started(tree(), {
+      moveNodes: async () => ({ id: null, snapshot: snapshot(after) }),
+    });
+    await store.moveMany(["web-01", "pve-01"], "Homelab", 0);
+    expect(calls.moveNodes).toEqual([[["web-01", "pve-01"], "Homelab", 0]]);
+    expect(store.children).toEqual(after);
+    expect(store.expanded.has("Homelab")).toBe(true);
+  });
+
+  test("moveMany with no ids sends nothing", async () => {
+    const { store, calls } = await started();
+    await store.moveMany([], null, 0);
+    expect(calls.moveNodes).toEqual([]);
+  });
+
+  test("removeMany deletes the tops in row order, one command each", async () => {
+    const { store, calls } = await open();
+    await store.removeMany(["web-01", "pve-01", "Homelab"]);
+    expect(calls.deleteNode).toEqual([["Homelab"], ["web-01"]]);
   });
 });

@@ -98,10 +98,22 @@ test("session_prompt_picks_the_variant", async () => {
   expect(title()).toBe("Authentication required");
 
   t.tab.prompt = null;
-  await show({ kind: "state", state: "needsVault", detail: null });
-  expect(title()).toBe("n1 needs the vault");
+  await show({
+    kind: "state",
+    state: "needsVault",
+    detail: null,
+    exitStatus: null,
+    endedCleanly: false,
+  });
+  expect(title()).toBe("Unlock the vault to connect to n1");
 
-  await show({ kind: "state", state: "connecting", detail: null });
+  await show({
+    kind: "state",
+    state: "connecting",
+    detail: null,
+    exitStatus: null,
+    endedCleanly: false,
+  });
   expect(dialog()).toBeNull();
 });
 

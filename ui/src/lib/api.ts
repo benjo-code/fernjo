@@ -22,12 +22,14 @@ async function call<T>(command: string, args?: InvokeArgs, options?: InvokeOptio
 
 export const tauriApi: Api = {
   listTree: () => call("list_tree"),
+  reloadTree: () => call("reload_tree"),
   getNode: (id) => call("get_node", { id }),
   createFolder: (parentId, index, name) => call("create_folder", { parentId, index, name }),
   createConnection: (parentId, index, name, protocol, host) =>
     call("create_connection", { parentId, index, name, protocol, host }),
   updateNode: (id, patch) => call("update_node", { id, patch }),
   moveNode: (id, parentId, index) => call("move_node", { id, parentId, index }),
+  moveNodes: (ids, parentId, index) => call("move_nodes", { ids, parentId, index }),
   duplicateNode: (id) => call("duplicate_node", { id }),
   deleteNode: (id) => call("delete_node", { id }),
   vaultStatus: () => call("vault_status"),

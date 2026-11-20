@@ -10,7 +10,9 @@ mod sessions;
 mod state;
 mod vault_commands;
 
+use std::sync::atomic::Ordering;
 use tauri::Manager;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 pub use state::AppState;
 
@@ -37,6 +39,21 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::open_for_app(fernjo_core::locate()))
+        // Candidate fix for the placeholder title bar icon on Linux (Wayland): apply the default
+        // window icon (the one tauri-codegen already embeds) explicitly once the window exists, to
+        // test whether setting it at that point changes the title bar. A no-op if the toolkit
+        // already used it. A failure is ignored, never fatal.
+        .setup(|app| {
+            #[cfg(target_os = "linux")]
+            if let (Some(window), Some(icon)) =
+                (app.get_webview_window("main"), app.default_window_icon())
+            {
+                let _ = window.set_icon(icon.clone());
+            }
+            #[cfg(not(target_os = "linux"))]
+            let _ = app;
+            Ok(())
+        })
         // A reload or a crashed page leaves its sessions running without a UI (the page's
         // `closeAll` on `pagehide` is fire-and-forget), so every page load ends them. The first
         // load of the app finds none.
@@ -50,13 +67,64 @@ pub fn run() {
                 state.clear_pending();
             }
         })
+        // Closing the window ends every session, so ask first while one is connected. The dialog
+        // is non-blocking (the handler runs on the main thread); its callback runs on another
+        // thread and ends the window with `destroy`, which does not raise `CloseRequested` again.
+        .on_window_event(|window, event| {
+            if window.label() != "main" {
+                return;
+            }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let state = window.state::<AppState>();
+                let connected = state.sessions.connected_count();
+                if !sessions::needs_close_confirmation(connected) {
+                    return;
+                }
+                api.prevent_close();
+                if state.close_prompt_open.swap(true, Ordering::SeqCst) {
+                    return;
+                }
+                let noun = if connected == 1 {
+                    "session is"
+                } else {
+                    "sessions are"
+                };
+                let window = window.clone();
+                window
+                    .dialog()
+                    .message(format!(
+                        "{connected} {noun} still connected. Closing fernjo ends them."
+                    ))
+                    .title("Close fernjo?")
+                    .kind(MessageDialogKind::Warning)
+                    .buttons(MessageDialogButtons::OkCancelCustom(
+                        "Close".into(),
+                        "Keep open".into(),
+                    ))
+                    .show({
+                        let window = window.clone();
+                        move |confirmed| {
+                            window
+                                .state::<AppState>()
+                                .close_prompt_open
+                                .store(false, Ordering::SeqCst);
+                            if confirmed {
+                                window.state::<AppState>().sessions.close_all();
+                                let _ = window.destroy();
+                            }
+                        }
+                    });
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::handlers::list_tree,
+            commands::handlers::reload_tree,
             commands::handlers::get_node,
             commands::handlers::create_folder,
             commands::handlers::create_connection,
             commands::handlers::update_node,
             commands::handlers::move_node,
+            commands::handlers::move_nodes,
             commands::handlers::duplicate_node,
             commands::handlers::delete_node,
             vault_commands::handlers::vault_status,

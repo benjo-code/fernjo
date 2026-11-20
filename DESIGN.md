@@ -125,9 +125,9 @@ components:
   button-reconnect:
     backgroundColor: "{colors.accent}"
     textColor: "{colors.accent-text}"
-    typography: "{typography.caption}"
     rounded: "{rounded.sm}"
-    padding: "2px 7px"
+    width: "20px"
+    height: "20px"
   input:
     backgroundColor: "{colors.surface}"
     textColor: "{colors.text}"
@@ -263,7 +263,7 @@ Body text uses tabular figures (`font-variant-numeric: tabular-nums`) so address
 - **Body strong** (600, 13px): folder names, the selected row, the properties panel header name, the vault note title.
 - **Medium** (`--weight-medium` 500, 13px): button labels and field labels.
 - **Label** (400, `--text-sm` 12px, muted): property keys, "from <folder>" marks, host column, vault chip, vault note body, the properties panel kind ("SSH connection"). Normal case, no letter-spacing.
-- **Caption** (400, `--text-xs` 11px): tab status text ("Connecting…", "Needs vault") and the Reconnect button.
+- **Caption** (400, `--text-xs` 11px): tab status text ("Connecting…", "Unlock vault") and the label of the outlined Reconnect button in the reason bar.
 - **Mono** (400, 13px, 19px line-height): the terminal.
 
 ### Named Rules
@@ -318,8 +318,9 @@ Optional (a setting). The address in `--color-text-muted`, 12 px, right-aligned 
 28 px high, `--color-surface` field with a 1 px `--color-border-input` border, `--radius-sm`, search icon and placeholder "Filter connections" in muted ink.
 
 ### Vault state and lock note
-- **Chip** beside the filter (28 px, 1 px `--color-border`, 12 px, lock or unlock icon): "Unlocked" or "Locked".
+- **Chip** beside the filter (28 px, 1 px `--color-border`, 12 px, lock or unlock icon): "Vault: unlocked", "Vault: locked", "Vault: none" or "Vault unusable", so the chip names what it is.
 - **Lock note:** while locked, a note sits at the top of the sidebar under the filter: `--color-surface` background, 1 px `--color-border`, `--radius-sm`, lock icon, title "Vault locked" (13 px, 600), body "Connections with stored credentials ask for it." (12 px, muted), and an outlined "Unlock" button (26 px high). The note is **compact** (title and button on one line, body under it) so that it leaves the 23 tree rows and the properties panel their room; the master password form (field, "Unlock automatically on this device", hint, and for "No vault yet" the repeat field and the no-recovery sentence) expands inline only after the button or the chip is clicked, with the password field focused, and "Cancel" collapses it again. While the form is open the tree may shrink to make room. An unusable vault shows Rust's reason as written, the file path and how to restore `vault.fernjo.bak`.
+- **No vault yet (compact variant):** until the create form is opened, the note for the state "none" is a flat, one-line row without the card (no background, border or radius; lock icon, "No vault yet", a 20 px outlined "Create vault" button; the explanatory sentence appears only with the form), so that Name, Host and the Credential row of the properties panel stay visible at 1280x800 with the tree's 23 rows. The locked and unusable notes keep the card.
 - **Never modal:** the tree stays usable while locked. The master password is asked inside the tab of the connection that needs credentials.
 
 ### Properties panel
@@ -336,11 +337,11 @@ Classic tab strip on the housing (`--color-sidebar`), 36 px, tabs 150–260 px w
 - **Active:** background `--term-bg` so it joins the session surface, text `--color-text`, 2 px ink line at the bottom.
 - **Connected:** filled mark.
 - **Connecting:** pulsing ring mark plus "Connecting…".
-- **Disconnected:** struck ring mark plus the yellow Reconnect button (key fill, 11 px, `--radius-sm`, reconnect icon), on every dropped tab.
+- **Disconnected:** struck ring mark plus the yellow Reconnect button (key fill, icon only, 20 px square like the close button, `--radius-sm`; the name is its `aria-label` and tooltip), on every dropped tab. There is no status text on the tab, so the title keeps its room. The tab in front also shows a one-line reason bar above the terminal (housing background, 1 px bottom rule, the struck ring mark, the reason, and an outlined secondary Reconnect button); it is not yellow, so the tab's key stays the one yellow action.
 - **RDP:** identical structure with the monitor icon.
 
 ### Inline unlock prompt (inside a tab)
-Shown in the session area of the tab that needs the vault (tab status "Needs vault"), on `--color-bg`, a 420 px column 88 px from the top with 14 px gaps: lock icon plus title "<name> needs the vault" (17 px, 600), a muted explanation that names the credential and says other tabs keep running, the master password field (masked, show toggle), the "Unlock automatically on this device" checkbox, and the actions: yellow "Unlock and connect" and an outlined "Cancel".
+Shown in the session area of the tab that needs the vault (tab status "Unlock vault"), on `--color-bg`, a 420 px column 88 px from the top with 14 px gaps: lock icon plus title "<name> needs the vault" (17 px, 600), a muted explanation that names the credential and says other tabs keep running, the master password field (masked, show toggle), the "Unlock automatically on this device" checkbox, and the actions: yellow "Unlock and connect" and an outlined "Cancel".
 - **Error state:** the field border and a 1 px ring turn `--color-danger`, and an alert icon plus "Wrong master password. Check Caps Lock and try again." appear in `--color-danger`.
 
 ### Session prompts (inside a tab)

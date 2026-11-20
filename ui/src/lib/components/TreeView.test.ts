@@ -39,7 +39,11 @@ async function setup(
     props: {
       store,
       vault,
-      sessions: new SessionStore(mock.api, (id) => id),
+      sessions: new SessionStore(
+        mock.api,
+        (id) => id,
+        () => true,
+      ),
       onOpenVault: () => {},
     },
   });
@@ -69,6 +73,13 @@ describe("TreeView", () => {
     expect(row("Homelab").getAttribute("aria-expanded")).toBe("true");
     expect(row("pve-01").hasAttribute("aria-expanded")).toBe(false);
     expect(row("web-01").hasAttribute("aria-expanded")).toBe(false);
+  });
+
+  test("tree_container_is_marked_multiselectable", async () => {
+    await setup();
+    expect(document.querySelector('[role="tree"]')!.getAttribute("aria-multiselectable")).toBe(
+      "true",
+    );
   });
 
   test("click_selects_and_chevron_click_toggles", async () => {
@@ -197,6 +208,8 @@ describe("TreeView", () => {
   test("empty_tree_offers_new_folder_and_new_connection", async () => {
     const { calls } = await setup([]);
     expect(document.querySelector('[role="treeitem"]')).toBeNull();
+    // only the buttons: the main area's start list explains the order of steps
+    expect(document.body.textContent).not.toContain("No connections yet");
     const buttons = [...document.querySelectorAll("button")].map((b) => b.textContent?.trim());
     expect(buttons).toEqual(["New folder", "New connection"]);
     document.querySelectorAll("button")[0].click();
@@ -218,7 +231,14 @@ describe("TreeView", () => {
     const store = new TreeStore(mock.api);
     mounted = mount(TreeView, {
       target: document.body,
-      props: { store, sessions: new SessionStore(mock.api, (id) => id) },
+      props: {
+        store,
+        sessions: new SessionStore(
+          mock.api,
+          (id) => id,
+          () => true,
+        ),
+      },
     });
     flushSync();
     expect(document.querySelector("button")).toBeNull(); // not loaded yet
@@ -237,9 +257,7 @@ describe("TreeView", () => {
 
   test("filter_box_filters_rows_and_clears_with_escape", async () => {
     const { store } = await setup(sample(), {}, Sidebar);
-    const input = document.querySelector<HTMLInputElement>(
-      'input[placeholder="Filter connections"]',
-    )!;
+    const input = document.querySelector<HTMLInputElement>('input[placeholder="Filter"]')!;
     expect(input).not.toBeNull();
     input.value = "pve";
     input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -274,7 +292,11 @@ describe("TreeView", () => {
       props: {
         store,
         vault,
-        sessions: new SessionStore(mock.api, (id) => id),
+        sessions: new SessionStore(
+          mock.api,
+          (id) => id,
+          () => true,
+        ),
         onOpenVault: () => {},
       },
     });
@@ -293,4 +315,147 @@ describe("TreeView", () => {
     flushSync();
     expect(document.querySelector('[role="alert"]')).toBeNull();
   });
+});
+
+describe("multi-select", () => {
+  const dialog = () => document.querySelector<HTMLElement>('[role="alertdialog"]');
+  const selectedNames = () =>
+    items()
+      .filter((el) => el.getAttribute("aria-selected") === "true")
+      .map((el) => el.dataset.nodeId);
+  const click = (id: string, init: MouseEventInit = {}) => {
+    row(id).dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ...init }));
+    flushSync();
+  };
+  const bigTree = (): TreeNode[] => [
+    folder("Homelab", [conn("pve-01"), conn("DC01", "rdp")]),
+    conn("web-01"),
+    conn("db-01"),
+  ];
+
+  test("ctrl click toggles", async () => {
+    const { store } = await setup(bigTree());
+    click("web-01");
+    click("db-01", { ctrlKey: true });
+    expect(selectedNames()).toEqual(["web-01", "db-01"]);
+    expect(store.selectedId).toBe("db-01");
+    click("web-01", { ctrlKey: true });
+    expect(selectedNames()).toEqual(["db-01"]);
+    click("Homelab", { metaKey: true });
+    expect(selectedNames()).toEqual(["Homelab", "db-01"]);
+    // a plain click selects only that row again
+    click("web-01");
+    expect(selectedNames()).toEqual(["web-01"]);
+  });
+
+  test("shift click selects the range", async () => {
+    const { store } = await setup(bigTree());
+    click("Homelab");
+    click("db-01", { shiftKey: true });
+    expect(selectedNames()).toEqual(["Homelab", "web-01", "db-01"]);
+    expect(store.anchorId).toBe("Homelab");
+    click("web-01", { shiftKey: true });
+    expect(selectedNames()).toEqual(["Homelab", "web-01"]);
+  });
+
+  test("shift arrow extends the selection from the anchor", async () => {
+    const { store } = await setup(bigTree());
+    click("Homelab");
+    await key(row("Homelab"), "ArrowDown", { shiftKey: true });
+    expect(selectedNames()).toEqual(["Homelab", "web-01"]);
+    await key(row("web-01"), "ArrowDown", { shiftKey: true });
+    expect(selectedNames()).toEqual(["Homelab", "web-01", "db-01"]);
+    await key(row("db-01"), "ArrowUp", { shiftKey: true });
+    expect(selectedNames()).toEqual(["Homelab", "web-01"]);
+    expect(store.anchorId).toBe("Homelab");
+    // without Shift the selection collapses to the moved-to row
+    await key(row("web-01"), "ArrowDown");
+    expect(selectedNames()).toEqual(["db-01"]);
+  });
+
+  test("deleting several asks first and names the count", async () => {
+    const { calls } = await setup(bigTree());
+    openHomelab();
+    click("web-01");
+    click("db-01", { ctrlKey: true });
+    click("Homelab", { ctrlKey: true });
+    await key(row("Homelab"), "Delete");
+    expect(dialog()!.querySelector(".title")!.textContent).toBe("Delete 3 items?");
+    expect(dialog()!.textContent).toContain("4 connections and 1 folder");
+    expect(dialog()!.textContent).toContain(
+      "This removes 4 connections and 1 folder, including everything inside. This cannot be undone.",
+    );
+    expect(calls.deleteNode).toHaveLength(0);
+    [...document.querySelectorAll<HTMLElement>('[role="alertdialog"] button')]
+      .find((b) => b.textContent?.trim() === "Delete")!
+      .click();
+    await tick();
+    await new Promise((r) => setTimeout(r, 0));
+    flushSync();
+    expect(calls.deleteNode).toEqual([["Homelab"], ["web-01"], ["db-01"]]);
+    expect(dialog()).toBeNull();
+  });
+
+  test("deleting only connections says exactly what goes", async () => {
+    await setup(bigTree());
+    click("web-01");
+    click("db-01", { ctrlKey: true });
+    await key(row("db-01"), "Delete");
+    expect(dialog()!.querySelector(".title")!.textContent).toBe("Delete 2 items?");
+    expect(dialog()!.querySelector(".detail, p")!.textContent!.trim()).toBe(
+      "This removes 2 connections. This cannot be undone.",
+    );
+  });
+
+  test("escape cancels the confirmation", async () => {
+    const { calls } = await setup(bigTree());
+    click("web-01");
+    click("db-01", { ctrlKey: true });
+    await key(row("db-01"), "Delete");
+    expect(dialog()).not.toBeNull();
+    await key(dialog()!, "Escape");
+    expect(dialog()).toBeNull();
+    expect(calls.deleteNode).toHaveLength(0);
+    expect(selectedNames()).toEqual(["web-01", "db-01"]);
+  });
+
+  test("one selected keeps the single delete text", async () => {
+    await setup(bigTree());
+    click("web-01");
+    await key(row("web-01"), "Delete");
+    expect(dialog()!.querySelector(".title")!.textContent).toBe("Delete “web-01”?");
+  });
+
+  test("the context menu on a multi-selection offers Delete only and keeps the selection", async () => {
+    await setup(bigTree());
+    click("web-01");
+    click("db-01", { ctrlKey: true });
+    row("web-01").dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 }),
+    );
+    flushSync();
+    expect(
+      [...document.querySelectorAll('[role="menuitem"]')].map((el) =>
+        el.querySelector(".label")?.textContent?.trim(),
+      ),
+    ).toEqual(["Delete"]);
+    expect(selectedNames()).toEqual(["web-01", "db-01"]);
+  });
+
+  test("the context menu on an unselected row selects just that row", async () => {
+    await setup(bigTree());
+    click("web-01");
+    click("db-01", { ctrlKey: true });
+    row("Homelab").dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 }),
+    );
+    flushSync();
+    expect(selectedNames()).toEqual(["Homelab"]);
+    expect(document.querySelectorAll('[role="menuitem"]').length).toBeGreaterThan(1);
+  });
+
+  function openHomelab() {
+    row("Homelab").querySelector<HTMLElement>(".chevron")!.click();
+    flushSync();
+  }
 });

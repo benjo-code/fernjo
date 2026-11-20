@@ -26,6 +26,61 @@ fn code<T>(r: Result<T, CommandError>) -> String {
 
 // ---------- no server needed ----------
 
+#[test]
+fn ki_prompts_are_capped_in_count_and_length() {
+    use fernjo_ssh::KiPrompt;
+    let long = |n: usize| "\u{e9}".repeat(n);
+    let round = KiRound {
+        name: long(5000),
+        instructions: long(5000),
+        prompts: (0..40)
+            .map(|i| KiPrompt {
+                text: if i == 0 { long(5000) } else { format!("p{i}") },
+                echo: i % 2 == 0,
+            })
+            .collect(),
+    };
+    let PromptView::KeyboardInteractive {
+        name,
+        instructions,
+        prompts,
+    } = cap_ki_round(round)
+    else {
+        panic!("wrong view");
+    };
+    assert_eq!(prompts.len(), 16);
+    assert_eq!(
+        prompts[0].text.chars().count(),
+        1025,
+        "1024 plus the ellipsis"
+    );
+    assert!(prompts[0].text.ends_with('\u{2026}'));
+    assert_eq!(prompts[1].text, "p1");
+    assert!(prompts[2].echo && !prompts[1].echo);
+    assert_eq!(instructions.chars().count(), 4097);
+    assert_eq!(name.chars().count(), 1025);
+    // a round within the limits passes unchanged
+    let small = KiRound {
+        name: "n".into(),
+        instructions: "i".into(),
+        prompts: vec![KiPrompt {
+            text: "Password: ".into(),
+            echo: false,
+        }],
+    };
+    assert_eq!(
+        cap_ki_round(small),
+        PromptView::KeyboardInteractive {
+            name: "n".into(),
+            instructions: "i".into(),
+            prompts: vec![KiPromptView {
+                text: "Password: ".into(),
+                echo: false
+            }]
+        }
+    );
+}
+
 fn answer(v: Value) -> PromptAnswer {
     serde_json::from_value(v).unwrap()
 }
@@ -198,24 +253,108 @@ async fn a_prompt_open_when_the_hub_closes_gets_the_safe_answer() {
     assert_eq!(d, HostKeyDecision::Reject);
 }
 
+// ---------- how a session ended ----------
+
+const FIVE: Duration = MIN_AUTO_CLOSE_SESSION;
+
+#[test]
+fn classify_end_exit_zero_after_five_seconds_is_clean() {
+    let e = classify_end(CloseReason::Exit(Some(0)), FIVE);
+    assert!(e.clean);
+    assert_eq!(e.exit_status, Some(0));
+    assert_eq!(e.text, "The remote shell ended (exit status 0).");
+}
+
+#[test]
+fn classify_end_exit_zero_within_five_seconds_is_not_clean() {
+    let e = classify_end(CloseReason::Exit(Some(0)), Duration::from_millis(4900));
+    assert!(!e.clean);
+    assert_eq!(e.exit_status, Some(0));
+}
+
+#[test]
+fn classify_end_nonzero_exit_is_not_clean() {
+    let e = classify_end(CloseReason::Exit(Some(3)), Duration::from_secs(60));
+    assert!(!e.clean);
+    assert_eq!(e.exit_status, Some(3));
+}
+
+#[test]
+fn classify_end_without_status_is_not_clean() {
+    let e = classify_end(CloseReason::Exit(None), Duration::from_secs(60));
+    assert!(!e.clean);
+    assert_eq!(e.exit_status, None);
+    assert_eq!(e.text, "The remote shell ended.");
+}
+
+#[test]
+fn classify_end_connection_lost_is_not_clean() {
+    let e = classify_end(CloseReason::ConnectionLost, Duration::from_secs(60));
+    assert!(!e.clean);
+    assert_eq!(e.exit_status, None);
+    assert_eq!(e.text, "The connection was lost.");
+}
+
+#[test]
+fn classify_end_closed_by_user_is_not_clean() {
+    let e = classify_end(CloseReason::ClosedByUser, Duration::from_secs(60));
+    assert!(!e.clean);
+    assert_eq!(e.exit_status, None);
+}
+
+#[test]
+fn state_event_json_carries_exit_status_and_ended_cleanly() {
+    let ended = UiEvent::State {
+        state: ConnState::Disconnected,
+        detail: Some("The remote shell ended (exit status 0).".into()),
+        exit_status: Some(0),
+        ended_cleanly: true,
+    };
+    assert_eq!(
+        serde_json::to_value(&ended).unwrap(),
+        json!({"kind": "state", "state": "disconnected",
+               "detail": "The remote shell ended (exit status 0).",
+               "exitStatus": 0, "endedCleanly": true})
+    );
+    let connected = UiEvent::State {
+        state: ConnState::Connected,
+        detail: None,
+        exit_status: None,
+        ended_cleanly: false,
+    };
+    assert_eq!(
+        serde_json::to_value(&connected).unwrap(),
+        json!({"kind": "state", "state": "connected", "detail": null,
+               "exitStatus": null, "endedCleanly": false})
+    );
+}
+
 #[test]
 fn session_event_json_has_no_secret_field() {
     let events = [
         UiEvent::State {
             state: ConnState::Connecting,
             detail: None,
+            exit_status: None,
+            ended_cleanly: false,
         },
         UiEvent::State {
             state: ConnState::NeedsVault,
             detail: None,
+            exit_status: None,
+            ended_cleanly: false,
         },
         UiEvent::State {
             state: ConnState::Connected,
             detail: None,
+            exit_status: None,
+            ended_cleanly: false,
         },
         UiEvent::State {
             state: ConnState::Disconnected,
             detail: Some("gone".into()),
+            exit_status: None,
+            ended_cleanly: false,
         },
         UiEvent::Prompt {
             id: 1,
@@ -279,7 +418,8 @@ fn session_event_json_has_no_secret_field() {
         .collect();
     assert_eq!(
         json[0],
-        json!({"kind": "state", "state": "connecting", "detail": null})
+        json!({"kind": "state", "state": "connecting", "detail": null,
+               "exitStatus": null, "endedCleanly": false})
     );
     assert_eq!(json[1]["state"], "needsVault");
     assert_eq!(json[3]["detail"], "gone");
@@ -1107,4 +1247,49 @@ fn the_confirmed_hosts_layer_is_the_device_file_or_memory_for_the_run() {
     assert!(some.confirmed_in_memory.is_none());
     // The synced data folder never holds the confirmed file.
     assert!(!some.confirmed_hosts.unwrap().starts_with(dir.path()));
+}
+
+// ---------- close confirmation ----------
+
+fn entry_in(phase: Phase) -> Arc<Entry> {
+    let (channel, _rec) = recorder();
+    Arc::new(Entry {
+        node_id: uuid::Uuid::new_v4(),
+        shared: Arc::new(Shared {
+            sink: Arc::new(Sink::new(channel)),
+            hub: Arc::new(PromptHub::default()),
+            flow: Mutex::new(FlowControl::default()),
+            wake: Notify::new(),
+            phase: Mutex::new(phase),
+            size: Mutex::new((80, 24)),
+            ops: Mutex::new(None),
+        }),
+        task: Mutex::new(None),
+    })
+}
+
+#[test]
+fn connected_count_counts_only_connected_sessions() {
+    let manager = SessionManager::default();
+    assert_eq!(manager.connected_count(), 0);
+    for (id, phase) in [
+        ("a", Phase::Connecting),
+        ("b", Phase::NeedsVault),
+        ("c", Phase::Connected),
+        ("d", Phase::Disconnected),
+    ] {
+        manager
+            .entries
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), entry_in(phase));
+    }
+    assert_eq!(manager.connected_count(), 1);
+}
+
+#[test]
+fn a_confirmation_is_needed_only_with_a_connected_session() {
+    assert!(!needs_close_confirmation(0));
+    assert!(needs_close_confirmation(1));
+    assert!(needs_close_confirmation(3));
 }

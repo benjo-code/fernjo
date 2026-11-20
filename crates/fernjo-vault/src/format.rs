@@ -76,10 +76,12 @@ pub(crate) fn read_capped(path: &Path, max: u64) -> io::Result<Vec<u8>> {
 }
 
 /// Bounds applied to the parameters read from a file, so a hostile synced file cannot
-/// demand gigabytes of memory or minutes of CPU.
-const MAX_MEMORY_KIB: u32 = 1024 * 1024; // 1 GiB
-const MAX_ITERATIONS: u32 = 20;
-const MAX_PARALLELISM: u32 = 16;
+/// demand gigabytes of memory or minutes of CPU: 4 times the shipped default cost per field
+/// (512 MiB, 24 passes, 16 lanes), room for raising the default a little later without a
+/// format change. See `Docs/DECISIONS.md` ("M7: vault Low findings triage").
+const MAX_MEMORY_KIB: u32 = KdfParams::DEFAULT.memory_kib * 4;
+const MAX_ITERATIONS: u32 = KdfParams::DEFAULT.iterations * 4;
+const MAX_PARALLELISM: u32 = KdfParams::DEFAULT.parallelism * 4;
 
 /// Argon2id cost parameters. They are stored in the file header, so they can be raised
 /// later without breaking existing vaults.
@@ -105,6 +107,22 @@ impl KdfParams {
         iterations: 1,
         parallelism: 1,
     };
+
+    /// The first field above the load limit, as a message naming the limit.
+    pub(crate) fn over_limit(self) -> Option<String> {
+        let (what, value, max) = if self.memory_kib > MAX_MEMORY_KIB {
+            ("memory (KiB)", self.memory_kib, MAX_MEMORY_KIB)
+        } else if self.iterations > MAX_ITERATIONS {
+            ("passes", self.iterations, MAX_ITERATIONS)
+        } else if self.parallelism > MAX_PARALLELISM {
+            ("lanes", self.parallelism, MAX_PARALLELISM)
+        } else {
+            return None;
+        };
+        Some(format!(
+            "the key derivation cost is above the limit ({what}: {value}, at most {max})"
+        ))
+    }
 
     pub(crate) fn validate(self) -> Result<(), VaultError> {
         let ok = (1..=MAX_PARALLELISM).contains(&self.parallelism)
@@ -191,6 +209,9 @@ impl Header {
             iterations: be_u32(file, OFF_KDF_ITERATIONS),
             parallelism: be_u32(file, OFF_KDF_PARALLELISM),
         };
+        if let Some(message) = kdf.over_limit() {
+            return Err(VaultError::Unreadable(message));
+        }
         kdf.validate()?;
         let header = Self {
             id: Uuid::from_bytes(array(file, OFF_ID)),
@@ -249,10 +270,12 @@ mod tests {
         };
         assert!(bad(7, 1, 1));
         assert!(bad(8, 0, 1));
-        assert!(bad(8, 21, 1));
+        assert!(bad(8, 25, 1));
         assert!(bad(8, 1, 0));
         assert!(bad(8 * 16, 1, 17));
         assert!(bad(15, 1, 2)); // below 8 * parallelism
         assert!(bad(MAX_MEMORY_KIB + 1, 1, 1));
+        assert!(!bad(MAX_MEMORY_KIB, MAX_ITERATIONS, MAX_PARALLELISM));
+        assert!(bad(8, MAX_ITERATIONS + 1, 1));
     }
 }

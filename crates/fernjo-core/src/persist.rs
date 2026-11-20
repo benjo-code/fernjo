@@ -3,12 +3,13 @@
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read as _, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::error::{DocumentError, LoadError, SaveError};
 use crate::model::{Node, NodeId, NodeKind};
@@ -34,6 +35,10 @@ pub enum Notice {
     /// `settings.json` could not be used; the default data folder is in effect and the file
     /// is left untouched.
     SettingsUnreadable { message: String },
+    /// `settings.json` names a data folder that contains the device-local folder (a
+    /// hand-edited file; the data-folder dialog refuses that choice). The device folder is
+    /// then synced with the data, which defeats its purpose.
+    DeviceFolderInsideDataDir { path: PathBuf },
 }
 
 /// Result of a successful load.
@@ -78,12 +83,29 @@ pub fn document(tree: &Tree) -> Value {
 
 /// Writes `tree` atomically: temp file in the same folder, flushed to disk, the current
 /// file copied to `.bak`, then the temp file renamed over the target.
-pub fn save(path: &Path, tree: &Tree) -> Result<(), SaveError> {
+/// Returns the fingerprint of exactly the bytes written (the trailing newline included).
+pub fn save(path: &Path, tree: &Tree) -> Result<Fingerprint, SaveError> {
     let json = serde_json::to_string_pretty(&file_out(tree)).map_err(|e| SaveError {
         path: path.to_path_buf(),
         source: io::Error::other(e),
     })?;
-    write_atomic(path, json.as_bytes())
+    write_atomic(path, json.as_bytes())?;
+    let mut hasher = Sha256::new();
+    hasher.update(json.as_bytes());
+    hasher.update(b"\n");
+    Ok(hasher.finalize().into())
+}
+
+/// SHA-256 of a file's bytes, used to notice that another program changed the file.
+pub type Fingerprint = [u8; 32];
+
+/// Fingerprint of the bytes in `path` (read with the size cap); `None` when it is missing.
+pub fn fingerprint(path: &Path) -> io::Result<Option<Fingerprint>> {
+    match read_capped(path) {
+        Ok(bytes) => Ok(Some(Sha256::digest(&bytes).into())),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 /// Shared by every file in the data and config folders: creates the parent folder, writes a
@@ -199,8 +221,38 @@ enum Read {
     Bad(String),
 }
 
+/// Largest `connections.json` or `settings.json` (and `.bak`) `load` reads: 64 MiB, far above
+/// any real tree. A larger file is refused as unreadable and left untouched.
+pub const MAX_DATA_FILE_LEN: u64 = 64 * 1024 * 1024;
+
+/// Reads `path` unless it is longer than [`MAX_DATA_FILE_LEN`] (`InvalidData`). The length is
+/// checked before reading, and the read itself is bounded in case the file grows meanwhile.
+pub(crate) fn read_capped(path: &Path) -> io::Result<Vec<u8>> {
+    let too_large = || {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "the file is larger than {} MiB",
+                MAX_DATA_FILE_LEN / (1024 * 1024)
+            ),
+        )
+    };
+    let file = fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    if len > MAX_DATA_FILE_LEN {
+        return Err(too_large());
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
+    file.take(MAX_DATA_FILE_LEN.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_DATA_FILE_LEN {
+        return Err(too_large());
+    }
+    Ok(bytes)
+}
+
 fn read_file(path: &Path) -> Result<Read, LoadError> {
-    let bytes = match fs::read(path) {
+    let bytes = match read_capped(path) {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Read::Missing),
         Err(e) => {
@@ -390,6 +442,32 @@ mod tests {
             .collect();
         v.sort();
         v
+    }
+
+    #[test]
+    fn load_refuses_a_file_over_the_cap_as_unreadable() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = main_path(dir.path());
+        let file = fs::File::create(&main).unwrap();
+        file.set_len(MAX_DATA_FILE_LEN + 1).unwrap();
+        drop(file);
+        match load(&main) {
+            Err(LoadError::Unreadable { reason, .. }) => assert!(reason.contains("larger than")),
+            other => panic!("expected Unreadable, got {other:?}"),
+        }
+        assert_eq!(fs::metadata(&main).unwrap().len(), MAX_DATA_FILE_LEN + 1);
+    }
+
+    #[test]
+    fn read_capped_accepts_up_to_the_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("f");
+        fs::write(&p, b"abc").unwrap();
+        assert_eq!(read_capped(&p).unwrap(), b"abc");
+        assert_eq!(
+            read_capped(&dir.path().join("none")).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
     }
 
     fn main_path(dir: &Path) -> PathBuf {
@@ -912,5 +990,17 @@ mod tests {
         })
         .unwrap();
         assert_eq!(v, json!({ "kind": "settingsUnreadable", "message": "bad" }));
+    }
+
+    #[test]
+    fn notice_serialises_as_device_folder_inside_data_dir() {
+        let v = serde_json::to_value(Notice::DeviceFolderInsideDataDir {
+            path: PathBuf::from("dev"),
+        })
+        .unwrap();
+        assert_eq!(
+            v,
+            json!({ "kind": "deviceFolderInsideDataDir", "path": "dev" })
+        );
     }
 }
