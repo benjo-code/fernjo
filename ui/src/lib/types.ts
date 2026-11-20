@@ -4,12 +4,19 @@
 
 export type Protocol = "ssh" | "rdp";
 
+/** How big an RDP desktop is: it follows the tab, or has a fixed size in pixels. */
+export type RdpResolution = { mode: "fit" } | { mode: "fixed"; width: number; height: number };
+
 /** Local settings of a node; a missing key means "inherit". */
 export interface Settings {
   username?: string;
   port?: number;
   keepaliveSecs?: number;
   credential?: string;
+  domain?: string;
+  rdpResolution?: RdpResolution;
+  rdpColorDepth?: number;
+  rdpClipboard?: boolean;
 }
 
 interface NodeBase {
@@ -53,6 +60,10 @@ export interface ResolvedNode {
   keepaliveSecs: FieldInfo<number>;
   /** A vault entry id; the name is looked up in the unlocked credential list. */
   credential: FieldInfo<string>;
+  domain: FieldInfo<string>;
+  rdpResolution: FieldInfo<RdpResolution>;
+  rdpColorDepth: FieldInfo<number>;
+  rdpClipboard: FieldInfo<boolean>;
 }
 
 /** Partial update: a key left out keeps the value, `null` resets to inherit. */
@@ -66,6 +77,10 @@ export interface NodePatch {
   keepaliveSecs?: number | null;
   /** A vault entry id sets it; `null` resets to inherit. */
   credential?: string | null;
+  domain?: string | null;
+  rdpResolution?: RdpResolution | null;
+  rdpColorDepth?: number | null;
+  rdpClipboard?: boolean | null;
 }
 
 export type Notice =

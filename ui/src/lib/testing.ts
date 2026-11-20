@@ -423,6 +423,10 @@ export function resolved(partial: Partial<ResolvedNode> & { id: string; name: st
     port: { local: null, effective: 22, source: { kind: "default" } },
     keepaliveSecs: { local: null, effective: 30, source: { kind: "default" } },
     credential: none,
+    domain: none,
+    rdpResolution: { local: null, effective: { mode: "fit" }, source: { kind: "default" } },
+    rdpColorDepth: { local: null, effective: 32, source: { kind: "default" } },
+    rdpClipboard: { local: null, effective: true, source: { kind: "default" } },
     ...partial,
   };
   return node;

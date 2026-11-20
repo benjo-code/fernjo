@@ -87,6 +87,11 @@
   );
   const isFolder = $derived(detail?.kind === "folder");
   const showKeepalive = $derived(isFolder || detail?.protocol === "ssh");
+  const showRdp = $derived(isFolder || detail?.protocol === "rdp");
+  const resolution = $derived(detail?.rdpResolution.effective ?? null);
+
+  /** What "Fixed size" starts with; Rust validates every size that is sent. */
+  const FIXED_START = { width: 1920, height: 1080 };
 
   // an error belongs to the node it was raised on
   $effect(() => {
@@ -109,7 +114,7 @@
 
   async function commitText(
     field: string,
-    key: "username",
+    key: "username" | "domain",
     text: string,
     info: FieldInfo<string>,
   ): Promise<boolean> {
@@ -139,6 +144,52 @@
     }
     if (n === info.local) return true;
     return save(field, { [key]: n });
+  }
+
+  async function chooseResolution(select: HTMLSelectElement) {
+    if (!detail) return;
+    const patch: NodePatch =
+      select.value === "fixed"
+        ? { rdpResolution: { mode: "fixed", ...FIXED_START } }
+        : { rdpResolution: { mode: "fit" } };
+    if (!(await save("resolution", patch))) select.value = resolution?.mode ?? "fit";
+  }
+
+  /** Only the number is parsed here; whether the size is allowed is Rust's call. */
+  async function commitDimension(which: "width" | "height", text: string): Promise<boolean> {
+    if (resolution?.mode !== "fixed") return false;
+    const label = which === "width" ? "Width" : "Height";
+    const value = text.trim();
+    if (!/^\d+$/.test(value)) {
+      setError("resolution", `${label} must be a whole number`);
+      return false;
+    }
+    const n = Number(value);
+    if (n > 0xffff) {
+      setError("resolution", `${label} is too large`);
+      return false;
+    }
+    if (n === resolution[which]) return true;
+    return save("resolution", {
+      rdpResolution: {
+        mode: "fixed",
+        width: resolution.width,
+        height: resolution.height,
+        [which]: n,
+      },
+    });
+  }
+
+  async function chooseColorDepth(select: HTMLSelectElement) {
+    if (!detail) return;
+    const ok = await save("colordepth", { rdpColorDepth: Number(select.value) });
+    if (!ok) select.value = show(detail.rdpColorDepth.effective);
+  }
+
+  async function toggleClipboard(box: HTMLInputElement) {
+    if (!detail) return;
+    const ok = await save("clipboard", { rdpClipboard: box.checked });
+    if (!ok) box.checked = detail.rdpClipboard.effective ?? true;
   }
 
   // The credential row: Rust reports the effective id and its source; the name comes from the
@@ -334,6 +385,119 @@
           {/snippet}
         </PropertyRow>
 
+        {#if showRdp}
+          <PropertyRow
+            name="domain"
+            label="Domain"
+            source={detail.domain.source}
+            hasValue={detail.domain.effective !== null}
+            error={errors.domain}
+            onreset={() => void save("domain", { domain: null })}
+          >
+            {#snippet children(id)}
+              <TextField
+                {id}
+                label="Domain"
+                title="Windows domain for the RDP login; a domain stored in the credential wins"
+                value={detail.domain.effective ?? ""}
+                onCommit={(text) => commitText("domain", "domain", text, detail.domain)}
+                onedit={() => setError("domain", null)}
+              />
+            {/snippet}
+          </PropertyRow>
+
+          <PropertyRow
+            name="resolution"
+            label="Resolution"
+            source={detail.rdpResolution.source}
+            hasValue={detail.rdpResolution.effective !== null}
+            error={errors.resolution}
+            onreset={() => void save("resolution", { rdpResolution: null })}
+          >
+            {#snippet children(id)}
+              <div class="res">
+                <select
+                  {id}
+                  aria-label="Resolution"
+                  value={resolution?.mode ?? "fit"}
+                  onchange={(e) => void chooseResolution(e.currentTarget)}
+                >
+                  <option value="fit">Fit to tab</option>
+                  <option value="fixed">Fixed size</option>
+                </select>
+                {#if resolution?.mode === "fixed"}
+                  <div class="dim">
+                    <TextField
+                      id={`${id}-width`}
+                      label="Width"
+                      title="Width in pixels"
+                      inputmode="numeric"
+                      value={String(resolution.width)}
+                      onCommit={(text) => commitDimension("width", text)}
+                      onedit={() => setError("resolution", null)}
+                    />
+                  </div>
+                  <span class="times" aria-hidden="true">×</span>
+                  <div class="dim">
+                    <TextField
+                      id={`${id}-height`}
+                      label="Height"
+                      title="Height in pixels"
+                      inputmode="numeric"
+                      value={String(resolution.height)}
+                      onCommit={(text) => commitDimension("height", text)}
+                      onedit={() => setError("resolution", null)}
+                    />
+                  </div>
+                {/if}
+              </div>
+            {/snippet}
+          </PropertyRow>
+
+          <PropertyRow
+            name="colordepth"
+            label="Colour depth"
+            source={detail.rdpColorDepth.source}
+            hasValue={detail.rdpColorDepth.effective !== null}
+            error={errors.colordepth}
+            onreset={() => void save("colordepth", { rdpColorDepth: null })}
+          >
+            {#snippet children(id)}
+              <select
+                {id}
+                aria-label="Colour depth"
+                value={show(detail.rdpColorDepth.effective)}
+                onchange={(e) => void chooseColorDepth(e.currentTarget)}
+              >
+                <option value="16">16-bit</option>
+                <option value="24">24-bit</option>
+                <option value="32">32-bit</option>
+              </select>
+            {/snippet}
+          </PropertyRow>
+
+          <PropertyRow
+            name="clipboard"
+            label="Clipboard"
+            source={detail.rdpClipboard.source}
+            hasValue={detail.rdpClipboard.effective !== null}
+            error={errors.clipboard}
+            onreset={() => void save("clipboard", { rdpClipboard: null })}
+          >
+            {#snippet children(id)}
+              <label class="check">
+                <input
+                  {id}
+                  type="checkbox"
+                  checked={detail.rdpClipboard.effective ?? true}
+                  onchange={(e) => void toggleClipboard(e.currentTarget)}
+                />
+                <span>Share text</span>
+              </label>
+            {/snippet}
+          </PropertyRow>
+        {/if}
+
         <PropertyRow name="description" label="Description" error={errors.description}>
           {#snippet children(id)}
             <TextField
@@ -483,6 +647,35 @@
   .cred > .static {
     flex: 1 1 90px;
     min-width: 0;
+  }
+
+  /* the resolution mode and, for a fixed size, the two numbers share the line */
+  .res {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+
+  .res > select {
+    flex: 1 1 70px;
+    min-width: 0;
+  }
+
+  .dim {
+    flex: 0 1 52px;
+    min-width: 0;
+  }
+
+  .times {
+    flex: none;
+    color: var(--color-text-muted);
+  }
+
+  .check {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
   }
 
   .small {
