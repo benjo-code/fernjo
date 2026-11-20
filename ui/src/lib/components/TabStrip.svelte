@@ -39,7 +39,7 @@
       case "connecting":
         return "Connecting…";
       case "needsVault":
-        return "Needs vault";
+        return "Unlock vault";
       case "disconnected":
         return tab.detail ?? "Disconnected";
       default:

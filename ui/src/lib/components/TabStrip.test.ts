@@ -88,7 +88,7 @@ describe("TabStrip", () => {
     expect(connected!.querySelector(".lamp")?.getAttribute("data-state")).toBe("live");
     expect(connected!.querySelector(".caption")).toBeNull();
 
-    expect(needsVault!.querySelector(".caption")?.textContent).toBe("Needs vault");
+    expect(needsVault!.querySelector(".caption")?.textContent).toBe("Unlock vault");
     expect(needsVault!.querySelector(".lamp")).toBeNull();
 
     expect(dropped!.querySelector(".lamp")?.getAttribute("data-state")).toBe("dropped");
@@ -142,7 +142,7 @@ describe("TabStrip", () => {
     expect(caption(0)).toBe("Confirm host key");
     expect(caption(1)).toBe("Confirm host key");
     expect(caption(2)).toBe("Needs input");
-    expect(caption(3)).toBe("Needs vault");
+    expect(caption(3)).toBe("Unlock vault");
     expect(caption(4)).toBe("Confirm host key");
     // answered: back to the plain state caption
     sessions.tabs[2]!.prompt = null;

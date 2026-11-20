@@ -105,7 +105,7 @@ test("session_prompt_picks_the_variant", async () => {
     exitStatus: null,
     endedCleanly: false,
   });
-  expect(title()).toBe("n1 needs the vault");
+  expect(title()).toBe("Unlock the vault to connect to n1");
 
   await show({
     kind: "state",

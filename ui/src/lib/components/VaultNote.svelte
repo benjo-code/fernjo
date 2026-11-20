@@ -13,6 +13,7 @@
     open?: boolean;
   } = $props();
 
+  const KEYCHAIN_HINT = "Keeps the key in the OS keychain so the vault unlocks at start.";
   const WRONG_PASSWORD = "Wrong master password. Check Caps Lock and try again.";
 
   const phase = $derived(vault.status?.state ?? null);
@@ -178,7 +179,7 @@
     </div>
 
     {#if phase === "locked"}
-      <p class="body">Connections with stored credentials ask for it.</p>
+      <p class="body">Connections that use a stored credential need the vault unlocked.</p>
       {#if issueLine}
         <p class="body" role="status">{issueLine}</p>
       {/if}
@@ -203,9 +204,9 @@
             />
             <span>Unlock automatically on this device</span>
           </label>
-          {#if remember || autoUnlock}
-            <p class="hint">Lock then lasts until the next start.</p>
-          {/if}
+          <p class="hint">
+            {KEYCHAIN_HINT}{remember || autoUnlock ? " Lock then lasts until the next start." : ""}
+          </p>
           <div class="actions">
             <button type="submit" class="btn small" aria-disabled={busy}>Unlock</button>
             {#if olderOffered}
@@ -256,6 +257,7 @@
             />
             <span>Unlock automatically on this device</span>
           </label>
+          <p class="hint">{KEYCHAIN_HINT}</p>
           <div class="actions">
             <button type="submit" class="btn small primary" aria-disabled={busy}>
               Create vault

@@ -91,9 +91,33 @@ describe("VaultManager", () => {
     expect(input("cred-password").placeholder).toBe("unchanged");
   });
 
+  test("the_title_is_vault_and_credentials_heads_the_list_with_a_singular_plural_count", async () => {
+    const count = () => document.querySelector(".list-head .muted")?.textContent?.trim();
+    const reset = () => {
+      unmount(mounted!);
+      mounted = null;
+      document.body.innerHTML = "";
+    };
+    await setup();
+    expect(document.getElementById("vault-manager-title")?.textContent).toBe("Vault");
+    expect(document.querySelector(".list h3")?.textContent?.trim()).toBe("Credentials");
+    expect(count()).toBe("2 credentials");
+    expect(document.body.textContent).not.toContain("stored");
+    reset();
+
+    await setup({}, { list: [entries[0]!] });
+    expect(count()).toBe("1 credential");
+    reset();
+
+    await setup({}, { list: [] });
+    expect(count()).toBe("0 credentials");
+  });
+
   test("empty_state_offers_new", async () => {
     await setup({}, { list: [] });
-    expect(document.body.textContent).toContain("No credentials yet.");
+    expect(document.body.textContent!.replace(/\s+/g, " ")).toContain(
+      "No credentials yet. Create one with + New and pick it on a connection's Credential property.",
+    );
     expect(buttons().filter((b) => b.textContent?.trim() === "+ New").length).toBeGreaterThan(0);
   });
 

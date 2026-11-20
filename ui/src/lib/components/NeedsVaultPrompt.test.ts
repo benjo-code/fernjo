@@ -64,10 +64,14 @@ test("needs_vault_unlock_calls_vault_then_resume", async () => {
       order.push("resume");
     },
   });
-  expect(document.body.textContent).toContain("n1 needs the vault");
+  expect(document.body.textContent).toContain("Unlock the vault to connect to n1");
   expect(document.body.textContent!.replace(/\s+/g, " ")).toContain("other tabs keep running");
   expect(document.activeElement).toBe(field());
   expect(document.body.textContent).toContain("Unlock automatically on this device");
+  // the explanation is visible before the box is ticked
+  expect(document.body.textContent).toContain(
+    "Keeps the key in the OS keychain so the vault unlocks at start.",
+  );
   expect(button("Unlock and connect").classList.contains("primary")).toBe(true);
   expect(document.querySelectorAll(".primary")).toHaveLength(1);
 

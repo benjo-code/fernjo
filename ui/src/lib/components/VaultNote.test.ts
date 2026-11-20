@@ -5,6 +5,8 @@ import type { Api, VaultStatus } from "../types";
 import { VaultStore } from "../vault.svelte";
 import VaultNote from "./VaultNote.svelte";
 
+const KEYCHAIN_HINT = "Keeps the key in the OS keychain so the vault unlocks at start.";
+
 let mounted: ReturnType<typeof mount> | null = null;
 
 afterEach(() => {
@@ -198,7 +200,9 @@ describe("VaultNote", () => {
   test("locked_and_no_vault_notes_are_compact_until_asked", async () => {
     await setup(vaultStatus({ state: "locked" }));
     expect(document.body.textContent).toContain("Vault locked");
-    expect(document.body.textContent).toContain("Connections with stored credentials ask for it.");
+    expect(document.body.textContent).toContain(
+      "Connections that use a stored credential need the vault unlocked.",
+    );
     expect(button("Unlock")).toBeDefined();
     expect(document.querySelector("input")).toBeNull();
     expect(document.querySelector("form")).toBeNull();
@@ -264,6 +268,21 @@ describe("VaultNote", () => {
     expect(document.body.textContent).toContain("Lock then lasts until the next start.");
   });
 
+  test("the_keychain_hint_is_always_visible_next_to_the_checkbox_in_both_forms", async () => {
+    await setup(vaultStatus({ state: "locked" }));
+    await expand();
+    expect(document.body.textContent).toContain(KEYCHAIN_HINT);
+    expect(document.body.textContent).not.toContain("Lock then lasts");
+    unmount(mounted!);
+    mounted = null;
+    document.body.innerHTML = "";
+
+    await setup(vaultStatus({ state: "none" }));
+    await expand("Create vault");
+    expect(document.body.textContent).toContain(KEYCHAIN_HINT);
+    expect(document.body.textContent).not.toContain("Lock then lasts");
+  });
+
   test("a_status_arriving_after_mount_updates_the_untouched_checkbox", async () => {
     const { vault } = await setup(vaultStatus({ state: "locked" }), {
       vaultUnlock: async () => vaultStatus({ state: "locked", autoUnlock: true }),
@@ -272,6 +291,7 @@ describe("VaultNote", () => {
     const box = document.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
     expect(box.checked).toBe(false);
     expect(document.body.textContent).not.toContain("Lock then lasts");
+    expect(document.body.textContent).toContain(KEYCHAIN_HINT);
     await vault.unlock("x", false);
     await settle();
     expect(box.checked).toBe(true);

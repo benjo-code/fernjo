@@ -290,7 +290,7 @@
   <header class="head">
     <div class="title">
       <Icon name="unlock" size={16} />
-      <h2 id="vault-manager-title">Credentials</h2>
+      <h2 id="vault-manager-title">Vault</h2>
     </div>
     <div class="head-actions">
       <label class="check">
@@ -354,11 +354,21 @@
   <div class="body">
     <div class="list">
       <div class="list-head">
-        <span class="muted">{vault.credentials.length} stored</span>
+        <div class="list-title">
+          <h3>Credentials</h3>
+          <span class="muted"
+            >{vault.credentials.length === 1
+              ? "1 credential"
+              : `${vault.credentials.length} credentials`}</span
+          >
+        </div>
         <button type="button" class="btn small" onclick={startNew}>+ New</button>
       </div>
       {#if vault.credentials.length === 0}
-        <p class="muted pad">No credentials yet.</p>
+        <p class="muted pad">
+          No credentials yet. Create one with + New and pick it on a connection's Credential
+          property.
+        </p>
       {:else}
         <ul>
           {#each vault.credentials as info (info.id)}
@@ -649,6 +659,17 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+  }
+
+  .list-title {
+    display: flex;
+    flex-direction: column;
+  }
+
+  h3 {
+    margin: 0;
+    font-size: var(--text-md);
+    font-weight: var(--weight-strong);
   }
 
   ul {
