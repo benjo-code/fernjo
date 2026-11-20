@@ -263,7 +263,7 @@ Body text uses tabular figures (`font-variant-numeric: tabular-nums`) so address
 - **Body strong** (600, 13px): folder names, the selected row, the properties panel header name, the vault note title.
 - **Medium** (`--weight-medium` 500, 13px): button labels and field labels.
 - **Label** (400, `--text-sm` 12px, muted): property keys, "from <folder>" marks, host column, vault chip, vault note body, the properties panel kind ("SSH connection"). Normal case, no letter-spacing.
-- **Caption** (400, `--text-xs` 11px): tab status text ("Connecting…", "Needs vault") and the label of the outlined Reconnect button in the reason bar.
+- **Caption** (400, `--text-xs` 11px): tab status text ("Connecting…", "Unlock vault") and the label of the outlined Reconnect button in the reason bar.
 - **Mono** (400, 13px, 19px line-height): the terminal.
 
 ### Named Rules
@@ -341,7 +341,7 @@ Classic tab strip on the housing (`--color-sidebar`), 36 px, tabs 150–260 px w
 - **RDP:** identical structure with the monitor icon.
 
 ### Inline unlock prompt (inside a tab)
-Shown in the session area of the tab that needs the vault (tab status "Needs vault"), on `--color-bg`, a 420 px column 88 px from the top with 14 px gaps: lock icon plus title "<name> needs the vault" (17 px, 600), a muted explanation that names the credential and says other tabs keep running, the master password field (masked, show toggle), the "Unlock automatically on this device" checkbox, and the actions: yellow "Unlock and connect" and an outlined "Cancel".
+Shown in the session area of the tab that needs the vault (tab status "Unlock vault"), on `--color-bg`, a 420 px column 88 px from the top with 14 px gaps: lock icon plus title "<name> needs the vault" (17 px, 600), a muted explanation that names the credential and says other tabs keep running, the master password field (masked, show toggle), the "Unlock automatically on this device" checkbox, and the actions: yellow "Unlock and connect" and an outlined "Cancel".
 - **Error state:** the field border and a 1 px ring turn `--color-danger`, and an alert icon plus "Wrong master password. Check Caps Lock and try again." appear in `--color-danger`.
 
 ### Session prompts (inside a tab)
