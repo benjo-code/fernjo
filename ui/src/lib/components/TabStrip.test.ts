@@ -175,7 +175,12 @@ describe("TabStrip", () => {
     setup(["connecting", "connected", "needsVault", "disconnected", "disconnected"]);
     const withButton = tabs().map((el) => el.querySelector("button.reconnect") !== null);
     expect(withButton).toEqual([false, false, false, true, true]);
-    expect(tabs()[3]!.querySelector("button.reconnect")?.textContent).toContain("Reconnect");
+    // icon only: the labelled button is in the bar above the terminal, so the title keeps the room
+    const button = tabs()[3]!.querySelector("button.reconnect")!;
+    expect(button.textContent?.trim()).toBe("");
+    expect(button.querySelector("svg")).not.toBeNull();
+    expect(button.getAttribute("aria-label")).toBe("Reconnect Name d");
+    expect(button.getAttribute("title")).toBe("Reconnect");
   });
 
   test("clicking_reconnect_calls_the_store", () => {

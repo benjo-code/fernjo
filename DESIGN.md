@@ -125,9 +125,9 @@ components:
   button-reconnect:
     backgroundColor: "{colors.accent}"
     textColor: "{colors.accent-text}"
-    typography: "{typography.caption}"
     rounded: "{rounded.sm}"
-    padding: "2px 7px"
+    width: "20px"
+    height: "20px"
   input:
     backgroundColor: "{colors.surface}"
     textColor: "{colors.text}"
@@ -263,7 +263,7 @@ Body text uses tabular figures (`font-variant-numeric: tabular-nums`) so address
 - **Body strong** (600, 13px): folder names, the selected row, the properties panel header name, the vault note title.
 - **Medium** (`--weight-medium` 500, 13px): button labels and field labels.
 - **Label** (400, `--text-sm` 12px, muted): property keys, "from <folder>" marks, host column, vault chip, vault note body, the properties panel kind ("SSH connection"). Normal case, no letter-spacing.
-- **Caption** (400, `--text-xs` 11px): tab status text ("Connecting…", "Needs vault") and the Reconnect button.
+- **Caption** (400, `--text-xs` 11px): tab status text ("Connecting…", "Needs vault") and the label of the outlined Reconnect button in the reason bar.
 - **Mono** (400, 13px, 19px line-height): the terminal.
 
 ### Named Rules
@@ -336,7 +336,7 @@ Classic tab strip on the housing (`--color-sidebar`), 36 px, tabs 150–260 px w
 - **Active:** background `--term-bg` so it joins the session surface, text `--color-text`, 2 px ink line at the bottom.
 - **Connected:** filled mark.
 - **Connecting:** pulsing ring mark plus "Connecting…".
-- **Disconnected:** struck ring mark plus the yellow Reconnect button (key fill, 11 px, `--radius-sm`, reconnect icon), on every dropped tab.
+- **Disconnected:** struck ring mark plus the yellow Reconnect button (key fill, icon only, 20 px square like the close button, `--radius-sm`; the name is its `aria-label` and tooltip), on every dropped tab. There is no status text on the tab, so the title keeps its room. The tab in front also shows a one-line reason bar above the terminal (housing background, 1 px bottom rule, the struck ring mark, the reason, and an outlined secondary Reconnect button); it is not yellow, so the tab's key stays the one yellow action.
 - **RDP:** identical structure with the monitor icon.
 
 ### Inline unlock prompt (inside a tab)

@@ -108,7 +108,7 @@
     white-space: nowrap;
   }
 
-  /* the same yellow key as Reconnect on the tab: one action, shown in both places */
+  /* outlined, not yellow: the tab's own icon button is the one yellow key (One Key Rule) */
   .reconnect {
     display: flex;
     flex: none;
@@ -116,14 +116,17 @@
     gap: var(--space-2);
     height: 20px;
     padding: 0 var(--space-3) 0 var(--space-2);
-    border: 0;
+    border: 1px solid var(--color-border-strong);
     border-radius: var(--radius-sm);
-    background: var(--color-accent);
-    color: var(--color-accent-text);
+    background: transparent;
+    color: var(--color-text);
     font: inherit;
     font-size: var(--text-xs);
-    font-weight: var(--weight-medium);
     cursor: default;
+  }
+
+  .reconnect:hover {
+    background: var(--color-hover);
   }
 
   /* an empty box would still catch the pointer above the active terminal */
