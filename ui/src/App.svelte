@@ -125,6 +125,21 @@
 
   let sidebar: Sidebar | undefined = $state();
 
+  // Asks the manager to start on the new-credential form; a fresh token each time, so it also
+  // works while the manager is open. Opening it any other way clears the request.
+  let newCredentialToken = $state<number | null>(null);
+  let newCredentialCount = 0;
+
+  function openVault() {
+    newCredentialToken = null;
+    view = "vault";
+  }
+
+  function newCredential() {
+    newCredentialToken = ++newCredentialCount;
+    view = "vault";
+  }
+
   /**
    * Only the app chords are handled here: tab switching, closing and the filter. Copy, paste and
    * search belong to the terminal controller, which leaves the app chords unhandled so they get here.
@@ -177,14 +192,21 @@
     {store}
     {vault}
     {sessions}
-    onOpenVault={() => (view = "vault")}
+    onOpenVault={openVault}
     onsettings={() => (folderOpen = true)}
     onimport={() => (importOpen = true)}
     {restartPending}
     onRestart={() => void restart()}
     {layout}
   >
-    <PropertiesPanel {store} {vault} {layout} />
+    <PropertiesPanel
+      {store}
+      {vault}
+      {layout}
+      onOpenVault={openVault}
+      onFocusVaultForm={() => sidebar?.focusVaultForm()}
+      onNewCredential={newCredential}
+    />
   </Sidebar>
   <main class="main">
     {#if sessions.tabs.length > 0}
@@ -192,7 +214,12 @@
     {/if}
     <div class="content">
       {#if view === "vault"}
-        <VaultManager {vault} tree={store} onclose={() => (view = "empty")} />
+        <VaultManager
+          {vault}
+          tree={store}
+          newToken={newCredentialToken}
+          onclose={() => (view = "empty")}
+        />
       {/if}
       {#if sessions.tabs.length > 0}
         <SessionArea {sessions} {vault} settings={terminalSettings} hidden={view === "vault"} />

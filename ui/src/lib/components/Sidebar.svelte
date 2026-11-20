@@ -46,6 +46,11 @@
     filterBox?.focus();
   }
 
+  /** Opens and focuses the vault form of the note (create or unlock); the Credential row calls it. */
+  export function focusVaultForm() {
+    void note?.focusForm();
+  }
+
   let note: VaultNote | undefined = $state();
   let noteOpen = $state(false);
 </script>

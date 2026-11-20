@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tick, untrack } from "svelte";
   import type { SessionStore, Tab } from "../sessions.svelte";
-  import type { VaultStore } from "../vault.svelte";
+  import { KEYCHAIN_HINT, type VaultStore } from "../vault.svelte";
   import PasswordField from "./PasswordField.svelte";
   import PromptFrame from "./PromptFrame.svelte";
 
@@ -90,7 +90,7 @@
       />
       <span>Unlock automatically on this device</span>
     </label>
-    <p class="hint">Keeps the key in the OS keychain so the vault unlocks at start.</p>
+    <p class="hint">{KEYCHAIN_HINT}</p>
     <div class="actions">
       <button type="submit" class="btn primary" aria-disabled={busy}>Unlock and connect</button>
       <button type="button" class="btn" onclick={cancel}>Cancel</button>

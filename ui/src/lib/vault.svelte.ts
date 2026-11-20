@@ -14,6 +14,9 @@ import type {
   VaultStatus,
 } from "./types";
 
+/** The line under every "Unlock automatically on this device" checkbox. */
+export const KEYCHAIN_HINT = "Keeps the key in the OS keychain so the vault unlocks at start.";
+
 /** The result of a call whose answer the caller needs: the value, or the error to show. */
 export type Outcome<T> = { value: T; error: null } | { value: null; error: ApiError };
 

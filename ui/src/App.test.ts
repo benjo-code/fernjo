@@ -1,7 +1,16 @@
 import { mount, unmount } from "svelte";
 import { afterEach, expect, test } from "vitest";
 import App from "./App.svelte";
-import { apiError, conn, dataFolder, folder, mockApi, vaultStatus } from "./lib/testing";
+import {
+  apiError,
+  conn,
+  credential,
+  dataFolder,
+  folder,
+  mockApi,
+  resolved,
+  vaultStatus,
+} from "./lib/testing";
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -173,5 +182,93 @@ test("without a stored width the shell grid keeps the token default", async () =
   const app = mount(App, { target: document.body, props: { api } });
   await new Promise((r) => setTimeout(r, 0));
   expect(document.querySelector<HTMLElement>(".shell")!.style.gridTemplateColumns).toBe("");
+  unmount(app);
+});
+
+// the Credential row of the properties panel: its buttons reach the vault from a connection
+async function selectConnection(impl: Parameters<typeof mockApi>[1], id = "web-01") {
+  const mock = mockApi([conn(id)], {
+    getNode: async (nodeId: string) => resolved({ id: nodeId, name: nodeId }),
+    ...impl,
+  });
+  const app = mount(App, { target: document.body, props: { api: mock.api } });
+  await settle();
+  document.querySelector<HTMLElement>(`[data-node-id='${id}']`)!.click();
+  await settle();
+  return { app, ...mock };
+}
+const rowButton = (text: string) =>
+  [...document.querySelectorAll<HTMLButtonElement>("[data-field='credential'] button")].find(
+    (b) => b.textContent?.trim() === text,
+  );
+
+test("the_credential_row_create_vault_button_opens_and_focuses_the_create_form", async () => {
+  const { app } = await selectConnection({
+    vaultStatus: async () => vaultStatus({ state: "none" }),
+  });
+  expect(document.querySelector("#vault-create-password")).toBeNull();
+  rowButton("Create vault")!.click();
+  await settle();
+  expect(document.activeElement).toBe(document.querySelector("#vault-create-password"));
+  unmount(app);
+});
+
+test("the_credential_row_unlock_button_opens_and_focuses_the_unlock_form", async () => {
+  const { app } = await selectConnection({
+    vaultStatus: async () => vaultStatus({ state: "locked" }),
+  });
+  rowButton("Unlock")!.click();
+  await settle();
+  expect(document.activeElement).toBe(document.querySelector("#vault-unlock-password"));
+  unmount(app);
+});
+
+test("the_credential_row_manage_button_opens_the_vault_manager_without_a_new_entry", async () => {
+  const { app } = await selectConnection({
+    vaultStatus: async () => vaultStatus({ state: "unlocked" }),
+    listCredentials: async () => [credential({ id: "c1", name: "Prod root" })],
+  });
+  rowButton("Manage…")!.click();
+  await settle();
+  expect(document.querySelector("main")?.textContent).toContain("Credentials");
+  expect(document.querySelector("#cred-name")).toBeNull();
+  unmount(app);
+});
+
+test("new_credential_in_the_dropdown_opens_the_manager_on_a_new_entry_each_time", async () => {
+  const { app, calls } = await selectConnection({
+    vaultStatus: async () => vaultStatus({ state: "unlocked" }),
+    listCredentials: async () => [credential({ id: "c1", name: "Prod root", username: "root" })],
+  });
+  const choose = async () => {
+    const select = document.querySelector<HTMLSelectElement>("[data-field='credential'] select")!;
+    select.value = select.options[select.options.length - 1]!.value;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await settle();
+  };
+  await choose();
+  const name = () => document.querySelector<HTMLInputElement>("#cred-name");
+  expect(name()).not.toBeNull();
+  expect(name()!.value).toBe("");
+  expect((document.querySelector("#cred-kind") as HTMLSelectElement).disabled).toBe(false);
+  expect(calls.updateNode).toHaveLength(0);
+
+  // already open on another entry: the request switches to the new entry again
+  document.querySelector<HTMLElement>("[data-credential='c1']")!.click();
+  await settle();
+  expect(name()!.value).toBe("Prod root");
+  await choose();
+  expect(name()!.value).toBe("");
+  expect(calls.updateNode).toHaveLength(0);
+
+  // closed and reopened through the vault chip: no new entry is pre-selected
+  [...document.querySelectorAll("main button")]
+    .find((b) => b.textContent === "Close")!
+    .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  await settle();
+  document.querySelector<HTMLButtonElement>("button[aria-label^='Vault']")!.click();
+  await settle();
+  expect(document.querySelector("main")?.textContent).toContain("Credentials");
+  expect(name()).toBeNull();
   unmount(app);
 });

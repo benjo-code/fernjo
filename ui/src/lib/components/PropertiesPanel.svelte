@@ -13,7 +13,20 @@
     store,
     vault,
     layout = new LayoutStore(),
-  }: { store: TreeStore; vault: VaultStore; layout?: LayoutStore } = $props();
+    onOpenVault,
+    onFocusVaultForm,
+    onNewCredential,
+  }: {
+    store: TreeStore;
+    vault: VaultStore;
+    layout?: LayoutStore;
+    /** "Manage…" (vault unlocked): open the credential manager. */
+    onOpenVault: () => void;
+    /** "Create vault" / "Unlock": bring the sidebar note's form into view and focus it. */
+    onFocusVaultForm: () => void;
+    /** "New credential…" in the dropdown: open the manager on a new entry. */
+    onNewCredential: () => void;
+  } = $props();
 
   const ROW_HEIGHT_TREE = 24; // --row-height-tree
   let section: HTMLElement | undefined = $state();
@@ -141,9 +154,17 @@
       : (vault.credentials.find((c) => c.id === credentialId)?.name ?? null),
   );
 
+  /** The last dropdown entry is an action, not a credential; it is never stored or kept selected. */
+  const NEW_CREDENTIAL = "__new__";
+
   async function chooseCredential(select: HTMLSelectElement) {
     if (!detail) return;
     const chosen = select.value;
+    if (chosen === NEW_CREDENTIAL) {
+      select.value = detail.credential.effective ?? "";
+      onNewCredential();
+      return;
+    }
     const ok =
       chosen === ""
         ? // "None" clears a local value (same as Inherit); with nothing local there is nothing to clear
@@ -335,29 +356,42 @@
           onreset={listReady ? () => void save("credential", { credential: null }) : undefined}
         >
           {#snippet children(id)}
-            {#if !unlocked}
-              <span {id} class="static"
-                >{vaultState === "locked" ? "Vault locked" : "No vault"}</span
-              >
-            {:else if vault.credentialsState === "loading"}
-              <span {id} class="static">Loading…</span>
-            {:else if vault.credentialsState === "failed"}
-              <span {id} class="static">Credentials unavailable</span>
-            {:else if credentialId !== null && credentialName === null}
-              <span {id} class="static">Missing credential</span>
-            {:else}
-              <select
-                {id}
-                aria-label="Credential"
-                value={credentialId ?? ""}
-                onchange={(e) => void chooseCredential(e.currentTarget)}
-              >
-                <option value="">None</option>
-                {#each vault.credentials as c (c.id)}
-                  <option value={c.id}>{c.name}</option>
-                {/each}
-              </select>
-            {/if}
+            <div class="cred">
+              {#if !unlocked}
+                <span {id} class="static"
+                  >{vaultState === "locked" ? "Vault locked" : "No vault"}</span
+                >
+              {:else if vault.credentialsState === "loading"}
+                <span {id} class="static">Loading…</span>
+              {:else if vault.credentialsState === "failed"}
+                <span {id} class="static">Credentials unavailable</span>
+              {:else if credentialId !== null && credentialName === null}
+                <span {id} class="static">Missing credential</span>
+              {:else}
+                <select
+                  {id}
+                  aria-label="Credential"
+                  value={credentialId ?? ""}
+                  onchange={(e) => void chooseCredential(e.currentTarget)}
+                >
+                  <option value="">None</option>
+                  {#each vault.credentials as c (c.id)}
+                    <option value={c.id}>{c.name}</option>
+                  {/each}
+                  <option value={NEW_CREDENTIAL}>New credential…</option>
+                </select>
+              {/if}
+              <!-- the way into the vault; an unusable vault has none, its note explains -->
+              {#if vaultState === "none"}
+                <button type="button" class="btn small" onclick={onFocusVaultForm}>
+                  Create vault
+                </button>
+              {:else if vaultState === "locked"}
+                <button type="button" class="btn small" onclick={onFocusVaultForm}>Unlock</button>
+              {:else if listReady}
+                <button type="button" class="btn small" onclick={onOpenVault}>Manage…</button>
+              {/if}
+            </div>
           {/snippet}
         </PropertyRow>
       {/if}
@@ -430,6 +464,29 @@
     margin: var(--space-2) 0;
     color: var(--color-text-muted);
     font-size: var(--text-sm);
+  }
+
+  /* the value and the vault button share the line and wrap when the sidebar is narrow */
+  .cred {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1) var(--space-2);
+    min-width: 0;
+  }
+
+  .cred > :global(select),
+  .cred > .static {
+    flex: 1 1 90px;
+    min-width: 0;
+  }
+
+  .small {
+    flex: none;
+    height: 22px;
+    padding: 0 var(--space-3);
+    font-size: var(--text-sm);
+    white-space: nowrap;
   }
 
   .static {

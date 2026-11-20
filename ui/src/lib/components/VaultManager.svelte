@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
+  import { onDestroy, untrack } from "svelte";
   import type { TreeStore } from "../store.svelte";
   import type {
     CredentialDraft,
@@ -9,7 +9,7 @@
     UsageItem,
   } from "../types";
   import type { ApiError } from "../types";
-  import type { VaultStore } from "../vault.svelte";
+  import { KEYCHAIN_HINT, type VaultStore } from "../vault.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import Icon from "./Icon.svelte";
   import PasswordField from "./PasswordField.svelte";
@@ -19,12 +19,18 @@
     tree,
     onclose,
     revealMs = 10_000,
+    newToken = null,
   }: {
     vault: VaultStore;
     tree: TreeStore;
     onclose: () => void;
     /** How long a revealed secret stays visible. */
     revealMs?: number;
+    /**
+     * A request to start on the new-credential form. A token this manager has not seen yet
+     * (also the one it is mounted with) selects "new"; the same token again, or null, does not.
+     */
+    newToken?: number | null;
   } = $props();
 
   type Kind = CredentialInfo["kind"];
@@ -134,6 +140,14 @@
     domain = "";
     notes = "";
   }
+
+  let seenToken: number | null = null;
+  $effect(() => {
+    const token = newToken;
+    if (token === null || token === seenToken) return;
+    seenToken = token;
+    untrack(startNew);
+  });
 
   function showError(err: ApiError) {
     handleError(err);
@@ -301,9 +315,9 @@
       <button type="button" class="btn small" onclick={openChange}>Change password</button>
       <button type="button" class="btn small" onclick={close}>Close</button>
     </div>
-    {#if autoUnlock}
-      <p class="hint line">Lock then lasts until the next start.</p>
-    {/if}
+    <p class="hint line">
+      {KEYCHAIN_HINT}{autoUnlock ? " Lock then lasts until the next start." : ""}
+    </p>
     {#if autoError}
       <p class="error line" role="alert">
         <Icon name="alert" size={14} /><span>{autoError}</span>

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from "svelte";
-  import type { VaultStore } from "../vault.svelte";
+  import { KEYCHAIN_HINT, type VaultStore } from "../vault.svelte";
   import Icon from "./Icon.svelte";
   import PasswordField from "./PasswordField.svelte";
 
@@ -13,7 +13,6 @@
     open?: boolean;
   } = $props();
 
-  const KEYCHAIN_HINT = "Keeps the key in the OS keychain so the vault unlocks at start.";
   const WRONG_PASSWORD = "Wrong master password. Check Caps Lock and try again.";
 
   const phase = $derived(vault.status?.state ?? null);
