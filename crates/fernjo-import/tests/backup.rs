@@ -142,12 +142,12 @@ fn damaged_body_json_is_damaged() {
 fn a_newer_connections_schema_is_newer_version_not_damaged() {
     let body = serde_json::json!({
         "schemaVersion": 1, "createdAt": "x", "app": "y",
-        "connections": {"schemaVersion": 3, "children": []}, "entries": []
+        "connections": {"schemaVersion": 4, "children": []}, "entries": []
     });
     let err = backup::open(&seal(body.to_string().as_bytes()), &pw(PW)).unwrap_err();
-    assert_eq!(err, BackupError::NewerVersion { found: 3 });
+    assert_eq!(err, BackupError::NewerVersion { found: 4 });
     assert_eq!(err.code(), "newer_version");
-    assert!(err.to_string().contains('3'), "{err}");
+    assert!(err.to_string().contains('4'), "{err}");
 }
 
 /// `levels` nested folders around one connection, as a `connections` document.

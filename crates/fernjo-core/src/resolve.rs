@@ -1,8 +1,9 @@
 //! Effective-value resolution: walks from a node up through its folders.
 
 use crate::model::{
-    DEFAULT_KEEPALIVE_SECS, DEFAULT_RDP_PORT, DEFAULT_SSH_PORT, Field, Node, NodeKind, NodeType,
-    Protocol, ResolvedNode, Settings, Source,
+    DEFAULT_KEEPALIVE_SECS, DEFAULT_RDP_CLIPBOARD, DEFAULT_RDP_COLOR_DEPTH, DEFAULT_RDP_PORT,
+    DEFAULT_SSH_PORT, Field, Node, NodeKind, NodeType, Protocol, RdpResolution, ResolvedNode,
+    Settings, Source,
 };
 
 /// Resolves the effective value of every setting of `node`.
@@ -35,6 +36,25 @@ pub fn resolve(ancestors: &[&Node], node: &Node) -> ResolvedNode {
             Some(DEFAULT_KEEPALIVE_SECS),
         ),
         credential: field(ancestors, node, |s| s.credential, None),
+        domain: field(ancestors, node, |s| s.domain.clone(), None),
+        rdp_resolution: field(
+            ancestors,
+            node,
+            |s| s.rdp_resolution,
+            Some(RdpResolution::Fit),
+        ),
+        rdp_color_depth: field(
+            ancestors,
+            node,
+            |s| s.rdp_color_depth,
+            Some(DEFAULT_RDP_COLOR_DEPTH),
+        ),
+        rdp_clipboard: field(
+            ancestors,
+            node,
+            |s| s.rdp_clipboard,
+            Some(DEFAULT_RDP_CLIPBOARD),
+        ),
     }
 }
 
@@ -228,6 +248,95 @@ mod tests {
         let r = resolve(&[], &conn("a", Protocol::Ssh, Settings::default()));
         assert_eq!(r.credential.effective, None);
         assert_eq!(r.credential.source, Source::Default);
+    }
+
+    #[test]
+    fn rdp_defaults_are_fit_32_and_clipboard_on() {
+        let r = resolve(&[], &conn("a", Protocol::Rdp, Settings::default()));
+        assert_eq!(r.rdp_resolution.effective, Some(RdpResolution::Fit));
+        assert_eq!(r.rdp_resolution.source, Source::Default);
+        assert_eq!(r.rdp_color_depth.effective, Some(32));
+        assert_eq!(r.rdp_color_depth.source, Source::Default);
+        assert_eq!(r.rdp_clipboard.effective, Some(true));
+        assert_eq!(r.rdp_clipboard.source, Source::Default);
+        assert_eq!(r.domain.effective, None);
+        assert_eq!(r.domain.source, Source::Default);
+    }
+
+    #[test]
+    fn rdp_settings_inherit_from_a_folder() {
+        let f = folder(
+            "F",
+            Settings {
+                rdp_color_depth: Some(16),
+                domain: Some("CORP".to_string()),
+                rdp_resolution: Some(RdpResolution::Fixed {
+                    width: 1920,
+                    height: 1080,
+                }),
+                rdp_clipboard: Some(false),
+                ..Settings::default()
+            },
+            vec![],
+        );
+        let c = conn("c", Protocol::Rdp, Settings::default());
+        let r = resolve(&[&f], &c);
+        let from_f = Source::Folder {
+            id: f.id,
+            name: "F".to_string(),
+        };
+        assert_eq!(r.rdp_color_depth.effective, Some(16));
+        assert_eq!(r.rdp_color_depth.local, None);
+        assert_eq!(r.rdp_color_depth.source, from_f);
+        assert_eq!(r.domain.effective.as_deref(), Some("CORP"));
+        assert_eq!(r.domain.source, from_f);
+        assert_eq!(
+            r.rdp_resolution.effective,
+            Some(RdpResolution::Fixed {
+                width: 1920,
+                height: 1080
+            })
+        );
+        assert_eq!(r.rdp_clipboard.effective, Some(false));
+        assert_eq!(r.rdp_clipboard.source, from_f);
+    }
+
+    #[test]
+    fn a_connection_value_beats_the_folder() {
+        let f = folder(
+            "F",
+            Settings {
+                rdp_color_depth: Some(16),
+                ..Settings::default()
+            },
+            vec![],
+        );
+        let c = conn(
+            "c",
+            Protocol::Rdp,
+            Settings {
+                rdp_color_depth: Some(24),
+                ..Settings::default()
+            },
+        );
+        let r = resolve(&[&f], &c);
+        assert_eq!(r.rdp_color_depth.effective, Some(24));
+        assert_eq!(r.rdp_color_depth.source, Source::Local);
+    }
+
+    #[test]
+    fn rdp_resolution_json_shape() {
+        let fit = serde_json::to_value(RdpResolution::Fit).unwrap();
+        assert_eq!(fit, serde_json::json!({ "mode": "fit" }));
+        let fixed = serde_json::to_value(RdpResolution::Fixed {
+            width: 1920,
+            height: 1080,
+        })
+        .unwrap();
+        assert_eq!(
+            fixed,
+            serde_json::json!({ "mode": "fixed", "width": 1920, "height": 1080 })
+        );
     }
 
     #[test]

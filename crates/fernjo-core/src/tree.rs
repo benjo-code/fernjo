@@ -5,7 +5,10 @@ use std::collections::HashSet;
 use serde::{Deserialize, Deserializer};
 
 use crate::error::TreeError;
-use crate::model::{CredentialId, Node, NodeId, NodeKind, Protocol, ResolvedNode, Settings};
+use crate::model::{
+    CredentialId, Node, NodeId, NodeKind, Protocol, RDP_COLOR_DEPTHS, RdpResolution, ResolvedNode,
+    Settings, is_valid_domain,
+};
 use crate::resolve::resolve;
 
 /// Deepest nesting the tree may have: the top level is level 1, so a connection may sit at level
@@ -58,6 +61,15 @@ pub struct NodePatch {
     pub keepalive_secs: Patch<u32>,
     #[serde(deserialize_with = "patch_from_json")]
     pub credential: Patch<CredentialId>,
+    #[serde(deserialize_with = "patch_from_json")]
+    pub domain: Patch<String>,
+    #[serde(deserialize_with = "patch_from_json")]
+    pub rdp_resolution: Patch<RdpResolution>,
+    /// A number, not a `u8`, so that 300 is `invalid_color_depth` and not a parse error.
+    #[serde(deserialize_with = "patch_from_json")]
+    pub rdp_color_depth: Patch<u32>,
+    #[serde(deserialize_with = "patch_from_json")]
+    pub rdp_clipboard: Patch<bool>,
 }
 
 /// The forest of top-level nodes. The root itself is implicit.
@@ -343,6 +355,26 @@ impl Tree {
             Patch::Keep => Patch::Keep,
             Patch::Inherit => Patch::Inherit,
         };
+        if let Patch::Set(resolution) = &patch.rdp_resolution
+            && !resolution.is_valid()
+        {
+            return Err(TreeError::InvalidResolution);
+        }
+        let color_depth = match patch.rdp_color_depth {
+            Patch::Set(depth) => Patch::Set(
+                u8::try_from(depth)
+                    .ok()
+                    .filter(|d| RDP_COLOR_DEPTHS.contains(d))
+                    .ok_or(TreeError::InvalidColorDepth)?,
+            ),
+            Patch::Keep => Patch::Keep,
+            Patch::Inherit => Patch::Inherit,
+        };
+        if let Patch::Set(domain) = &patch.domain
+            && !is_valid_domain(domain)
+        {
+            return Err(TreeError::InvalidDomain);
+        }
         let node = find_mut(&mut self.children, id).ok_or(TreeError::NotFound(id))?;
         if (patch.host.is_some() || patch.protocol.is_some())
             && !matches!(node.kind, NodeKind::Connection { .. })
@@ -368,6 +400,10 @@ impl Tree {
         apply(&mut node.settings.port, port);
         apply(&mut node.settings.keepalive_secs, patch.keepalive_secs);
         apply(&mut node.settings.credential, patch.credential);
+        apply(&mut node.settings.domain, patch.domain);
+        apply(&mut node.settings.rdp_resolution, patch.rdp_resolution);
+        apply(&mut node.settings.rdp_color_depth, color_depth);
+        apply(&mut node.settings.rdp_clipboard, patch.rdp_clipboard);
         Ok(())
     }
 
@@ -584,7 +620,7 @@ fn apply<T>(slot: &mut Option<T>, patch: Patch<T>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{NodeKind, Protocol, Source};
+    use crate::model::{NodeKind, Protocol, RdpResolution, Source};
 
     fn names(nodes: &[Node]) -> Vec<&str> {
         nodes.iter().map(|n| n.name.as_str()).collect()
@@ -1077,6 +1113,176 @@ mod tests {
         assert_eq!(p.name.as_deref(), Some("x"));
     }
 
+    // ---- RDP settings ----------------------------------------------------
+
+    #[test]
+    fn invalid_color_depth_is_refused() {
+        let mut t = Tree::new();
+        let id = ssh(&mut t, None, "c");
+        for bad in [8u32, 15, 33, 300] {
+            let err = t
+                .update(
+                    id,
+                    NodePatch {
+                        rdp_color_depth: Patch::Set(bad),
+                        ..NodePatch::default()
+                    },
+                )
+                .unwrap_err();
+            assert_eq!(err.code(), "invalid_color_depth", "{bad}");
+        }
+        assert_eq!(t.get(id).unwrap().settings.rdp_color_depth, None);
+        for good in [16u32, 24, 32] {
+            t.update(
+                id,
+                NodePatch {
+                    rdp_color_depth: Patch::Set(good),
+                    ..NodePatch::default()
+                },
+            )
+            .unwrap();
+        }
+        assert_eq!(t.get(id).unwrap().settings.rdp_color_depth, Some(32));
+    }
+
+    #[test]
+    fn fixed_resolution_outside_200_to_8192_is_refused() {
+        let mut t = Tree::new();
+        let id = ssh(&mut t, None, "c");
+        for (width, height) in [(199, 600), (8193, 600), (800, 0), (800, 199), (800, 8193)] {
+            let err = t
+                .update(
+                    id,
+                    NodePatch {
+                        rdp_resolution: Patch::Set(RdpResolution::Fixed { width, height }),
+                        ..NodePatch::default()
+                    },
+                )
+                .unwrap_err();
+            assert_eq!(err.code(), "invalid_resolution", "{width}x{height}");
+        }
+        assert_eq!(t.get(id).unwrap().settings.rdp_resolution, None);
+        for (width, height) in [(200, 200), (8192, 8192), (1920, 1080)] {
+            t.update(
+                id,
+                NodePatch {
+                    rdp_resolution: Patch::Set(RdpResolution::Fixed { width, height }),
+                    ..NodePatch::default()
+                },
+            )
+            .unwrap();
+        }
+        t.update(
+            id,
+            NodePatch {
+                rdp_resolution: Patch::Set(RdpResolution::Fit),
+                ..NodePatch::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            t.get(id).unwrap().settings.rdp_resolution,
+            Some(RdpResolution::Fit)
+        );
+    }
+
+    #[test]
+    fn domain_with_a_control_character_or_257_characters_is_refused() {
+        let mut t = Tree::new();
+        let id = ssh(&mut t, None, "c");
+        for bad in ["COR\u{7}P".to_string(), "a\nb".to_string(), "d".repeat(257)] {
+            let err = t
+                .update(
+                    id,
+                    NodePatch {
+                        domain: Patch::Set(bad),
+                        ..NodePatch::default()
+                    },
+                )
+                .unwrap_err();
+            assert_eq!(err.code(), "invalid_domain");
+        }
+        assert_eq!(t.get(id).unwrap().settings.domain, None);
+        t.update(
+            id,
+            NodePatch {
+                domain: Patch::Set("d".repeat(256)),
+                ..NodePatch::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            t.get(id).unwrap().settings.domain.as_deref().map(str::len),
+            Some(256)
+        );
+    }
+
+    #[test]
+    fn a_refused_rdp_patch_changes_nothing_else() {
+        let mut t = Tree::new();
+        let id = ssh(&mut t, None, "c");
+        let err = t
+            .update(
+                id,
+                NodePatch {
+                    name: Some("renamed".into()),
+                    rdp_color_depth: Patch::Set(7),
+                    ..NodePatch::default()
+                },
+            )
+            .unwrap_err();
+        assert_eq!(err.code(), "invalid_color_depth");
+        assert_eq!(t.get(id).unwrap().name, "c");
+    }
+
+    #[test]
+    fn patch_null_clears_an_rdp_setting() {
+        let mut t = Tree::new();
+        let id = ssh(&mut t, None, "c");
+        t.update(
+            id,
+            NodePatch {
+                rdp_color_depth: Patch::Set(16),
+                rdp_clipboard: Patch::Set(false),
+                domain: Patch::Set("CORP".into()),
+                rdp_resolution: Patch::Set(RdpResolution::Fit),
+                ..NodePatch::default()
+            },
+        )
+        .unwrap();
+        let p: NodePatch = serde_json::from_str(
+            r#"{"rdpColorDepth":null,"rdpClipboard":null,"domain":null,"rdpResolution":null}"#,
+        )
+        .unwrap();
+        t.update(id, p).unwrap();
+        let s = &t.get(id).unwrap().settings;
+        assert_eq!(s.rdp_color_depth, None);
+        assert_eq!(s.rdp_clipboard, None);
+        assert_eq!(s.domain, None);
+        assert_eq!(s.rdp_resolution, None);
+    }
+
+    #[test]
+    fn node_patch_parses_rdp_fields_from_json() {
+        let p: NodePatch = serde_json::from_str(
+            r#"{"rdpColorDepth":16,"rdpResolution":{"mode":"fixed","width":1920,"height":1080},"rdpClipboard":false,"domain":"CORP"}"#,
+        )
+        .unwrap();
+        assert_eq!(p.rdp_color_depth, Patch::Set(16));
+        assert_eq!(
+            p.rdp_resolution,
+            Patch::Set(RdpResolution::Fixed {
+                width: 1920,
+                height: 1080
+            })
+        );
+        assert_eq!(p.rdp_clipboard, Patch::Set(false));
+        assert_eq!(p.domain, Patch::Set("CORP".to_string()));
+        let p: NodePatch = serde_json::from_str("{}").unwrap();
+        assert_eq!(p.rdp_color_depth, Patch::Keep);
+        assert_eq!(p.rdp_resolution, Patch::Keep);
+    }
+
     // ---- move ---------------------------------------------------------
 
     #[test]
@@ -1466,6 +1672,9 @@ mod tests {
             (TreeError::NotAConnection, "not_a_connection"),
             (TreeError::EmptyName, "empty_name"),
             (TreeError::InvalidPort, "invalid_port"),
+            (TreeError::InvalidResolution, "invalid_resolution"),
+            (TreeError::InvalidColorDepth, "invalid_color_depth"),
+            (TreeError::InvalidDomain, "invalid_domain"),
             (TreeError::InvalidMove, "invalid_move"),
             (TreeError::IndexOutOfRange, "index_out_of_range"),
             (TreeError::TooDeep, "too_deep"),
