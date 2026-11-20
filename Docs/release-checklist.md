@@ -1,6 +1,6 @@
 # Release checklist
 
-This file has three parts: the reusable checklist for every release (next), the readiness result for v0.1.0, and the v0.1.0 security review with its evidence. A release happens only on the owner's explicit instruction (`CLAUDE.md`, "Releases" and "Collaboration"); this file prepares the decision and never performs it.
+This file has three parts: the reusable checklist for every release (next), the readiness result for v0.1.0, and the v0.1.0 security review with its evidence (plus one result section per later release). A release happens only on the owner's explicit instruction (`CLAUDE.md`, "Releases" and "Collaboration"); this file prepares the decision and never performs it.
 
 ## Reusable checklist (every release)
 
@@ -163,6 +163,61 @@ Date 2026-11-18. Branch `release/v0.1.0` from `dev` (`977dab4`); plan `Docs/supe
 The live SSH integration tests skip locally without the throwaway container; they count only through the CI `rust` job of the release PR, not through this table.
 
 **Release (2026-11-18).** Release PR [#12](https://github.com/benjo-code/fernjo/pull/12) (`release/v0.1.0` head `e8a450d`) merged into `main` with a merge commit, `2184295` (two parents). All checks passed, including the SSH container tests in the `rust` job, CodeQL (no new alert) and the `release.yml` dry run with its four build jobs (`publish` skipped by design). The first dry run had one red job, `build (macos-x64)` (run `44387357004`): the build and smoke test passed and only `actions/upload-artifact` failed with `Failed to CreateArtifact: Unable to make request: ENOTFOUND` (a runner network error); with the owner's go, only that job was re-run and passed, no code changed. `gh release create v0.1.0 --target main` made the tag on `2184295` and the release [v0.1.0](https://github.com/benjo-code/fernjo/releases/tag/v0.1.0) (not a draft, not a pre-release). The release run [`44390901462`](https://github.com/benjo-code/fernjo/actions/runs/44390901462) succeeded in all five jobs (`build (windows)`, `build (macos-arm64)`, `build (macos-x64)`, `build (linux)`, `publish`). The release holds six assets: `fernjo_0.1.0_x64-setup.exe` (4112475 B), `fernjo_0.1.0_aarch64.dmg` (4512251), `fernjo_0.1.0_x64.dmg` (4925926), `fernjo_0.1.0_amd64.deb` (6188562), `fernjo_0.1.0_amd64.AppImage` (84290040) and `SHA256SUMS` (454). Downloaded with `gh release download`: `sha256sum -c SHA256SUMS` reported all 5 files OK; `bash tools/verify-installers.sh 0.1.0 <dir>` exited 0 on a directory holding only the five installers (on a directory that also holds `SHA256SUMS` it exits 1 with `unexpected: SHA256SUMS`, because the script runs before that file is written). Back-merge PR [#13](https://github.com/benjo-code/fernjo/pull/13) (`main` into `dev`, 22 checks passed) merged with a merge commit, `d206a34`; `origin/main` is an ancestor of `origin/dev` and `dev` says `version = "0.1.0"`. Not verified by this release procedure (unchanged, listed above): the `.deb` on a real Debian or Ubuntu desktop and the Apple Silicon dmg on a real Apple Silicon Mac; the installers were not run again after the release, the smoke tests ran inside the release run.
+
+## v0.1.1 result
+
+Date 2026-11-20. Branch `release/v0.1.1` from `dev` (`6cd1672`, the M7 merge); plan `Docs/superpowers/plans/2026-11-20-release-v0.1.1.md`, design `Docs/superpowers/specs/2026-11-20-release-v0.1.1-design.md`. The commands ran on the plan commit `24148f7` plus the release edits (version bump with `Cargo.lock`: only the five workspace crate version lines changed, CHANGELOG `[0.1.1] - 2026-11-20`, README, roadmap), which were uncommitted at that moment, as for v0.1.0. The owner gave the go for the whole sequence in advance on 2026-11-20 (stop only if something goes wrong).
+
+| Command | Result |
+|---|---|
+| `bash tools/check-release-version.sh v0.1.1` | exit 0, "version 0.1.1 matches Cargo.toml and package.json" |
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets --locked -- -D warnings` | exit 0 |
+| `cargo test --workspace --locked` | exit 0, 673 passed, 0 failed, 2 ignored (summed over the test binaries) |
+| `pnpm install --frozen-lockfile` | exit 0 |
+| `pnpm test` | exit 0, 42 files, 587 tests passed |
+| `pnpm lint` | exit 0 (Prettier clean, `svelte-check` 238 files, 0 errors, 0 warnings) |
+| `cargo deny check` | exit 0 (advisories, bans, licenses, sources ok) |
+| `bash tools/check-workflows.sh` | exit 0 |
+| `bash tools/test-release-scripts.sh` | exit 0, 48/48 passed |
+| `dotnet run tools/roadmap.cs -- check` | first run red (`ROADMAP.md` out of date: the backlog entry below was added after `generate`); after `generate`: "Roadmap is valid and ROADMAP.md is up to date." |
+
+The live SSH integration tests skip locally without the throwaway container; they count only through the CI `rust` job of the release PR, not through this table.
+
+**Security review of `v0.1.0..HEAD`** (162 files, about 7200 added lines):
+
+- Independent review by a fresh reviewer (read-only, the code and the "v0.1.0 security review" areas as the brief, no conclusions given): **no High or Medium finding**. Areas examined and found sound: the fingerprint check and `reload_tree`, capped reads and the vault KDF cap, the hardened vault and `known_hosts` writers, `known_hosts` multi-host lines, `move_nodes`, import limits and the export target check, session end classification, the close dialog, the keyboard-interactive cap and the agent sign timeout, nav guard and CSP (unchanged), `release.yml` and `tools/check-no-build-paths.sh`, the frontend (no `{@html}`, `innerHTML`, `eval` or dynamic URLs), no new command returns a secret. The review did not run tests or the app, and could not verify the real-runner effect of the path remap, the Unix-only symlink tests or the Windows keychain modifier.
+- `gh api "repos/benjo-code/fernjo/code-scanning/alerts?state=open" --jq length`: `0`.
+- gitleaks v8.30.1 via Docker with the repo's `.gitleaks.toml` over the history: 18 commits scanned, `no leaks found`.
+- M7-touched items by their own tests, all in the green `cargo test` run above: `no_response_contains_a_secret`, `command_table_covers_every_tauri_command`, `webview2_arguments_keep_wry_defaults_and_turn_off_the_component_updater`, the `fernjo-vault` KDF cap and atomic write tests, the `fernjo-import` limit tests (the Unix-only symlink and directory-fsync tests run in CI on Linux, not here). Release-binary hygiene: the dry run of PR #16 (run `44722229377`) passed "Check the binary for build paths" in all four build jobs.
+- Low findings and their dispositions:
+  1. `connections.json`, `settings.json` and export writers still use a fixed `<file>.tmp` name that follows a planted symlink (pre-existing, documented in `Docs/DECISIONS.md` "M7: connections.json fingerprint check" with a backlog item): accepted for this release; needs write access to the data folder.
+  2. `sanitize_nodes` does not clean `settings.username` of JSON and backup imports (new, small): backlog entry "Clean the username of JSON and backup imports" in `Docs/roadmap.json`; plain text in the UI, no code execution or secret exposure.
+  3. `--disable-component-update` is a Chromium switch outside Microsoft's documented list (informational): accepted; re-measure after a major runtime update (as in `CLAUDE.md`).
+  4. `clear_pending` uses `try_lock`, so a page reload during an `import_inspect` or `import_apply` may leave the pending file until that command ends (new, benign): accepted; secrets stay in Rust and `import_apply` clears it afterwards.
+
+**Known gaps**
+
+| # | Gap | Disposition |
+|---|-----|-------------|
+| 1 | M7 owner-machine manual checks on Windows, macOS and Linux (quit dialog and destroy path, Cmd+Q, agent confirmation per signature, discoverability walk-through, and the others in the roadmap block "Open manual checks (owner)") | Accepted for this release (owner waiver 2026-11-20); still worth running |
+| 2 | Linux title bar icon attempt (`setup` hook) | Unproven until the owner looks at the CachyOS laptop; cosmetic; CHANGELOG says "unconfirmed" |
+| 3 | Apple Silicon dmg and the `.deb` on real hardware | Accepted, README says so |
+| 4 | SSH container tests | Count only through the CI `rust` job of the release PR (recorded in the evidence) |
+| 5 | Release dry run and the release run of this release | Recorded after the release (evidence lines below) |
+| 6 | Low findings 1 to 4 above | Accepted or backlog, see their dispositions |
+
+**Verdict**
+
+| Area | Verdict | Reasoning |
+|---|---|---|
+| Security review | Go | No High or Medium finding; alerts 0; gitleaks clean; four Low findings with dispositions |
+| Installers | Go on the dry run of PR #16 | Four build jobs green with the build-path check and smoke tests; the five installers and `SHA256SUMS` are checked after the release (evidence below) |
+| Docs | Go | README, CHANGELOG, roadmap and this file match the code and the evidence; unverified items are named as such (gaps 1 to 3) |
+| Performance | Go (Windows) | Unchanged since the M7 measurements in `Docs/performance.md`; not re-run for this release; Linux and macOS not measured |
+| Repo settings | Go | Required checks of `main` and `dev` as before; this release changes no setting |
+
+**Overall: no blocker for v0.1.1.** Evidence of the release itself (PR numbers, merge commit, release run, asset checks) follows in the evidence lines added after the release.
 
 ## v0.1.0 security review
 
