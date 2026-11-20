@@ -22,7 +22,9 @@ test("mounts_with_a_mock_api_and_renders_the_shell", async () => {
   await new Promise((r) => setTimeout(r, 0));
   expect(calls.listTree).toHaveLength(1);
   expect(document.querySelector('aside[aria-label="Connections"]')).not.toBeNull();
-  expect(document.querySelector("main")?.textContent).toContain("Open a connection from the tree");
+  expect(document.querySelector("main")?.textContent).toContain(
+    "Double-click a connection (or press Enter) to open it.",
+  );
   unmount(app);
 });
 
@@ -40,7 +42,9 @@ test("the_vault_chip_opens_the_manager_view_only_while_unlocked_and_close_return
     .find((b) => b.textContent === "Close")
     ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
   await settle();
-  expect(document.querySelector("main")?.textContent).toContain("Open a connection from the tree");
+  // the vault exists, so only the first step of the start list is left
+  expect(document.querySelector("main")?.textContent).toContain("Add a connection");
+  expect(document.querySelector("main")?.textContent).not.toContain("create a vault");
   unmount(app);
 });
 
@@ -287,5 +291,82 @@ test("new_credential_in_the_dropdown_opens_the_manager_on_a_new_entry_each_time"
   await settle();
   expect(document.querySelector("main")?.textContent).toContain("Credentials");
   expect(name()).toBeNull();
+  unmount(app);
+});
+
+// first run and "how to open": the main area without a tab
+const mainButton = (text: string) =>
+  [...document.querySelectorAll<HTMLButtonElement>("main button")].find(
+    (b) => b.textContent?.trim() === text,
+  );
+
+test("an_empty_tree_shows_the_numbered_start_list_instead_of_the_open_hint", async () => {
+  const { api } = mockApi([]);
+  const app = mount(App, { target: document.body, props: { api } });
+  await settle();
+  const main = document.querySelector("main")!;
+  const steps = [...main.querySelectorAll("ol > li")].map((li) => li.textContent);
+  expect(steps).toHaveLength(2);
+  expect(steps[0]).toContain("Add a connection");
+  expect(steps[1]).toContain("Optional: create a vault to store logins");
+  expect([...main.querySelectorAll("button")].map((b) => b.textContent?.trim())).toEqual([
+    "New connection",
+    "Import from mRemoteNG…",
+    "Create vault",
+  ]);
+  expect(main.textContent).not.toContain("Open a connection from the tree");
+  expect(main.textContent).not.toContain("Double-click");
+  unmount(app);
+});
+
+test("the_start_list_buttons_run_the_same_actions_as_the_sidebar", async () => {
+  const { api, calls } = mockApi([]);
+  const app = mount(App, { target: document.body, props: { api } });
+  await settle();
+
+  mainButton("New connection")!.click();
+  await settle();
+  expect(calls.createConnection).toEqual([[null, null, "New connection", "ssh", ""]]);
+  unmount(app);
+});
+
+test("the_start_list_create_vault_button_opens_and_focuses_the_create_form", async () => {
+  const { api } = mockApi([]);
+  const app = mount(App, { target: document.body, props: { api } });
+  await settle();
+  mainButton("Create vault")!.click();
+  await settle();
+  expect(document.activeElement).toBe(document.querySelector("#vault-create-password"));
+  unmount(app);
+});
+
+test("the_start_list_import_button_opens_the_import_dialog", async () => {
+  const { api } = mockApi([]);
+  const app = mount(App, { target: document.body, props: { api } });
+  await settle();
+  mainButton("Import from mRemoteNG…")!.click();
+  await settle();
+  expect(document.querySelector("[role=dialog] h2")?.textContent).toBe("Import, export & backup");
+  unmount(app);
+});
+
+test("the_vault_step_of_the_start_list_goes_away_when_a_vault_exists", async () => {
+  const { api } = mockApi([], { vaultStatus: async () => vaultStatus({ state: "locked" }) });
+  const app = mount(App, { target: document.body, props: { api } });
+  await settle();
+  const main = document.querySelector("main")!;
+  expect([...main.querySelectorAll("ol > li")]).toHaveLength(1);
+  expect(mainButton("Create vault")).toBeUndefined();
+  unmount(app);
+});
+
+test("a_tree_with_connections_and_no_tab_says_how_to_open_one", async () => {
+  const { api } = mockApi([conn("web-01")]);
+  const app = mount(App, { target: document.body, props: { api } });
+  await settle();
+  const main = document.querySelector("main")!;
+  expect(main.textContent).toContain("Double-click a connection (or press Enter) to open it.");
+  expect(main.querySelector("ol")).toBeNull();
+  expect(main.textContent).not.toContain("Open a connection from the tree");
   unmount(app);
 });

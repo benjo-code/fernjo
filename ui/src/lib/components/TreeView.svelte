@@ -417,7 +417,6 @@
   <!-- nothing to show yet, or the data could not be opened (the notice bar says why) -->
 {:else if store.children.length === 0}
   <div class="empty">
-    <p>No connections yet</p>
     <div class="actions">
       <button type="button" class="btn" onclick={() => store.createFolder(null, null)}>
         New folder
@@ -503,10 +502,6 @@
     padding: var(--space-5) var(--space-3);
     color: var(--color-text-muted);
     font-size: var(--text-sm);
-  }
-
-  .empty p {
-    margin: 0 0 var(--space-3);
   }
 
   .actions {

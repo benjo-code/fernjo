@@ -54,8 +54,15 @@ describe("VaultNote", () => {
     });
     const region = document.querySelector('[role="region"]')!;
     expect(region.textContent).toContain("No vault yet");
+    // collapsed it is one slim line (heading and button), so it leaves the properties panel room
+    expect(region.classList.contains("compact")).toBe(true);
+    expect(region.textContent).not.toContain("encrypted vault");
     button("Create vault")!.click();
     await settle();
+    expect(region.classList.contains("compact")).toBe(false);
+    expect(region.textContent).toContain(
+      "Credentials are stored in an encrypted vault protected by a master password.",
+    );
 
     // the sentence about missing recovery is part of the form
     expect(document.body.textContent).toContain(

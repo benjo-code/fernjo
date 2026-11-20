@@ -158,6 +158,7 @@
 {#if phase !== null && phase !== "unlocked"}
   <div
     class="note"
+    class:compact={phase === "none" && !creating}
     role="region"
     aria-labelledby="vault-note-title"
     tabindex="-1"
@@ -223,10 +224,10 @@
         </form>
       {/if}
     {:else if phase === "none"}
-      <p class="body">
-        Credentials are stored in an encrypted vault protected by a master password.
-      </p>
       {#if creating}
+        <p class="body">
+          Credentials are stored in an encrypted vault protected by a master password.
+        </p>
         <form onsubmit={submitCreate}>
           <PasswordField
             bind:this={createField}
@@ -291,6 +292,22 @@
     background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-sm);
+  }
+
+  /*
+   * No vault, form closed: one slim line without a card, so a selected connection's properties
+   * keep room for the Credential row (the tree keeps its 23 rows, the panel gives way).
+   */
+  .note.compact {
+    margin: 0;
+    padding: 0 var(--space-3);
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .note.compact .small {
+    height: 20px;
   }
 
   .note:focus {

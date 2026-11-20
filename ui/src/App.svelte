@@ -224,7 +224,39 @@
       {#if sessions.tabs.length > 0}
         <SessionArea {sessions} {vault} settings={terminalSettings} hidden={view === "vault"} />
       {:else if view !== "vault"}
-        <p class="empty">Open a connection from the tree</p>
+        {#if store.loadError || !store.loaded}
+          <!-- nothing to say until the tree is there (the notice bar explains a load failure) -->
+        {:else if store.children.length === 0}
+          <ol class="start">
+            <li>
+              <span>Add a connection</span>
+              <div class="actions">
+                <button
+                  type="button"
+                  class="btn"
+                  onclick={() => void store.createConnection(null, null)}
+                >
+                  New connection
+                </button>
+                <button type="button" class="btn" onclick={() => (importOpen = true)}>
+                  Import from mRemoteNG…
+                </button>
+              </div>
+            </li>
+            {#if vault.status?.state === "none"}
+              <li>
+                <span>Optional: create a vault to store logins</span>
+                <div class="actions">
+                  <button type="button" class="btn" onclick={() => sidebar?.focusVaultForm()}>
+                    Create vault
+                  </button>
+                </div>
+              </li>
+            {/if}
+          </ol>
+        {:else}
+          <p class="empty">Double-click a connection (or press Enter) to open it.</p>
+        {/if}
       {/if}
     </div>
   </main>
@@ -270,5 +302,30 @@
     margin: auto;
     color: var(--color-text-muted);
     font-size: var(--text-sm);
+  }
+
+  .start {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+    margin: auto;
+    padding: 0 0 0 var(--space-6);
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+
+  .start li {
+    padding-left: var(--space-2);
+  }
+
+  .start li > span {
+    display: block;
+    margin-bottom: var(--space-3);
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
   }
 </style>

@@ -201,6 +201,8 @@ describe("TreeView", () => {
   test("empty_tree_offers_new_folder_and_new_connection", async () => {
     const { calls } = await setup([]);
     expect(document.querySelector('[role="treeitem"]')).toBeNull();
+    // only the buttons: the main area's start list explains the order of steps
+    expect(document.body.textContent).not.toContain("No connections yet");
     const buttons = [...document.querySelectorAll("button")].map((b) => b.textContent?.trim());
     expect(buttons).toEqual(["New folder", "New connection"]);
     document.querySelectorAll("button")[0].click();
