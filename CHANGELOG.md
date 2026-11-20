@@ -6,6 +6,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 
 ## [Unreleased]
 
+### Added
+
+- Linux AppImage: on start, fernjo offers to add itself to your application menu ("Add", "Never" or "Not now"), which is what the desktop needs to show the app icon instead of a placeholder in the title bar. It writes `fernjo.desktop` and the icon below `~/.local/share` only if you choose "Add", and asks again at the next start after "Not now" (so you can move the AppImage first) or when the AppImage has moved. Whether this fixes the title bar icon is not confirmed yet.
+
 ### Fixed
 
 - The properties panel can now be dragged taller, not only smaller: once you set its height, the connection tree only has to keep 6 rows (before, it kept 23, which left no room to grow at the default size). Without a stored height the layout is unchanged, and a double-click on the bar still resets it.

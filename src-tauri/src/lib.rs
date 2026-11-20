@@ -1,3 +1,4 @@
+mod app_menu;
 mod app_settings;
 mod commands;
 mod connect_plan;
@@ -39,17 +40,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::open_for_app(fernjo_core::locate()))
-        // Candidate fix for the placeholder title bar icon on Linux (Wayland): apply the default
-        // window icon (the one tauri-codegen already embeds) explicitly once the window exists, to
-        // test whether setting it at that point changes the title bar. A no-op if the toolkit
-        // already used it. A failure is ignored, never fatal.
+        // Linux AppImage: the compositor takes the title bar icon from an installed `.desktop`
+        // entry, which an AppImage has none of; `app_menu` offers to write one (never without the
+        // user's answer). `Window::set_icon` cannot do it under Wayland.
         .setup(|app| {
             #[cfg(target_os = "linux")]
-            if let (Some(window), Some(icon)) =
-                (app.get_webview_window("main"), app.default_window_icon())
-            {
-                let _ = window.set_icon(icon.clone());
-            }
+            app_menu::offer(app.handle());
             #[cfg(not(target_os = "linux"))]
             let _ = app;
             Ok(())
