@@ -663,7 +663,7 @@ impl SessionManager {
     /// Resolves the connection and starts its session.
     ///
     /// # Errors
-    /// What `connect_plan::resolve` reports (`not_found`, `not_a_connection`, ...), or
+    /// What `connect_plan::resolve_ssh` reports (`not_found`, `not_a_connection`, ...), or
     /// `no_data_dir`.
     pub fn open(
         &self,
@@ -673,7 +673,7 @@ impl SessionManager {
         cols: u32,
         rows: u32,
     ) -> Result<String, CommandError> {
-        let plan = connect_plan::resolve(state, node_id, false)?;
+        let plan = connect_plan::resolve_ssh(state, node_id, false)?;
         let hosts = self.host_files(state)?;
         let shared = Arc::new(Shared {
             sink: Arc::new(Sink::new(channel)),
@@ -741,7 +741,7 @@ impl SessionManager {
         entry: &Arc<Entry>,
         skip_vault: bool,
     ) -> Result<(), CommandError> {
-        let plan = connect_plan::resolve(state, entry.node_id, skip_vault);
+        let plan = connect_plan::resolve_ssh(state, entry.node_id, skip_vault);
         match (plan, self.host_files(state)) {
             (Ok(plan), Ok(hosts)) => start(entry, plan, hosts),
             (Err(e), _) | (_, Err(e)) => {
