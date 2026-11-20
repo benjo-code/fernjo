@@ -318,8 +318,9 @@ Optional (a setting). The address in `--color-text-muted`, 12 px, right-aligned 
 28 px high, `--color-surface` field with a 1 px `--color-border-input` border, `--radius-sm`, search icon and placeholder "Filter connections" in muted ink.
 
 ### Vault state and lock note
-- **Chip** beside the filter (28 px, 1 px `--color-border`, 12 px, lock or unlock icon): "Unlocked" or "Locked".
+- **Chip** beside the filter (28 px, 1 px `--color-border`, 12 px, lock or unlock icon): "Vault: unlocked", "Vault: locked", "Vault: none" or "Vault unusable", so the chip names what it is.
 - **Lock note:** while locked, a note sits at the top of the sidebar under the filter: `--color-surface` background, 1 px `--color-border`, `--radius-sm`, lock icon, title "Vault locked" (13 px, 600), body "Connections with stored credentials ask for it." (12 px, muted), and an outlined "Unlock" button (26 px high). The note is **compact** (title and button on one line, body under it) so that it leaves the 23 tree rows and the properties panel their room; the master password form (field, "Unlock automatically on this device", hint, and for "No vault yet" the repeat field and the no-recovery sentence) expands inline only after the button or the chip is clicked, with the password field focused, and "Cancel" collapses it again. While the form is open the tree may shrink to make room. An unusable vault shows Rust's reason as written, the file path and how to restore `vault.fernjo.bak`.
+- **No vault yet (compact variant):** until the create form is opened, the note for the state "none" is a flat, one-line row without the card (no background, border or radius; lock icon, "No vault yet", a 20 px outlined "Create vault" button; the explanatory sentence appears only with the form), so that Name, Host and the Credential row of the properties panel stay visible at 1280x800 with the tree's 23 rows. The locked and unusable notes keep the card.
 - **Never modal:** the tree stays usable while locked. The master password is asked inside the tab of the connection that needs credentials.
 
 ### Properties panel
