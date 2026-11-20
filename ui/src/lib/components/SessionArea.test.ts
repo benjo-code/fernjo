@@ -233,3 +233,95 @@ test("the_terminal_is_inert_while_a_prompt_or_the_vault_wait_covers_it_and_free_
   await tick();
   expect(inert()).toBe(false);
 });
+
+const bar = () => document.querySelector<HTMLElement>(".dropped");
+
+function drop(i: number, detail: string | null) {
+  handlers[i]!({
+    kind: "state",
+    state: "disconnected",
+    detail,
+    exitStatus: null,
+    endedCleanly: false,
+  });
+  flushSync();
+}
+
+test("an_active_disconnected_tab_shows_why_in_a_polite_bar_with_reconnect", async () => {
+  setup(false, 1);
+  await tick();
+  await new Promise((r) => setTimeout(r, 0));
+  expect(bar()).toBeNull();
+
+  drop(0, "The remote shell ended (exit status 3).");
+  expect(bar()).not.toBeNull();
+  expect(bar()!.getAttribute("role")).toBe("status");
+  expect(bar()!.textContent).toContain("The remote shell ended (exit status 3).");
+  expect(bar()!.querySelector("button")?.textContent).toContain("Reconnect");
+
+  drop(0, "The connection was lost.");
+  expect(bar()!.textContent).toContain("The connection was lost.");
+});
+
+test("the_bar_is_only_for_a_disconnected_tab_in_front", async () => {
+  const sessions = setup(false, 2);
+  await tick();
+  await new Promise((r) => setTimeout(r, 0));
+  // connecting and connected tabs have none
+  expect(bar()).toBeNull();
+  handlers[1]!({
+    kind: "state",
+    state: "connected",
+    detail: null,
+    exitStatus: null,
+    endedCleanly: false,
+  });
+  flushSync();
+  expect(bar()).toBeNull();
+
+  // a dropped tab in the background waits until it comes to the front
+  drop(0, "The connection was lost.");
+  expect(sessions.activeId).toBe(sessions.tabs[1]!.id);
+  expect(bar()).toBeNull();
+  sessions.activate(sessions.tabs[0]!.id);
+  flushSync();
+  expect(bar()?.textContent).toContain("The connection was lost.");
+  sessions.activate(sessions.tabs[1]!.id);
+  flushSync();
+  expect(bar()).toBeNull();
+});
+
+test("the_bar_stays_out_of_sight_while_another_view_covers_the_area", async () => {
+  setup(true, 1);
+  await tick();
+  await new Promise((r) => setTimeout(r, 0));
+  drop(0, "The connection was lost.");
+  expect(bar()).toBeNull();
+});
+
+test("reconnect_in_the_bar_calls_the_store_and_the_bar_goes_once_it_starts", async () => {
+  const sessions = setup(false, 1);
+  await tick();
+  await new Promise((r) => setTimeout(r, 0));
+  drop(0, "The connection was lost.");
+  const reconnect = vi.spyOn(sessions, "reconnect");
+  bar()!.querySelector<HTMLButtonElement>("button")!.click();
+  flushSync();
+  expect(reconnect).toHaveBeenCalledWith(sessions.tabs[0]!.id);
+  // reconnect() sets the tab to connecting at once
+  expect(sessions.tabs[0]!.state).toBe("connecting");
+  expect(bar()).toBeNull();
+});
+
+test("the_bar_and_the_terminal_share_one_column_so_the_terminal_box_shrinks_and_refits", async () => {
+  setup(false, 1);
+  await tick();
+  await new Promise((r) => setTimeout(r, 0));
+  drop(0, "The connection was lost.");
+  // the bar is a sibling above the terminal's box, never an overlay: the box (and so the
+  // ResizeObserver of TerminalView) sees the size change when the bar appears or goes
+  const pane = document.querySelector<HTMLElement>(".pane")!;
+  expect(bar()!.parentElement).toBe(pane);
+  expect(bar()!.contains(document.querySelector(".view"))).toBe(false);
+  expect(bar()!.nextElementSibling?.querySelector(".view")).not.toBeNull();
+});

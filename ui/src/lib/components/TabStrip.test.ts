@@ -150,11 +150,19 @@ describe("TabStrip", () => {
     expect(caption(2)).toBe("Connecting…");
   });
 
-  test("the_caption_of_a_disconnected_tab_is_its_detail_text", () => {
+  test("a_disconnected_tab_has_no_caption_but_keeps_title_mark_reconnect_and_the_reason_as_tooltip", () => {
     const { sessions } = setup(["disconnected"]);
-    sessions.tabs[0]!.detail = "Connection reset by peer";
+    sessions.tabs[0]!.detail = "The remote shell ended (exit status 3).";
     flushSync();
-    expect(tabs()[0]!.querySelector(".caption")?.textContent).toBe("Connection reset by peer");
+    const tab = tabs()[0]!;
+    // the reason lives in the bar above the terminal; a caption would cut the title short
+    expect(tab.querySelector(".caption")).toBeNull();
+    expect(tab.querySelector(".title")?.textContent).toBe("Name a");
+    expect(tab.querySelector(".lamp")?.getAttribute("data-state")).toBe("dropped");
+    expect(tab.querySelector("button.reconnect")).not.toBeNull();
+    expect(tab.querySelector("button.main")?.getAttribute("title")).toBe(
+      "Name a: The remote shell ended (exit status 3).",
+    );
   });
 
   test("the_protocol_icon_follows_the_connection", () => {

@@ -28,6 +28,8 @@
   });
 
   function caption(tab: Tab): string | null {
+    // A dropped tab has no caption: its reason is the bar above the terminal (SessionArea) and the
+    // tooltip, so the title keeps the room.
     // a pending prompt is state "connecting" in Rust; the caption tells that the tab waits for the user
     if (tab.prompt) {
       const kind = tab.prompt.prompt.kind;
@@ -40,8 +42,6 @@
         return "Connecting…";
       case "needsVault":
         return "Unlock vault";
-      case "disconnected":
-        return tab.detail ?? "Disconnected";
       default:
         return null;
     }
