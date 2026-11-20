@@ -1444,6 +1444,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fernjo-rdp"
+version = "0.1.1"
+dependencies = [
+ "getrandom 0.4.3",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "fernjo-ssh"
 version = "0.1.1"
 dependencies = [

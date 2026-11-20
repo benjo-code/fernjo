@@ -1,0 +1,19 @@
+[package]
+name = "fernjo-rdp"
+description = "RDP client sessions for fernjo (IronRDP)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+secrecy.workspace = true
+getrandom.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
