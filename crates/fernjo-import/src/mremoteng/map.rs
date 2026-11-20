@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher, RandomState};
 use std::rc::Rc;
 
-use fernjo_core::{CredentialId, Node, NodeId, NodeKind, Protocol, Settings};
+use fernjo_core::{CredentialId, Node, NodeId, NodeKind, Protocol, RdpResolution, Settings};
 use fernjo_vault::{EntryId, NewEntry, Secret};
 use secrecy::{ExposeSecret, SecretString};
 
@@ -123,6 +123,32 @@ pub fn plan(doc: &RawDocument, today: &str, taken_names: &[String]) -> ImportPla
 /// that many anyway, so anything copied beyond it is wasted, and with an attacker-chosen name
 /// times the number of nodes it adds up to minutes. Names pass through here wherever they are
 /// put into a trail or a message; the cut text reads the same as before in the line.
+/// mRemoteNG `Resolution` to a setting: the window and full screen modes follow the tab, `ResWxH`
+/// is a fixed size (when it is one the core accepts); anything else (`SmartSize`, ...) has no
+/// equivalent.
+fn map_resolution(text: &str) -> Option<RdpResolution> {
+    if text.eq_ignore_ascii_case("FitToWindow") || text.eq_ignore_ascii_case("Fullscreen") {
+        return Some(RdpResolution::Fit);
+    }
+    let size = text.strip_prefix("Res")?;
+    let (width, height) = size.split_once('x')?;
+    let resolution = RdpResolution::Fixed {
+        width: width.parse().ok()?,
+        height: height.parse().ok()?,
+    };
+    resolution.is_valid().then_some(resolution)
+}
+
+/// mRemoteNG `Colors` to a colour depth (256 and 15-bit colours have no equivalent).
+fn map_colors(text: &str) -> Option<u8> {
+    match text {
+        "Colors16Bit" => Some(16),
+        "Colors24Bit" => Some(24),
+        "Colors32Bit" => Some(32),
+        _ => None,
+    }
+}
+
 fn display(s: &str) -> &str {
     match s.char_indices().nth(MAX_LINE_CHARS) {
         None => s,
@@ -163,7 +189,7 @@ impl Builder {
             head.push(ReportLine::new(
                 "",
                 format!(
-                    "RDP display, redirection and gateway settings are not carried over ({n} RDP connection{s})"
+                    "RDP redirection, gateway and the display settings other than resolution and colour depth are not carried over ({n} RDP connection{s})"
                 ),
             ));
         }
@@ -292,7 +318,10 @@ impl Builder {
             self.problem(trail, "has no name; imported as \"Unnamed\"".to_owned());
         }
         self.clipped_lines(raw, trail);
-        let (settings, credential_set, username_set) = self.settings(raw, name, trail, above);
+        let (mut settings, credential_set, username_set) = self.settings(raw, name, trail, above);
+        if protocol == Some(Protocol::Rdp) {
+            self.rdp_display(raw, trail, &mut settings);
+        }
 
         let kind = match protocol {
             Some(protocol) => {
@@ -369,6 +398,38 @@ impl Builder {
                         "its {what} was longer than {max} characters and was shortened to {max}"
                     ),
                 );
+            }
+        }
+    }
+
+    /// Resolution and colour depth of an RDP connection, unless they are inherited. A value that has
+    /// no equivalent here is left unset and listed as partly mapped; an empty one (an old file) is
+    /// simply unset.
+    fn rdp_display(&mut self, raw: &RawNode, trail: &[&str], s: &mut Settings) {
+        let resolution = raw.resolution.trim();
+        if !raw.inherit.resolution && !resolution.is_empty() {
+            match map_resolution(resolution) {
+                Some(r) => s.rdp_resolution = Some(r),
+                None => self.partly(
+                    trail,
+                    format!(
+                        "its resolution \"{}\" has no equivalent and is not carried over",
+                        display(resolution)
+                    ),
+                ),
+            }
+        }
+        let colors = raw.colors.trim();
+        if !raw.inherit.colors && !colors.is_empty() {
+            match map_colors(colors) {
+                Some(depth) => s.rdp_color_depth = Some(depth),
+                None => self.partly(
+                    trail,
+                    format!(
+                        "its colour depth \"{}\" has no equivalent and is not carried over",
+                        display(colors)
+                    ),
+                ),
             }
         }
     }
