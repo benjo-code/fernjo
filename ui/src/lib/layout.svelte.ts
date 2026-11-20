@@ -10,6 +10,24 @@ export const PANEL_MIN = 26;
 /** Upper bound for a stored panel height before the window clamps it further. */
 const PANEL_STORE_MAX = 4000;
 
+/** Tree rows kept visible while the panel is content-sized: the panel gives way first. */
+export const TREE_ROWS_DEFAULT = 23;
+/** Tree rows kept visible once the user has set a panel height: they chose the trade. */
+export const TREE_ROWS_SIZED = 6;
+
+/**
+ * The tree slot's minimum height. Sidebar.svelte mirrors it in CSS (`.panel-sized .tree-slot`
+ * and `.tree-slot`); the two must stay in step or the sidebar overflows.
+ */
+export function treeMinHeight(
+  panelSized: boolean,
+  rowHeight: number,
+  viewportHeight: number,
+): number {
+  const rows = panelSized ? TREE_ROWS_SIZED : TREE_ROWS_DEFAULT;
+  return Math.min(rowHeight * rows, viewportHeight - 120);
+}
+
 /** The widest the sidebar may be in a window of this width. */
 export function sidebarMax(viewportWidth: number): number {
   return Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, Math.floor(viewportWidth / 2)));

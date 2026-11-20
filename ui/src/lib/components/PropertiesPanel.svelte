@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { PANEL_MIN, LayoutStore, clampPanelHeight } from "../layout.svelte";
+  import { PANEL_MIN, LayoutStore, clampPanelHeight, treeMinHeight } from "../layout.svelte";
   import type { TreeStore } from "../store.svelte";
   import type { VaultStore } from "../vault.svelte";
   import type { FieldInfo, NodePatch, Protocol } from "../types";
@@ -34,8 +34,9 @@
   // the tallest the panel may be; generous until the sidebar has been measured
   let maxHeight = $state(4000);
 
-  /** Mirrors the tree slot's min-height in Sidebar.svelte. */
-  const treeMin = () => Math.min(ROW_HEIGHT_TREE * 23, window.innerHeight - 120);
+  // The cap is the same whether or not a height is stored, so the first drag can already grow
+  // the panel past the default: the user's own height only has to leave the tree a few rows.
+  const treeMin = () => treeMinHeight(true, ROW_HEIGHT_TREE, window.innerHeight);
 
   function measure() {
     if (section) measured = section.offsetHeight;
