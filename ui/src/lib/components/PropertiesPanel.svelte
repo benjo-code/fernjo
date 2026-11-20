@@ -229,40 +229,7 @@
           {/snippet}
         </PropertyRow>
 
-        <PropertyRow name="description" label="Description" error={errors.description}>
-          {#snippet children(id)}
-            <TextField
-              {id}
-              label="Description"
-              value={detail.description}
-              onCommit={(text) =>
-                text === detail.description
-                  ? Promise.resolve(true)
-                  : save("description", { description: text })}
-              onedit={() => setError("description", null)}
-            />
-          {/snippet}
-        </PropertyRow>
-
         {#if !isFolder}
-          <PropertyRow name="protocol" label="Protocol" error={errors.protocol}>
-            {#snippet children(id)}
-              <select
-                {id}
-                aria-label="Protocol"
-                value={detail.protocol}
-                onchange={async (e) => {
-                  const select = e.currentTarget;
-                  const ok = await save("protocol", { protocol: select.value as Protocol });
-                  if (!ok) select.value = detail.protocol ?? "ssh";
-                }}
-              >
-                <option value="ssh">SSH</option>
-                <option value="rdp">RDP</option>
-              </select>
-            {/snippet}
-          </PropertyRow>
-
           <PropertyRow name="host" label="Host" error={errors.host}>
             {#snippet children(id)}
               <TextField
@@ -276,27 +243,6 @@
             {/snippet}
           </PropertyRow>
         {/if}
-
-        <PropertyRow
-          name="port"
-          label="Port"
-          source={detail.port.source}
-          hasValue={detail.port.effective !== null}
-          error={errors.port}
-          onreset={() => void save("port", { port: null })}
-        >
-          {#snippet children(id)}
-            <TextField
-              {id}
-              label="Port"
-              inputmode="numeric"
-              placeholder={isFolder ? "22 (SSH), 3389 (RDP)" : ""}
-              value={show(detail.port.effective)}
-              onCommit={(text) => commitNumber("port", "port", "Port", text, detail.port)}
-              onedit={() => setError("port", null)}
-            />
-          {/snippet}
-        </PropertyRow>
 
         <PropertyRow
           name="username"
@@ -317,42 +263,13 @@
           {/snippet}
         </PropertyRow>
 
-        {#if showKeepalive}
-          <PropertyRow
-            name="keepalive"
-            label="Keepalive"
-            source={detail.keepaliveSecs.source}
-            hasValue={detail.keepaliveSecs.effective !== null}
-            error={errors.keepalive}
-            onreset={() => void save("keepalive", { keepaliveSecs: null })}
-          >
-            {#snippet children(id)}
-              <TextField
-                {id}
-                label="Keepalive"
-                title="Seconds between keepalive packets; 0 turns keepalive off"
-                inputmode="numeric"
-                value={show(detail.keepaliveSecs.effective)}
-                onCommit={(text) =>
-                  commitNumber(
-                    "keepalive",
-                    "keepaliveSecs",
-                    "Keepalive",
-                    text,
-                    detail.keepaliveSecs,
-                  )}
-                onedit={() => setError("keepalive", null)}
-              />
-            {/snippet}
-          </PropertyRow>
-        {/if}
-
         <PropertyRow
           name="credential"
           label="Credential"
           source={detail.credential.source}
           hasValue={detail.credential.effective !== null}
           error={errors.credential}
+          wrapAux
           onreset={listReady ? () => void save("credential", { credential: null }) : undefined}
         >
           {#snippet children(id)}
@@ -394,6 +311,92 @@
             </div>
           {/snippet}
         </PropertyRow>
+
+        <PropertyRow
+          name="port"
+          label="Port"
+          source={detail.port.source}
+          hasValue={detail.port.effective !== null}
+          error={errors.port}
+          onreset={() => void save("port", { port: null })}
+        >
+          {#snippet children(id)}
+            <TextField
+              {id}
+              label="Port"
+              inputmode="numeric"
+              placeholder={isFolder ? "22 (SSH), 3389 (RDP)" : ""}
+              value={show(detail.port.effective)}
+              onCommit={(text) => commitNumber("port", "port", "Port", text, detail.port)}
+              onedit={() => setError("port", null)}
+            />
+          {/snippet}
+        </PropertyRow>
+
+        <PropertyRow name="description" label="Description" error={errors.description}>
+          {#snippet children(id)}
+            <TextField
+              {id}
+              label="Description"
+              value={detail.description}
+              onCommit={(text) =>
+                text === detail.description
+                  ? Promise.resolve(true)
+                  : save("description", { description: text })}
+              onedit={() => setError("description", null)}
+            />
+          {/snippet}
+        </PropertyRow>
+
+        {#if showKeepalive}
+          <PropertyRow
+            name="keepalive"
+            label="Keepalive"
+            source={detail.keepaliveSecs.source}
+            hasValue={detail.keepaliveSecs.effective !== null}
+            error={errors.keepalive}
+            onreset={() => void save("keepalive", { keepaliveSecs: null })}
+          >
+            {#snippet children(id)}
+              <TextField
+                {id}
+                label="Keepalive"
+                title="Seconds between keepalive packets; 0 turns keepalive off"
+                inputmode="numeric"
+                value={show(detail.keepaliveSecs.effective)}
+                onCommit={(text) =>
+                  commitNumber(
+                    "keepalive",
+                    "keepaliveSecs",
+                    "Keepalive",
+                    text,
+                    detail.keepaliveSecs,
+                  )}
+                onedit={() => setError("keepalive", null)}
+              />
+            {/snippet}
+          </PropertyRow>
+        {/if}
+
+        {#if !isFolder}
+          <PropertyRow name="protocol" label="Protocol" error={errors.protocol}>
+            {#snippet children(id)}
+              <select
+                {id}
+                aria-label="Protocol"
+                value={detail.protocol}
+                onchange={async (e) => {
+                  const select = e.currentTarget;
+                  const ok = await save("protocol", { protocol: select.value as Protocol });
+                  if (!ok) select.value = detail.protocol ?? "ssh";
+                }}
+              >
+                <option value="ssh">SSH</option>
+                <option value="rdp">RDP</option>
+              </select>
+            {/snippet}
+          </PropertyRow>
+        {/if}
       {/if}
     </div>
   {/if}

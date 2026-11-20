@@ -367,6 +367,62 @@ describe("PropertiesPanel", () => {
   });
 });
 
+describe("PropertiesPanel row order", () => {
+  const order = () =>
+    [...document.querySelectorAll<HTMLElement>("[data-field]")].map((e) => e.dataset.field);
+
+  test("ssh_connection_rows_run_by_use_with_the_rarely_changed_ones_last", async () => {
+    await setup({ "web-01": resolved({ id: "web-01", name: "web-01" }) });
+    expect(order()).toEqual([
+      "name",
+      "host",
+      "username",
+      "credential",
+      "port",
+      "description",
+      "keepalive",
+      "protocol",
+    ]);
+  });
+
+  test("rdp_connection_has_no_keepalive_row_in_the_same_order", async () => {
+    await setup({ DC01: resolved({ id: "DC01", name: "DC01", protocol: "rdp" }) }, "DC01");
+    expect(order()).toEqual([
+      "name",
+      "host",
+      "username",
+      "credential",
+      "port",
+      "description",
+      "protocol",
+    ]);
+  });
+
+  test("folder_rows_have_no_host_or_protocol_and_credential_comes_before_port", async () => {
+    await setup(
+      {
+        Homelab: resolved({
+          id: "Homelab",
+          name: "Homelab",
+          kind: "folder",
+          protocol: null,
+          host: null,
+        }),
+      },
+      "Homelab",
+    );
+    expect(order()).toEqual(["name", "username", "credential", "port", "description", "keepalive"]);
+  });
+
+  test("only_the_credential_row_wraps_its_aux_column_under_the_value", async () => {
+    await setup({ "web-01": resolved({ id: "web-01", name: "web-01" }) });
+    const wrapping = [...document.querySelectorAll<HTMLElement>("[data-field].wrap")].map(
+      (e) => e.dataset.field,
+    );
+    expect(wrapping).toEqual(["credential"]);
+  });
+});
+
 describe("PropertiesPanel credential row", () => {
   const ID = "3f2b8c1e-aaaa-4bbb-8ccc-0123456789ab";
   const OTHER = "9d1e7a00-bbbb-4ccc-8ddd-ba9876543210";

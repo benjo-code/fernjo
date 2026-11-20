@@ -9,6 +9,7 @@
     source = null,
     hasValue = false,
     error = null,
+    wrapAux = false,
     onreset,
     children,
   }: {
@@ -20,6 +21,11 @@
     /** An effective value exists (so a built-in default can be named as such). */
     hasValue?: boolean;
     error?: string | null;
+    /**
+     * The aux column drops under the value when the line is too narrow for both, instead of
+     * squeezing the value (a dropdown that must stay readable).
+     */
+    wrapAux?: boolean;
     onreset?: () => void;
     /** Receives the id to put on the field so the label points at it. */
     children: Snippet<[string]>;
@@ -28,7 +34,7 @@
   const id = $props.id();
 </script>
 
-<div class="prop" data-field={name}>
+<div class="prop" class:wrap={wrapAux} data-field={name}>
   <label class="key" for={id}>{label}</label>
   <div class="val">{@render children(id)}</div>
   <div class="aux">
@@ -55,6 +61,33 @@
     column-gap: var(--space-2);
     min-height: var(--row-height-tree);
     padding: 1px 0;
+  }
+
+  /* flex-wrap instead of the grid: the value keeps at least 100px, the aux column wraps below it */
+  .prop.wrap {
+    display: flex;
+    flex-wrap: wrap;
+    row-gap: var(--space-1);
+  }
+
+  .wrap .key {
+    flex: none;
+    width: 84px;
+  }
+
+  .wrap .val {
+    flex: 1 1 100px;
+  }
+
+  .wrap .aux {
+    flex: none;
+    margin-left: auto;
+  }
+
+  .wrap .error {
+    flex: 0 0 100%;
+    box-sizing: border-box;
+    padding-left: 92px;
   }
 
   .key {
