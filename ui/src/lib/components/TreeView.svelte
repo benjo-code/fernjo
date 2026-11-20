@@ -224,10 +224,13 @@
     else sessions.open(node.id);
   }
 
+  // The keys `onkeydown` handles: Enter connects a connection row, F2 renames, Delete deletes.
+  const DELETE_KEY = { hint: "Del", keys: "Delete" };
+
   function menuItemsFor(row: Row | null): MenuItem[] {
     if (row && store.selectedIds.size > 1 && store.isSelected(row.node.id)) {
       // Rename and Duplicate need a single node
-      return [{ label: "Delete", action: () => requestDelete(row) }];
+      return [{ label: "Delete", action: () => requestDelete(row), ...DELETE_KEY }];
     }
     if (!row) {
       return [
@@ -238,7 +241,12 @@
     const { parentId, index } = placement(row);
     const connectItems: MenuItem[] = [];
     if (row.node.type === "connection") {
-      connectItems.push({ label: "Connect", action: () => connect(row) });
+      connectItems.push({
+        label: "Connect",
+        action: () => connect(row),
+        hint: "Enter",
+        keys: "Enter",
+      });
       if (sessions.tabs.some((t) => t.nodeId === row.node.id)) {
         connectItems.push({ label: "Open another session", action: () => connect(row, true) });
       }
@@ -248,8 +256,8 @@
       { label: "New folder", action: () => void store.createFolder(parentId, index) },
       { label: "New connection", action: () => void store.createConnection(parentId, index) },
       { label: "Duplicate", action: () => void store.duplicate(row.node.id) },
-      { label: "Rename", action: () => store.startRename(row.node.id) },
-      { label: "Delete", action: () => requestDelete(row) },
+      { label: "Rename", action: () => store.startRename(row.node.id), hint: "F2", keys: "F2" },
+      { label: "Delete", action: () => requestDelete(row), ...DELETE_KEY },
     ];
   }
 

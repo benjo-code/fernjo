@@ -44,10 +44,12 @@ const row = (id: string) =>
     (el) => el.dataset.nodeId === id,
   )!;
 const menuLabels = () =>
-  [...document.querySelectorAll('[role="menuitem"]')].map((el) => el.textContent?.trim());
+  [...document.querySelectorAll('[role="menuitem"]')].map((el) =>
+    el.querySelector(".label")?.textContent?.trim(),
+  );
 const item = (label: string) =>
   [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
-    (el) => el.textContent?.trim() === label,
+    (el) => el.querySelector(".label")?.textContent?.trim() === label,
   )!;
 
 function contextMenu(el: Element) {

@@ -2,6 +2,10 @@
   export interface MenuItem {
     label: string;
     action: () => void;
+    /** Muted text at the right edge: the key that does the same (display form, such as "Del"). */
+    hint?: string;
+    /** The same key as the `aria-keyshortcuts` value (real key name, such as "Delete"). */
+    keys?: string;
   }
 </script>
 
@@ -92,12 +96,17 @@
       class="item"
       role="menuitem"
       tabindex="-1"
+      aria-keyshortcuts={item.keys}
       onclick={() => {
         item.action();
         onClose();
       }}
     >
-      {item.label}
+      <span class="label">{item.label}</span>
+      {#if item.hint}
+        <!-- the key is announced through aria-keyshortcuts, so the name stays the label alone -->
+        <span class="hint" aria-hidden="true">{item.hint}</span>
+      {/if}
     </button>
   {/each}
 </div>
@@ -116,7 +125,10 @@
   }
 
   .item {
-    display: block;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-5);
     width: 100%;
     height: 28px;
     padding: 0 var(--space-3);
@@ -127,6 +139,16 @@
     font: inherit;
     text-align: left;
     cursor: default;
+  }
+
+  .label {
+    white-space: nowrap;
+  }
+
+  .hint {
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+    white-space: nowrap;
   }
 
   .item:hover {

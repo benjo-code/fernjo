@@ -428,7 +428,9 @@ describe("multi-select", () => {
     );
     flushSync();
     expect(
-      [...document.querySelectorAll('[role="menuitem"]')].map((el) => el.textContent?.trim()),
+      [...document.querySelectorAll('[role="menuitem"]')].map((el) =>
+        el.querySelector(".label")?.textContent?.trim(),
+      ),
     ).toEqual(["Delete"]);
     expect(selectedNames()).toEqual(["web-01", "db-01"]);
   });
