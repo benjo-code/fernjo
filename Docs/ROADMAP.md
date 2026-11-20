@@ -33,7 +33,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 | – | **Release `v0.1.0`** – Daily SSH driver (M0 to M6) | – | ✅ done | – | 2026-11-18 |
 | 7 | Daily-use polish and hardening | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-19-milestone-07-polish-hardening.md) | 2026-11-20 |
 | – | **Release `v0.1.1`** – Polish and hardening (M7) | – | ✅ done | – | 2026-11-20 |
-| 8 | RDP sessions | 1 – fernjo app | 🟡 planned | [Plan](superpowers/plans/2026-11-20-milestone-08-rdp-sessions.md) | – |
+| 8 | RDP sessions | 1 – fernjo app | 🔵 in progress | [Plan](superpowers/plans/2026-11-20-milestone-08-rdp-sessions.md) | – |
 | – | **Release `v0.2.0`** – RDP (M8) | – | ⬜ open | – | – |
 
 ## Scope changes
@@ -389,7 +389,7 @@ No item was changed or declined. Implemented in eight sub-tasks 19.1 to 19.8 of 
 Closes the known gaps of 0.1.0: no silent loss of synced data, clearer UI, resizable panels, multi-select in the tree.
 
 ## Milestone 8 – RDP sessions
-**Status:** 🟡 planned · **Plan:** [2026-11-20-milestone-08-rdp-sessions.md](superpowers/plans/2026-11-20-milestone-08-rdp-sessions.md) · **Prerequisites:** M6
+**Status:** 🔵 in progress · **Plan:** [2026-11-20-milestone-08-rdp-sessions.md](superpowers/plans/2026-11-20-milestone-08-rdp-sessions.md) · **Prerequisites:** M6
 
 Goal: RDP connections in the tree open as tabs next to SSH sessions, smoothly enough for daily admin work.
 
@@ -397,7 +397,7 @@ Goal: RDP connections in the tree open as tabs next to SSH sessions, smoothly en
 - [ ] Throwaway spike: IronRDP → framebuffer → Tauri channel → canvas at 1920×1080 on all three OSes, measured; result in `Docs/DECISIONS.md`
 - [ ] `fernjo-rdp`: IronRDP client with TLS + NLA (CredSSP), credentials and domain from the vault
 - [ ] RDP tab: fit to tab with dynamic resize (fixed size as fallback), keyboard and mouse input, text clipboard both ways, fullscreen
-- [ ] RDP settings (domain, resolution/scaling, colour depth, clipboard) as inheritable settings
+- [x] RDP settings (domain, resolution/scaling, colour depth, clipboard) as inheritable settings
 - [ ] If the bar is missed after optimising the canvas path: record a scope change and insert a native-surface milestone before v0.2.0
 
 **Acceptance criteria**

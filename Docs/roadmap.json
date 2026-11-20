@@ -286,7 +286,7 @@
         {
           "id": "8",
           "title": "RDP sessions",
-          "status": "planned",
+          "status": "in-progress",
           "plan": "superpowers/plans/2026-11-20-milestone-08-rdp-sessions.md",
           "prerequisites": ["6"],
           "goal": "RDP connections in the tree open as tabs next to SSH sessions, smoothly enough for daily admin work.",
@@ -294,7 +294,7 @@
             { "text": "Throwaway spike: IronRDP → framebuffer → Tauri channel → canvas at 1920×1080 on all three OSes, measured; result in `Docs/DECISIONS.md`", "done": false },
             { "text": "`fernjo-rdp`: IronRDP client with TLS + NLA (CredSSP), credentials and domain from the vault", "done": false },
             { "text": "RDP tab: fit to tab with dynamic resize (fixed size as fallback), keyboard and mouse input, text clipboard both ways, fullscreen", "done": false },
-            { "text": "RDP settings (domain, resolution/scaling, colour depth, clipboard) as inheritable settings", "done": false },
+            { "text": "RDP settings (domain, resolution/scaling, colour depth, clipboard) as inheritable settings", "done": true },
             { "text": "If the bar is missed after optimising the canvas path: record a scope change and insert a native-surface milestone before v0.2.0", "done": false }
           ],
           "acceptance": [
