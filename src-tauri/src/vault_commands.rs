@@ -2011,7 +2011,9 @@ mod tests {
     /// Commands that need an `AppHandle` cannot be called without a running app, so they have
     /// no `table()` entry. Each is exempt for the stated reason: no secret type appears in
     /// its signature (`choose_data_folder` returns `DataFolderInfo`, `restart_app` nothing).
-    const APP_HANDLE_EXEMPT: [(&str, &str); 6] = [
+    const APP_HANDLE_EXEMPT: [(&str, &str); 8] = [
+        ("spike_stream", "throwaway spike; synthetic pixels only"),
+        ("spike_ack", "throwaway spike; no data"),
         (
             "choose_data_folder",
             "takes an AppHandle; returns only DataFolderInfo",
@@ -2056,6 +2058,7 @@ mod tests {
             include_str!("session_commands.rs"),
             include_str!("import_commands.rs"),
             include_str!("app_settings.rs"),
+            include_str!("spike.rs"),
         ];
         // Only lines that start with the attribute count (not doc comments or strings), so
         // `#[tauri::command(async)]` and similar forms are counted too.

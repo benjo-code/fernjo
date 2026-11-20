@@ -8,6 +8,7 @@ mod nav_guard;
 mod session_commands;
 mod session_flow;
 mod sessions;
+mod spike;
 mod state;
 mod vault_commands;
 
@@ -113,6 +114,8 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            spike::handlers::spike_stream,
+            spike::handlers::spike_ack,
             commands::handlers::list_tree,
             commands::handlers::reload_tree,
             commands::handlers::get_node,
