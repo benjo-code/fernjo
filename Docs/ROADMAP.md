@@ -360,6 +360,25 @@ Wanted:
 
 Approach: do it as a design critique with real screenshots (the `impeccable` skill; `DESIGN.md` and the tokens in `ui/src/styles/tokens.css` apply, no new visual direction), turn the findings into a short list, agree it with the owner, then implement the agreed changes with tests.
 
+**M7 discoverability review: agreed list**
+Decision date 2026-11-20. The owner reviewed `Docs/design/m07-discoverability-review.md` (13 items, screenshots in `Docs/design/m07-review/`) and answered "implement all of them".
+
+- D1 Vault chip label and tooltip: implement
+- D2 Manager title and empty state: implement
+- D3 Credential row: create, unlock, manage, new: implement
+- D4 Footer labels and "Import, export & backup": implement
+- D5 Properties panel default height or row order: implement
+- D6 First-run start list: implement
+- D7 Vault wording: implement
+- D8 Settings: live versus saved controls: implement
+- D9 Dropped tab shows its reason: implement
+- D10 Shortcut hints in the context menu: implement
+- D11 Shortcut list in Settings and filter tooltip: implement
+- D12 Host key buttons explained: implement
+- D13 How to open a connection: implement
+
+No item was changed or declined. Implemented in eight sub-tasks 19.1 to 19.8 of the plan (`superpowers/plans/2026-11-19-milestone-07-polish-hardening.md`); the criterion "Manual, owner: the owner finds the vault, Import & backup and Settings without a hint" stays open until the owner has walked through the result.
+
 ## Release `v0.1.1` – Acceptance
 
 Closes the known gaps of 0.1.0: no silent loss of synced data, clearer UI, resizable panels, multi-select in the tree.
