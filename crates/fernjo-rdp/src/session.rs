@@ -28,6 +28,8 @@ use crate::{ConnectParams, Framebuffer, InputEvent, Interaction, MouseButton, Rd
 const EVENT_QUEUE: usize = 8;
 /// Commands waiting for the connection task.
 const COMMAND_QUEUE: usize = 64;
+/// How long one step of a reactivation may wait for the server.
+const REACTIVATION_STEP_LIMIT: Duration = Duration::from_secs(30);
 /// How long a final event may wait for a consumer that has stopped reading.
 const DELIVER_LIMIT: Duration = Duration::from_secs(5);
 
@@ -362,13 +364,17 @@ async fn drive(
                     let mut activation = activation_factory.create();
                     let mut buf = ironrdp_core::WriteBuf::new();
                     let finalized = loop {
-                        let step =
-                            match single_sequence_step_read(&mut reader, &mut activation, &mut buf)
-                                .await
-                            {
-                                Ok(step) => step,
-                                Err(_) => return CloseReason::ConnectionLost,
-                            };
+                        // a server that goes quiet here must neither hold the session open nor
+                        // make it impossible to close
+                        let read =
+                            single_sequence_step_read(&mut reader, &mut activation, &mut buf);
+                        let step = tokio::select! {
+                            read = tokio::time::timeout(REACTIVATION_STEP_LIMIT, read) => match read {
+                                Ok(Ok(step)) => step,
+                                _ => return CloseReason::ConnectionLost,
+                            },
+                            () = closing.notified() => return CloseReason::ClosedByUser,
+                        };
                         if step.size().is_some() && writer.write_all(buf.filled()).await.is_err() {
                             return CloseReason::ConnectionLost;
                         }

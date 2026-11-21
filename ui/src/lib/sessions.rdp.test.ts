@@ -199,6 +199,7 @@ test("a fixed resolution is read from the connection when the canvas attaches", 
         effective: mode === "fixed" ? { mode, width: 1920, height: 1080 } : { mode },
         source: { kind: "default" },
       },
+      rdpClipboard: { local: null, effective: true, source: { kind: "default" } },
     }) as never;
   const fixed = await rdpTab({ getNode: async () => node("fixed") });
   await vi.waitFor(() => expect(fixed.tab.fixedSize).toBe(true));

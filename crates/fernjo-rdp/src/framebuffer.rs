@@ -61,10 +61,20 @@ struct Pixels {
     data: Vec<u8>,
 }
 
-/// A size is acceptable when neither side is zero or above [`MAX_DESKTOP_DIMENSION`]; this is
-/// checked before anything is allocated, so a hostile server cannot make the client allocate.
+/// Largest desktop in pixels (8192 by 4320, about 141 MB as RGBA): each side may reach
+/// [`MAX_DESKTOP_DIMENSION`], but not both at once, so one session cannot ask for gigabytes of
+/// framebuffer, decoded image and region copies.
+pub const MAX_DESKTOP_PIXELS: u32 = 8192 * 4320;
+
+/// A size is acceptable when neither side is zero or above [`MAX_DESKTOP_DIMENSION`] and the area
+/// is at most [`MAX_DESKTOP_PIXELS`]; this is checked before anything is allocated, so a hostile
+/// server cannot make the client allocate.
 fn check_size(width: u16, height: u16) -> Result<(), RdpError> {
-    if width == 0 || height == 0 || width > MAX_DESKTOP_DIMENSION || height > MAX_DESKTOP_DIMENSION
+    if width == 0
+        || height == 0
+        || width > MAX_DESKTOP_DIMENSION
+        || height > MAX_DESKTOP_DIMENSION
+        || u32::from(width) * u32::from(height) > MAX_DESKTOP_PIXELS
     {
         return Err(RdpError::DesktopTooLarge);
     }

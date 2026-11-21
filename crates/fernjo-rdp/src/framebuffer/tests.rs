@@ -28,6 +28,27 @@ fn refuses_zero_and_oversize_desktops() {
 }
 
 #[test]
+fn refuses_a_desktop_whose_area_is_too_large() {
+    // each side is within bounds, together they would be 256 MiB of pixels
+    assert_eq!(
+        Framebuffer::new(8192, 8192).unwrap_err().code(),
+        "desktop_too_large"
+    );
+    assert_eq!(
+        Framebuffer::new(8192, 4321).unwrap_err().code(),
+        "desktop_too_large"
+    );
+    assert!(Framebuffer::new(8192, 4320).is_ok());
+    assert!(Framebuffer::new(7680, 4320).is_ok());
+    let fb = Framebuffer::new(100, 100).unwrap();
+    assert_eq!(
+        fb.resize(8192, 8192).unwrap_err().code(),
+        "desktop_too_large"
+    );
+    assert_eq!(fb.size(), (100, 100));
+}
+
+#[test]
 fn write_then_copy_round_trips_a_region() {
     let fb = Framebuffer::new(10, 6).unwrap();
     let pixels: Vec<u8> = (0..(3 * 2 * 4)).map(|i| i as u8 + 1).collect();

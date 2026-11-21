@@ -156,6 +156,11 @@ export class RdpController {
     return this.#key(e.code, true);
   }
 
+  /** Whether the key's press was forwarded and its release is still to come. */
+  isDown(code: string): boolean {
+    return this.#keys.has(code);
+  }
+
   keyUp(e: Pick<KeyboardEvent, "code">): boolean {
     return this.#key(e.code, false);
   }

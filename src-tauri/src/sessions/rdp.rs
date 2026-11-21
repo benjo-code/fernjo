@@ -180,7 +180,9 @@ pub(crate) fn build_params(plan: RdpPlan, size: (u32, u32), certs: CertStore) ->
         plan.username.unwrap_or_default(),
         password,
     );
-    params.domain = plan.domain;
+    // A user name typed as `DOMAIN\user` already names its domain, and the login layer refuses
+    // that form together with a separate domain, so the configured domain is not passed then.
+    params.domain = plan.domain.filter(|_| !params.username.contains('\\'));
     params.color_depth = plan.color_depth;
     params.clipboard = plan.clipboard;
     params.certs = certs;
@@ -366,6 +368,10 @@ impl SessionManager {
     /// # Errors
     /// `not_found`; `session_not_connected` while there is no live session.
     pub fn rdp_clipboard(&self, id: &str, text: String) -> Result<(), CommandError> {
+        // over the cap nothing would be sent anyway; do not queue megabytes for the session task
+        if text.len() > fernjo_rdp::MAX_CLIPBOARD_BYTES {
+            return Ok(());
+        }
         self.send_op(id, Op::Clipboard(text))
     }
 

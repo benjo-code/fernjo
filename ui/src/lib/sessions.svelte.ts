@@ -357,13 +357,14 @@ export class SessionStore {
    * fixed (on any failure the tab fits) and whether the clipboard is shared (on any failure not).
    */
   #loadMode(tab: Tab): void {
-    this.#api.getNode(tab.nodeId).then(
-      (node) => {
-        tab.fixedSize = node.rdpResolution.effective?.mode === "fixed";
-        tab.clipboard = node.rdpClipboard.effective ?? true;
-      },
-      () => {},
-    );
+    this.#api
+      .getNode(tab.nodeId)
+      .then((node) => {
+        tab.fixedSize = node.rdpResolution?.effective?.mode === "fixed";
+        tab.clipboard = node.rdpClipboard?.effective ?? true;
+      })
+      // a failed read or an unexpected answer leaves the safe defaults
+      .catch(() => {});
   }
 
   /** The canvas component is gone; regions that arrive meanwhile are acknowledged and dropped. */

@@ -135,6 +135,14 @@
     if (canvas && wantsFocus) canvas.focus();
   });
 
+  // A resize asked for before the session was live (a prompt was open) was dropped by Rust, which
+  // had no display channel yet: compare the box with the desktop once the session is live.
+  $effect(() => {
+    if (tab.state !== "connected") return;
+    const c = controller;
+    if (c) untrack(() => c.boxChanged(room.width, room.height));
+  });
+
   // Entering full screen shows how to leave it, for a few seconds. The box changes size at once,
   // and the desktop follows after the debounce.
   $effect(() => {
@@ -188,7 +196,10 @@
   }
 
   function onkeyup(e: KeyboardEvent) {
-    if (ours(e) || !scancodeFor(e.code)) return;
+    // A key that went down to the remote machine always gets its release, even when a modifier
+    // pressed meanwhile would make the release look like an app chord (hold Tab, press Ctrl,
+    // let go of Tab); otherwise it would stay down there.
+    if (!scancodeFor(e.code) || (ours(e) && !controller?.isDown(e.code))) return;
     e.preventDefault();
     const code = e.code;
     ordered(() => void controller?.keyUp({ code }));

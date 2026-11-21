@@ -26,11 +26,17 @@ vi.mock("./controller", async (importOriginal) => ({
       this.calls.push("paint");
     }
     boxChanged() {}
+    down = new Set<string>();
+    isDown(code: string) {
+      return this.down.has(code);
+    }
     keyDown(e: { code: string }) {
+      this.down.add(e.code);
       this.calls.push(`down:${e.code}`);
       return e.code !== "Unknown";
     }
     keyUp(e: { code: string }) {
+      this.down.delete(e.code);
       this.calls.push(`up:${e.code}`);
       return e.code !== "Unknown";
     }
@@ -139,6 +145,37 @@ test("keys with a scancode are forwarded and kept from the browser; others are n
   expect(unknown.defaultPrevented).toBe(false);
   expect(h.made[0]!.calls).toContain("down:KeyA");
   expect(h.made[0]!.calls.some((c) => c.includes("Unknown"))).toBe(false);
+});
+
+test("a key that went down is released even when a modifier turned its release into an app chord", () => {
+  setup();
+  const canvas = canvases()[0]!;
+  h.made[0]!.calls.length = 0;
+  canvas.dispatchEvent(
+    new KeyboardEvent("keydown", { code: "Tab", key: "Tab", bubbles: true, cancelable: true }),
+  );
+  // Ctrl was pressed meanwhile: Tab released now would look like Ctrl+Tab
+  const up = new KeyboardEvent("keyup", {
+    code: "Tab",
+    key: "Tab",
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  canvas.dispatchEvent(up);
+  expect(h.made[0]!.calls).toEqual(["down:Tab", "up:Tab"]);
+  // a Ctrl+Tab that never went down stays the app's
+  h.made[0]!.calls.length = 0;
+  canvas.dispatchEvent(
+    new KeyboardEvent("keyup", {
+      code: "Tab",
+      key: "Tab",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  expect(h.made[0]!.calls).toEqual([]);
 });
 
 test("blur releases the keys", () => {

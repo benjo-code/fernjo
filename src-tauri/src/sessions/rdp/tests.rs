@@ -637,6 +637,40 @@ fn fit_takes_the_tab_size_and_follows_it_later() {
 }
 
 #[test]
+fn a_down_level_user_name_is_not_combined_with_a_domain() {
+    // sspi refuses `CORP\admin` together with a domain, so the domain is left out then
+    let mut p = plan(RdpResolution::Fit);
+    p.username = Some("CORP\\admin".into());
+    let params = build_params(p, (800, 600), CertStore::in_memory());
+    assert_eq!(params.username, "CORP\\admin");
+    assert_eq!(params.domain, None);
+    // a plain name or a UPN keeps the domain
+    for name in ["admin", "admin@corp.example"] {
+        let mut p = plan(RdpResolution::Fit);
+        p.username = Some(name.into());
+        let params = build_params(p, (800, 600), CertStore::in_memory());
+        assert_eq!(params.domain.as_deref(), Some("CORP"), "{name}");
+    }
+}
+
+#[test]
+fn an_oversize_clipboard_text_is_not_queued() {
+    let (channel, _rec) = recorder();
+    let shared = shared_with(channel, credit_for(8, 8));
+    let (tx, mut ops) = tokio::sync::mpsc::unbounded_channel();
+    *shared.ops.lock().unwrap() = Some(tx);
+    let manager = manager_with("a", entry_with(shared));
+    manager
+        .rdp_clipboard("a", "x".repeat(fernjo_rdp::MAX_CLIPBOARD_BYTES + 1))
+        .unwrap();
+    assert!(ops.try_recv().is_err());
+    manager
+        .rdp_clipboard("a", "x".repeat(fernjo_rdp::MAX_CLIPBOARD_BYTES))
+        .unwrap();
+    assert!(matches!(ops.try_recv().unwrap(), Op::Clipboard(_)));
+}
+
+#[test]
 fn a_fixed_resolution_ignores_the_tab_and_turns_resizing_off() {
     let p = build_params(
         plan(RdpResolution::Fixed {
