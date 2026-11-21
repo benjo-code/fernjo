@@ -394,7 +394,7 @@ Closes the known gaps of 0.1.0: no silent loss of synced data, clearer UI, resiz
 Goal: RDP connections in the tree open as tabs next to SSH sessions, smoothly enough for daily admin work.
 
 **Tasks**
-- [ ] Throwaway spike: IronRDP → framebuffer → Tauri channel → canvas at 1920×1080 on all three OSes, measured; result in `Docs/DECISIONS.md`
+- [x] Throwaway spike: IronRDP → framebuffer → Tauri channel → canvas at 1920×1080 on all three OSes, measured; result in `Docs/DECISIONS.md`
 - [ ] `fernjo-rdp`: IronRDP client with TLS + NLA (CredSSP), credentials and domain from the vault
 - [ ] RDP tab: fit to tab with dynamic resize (fixed size as fallback), keyboard and mouse input, text clipboard both ways, fullscreen
 - [x] RDP settings (domain, resolution/scaling, colour depth, clipboard) as inheritable settings

@@ -291,7 +291,7 @@
           "prerequisites": ["6"],
           "goal": "RDP connections in the tree open as tabs next to SSH sessions, smoothly enough for daily admin work.",
           "tasks": [
-            { "text": "Throwaway spike: IronRDP → framebuffer → Tauri channel → canvas at 1920×1080 on all three OSes, measured; result in `Docs/DECISIONS.md`", "done": false },
+            { "text": "Throwaway spike: IronRDP → framebuffer → Tauri channel → canvas at 1920×1080 on all three OSes, measured; result in `Docs/DECISIONS.md`", "done": true },
             { "text": "`fernjo-rdp`: IronRDP client with TLS + NLA (CredSSP), credentials and domain from the vault", "done": false },
             { "text": "RDP tab: fit to tab with dynamic resize (fixed size as fallback), keyboard and mouse input, text clipboard both ways, fullscreen", "done": false },
             { "text": "RDP settings (domain, resolution/scaling, colour depth, clipboard) as inheritable settings", "done": true },
