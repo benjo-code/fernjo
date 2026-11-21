@@ -10,7 +10,8 @@ const h = vi.hoisted(() => ({
   made: [] as { calls: string[]; options: { send(events: unknown[]): void } }[],
 }));
 
-vi.mock("./controller", () => ({
+vi.mock("./controller", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./controller")>()),
   RdpController: class {
     calls: string[] = [];
     options: { send(events: unknown[]): void };
@@ -24,6 +25,7 @@ vi.mock("./controller", () => ({
     paint() {
       this.calls.push("paint");
     }
+    boxChanged() {}
     keyDown(e: { code: string }) {
       this.calls.push(`down:${e.code}`);
       return e.code !== "Unknown";

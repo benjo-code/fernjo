@@ -212,14 +212,10 @@
       : { parentId: row.parentId, index: row.index + 1 };
   }
 
-  /** Opens a session for a connection; RDP is not implemented yet and says so. */
+  /** Opens a session (terminal or remote desktop, by the connection's protocol). */
   function connect(row: Row, another = false) {
     const { node } = row;
     if (node.type !== "connection") return;
-    if (node.protocol === "rdp") {
-      store.showError("RDP sessions are not available yet");
-      return;
-    }
     if (another) sessions.open(node.id, { another: true });
     else sessions.open(node.id);
   }

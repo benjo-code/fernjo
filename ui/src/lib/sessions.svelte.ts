@@ -21,6 +21,11 @@ export interface Tab {
   nodeId: string;
   /** Which view the tab gets: a terminal or the remote desktop canvas. */
   protocol: Protocol;
+  /**
+   * RDP: the effective resolution is fixed, so the desktop does not follow the tab and the canvas
+   * scales instead. Read from the connection when the canvas attaches and on every reconnect.
+   */
+  fixedSize: boolean;
   title: string;
   state: SessionState;
   detail: string | null;
@@ -82,6 +87,11 @@ export class SessionStore {
   revealed = $state(0);
   /** A close that waits for the user's answer (only a running session is worth a question). */
   closeRequest = $state<{ id: string; title: string } | null>(null);
+  /**
+   * The active remote desktop fills the window (sidebar and tab strip hidden). It ends with the
+   * session, with any change of the active tab and with a toggle.
+   */
+  remoteFullscreen = $state(false);
 
   #api: Api;
   #nameOf: (nodeId: string) => string;
@@ -109,6 +119,7 @@ export class SessionStore {
       const existing = this.tabs.find((t) => t.nodeId === nodeId);
       if (existing) {
         this.activeId = existing.id;
+        this.remoteFullscreen = false;
         this.revealed++;
         return;
       }
@@ -132,19 +143,35 @@ export class SessionStore {
       sessionId: null,
       nodeId,
       protocol: this.#protocolOf(nodeId),
+      fixedSize: false,
       title,
       state: "connecting",
       detail: null,
       prompt: null,
     });
     this.activeId = id;
+    this.remoteFullscreen = false;
     this.revealed++;
   }
 
   activate(id: string): void {
     if (!this.tabs.some((t) => t.id === id)) return;
     this.activeId = id;
+    this.remoteFullscreen = false;
     this.revealed++;
+  }
+
+  /**
+   * Enters or leaves full screen for the active remote desktop. Only a connected RDP tab can
+   * enter it; leaving always works.
+   */
+  toggleFullscreen(): void {
+    if (this.remoteFullscreen) {
+      this.remoteFullscreen = false;
+      return;
+    }
+    const tab = this.tabs.find((t) => t.id === this.activeId);
+    if (tab?.protocol === "rdp" && tab.state === "connected") this.remoteFullscreen = true;
   }
 
   next(): void {
@@ -160,6 +187,7 @@ export class SessionStore {
     const at = this.tabs.findIndex((t) => t.id === this.activeId);
     const to = (at + delta + this.tabs.length) % this.tabs.length;
     this.activeId = this.tabs[to]!.id;
+    this.remoteFullscreen = false;
     this.revealed++;
   }
 
@@ -195,6 +223,7 @@ export class SessionStore {
     this.tabs.splice(at, 1);
     if (this.activeId === id) {
       this.activeId = (this.tabs[at] ?? this.tabs[at - 1])?.id ?? null;
+      this.remoteFullscreen = false;
     }
   }
 
@@ -213,6 +242,7 @@ export class SessionStore {
         ? { cols: rt.remote?.size().width ?? 1280, rows: rt.remote?.size().height ?? 800 }
         : (rt.bridge?.size() ?? { cols: 80, rows: 24 });
     const previous = { state: tab.state, detail: tab.detail };
+    if (tab.protocol === "rdp") this.#loadMode(tab);
     tab.state = "connecting";
     tab.detail = null;
     tab.prompt = null;
@@ -311,8 +341,19 @@ export class SessionStore {
     if (rt.desktop) bridge.setDesktop(rt.desktop.width, rt.desktop.height);
     if (rt.started) return;
     rt.started = true;
+    this.#loadMode(tab);
     const { width, height } = bridge.size();
     this.#open(tab, rt, id, width, height);
+  }
+
+  /** Whether the connection's effective resolution is fixed; on any failure the tab fits. */
+  #loadMode(tab: Tab): void {
+    this.#api.getNode(tab.nodeId).then(
+      (node) => {
+        tab.fixedSize = node.rdpResolution.effective?.mode === "fixed";
+      },
+      () => {},
+    );
   }
 
   /** The canvas component is gone; regions that arrive meanwhile are acknowledged and dropped. */
@@ -379,6 +420,7 @@ export class SessionStore {
     } else if (e.kind === "state") {
       tab.state = e.state;
       tab.detail = e.detail;
+      if (e.state !== "connected" && this.activeId === id) this.remoteFullscreen = false;
       if (e.state === "disconnected") {
         tab.prompt = null;
         // Rust decides what a clean end is; the setting only decides whether the tab stays.

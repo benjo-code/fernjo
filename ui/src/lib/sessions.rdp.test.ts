@@ -190,3 +190,40 @@ test("a terminal tab still gets terminal output", async () => {
   expect(written).toEqual([[1, 2, 3]]);
   expect(mock.calls.sessionAck).toHaveLength(0);
 });
+
+test("a fixed resolution is read from the connection when the canvas attaches", async () => {
+  const node = (mode: "fit" | "fixed") =>
+    ({
+      rdpResolution: {
+        local: null,
+        effective: mode === "fixed" ? { mode, width: 1920, height: 1080 } : { mode },
+        source: { kind: "default" },
+      },
+    }) as never;
+  const fixed = await rdpTab({ getNode: async () => node("fixed") });
+  await vi.waitFor(() => expect(fixed.tab.fixedSize).toBe(true));
+  const fit = await rdpTab({ getNode: async () => node("fit") });
+  await new Promise((r) => setTimeout(r, 0));
+  expect(fit.tab.fixedSize).toBe(false);
+  // an unreadable connection leaves the tab fitting
+  const unknown = await rdpTab();
+  expect(unknown.tab.fixedSize).toBe(false);
+});
+
+test("full screen is for a connected rdp tab and ends with any change of tab", async () => {
+  const t = await rdpTab();
+  t.sessions.toggleFullscreen();
+  expect(t.sessions.remoteFullscreen).toBe(false); // still connecting
+  t.state("connected");
+  t.sessions.toggleFullscreen();
+  expect(t.sessions.remoteFullscreen).toBe(true);
+  t.sessions.next();
+  expect(t.sessions.remoteFullscreen).toBe(false);
+  t.sessions.toggleFullscreen();
+  expect(t.sessions.remoteFullscreen).toBe(true);
+  t.sessions.toggleFullscreen();
+  expect(t.sessions.remoteFullscreen).toBe(false);
+  t.sessions.toggleFullscreen();
+  t.sessions.close(t.tab.id);
+  expect(t.sessions.remoteFullscreen).toBe(false);
+});

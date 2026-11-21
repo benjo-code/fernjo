@@ -203,7 +203,7 @@ export class TerminalController {
 
   /**
    * Key contract (shared with App's window handler, which must NOT dispatch copy, paste or
-   * terminalSearch): `routeKey(e, mac, true)` decides.
+   * terminalSearch): `routeKey(e, mac, "terminal")` decides.
    * - `copy` and `terminalSearch` are handled here (preventDefault + stopPropagation) and xterm
    *   ignores them.
    * - every other app action (tabs, close, filter, and paste) returns false WITHOUT
@@ -213,7 +213,7 @@ export class TerminalController {
    */
   #onKey(e: KeyboardEvent): boolean {
     if (e.type !== "keydown") return true;
-    const action = routeKey(e, this.#mac, true);
+    const action = routeKey(e, this.#mac, "terminal");
     if (action === null) return true;
     if (action === "copy" || action === "terminalSearch") {
       e.preventDefault();

@@ -10,6 +10,47 @@ export interface RdpControllerOptions {
   send(events: RdpInputEvent[]): void;
   requestAnimationFrame?: (callback: () => void) => number;
   cancelAnimationFrame?: (handle: number) => void;
+  /** Asks Rust for a new desktop size; called once after the box has stopped changing. */
+  resize?(width: number, height: number): void;
+  /** `true` for a fixed resolution: the desktop never follows the box, the canvas scales. */
+  fixed?(): boolean;
+  setTimeout?: (callback: () => void, ms: number) => number;
+  clearTimeout?: (handle: number) => void;
+}
+
+/** The box must stay unchanged this long before a resize is sent. */
+export const RESIZE_DEBOUNCE_MS = 150;
+/** Smallest and largest desktop side asked for (Rust clamps the same way). */
+export const MIN_SIDE = 200;
+export const MAX_SIDE = 8192;
+
+/**
+ * The desktop size for a box: both sides rounded down to an even number and clamped to
+ * `MIN_SIDE..=MAX_SIDE`. `null` for a box that is empty or not a number (a hidden tab), which
+ * must never be sent: a zero-sized desktop is refused by the server.
+ */
+export function fitSize(width: number, height: number): { width: number; height: number } | null {
+  if (!(width >= 1) || !(height >= 1)) return null;
+  const side = (v: number) => Math.min(MAX_SIDE, Math.max(MIN_SIDE, Math.floor(v) & ~1));
+  return { width: side(width), height: side(height) };
+}
+
+/**
+ * The size the canvas is shown at inside a box: the whole desktop, scaled up or down with the
+ * aspect ratio kept. `null` while the box or the desktop is empty.
+ */
+export function displaySize(
+  box: { width: number; height: number },
+  desktop: { width: number; height: number },
+): { width: number; height: number } | null {
+  if (!(box.width >= 1) || !(box.height >= 1) || desktop.width < 1 || desktop.height < 1) {
+    return null;
+  }
+  const scale = Math.min(box.width / desktop.width, box.height / desktop.height);
+  return {
+    width: Math.max(1, Math.floor(desktop.width * scale)),
+    height: Math.max(1, Math.floor(desktop.height * scale)),
+  };
 }
 
 /** Rust refuses more events than this in one call (`MAX_INPUT_EVENTS`). */
@@ -43,16 +84,44 @@ export class RdpController {
   #buttons = new Set<RdpButton>();
   #lastMove: { x: number; y: number } | null = null;
   #wheelRest = { x: 0, y: 0 };
+  #resize: ((width: number, height: number) => void) | undefined;
+  #fixed: () => boolean;
+  #setTimeout: (callback: () => void, ms: number) => number;
+  #clearTimeout: (handle: number) => void;
+  #timer: number | null = null;
 
   constructor(options: RdpControllerOptions) {
     this.#canvas = options.canvas;
     this.#send = options.send;
+    this.#resize = options.resize;
+    this.#fixed = options.fixed ?? (() => false);
+    this.#setTimeout = options.setTimeout ?? ((cb, ms) => window.setTimeout(cb, ms));
+    this.#clearTimeout = options.clearTimeout ?? ((h) => window.clearTimeout(h));
     this.#raf = options.requestAnimationFrame ?? ((cb) => requestAnimationFrame(cb));
     this.#caf = options.cancelAnimationFrame ?? ((h) => cancelAnimationFrame(h));
   }
 
   get desktop(): DesktopSize {
     return this.#desktop;
+  }
+
+  // --- fit to the tab ----------------------------------------------------------------------
+
+  /**
+   * The box around the canvas has this size now. After it stops changing (the debounce) the
+   * desktop is asked to follow, unless the resolution is fixed, the box is empty, or the desktop
+   * already has the size.
+   */
+  boxChanged(width: number, height: number): void {
+    if (this.#timer !== null) this.#clearTimeout(this.#timer);
+    this.#timer = this.#setTimeout(() => {
+      this.#timer = null;
+      if (this.#fixed()) return;
+      const wanted = fitSize(width, height);
+      if (!wanted) return;
+      if (wanted.width === this.#desktop.width && wanted.height === this.#desktop.height) return;
+      this.#resize?.(wanted.width, wanted.height);
+    }, RESIZE_DEBOUNCE_MS);
   }
 
   // --- painting ----------------------------------------------------------------------------
@@ -215,6 +284,8 @@ export class RdpController {
   }
 
   dispose(): void {
+    if (this.#timer !== null) this.#clearTimeout(this.#timer);
+    this.#timer = null;
     if (this.#frame !== null) this.#caf(this.#frame);
     this.#frame = null;
     this.#queue = [];
