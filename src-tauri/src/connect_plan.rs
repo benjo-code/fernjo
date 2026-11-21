@@ -69,10 +69,6 @@ pub struct ConnectPlan {
 
 /// What to authenticate an RDP session with (a password only).
 #[derive(Debug)]
-#[allow(
-    dead_code,
-    reason = "read by the session manager from the RDP wiring task on"
-)]
 pub enum RdpCredentialPlan {
     /// The connection references no credential.
     None,
@@ -86,10 +82,6 @@ pub enum RdpCredentialPlan {
 /// Everything the session manager needs to open an RDP connection. `Debug` never shows the
 /// password.
 #[derive(Debug)]
-#[allow(
-    dead_code,
-    reason = "read by the session manager from the RDP wiring task on"
-)]
 pub struct RdpPlan {
     pub host: String,
     pub port: u16,
@@ -104,10 +96,6 @@ pub struct RdpPlan {
 
 /// The plan for either protocol.
 #[derive(Debug)]
-#[allow(
-    dead_code,
-    reason = "read by the session manager from the RDP wiring task on"
-)]
 pub enum Plan {
     Ssh(ConnectPlan),
     Rdp(RdpPlan),
@@ -198,26 +186,6 @@ fn checked_host(node: &ResolvedNode) -> Result<String, CommandError> {
         ));
     }
     Ok(host)
-}
-
-/// Builds the plan for the SSH connection `node_id`.
-///
-/// # Errors
-/// `not_found`, `not_a_connection`, `unsupported_protocol` (an RDP node), `invalid_host`, or a
-/// vault error other than a missing entry (for example `internal`).
-pub fn resolve_ssh(
-    state: &AppState,
-    node_id: NodeId,
-    skip_vault: bool,
-) -> Result<ConnectPlan, CommandError> {
-    let node = connection(state, node_id)?;
-    if node.protocol != Some(Protocol::Ssh) {
-        return Err(error(
-            "unsupported_protocol",
-            "this connection is not an SSH connection",
-        ));
-    }
-    ssh_plan(state, &node, skip_vault)
 }
 
 fn ssh_plan(
@@ -311,10 +279,6 @@ fn rdp_plan(
 ///
 /// # Errors
 /// `not_found`, `not_a_connection`, `invalid_host`, or a vault error other than a missing entry.
-#[allow(
-    dead_code,
-    reason = "read by the session manager from the RDP wiring task on"
-)]
 pub fn resolve_session(
     state: &AppState,
     node_id: NodeId,
@@ -337,6 +301,18 @@ mod tests {
     use secrecy::{ExposeSecret, SecretString};
     use serde_json::{Value, json};
     use std::path::Path;
+
+    /// The SSH plan of a node (the tests below that are about SSH only use SSH nodes).
+    fn resolve_ssh(
+        state: &AppState,
+        node_id: NodeId,
+        skip_vault: bool,
+    ) -> Result<ConnectPlan, CommandError> {
+        match resolve_session(state, node_id, skip_vault)? {
+            Plan::Ssh(plan) => Ok(plan),
+            Plan::Rdp(_) => panic!("expected an SSH plan"),
+        }
+    }
 
     const MASTER: &str = "SENTINEL-master-1a2b3c";
     const PW: &str = "SENTINEL-password-7f3a9b";
@@ -594,16 +570,6 @@ mod tests {
         };
         assert_eq!(key.expose_secret(), KEY);
         assert_eq!(passphrase.unwrap().expose_secret(), PASS);
-    }
-
-    #[test]
-    fn resolve_ssh_refuses_an_rdp_node() {
-        let dir = tempfile::tempdir().unwrap();
-        let st = state(dir.path());
-        let id = rdp(&st, None, "h");
-        let err = resolve_ssh(&st, id, false).unwrap_err();
-        assert_eq!(err.code, "unsupported_protocol");
-        assert_eq!(err.message, "this connection is not an SSH connection");
     }
 
     // ---- RDP -----------------------------------------------------------------------------

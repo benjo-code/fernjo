@@ -1620,6 +1620,7 @@ dependencies = [
  "chrono",
  "fernjo-core",
  "fernjo-import",
+ "fernjo-rdp",
  "fernjo-ssh",
  "fernjo-vault",
  "secrecy",

@@ -138,10 +138,11 @@ pub fn set_terminal_settings(
 }
 
 /// Opens a session for a connection and returns its id (a UUID). Everything is resolved in Rust.
+/// For an RDP connection `cols` and `rows` are the size of the tab in pixels.
 /// Output (raw) and events (JSON) arrive on `on_event`; see the wire contract in `sessions.rs`.
 ///
 /// # Errors
-/// `not_found`, `not_a_connection`, `unsupported_protocol`, `invalid_host`, `no_data_dir`, or a
+/// `not_found`, `not_a_connection`, `invalid_host`, `no_data_dir`, or a
 /// vault error.
 pub fn open_session(
     state: &AppState,
