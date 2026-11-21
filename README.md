@@ -17,9 +17,9 @@ Working now:
 - Data folder you can sync yourself (Syncthing, Nextcloud, iCloud) – the vault stays encrypted
 - Light and dark theme, following the system or set by hand
 
-Planned:
+In the next release (v0.2.0, implemented on the development branch, not released yet):
 
-- RDP sessions in tabs (IronRDP)
+- RDP sessions in tabs (IronRDP): TLS and network level authentication, certificate pinning, a canvas that follows the tab size (or a fixed resolution), keyboard and mouse, text clipboard both ways and an in-app full screen. Not yet checked against a real server through the app (see the owner checks in [Docs/ROADMAP.md](Docs/ROADMAP.md)); the clipboard depends on what each web view allows. Not supported: drive, printer and audio redirection, gateways and Kerberos.
 
 Design and scope: [Docs/superpowers/specs/2026-11-15-fernjo-design.md](Docs/superpowers/specs/2026-11-15-fernjo-design.md)
 
