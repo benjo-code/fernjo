@@ -21,6 +21,7 @@ fernjo stores SSH and RDP credentials. Reports about the following are especiall
 - a secret (password, private key, passphrase, vault data key) reaching the webview, a log, `connections.json` or any file in plaintext
 - weaknesses in the vault file format or its key handling
 - bypasses of SSH host key verification
+- bypasses of the RDP certificate decision (the pin per `host:port` in the device-local `rdp_certs.confirmed`; a connection to a new or changed certificate must ask before any credential is sent)
 - anything that lets web content in the app window reach Tauri commands it should not
 
 ## Threat model: the synced data folder

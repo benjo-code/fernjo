@@ -329,7 +329,8 @@
     {
       "version": "0.2.0",
       "title": "RDP",
-      "status": "open",
+      "status": "done",
+      "date": "2026-11-22",
       "afterMilestone": "8",
       "covers": ["8"],
       "intro": "RDP sessions in tabs next to SSH."

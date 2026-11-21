@@ -1615,7 +1615,7 @@ dependencies = [
 
 [[package]]
 name = "fernjo-app"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "fernjo-core",
@@ -1638,7 +1638,7 @@ dependencies = [
 
 [[package]]
 name = "fernjo-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "directories",
  "serde",
@@ -1651,7 +1651,7 @@ dependencies = [
 
 [[package]]
 name = "fernjo-import"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "aes-gcm",
  "base64 0.23.1",
@@ -1671,7 +1671,7 @@ dependencies = [
 
 [[package]]
 name = "fernjo-rdp"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "getrandom 0.4.3",
  "ironrdp-cliprdr",
@@ -1699,7 +1699,7 @@ dependencies = [
 
 [[package]]
 name = "fernjo-ssh"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "data-encoding",
  "getrandom 0.4.3",
@@ -1714,7 +1714,7 @@ dependencies = [
 
 [[package]]
 name = "fernjo-vault"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "argon2",
  "chacha20poly1305",
