@@ -4,13 +4,23 @@
 // never kept here.
 import { toApiError } from "./api";
 import { reorder } from "./tabs";
-import type { Api, Prompt, PromptAnswer, SessionEvent, SessionState } from "./types";
+import type {
+  Api,
+  Prompt,
+  PromptAnswer,
+  Protocol,
+  RdpInputEvent,
+  SessionEvent,
+  SessionState,
+} from "./types";
 
 export interface Tab {
   /** Local key, stable from the click on; the session id only exists once Rust answered. */
   id: string;
   sessionId: string | null;
   nodeId: string;
+  /** Which view the tab gets: a terminal or the remote desktop canvas. */
+  protocol: Protocol;
   title: string;
   state: SessionState;
   detail: string | null;
@@ -23,6 +33,20 @@ export interface TerminalBridge {
   size(): { cols: number; rows: number };
 }
 
+/**
+ * What the RDP canvas component hands over: where regions are painted, how big the canvas box is
+ * (pixels) and what to do with text the remote side copied.
+ */
+export interface RemoteBridge {
+  paint(rect: { x: number; y: number; width: number; height: number }, rgba: Uint8Array): void;
+  setDesktop(width: number, height: number): void;
+  clipboard(text: string): void;
+  size(): { width: number; height: number };
+}
+
+/** Bytes before the pixels of a region message: `u16 x, y, width, height`, little endian. */
+const REGION_HEADER = 8;
+
 export type Lamp = "live" | "connecting" | "dropped";
 
 const RECONNECTED = "\r\n\x1b[2m— reconnected —\x1b[0m\r\n";
@@ -30,6 +54,9 @@ const RECONNECTED = "\r\n\x1b[2m— reconnected —\x1b[0m\r\n";
 /** Per-tab plumbing that is not view state. */
 interface Runtime {
   bridge: TerminalBridge | null;
+  remote: RemoteBridge | null;
+  /** The last desktop size Rust reported, for a canvas that is mounted again. */
+  desktop: { width: number; height: number } | null;
   /** Output that arrived while no terminal was attached. */
   pending: Uint8Array[];
   started: boolean;
@@ -59,15 +86,22 @@ export class SessionStore {
   #api: Api;
   #nameOf: (nodeId: string) => string;
   #closeOnExit: () => boolean;
+  #protocolOf: (nodeId: string) => Protocol;
   // A plain Map on purpose: plumbing, not view state; effects that call the bridge must not subscribe to it.
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   #runtime = new Map<string, Runtime>();
   #counter = 0;
 
-  constructor(api: Api, nameOf: (nodeId: string) => string, closeOnExit: () => boolean) {
+  constructor(
+    api: Api,
+    nameOf: (nodeId: string) => string,
+    closeOnExit: () => boolean,
+    protocolOf: (nodeId: string) => Protocol = () => "ssh",
+  ) {
     this.#api = api;
     this.#nameOf = nameOf;
     this.#closeOnExit = closeOnExit;
+    this.#protocolOf = protocolOf;
   }
 
   open(nodeId: string, opts: { another?: boolean } = {}): void {
@@ -86,6 +120,8 @@ export class SessionStore {
     const id = `tab-${++this.#counter}`;
     this.#runtime.set(id, {
       bridge: null,
+      remote: null,
+      desktop: null,
       pending: [],
       started: false,
       closed: false,
@@ -95,6 +131,7 @@ export class SessionStore {
       id,
       sessionId: null,
       nodeId,
+      protocol: this.#protocolOf(nodeId),
       title,
       state: "connecting",
       detail: null,
@@ -170,7 +207,11 @@ export class SessionStore {
     const tab = this.tabs.find((t) => t.id === id);
     const rt = this.#runtime.get(id);
     if (!tab || !rt?.sessionId || tab.state !== "disconnected") return;
-    const { cols, rows } = rt.bridge?.size() ?? { cols: 80, rows: 24 };
+    // an RDP session counts pixels where a terminal counts cells
+    const { cols, rows } =
+      tab.protocol === "rdp"
+        ? { cols: rt.remote?.size().width ?? 1280, rows: rt.remote?.size().height ?? 800 }
+        : (rt.bridge?.size() ?? { cols: 80, rows: 24 });
     const previous = { state: tab.state, detail: tab.detail };
     tab.state = "connecting";
     tab.detail = null;
@@ -179,7 +220,7 @@ export class SessionStore {
       tab,
       // The separator is written only once Rust accepted the reconnect.
       this.#api.reconnectSession(rt.sessionId, cols, rows).then(() => {
-        this.#emit(rt, new TextEncoder().encode(RECONNECTED));
+        if (tab.protocol !== "rdp") this.#emit(rt, new TextEncoder().encode(RECONNECTED));
       }),
       () => {
         // The click raced the state: undo the optimistic change, the next event decides.
@@ -237,6 +278,11 @@ export class SessionStore {
     if (rt.started) return;
     rt.started = true;
     const { cols, rows } = bridge.size();
+    this.#open(tab, rt, id, cols, rows);
+  }
+
+  /** Asks Rust for the session; `cols` and `rows` are pixels for an RDP tab. */
+  #open(tab: Tab, rt: Runtime, id: string, cols: number, rows: number): void {
     this.#api
       .openSession(tab.nodeId, (e) => this.#onMessage(id, e), cols, rows)
       .then(
@@ -256,6 +302,25 @@ export class SessionStore {
       );
   }
 
+  /** Connects the RDP canvas; the first attach starts the session at the size of the canvas box. */
+  attachRemote(id: string, bridge: RemoteBridge): void {
+    const tab = this.tabs.find((t) => t.id === id);
+    const rt = this.#runtime.get(id);
+    if (!tab || !rt) return;
+    rt.remote = bridge;
+    if (rt.desktop) bridge.setDesktop(rt.desktop.width, rt.desktop.height);
+    if (rt.started) return;
+    rt.started = true;
+    const { width, height } = bridge.size();
+    this.#open(tab, rt, id, width, height);
+  }
+
+  /** The canvas component is gone; regions that arrive meanwhile are acknowledged and dropped. */
+  detachRemote(id: string): void {
+    const rt = this.#runtime.get(id);
+    if (rt) rt.remote = null;
+  }
+
   /** The terminal component is gone (for example a remount); output waits for the next one. */
   detachTerminal(id: string): void {
     const rt = this.#runtime.get(id);
@@ -270,6 +335,22 @@ export class SessionStore {
     if (sessionId) this.#fire(this.#api.sessionInput(sessionId, bytes));
   }
 
+  /** RDP keyboard and mouse input; like terminal input it only goes to a connected session. */
+  rdpInput(id: string, events: RdpInputEvent[]): void {
+    if (events.length === 0) return;
+    if (this.tabs.find((t) => t.id === id)?.state !== "connected") return;
+    const sessionId = this.#runtime.get(id)?.sessionId;
+    if (sessionId) this.#fire(this.#api.rdpInput(sessionId, events));
+  }
+
+  /** Text copied locally, offered to the remote clipboard of a connected RDP session. */
+  rdpClipboard(id: string, text: string): void {
+    if (this.tabs.find((t) => t.id === id)?.state !== "connected") return;
+    const sessionId = this.#runtime.get(id)?.sessionId;
+    if (sessionId) this.#fire(this.#api.rdpClipboard(sessionId, text));
+  }
+
+  /** Terminal: columns and rows. RDP: the pixel size of the canvas box. */
   resize(id: string, cols: number, rows: number): void {
     if (cols < 1 || rows < 1) return;
     const sessionId = this.#runtime.get(id)?.sessionId;
@@ -288,7 +369,13 @@ export class SessionStore {
     const tab = this.tabs.find((t) => t.id === id);
     if (!rt || !tab) return;
     if (isBuffer(e)) {
-      this.#emit(rt, new Uint8Array(e));
+      if (tab.protocol === "rdp") this.#region(rt, id, e);
+      else this.#emit(rt, new Uint8Array(e));
+    } else if (e.kind === "desktop") {
+      rt.desktop = { width: e.width, height: e.height };
+      rt.remote?.setDesktop(e.width, e.height);
+    } else if (e.kind === "clipboard") {
+      rt.remote?.clipboard(e.text);
     } else if (e.kind === "state") {
       tab.state = e.state;
       tab.detail = e.detail;
@@ -300,6 +387,27 @@ export class SessionStore {
     } else {
       tab.prompt = { id: e.id, prompt: e.prompt };
     }
+  }
+
+  /**
+   * One region of the remote desktop: paints it and acknowledges its bytes. A message that does not
+   * fit its header, or one that arrives while no canvas is attached, is not painted but still
+   * acknowledged, so Rust never waits for credit that will not come back.
+   */
+  #region(rt: Runtime, id: string, buffer: ArrayBuffer): void {
+    if (rt.remote && buffer.byteLength >= REGION_HEADER) {
+      const view = new DataView(buffer);
+      const rect = {
+        x: view.getUint16(0, true),
+        y: view.getUint16(2, true),
+        width: view.getUint16(4, true),
+        height: view.getUint16(6, true),
+      };
+      if (buffer.byteLength - REGION_HEADER === rect.width * rect.height * 4) {
+        rt.remote.paint(rect, new Uint8Array(buffer, REGION_HEADER));
+      }
+    }
+    this.ack(id, buffer.byteLength);
   }
 
   #emit(rt: Runtime, bytes: Uint8Array): void {

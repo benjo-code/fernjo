@@ -179,6 +179,8 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     restartApp: [],
     openSession: [],
     sessionInput: [],
+    rdpInput: [],
+    rdpClipboard: [],
     sessionResize: [],
     sessionAck: [],
     closeSession: [],
@@ -326,6 +328,14 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     sessionInput: async (...args) => {
       calls.sessionInput.push(args);
       if (impl.sessionInput) await impl.sessionInput(...args);
+    },
+    rdpInput: async (...args) => {
+      calls.rdpInput.push(args);
+      if (impl.rdpInput) await impl.rdpInput(...args);
+    },
+    rdpClipboard: async (...args) => {
+      calls.rdpClipboard.push(args);
+      if (impl.rdpClipboard) await impl.rdpClipboard(...args);
     },
     sessionResize: async (...args) => {
       calls.sessionResize.push(args);

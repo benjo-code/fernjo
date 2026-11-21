@@ -233,6 +233,10 @@ export interface Api {
     rows: number,
   ): Promise<string>;
   sessionInput(id: string, data: Uint8Array): Promise<void>;
+  /** RDP: keyboard and mouse events (at most 256 per call; coordinates are desktop pixels). */
+  rdpInput(id: string, events: RdpInputEvent[]): Promise<void>;
+  /** RDP: text copied locally, offered to the remote clipboard. */
+  rdpClipboard(id: string, text: string): Promise<void>;
   sessionResize(id: string, cols: number, rows: number): Promise<void>;
   sessionAck(id: string, bytes: number): Promise<void>;
   closeSession(id: string): Promise<void>;
@@ -356,6 +360,8 @@ export type Prompt =
       instructions: string;
       prompts: { text: string; echo: boolean }[];
     }
+  | { kind: "certificate"; host: string; port: number; fingerprint: string }
+  | { kind: "certificateChanged"; host: string; port: number; old: string; new: string }
   | { kind: "password"; user: string; host: string }
   | { kind: "username"; host: string }
   | { kind: "keyPassphrase" };
@@ -371,7 +377,18 @@ export type SessionEvent =
       /** `true` only for an orderly end of a connected session; the tab may then close itself. */
       endedCleanly: boolean;
     }
-  | { kind: "prompt"; id: number; prompt: Prompt };
+  | { kind: "prompt"; id: number; prompt: Prompt }
+  /** RDP: the remote desktop has this size in pixels (before the first region and on a change). */
+  | { kind: "desktop"; width: number; height: number }
+  /** RDP: the remote side copied this text. */
+  | { kind: "clipboard"; text: string };
+
+/** One keyboard or mouse event for an RDP session; coordinates are desktop pixels. */
+export type RdpInputEvent =
+  | { kind: "key"; scancode: number; extended: boolean; pressed: boolean }
+  | { kind: "mouseMove"; x: number; y: number }
+  | { kind: "mouseButton"; button: "left" | "middle" | "right" | "x1" | "x2"; pressed: boolean }
+  | { kind: "wheel"; vertical: boolean; delta: number };
 
 /** The user's answer to a prompt (UI to Rust only). */
 export type PromptAnswer =

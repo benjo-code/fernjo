@@ -35,6 +35,10 @@
     api,
     (id) => findNode(store.children, id)?.name ?? "Session",
     () => (terminal.info ?? DEFAULT_TERMINAL).closeOnExit,
+    (id) => {
+      const node = findNode(store.children, id);
+      return node?.type === "connection" ? node.protocol : "ssh";
+    },
   );
 
   // svelte-ignore state_referenced_locally

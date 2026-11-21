@@ -1,4 +1,5 @@
 <script lang="ts">
+  import RdpView from "../rdp/RdpView.svelte";
   import type { SessionStore } from "../sessions.svelte";
   import TerminalView from "../terminal/TerminalView.svelte";
   import type { TerminalSettings } from "../types";
@@ -45,13 +46,22 @@
         </div>
       {/if}
       <div class="body">
-        <TerminalView
-          {tab}
-          {sessions}
-          {settings}
-          visible={!hidden && tab.id === sessions.activeId}
-          locked={tab.state === "needsVault" || tab.prompt !== null}
-        />
+        {#if tab.protocol === "rdp"}
+          <RdpView
+            {tab}
+            {sessions}
+            visible={!hidden && tab.id === sessions.activeId}
+            locked={tab.state === "needsVault" || tab.prompt !== null}
+          />
+        {:else}
+          <TerminalView
+            {tab}
+            {sessions}
+            {settings}
+            visible={!hidden && tab.id === sessions.activeId}
+            locked={tab.state === "needsVault" || tab.prompt !== null}
+          />
+        {/if}
       </div>
       <!-- Only the tab in front shows its prompt, so it can take the keyboard when it appears (a
            prompt of another tab waits, and typed text is not kept across a tab switch). -->

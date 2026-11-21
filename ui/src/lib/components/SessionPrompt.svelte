@@ -31,6 +31,8 @@
       <HostKeySyncedPrompt {tab} {sessions} prompt={asked.prompt} />
     {:else if asked.prompt.kind === "hostKeyChanged"}
       <HostKeyChangedPrompt {tab} {sessions} prompt={asked.prompt} />
+    {:else if asked.prompt.kind === "certificate" || asked.prompt.kind === "certificateChanged"}
+      <!-- RDP certificate prompts have no view yet: the connect keeps waiting for an answer. -->
     {:else}
       <SecretsPrompt {tab} {sessions} prompt={asked.prompt} />
     {/if}
