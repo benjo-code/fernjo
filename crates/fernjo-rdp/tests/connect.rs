@@ -80,6 +80,25 @@ async fn an_invalid_host_is_refused_before_any_connection() {
 }
 
 #[tokio::test]
+async fn a_server_that_cannot_sign_for_its_certificate_fails_the_handshake_before_any_prompt() {
+    // the pin is the hash of a public certificate; without a checked handshake signature an
+    // attacker on the path could replay the real certificate and pass it
+    let server = FakeServer::start(Behaviour::ImpersonatedTls).await;
+    let params = server.params();
+    let certs = params.certs.clone();
+    let script = Script::new(CertDecision::TrustAlways);
+    let result = connect(params, &script).await;
+    assert_eq!(code(&result), "tls_failed");
+    assert!(script.log().is_empty(), "{:?}", script.log());
+    assert_eq!(
+        certs
+            .check("127.0.0.1", server.addr.port(), &server.fingerprint)
+            .unwrap(),
+        CertCheck::Unknown
+    );
+}
+
+#[tokio::test]
 async fn a_new_certificate_asks_and_reject_ends_with_certificate_rejected() {
     let server = FakeServer::start(Behaviour::TlsThenClose).await;
     let params = server.params();
