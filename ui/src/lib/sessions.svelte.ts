@@ -26,6 +26,11 @@ export interface Tab {
    * scales instead. Read from the connection when the canvas attaches and on every reconnect.
    */
   fixedSize: boolean;
+  /**
+   * RDP: the effective clipboard setting is on. Off until the connection has been read, so a
+   * tab never touches the local clipboard on a guess.
+   */
+  clipboard: boolean;
   title: string;
   state: SessionState;
   detail: string | null;
@@ -144,6 +149,7 @@ export class SessionStore {
       nodeId,
       protocol: this.#protocolOf(nodeId),
       fixedSize: false,
+      clipboard: false,
       title,
       state: "connecting",
       detail: null,
@@ -346,11 +352,15 @@ export class SessionStore {
     this.#open(tab, rt, id, width, height);
   }
 
-  /** Whether the connection's effective resolution is fixed; on any failure the tab fits. */
+  /**
+   * Reads the connection's effective RDP settings that the view needs: whether the resolution is
+   * fixed (on any failure the tab fits) and whether the clipboard is shared (on any failure not).
+   */
   #loadMode(tab: Tab): void {
     this.#api.getNode(tab.nodeId).then(
       (node) => {
         tab.fixedSize = node.rdpResolution.effective?.mode === "fixed";
+        tab.clipboard = node.rdpClipboard.effective ?? true;
       },
       () => {},
     );

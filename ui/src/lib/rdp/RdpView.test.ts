@@ -3,7 +3,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import SessionArea from "../components/SessionArea.svelte";
 import { SessionStore } from "../sessions.svelte";
 import { mockApi, terminalSettings, vaultStatus } from "../testing";
-import type { SessionEvent } from "../types";
+import type { Api, SessionEvent } from "../types";
 import { VaultStore } from "../vault.svelte";
 
 const h = vi.hoisted(() => ({
@@ -88,9 +88,10 @@ afterEach(() => {
   h.made.length = 0;
 });
 
-function setup(count = 1) {
+function setup(count = 1, impl: Partial<Api> = {}) {
   handlers.length = 0;
   const mock = mockApi([], {
+    ...impl,
     openSession: async (_n, onEvent) => {
       handlers.push(onEvent);
       return `sid-${handlers.length}`;
@@ -137,7 +138,7 @@ test("keys with a scancode are forwarded and kept from the browser; others are n
   expect(handled.defaultPrevented).toBe(true);
   expect(unknown.defaultPrevented).toBe(false);
   expect(h.made[0]!.calls).toContain("down:KeyA");
-  expect(h.made[0]!.calls).toContain("up:Unknown");
+  expect(h.made[0]!.calls.some((c) => c.includes("Unknown"))).toBe(false);
 });
 
 test("blur releases the keys", () => {
@@ -227,4 +228,129 @@ test("unmounting disposes the controller", () => {
   unmount(mounted!);
   mounted = null;
   expect(h.made[0]!.calls).toContain("dispose");
+});
+
+// ---------- clipboard ----------
+
+const node = (clipboard: boolean) =>
+  ({
+    rdpResolution: { local: null, effective: { mode: "fit" }, source: { kind: "default" } },
+    rdpClipboard: { local: null, effective: clipboard, source: { kind: "default" } },
+  }) as never;
+
+function fakeClipboard(read: () => Promise<string>) {
+  const clipboard = {
+    readText: vi.fn(read),
+    writeText: vi.fn<(text: string) => Promise<void>>(async () => {}),
+  };
+  vi.stubGlobal("navigator", { ...navigator, clipboard });
+  return clipboard;
+}
+
+const flush = () => new Promise((r) => setTimeout(r, 0));
+
+async function connected(clipboard: boolean) {
+  const t = setup(1, { getNode: async () => node(clipboard) });
+  await flush();
+  state(0, "connected");
+  await flush();
+  return t;
+}
+
+test("with the setting off the local clipboard is never touched", async () => {
+  const clip = fakeClipboard(async () => "secret");
+  const t = await connected(false);
+  canvases()[0]!.dispatchEvent(new FocusEvent("focus"));
+  canvases()[0]!.dispatchEvent(
+    new KeyboardEvent("keydown", { code: "KeyV", ctrlKey: true, bubbles: true, cancelable: true }),
+  );
+  handlers[0]!({ kind: "clipboard", text: "from the server" });
+  await flush();
+  expect(clip.readText).not.toHaveBeenCalled();
+  expect(clip.writeText).not.toHaveBeenCalled();
+  expect(t.calls.rdpClipboard).toEqual([]);
+});
+
+test("the local text is offered when the desktop gets the focus", async () => {
+  const clip = fakeClipboard(async () => "copied here");
+  const t = await connected(true);
+  canvases()[0]!.dispatchEvent(new FocusEvent("focus"));
+  await flush();
+  expect(clip.readText).toHaveBeenCalled();
+  expect(t.calls.rdpClipboard).toEqual([["sid-1", "copied here"]]);
+  // the same text is not sent again on the next focus
+  canvases()[0]!.dispatchEvent(new FocusEvent("focus"));
+  await flush();
+  expect(t.calls.rdpClipboard).toHaveLength(1);
+});
+
+test("text the remote side copied is written locally and not sent back", async () => {
+  let local = "";
+  const clip = fakeClipboard(async () => local);
+  clip.writeText.mockImplementation(async (text: string) => {
+    local = text;
+  });
+  const t = await connected(true);
+  handlers[0]!({ kind: "clipboard", text: "from the server" });
+  await flush();
+  expect(clip.writeText).toHaveBeenCalledWith("from the server");
+  canvases()[0]!.dispatchEvent(new FocusEvent("focus"));
+  await flush();
+  expect(t.calls.rdpClipboard).toEqual([]);
+});
+
+test("a paste chord waits for the clipboard and keeps the order of the keys", async () => {
+  let release: (text: string) => void = () => {};
+  fakeClipboard(() => new Promise<string>((r) => (release = r)));
+  const t = await connected(true);
+  const canvas = canvases()[0]!;
+  h.made[0]!.calls.length = 0;
+  const key = (type: string, code: string, ctrlKey = true) =>
+    canvas.dispatchEvent(
+      new KeyboardEvent(type, { code, ctrlKey, bubbles: true, cancelable: true }),
+    );
+  key("keydown", "ControlLeft");
+  key("keydown", "KeyV");
+  key("keyup", "KeyV");
+  key("keyup", "ControlLeft", false);
+  await flush();
+  // control went through at once, the paste waits for the read
+  expect(h.made[0]!.calls).toEqual(["down:ControlLeft"]);
+  release("copied here");
+  await flush();
+  expect(t.calls.rdpClipboard).toEqual([["sid-1", "copied here"]]);
+  expect(h.made[0]!.calls).toEqual(["down:ControlLeft", "down:KeyV", "up:KeyV", "up:ControlLeft"]);
+});
+
+test("losing the focus while a paste waits drops the waiting keys", async () => {
+  let release: (text: string) => void = () => {};
+  fakeClipboard(() => new Promise<string>((r) => (release = r)));
+  await connected(true);
+  const canvas = canvases()[0]!;
+  h.made[0]!.calls.length = 0;
+  canvas.dispatchEvent(
+    new KeyboardEvent("keydown", { code: "KeyV", ctrlKey: true, bubbles: true, cancelable: true }),
+  );
+  canvas.dispatchEvent(new FocusEvent("blur"));
+  release("late");
+  await flush();
+  expect(h.made[0]!.calls).toEqual(["blur"]);
+});
+
+test("a refused read shows one line and the keys still arrive", async () => {
+  fakeClipboard(async () => {
+    throw new Error("denied");
+  });
+  await connected(true);
+  const canvas = canvases()[0]!;
+  canvas.dispatchEvent(new FocusEvent("focus"));
+  canvas.dispatchEvent(
+    new KeyboardEvent("keydown", { code: "KeyV", ctrlKey: true, bubbles: true, cancelable: true }),
+  );
+  await flush();
+  expect(document.querySelectorAll(".note")).toHaveLength(1);
+  expect(document.querySelector(".note")?.textContent).toBe(
+    "The clipboard is blocked by the web view",
+  );
+  expect(h.made[0]!.calls).toContain("down:KeyV");
 });
