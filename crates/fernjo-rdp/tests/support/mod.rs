@@ -87,6 +87,10 @@ pub enum Behaviour {
     /// X.224 negotiation selecting TLS, then a TLS handshake with a self-signed certificate; the
     /// connection is closed once the client has the certificate.
     TlsThenClose,
+    /// As `TlsThenClose`, but the server is an impostor: it presents the real server's public
+    /// certificate and signs the TLS handshake with a different private key, which is all an
+    /// attacker on the path can do (the certificate is public, its key is not).
+    ImpersonatedTls,
     /// Accepts and never answers.
     Silent,
     /// Answers with text that is not RDP and closes.
@@ -108,13 +112,23 @@ impl FakeServer {
         let der = cert.cert.der().clone();
         let fingerprint = format!("sha256:{}", hex(&Sha256::digest(der.as_ref())));
         let key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der()));
-        let config =
+        let builder =
             ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
                 .with_safe_default_protocol_versions()
                 .unwrap()
-                .with_no_client_auth()
+                .with_no_client_auth();
+        let config = if matches!(behaviour, Behaviour::ImpersonatedTls) {
+            let other = rcgen::KeyPair::generate().unwrap();
+            let other_key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(other.serialize_der()));
+            let signing = rustls::crypto::ring::sign::any_supported_type(&other_key).unwrap();
+            let certified =
+                rustls::sign::CertifiedKey::new(vec![CertificateDer::from(der.to_vec())], signing);
+            builder.with_cert_resolver(Arc::new(rustls::sign::SingleCertAndKey::from(certified)))
+        } else {
+            builder
                 .with_single_cert(vec![CertificateDer::from(der.to_vec())], key)
-                .unwrap();
+                .unwrap()
+        };
         let acceptor = TlsAcceptor::from(Arc::new(config));
         let connections = Arc::new(AtomicUsize::new(0));
         let counter = connections.clone();

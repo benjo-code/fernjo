@@ -3,6 +3,7 @@
 //! caller (`session.rs`) takes the framed stream and the connection result.
 
 use std::future::Future;
+use std::sync::Arc;
 use std::time::Duration;
 
 use ironrdp_connector::credssp::KerberosConfig;
@@ -227,9 +228,18 @@ pub(crate) async fn establish<I: Interaction>(
         if !leftover.is_empty() {
             return Err(RdpError::Protocol);
         }
-        let (tls, cert) = ironrdp_tls::upgrade(stream, &host)
-            .await
-            .map_err(|_| RdpError::TlsFailed)?;
+        // RDP servers present self-signed certificates, so a failed chain or name check is
+        // accepted here and the pin decides after the handshake. The handshake signature is
+        // still checked against the certificate's public key (`ironrdp_tls::upgrade` would turn
+        // that off too), so a server that only replays a public certificate cannot get through.
+        let (tls, cert) = ironrdp_tls::upgrade_with_certificate_validation_callback_for_endpoint(
+            stream,
+            &host,
+            &host,
+            Arc::new(|_cert: &[u8], _endpoint: &str, _failure: &str| true),
+        )
+        .await
+        .map_err(|_| RdpError::TlsFailed)?;
         let upgraded = ironrdp_tokio::mark_as_upgraded(should_upgrade, &mut connector);
         let der = cert
             .to_der()
