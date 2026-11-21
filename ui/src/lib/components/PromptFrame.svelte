@@ -11,7 +11,7 @@
     children,
   }: {
     title: string;
-    icon: "lock" | "alert" | "ssh";
+    icon: "lock" | "alert" | "ssh" | "rdp";
     role?: "dialog" | "alertdialog";
     /** The dialog element, for the owner's initial focus. */
     root?: HTMLElement;

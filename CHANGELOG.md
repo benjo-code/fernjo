@@ -6,6 +6,24 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-22
+
+RDP: milestone M8 (RDP sessions in tabs next to SSH, inheritable RDP settings, `connections.json` schema 3, mRemoteNG import of RDP display settings).
+
+### Added
+
+- RDP sessions (M8): an RDP connection in the tree opens as a tab next to the SSH sessions. It connects with TLS and network level authentication (user name, password and domain from the vault, or asked in the tab), shows the remote desktop on a canvas, takes keyboard and mouse input (the physical key counts, so the server's own keyboard layout applies), follows the size of the tab when the window or the sidebar changes (or keeps a fixed resolution and scales), shares text copy and paste both ways, and has an in-app full screen (Ctrl+Shift+F11 in and out; in a remote desktop only this and Ctrl+Tab belong to fernjo, every other key goes to the remote machine). The first connection to a server asks whether to trust its certificate (the fingerprint is remembered on this device; a changed certificate blocks and asks; self-signed certificates are accepted, but the server has to prove with the TLS handshake that it holds the certificate's private key, so replaying a public certificate does not pass; this check was added after the owner's run and has not been tried against a Windows host yet, only against a test server), and a session that ends keeps its tab with the reason and Reconnect. Display, clipboard and domain settings (resolution fit or fixed, colour depth, clipboard on or off, domain) are inheritable like the SSH settings; `connections.json` moves to schema version 3 (older files load unchanged). The mRemoteNG import now carries colour depth and resolution. Tried by the owner from Windows, macOS and Linux against Windows 11 hosts, with development builds (`pnpm tauri dev`); not tried against Windows Server, and an RDP session in an installed release build is not verified (the installers were built and smoke-tested on CI runners, which proves that the app starts, not an RDP session). The clipboard depends on what each web view allows. Known limits found by the release review and not fixed (see `Docs/roadmap.json`, backlog): a hostile RDP server can make fernjo buffer unbounded data on a virtual channel before the 1 MiB clipboard cap applies (switch the connection's clipboard off for hosts you do not trust), and the RDP clipboard is on by default and copies your local clipboard to the remote machine when the remote desktop gets the focus. RDP drive, printer and audio redirection, gateways and Kerberos are not supported.
+- Linux AppImage: on start, fernjo offers to add itself to your application menu ("Add", "Never" or "Not now"), which is what the desktop needs to show the app icon instead of a placeholder in the title bar. It writes `fernjo.desktop` and the icon below `~/.local/share` only if you choose "Add", and asks again at the next start after "Not now" (so you can move the AppImage first) or when the AppImage has moved. Whether this fixes the title bar icon is not confirmed yet.
+
+### Changed
+
+- fernjo now also makes the RDP connections you open (M8); it still has no update check, telemetry or analytics.
+- SSH RSA-key signing and RDP share a release candidate of the `rsa` crate (`0.10.0-rc.18`), because IronRDP's `picky` pins it; the advisory `RUSTSEC-2023-0071` (Marvin attack, not constant time) is ignored in `deny.toml` by owner decision of 2026-11-20 and is revisited at every IronRDP update. RDP itself does no RSA private-key work in a password client.
+
+### Fixed
+
+- The properties panel can now be dragged taller, not only smaller: once you set its height, the connection tree only has to keep 6 rows (before, it kept 23, which left no room to grow at the default size). Without a stored height the layout is unchanged, and a double-click on the bar still resets it.
+
 ## [0.1.1] - 2026-11-20
 
 Polish and hardening: milestone M7 (no silent loss of synced data, quit confirmation, tabs that close on a deliberate shell exit, resizable panels, multi-select in the tree, a UI whose vault, import and settings can be found without a hint, and the Low findings of the M6 reviews settled).

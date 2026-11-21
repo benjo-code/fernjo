@@ -204,7 +204,7 @@ The live SSH integration tests skip locally without the throwaway container; the
 | 2 | Linux title bar icon attempt (`setup` hook) | Unproven until the owner looks at the CachyOS laptop; cosmetic; CHANGELOG says "unconfirmed" |
 | 3 | Apple Silicon dmg and the `.deb` on real hardware | Accepted, README says so |
 | 4 | SSH container tests | Count only through the CI `rust` job of the release PR (recorded in the evidence) |
-| 5 | Release dry run and the release run of this release | Recorded after the release (evidence lines below) |
+| 5 | Release dry run and the release run of this release | Done, see the evidence lines under "Release (2026-11-20)" |
 | 6 | Low findings 1 to 4 above | Accepted or backlog, see their dispositions |
 
 **Verdict**
@@ -217,7 +217,77 @@ The live SSH integration tests skip locally without the throwaway container; the
 | Performance | Go (Windows) | Unchanged since the M7 measurements in `Docs/performance.md`; not re-run for this release; Linux and macOS not measured |
 | Repo settings | Go | Required checks of `main` and `dev` as before; this release changes no setting |
 
-**Overall: no blocker for v0.1.1.** Evidence of the release itself (PR numbers, merge commit, release run, asset checks) follows in the evidence lines added after the release.
+**Overall: no blocker for v0.1.1.**
+
+**Release (2026-11-20).**
+
+- Release PR [#17](https://github.com/benjo-code/fernjo/pull/17) (`release/v0.1.1`, head `cf3ccb3`) merged into `main` with a merge commit, `4d5590d` (two parents: `2184295` and `cf3ccb3`); `main` then holds version `0.1.1`. All checks passed: `roadmap`, `rust` (including the SSH container tests: the steps "Start the SSH test server" and "Run cargo test --workspace" succeeded; CI fails when the server is missing), `ui`, `tauri-build`, `cargo-deny`, `workflows`, both CodeQL `analyze` jobs and the `CodeQL` result (no new alert), and the `release.yml` dry run [44747721142](https://github.com/benjo-code/fernjo/actions/runs/44747721142) with its four build jobs (`publish` skipped by design). The step "Check the binary for build paths" succeeded in all four build jobs (checklist step 8). Open code-scanning alerts after the merge: 0.
+- Release [v0.1.1](https://github.com/benjo-code/fernjo/releases/tag/v0.1.1) created with `gh release create v0.1.1 --target main` (notes from the CHANGELOG section); the tag points at `4d5590d`. `release.yml` run [44749438942](https://github.com/benjo-code/fernjo/actions/runs/44749438942): `build (windows)`, `build (macos-x64)`, `build (macos-arm64)`, `build (linux)` and `publish` all `success`.
+- Assets: `fernjo_0.1.1_x64-setup.exe`, `fernjo_0.1.1_aarch64.dmg`, `fernjo_0.1.1_x64.dmg`, `fernjo_0.1.1_amd64.deb`, `fernjo_0.1.1_amd64.AppImage` and `SHA256SUMS`. Downloaded into an empty folder: `sha256sum -c SHA256SUMS` reported `OK` for all five; `bash tools/verify-installers.sh 0.1.1 <dir>` exits 0 on a folder that holds only the five installers (it reports `SHA256SUMS` as unexpected when run in the download folder, because the workflow runs it before that file exists); `gh release view`: not a draft, not a pre-release, tag `v0.1.1`, target `main`.
+- Back-merge PR [#18](https://github.com/benjo-code/fernjo/pull/18) (`main` into `dev`) merged with a merge commit, `ec94bd7`; `origin/main` is an ancestor of `origin/dev`, which holds version `0.1.1`. All its checks passed.
+
+Still unverified after the release: the waived owner checks (gap 1), the Linux title bar icon (gap 2), the Apple Silicon dmg and the `.deb` on real hardware (gap 3). The installers were built and smoke-tested on CI runners; the downloaded files were checked by checksum and name only, not installed on a machine of ours.
+
+## v0.2.0 result
+
+Date 2026-11-21. Branch `release/v0.2.0` from `dev` (`09d08b7`, the M8 docs commit), merged with `dev` after the fix PR #25 (`b46508d`, see the security review below); plan `Docs/superpowers/plans/2026-11-21-release-v0.2.0.md`, design `Docs/superpowers/specs/2026-11-21-release-v0.2.0-design.md`. The commands ran on the merge commit `3f07831` plus the release edits (version bump with `Cargo.lock`: only the six workspace crate version lines changed, CHANGELOG `[0.2.0] - 2026-11-21`, README, SECURITY.md, roadmap), which were uncommitted at that moment, as for v0.1.1. The owner gave the go for the irreversible steps on 2026-11-22, after the report of this section: merge to `main`, release, back-merge, and (by delegating the decision to the recommendation to dismiss) the dismissal of the CodeQL alerts #122 to #127; the owner also accepted the two Medium findings on the same terms and declined the optional installer check. The release day is 2026-11-22 (CHANGELOG and roadmap date).
+
+| Command | Result |
+|---|---|
+| `bash tools/check-release-version.sh v0.2.0` | exit 0, "version 0.2.0 matches Cargo.toml and package.json" |
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets --locked -- -D warnings` | exit 0 |
+| `cargo test --workspace --locked` | exit 0, 794 passed, 0 failed, 2 ignored (summed over the test binaries) |
+| `pnpm install --frozen-lockfile` | exit 0 |
+| `pnpm test` | exit 0, 52 files, 689 tests passed |
+| `pnpm lint` | exit 0 (Prettier clean, `svelte-check` 255 files, 0 errors, 0 warnings) |
+| `cargo deny check` | exit 0 (advisories, bans, licenses, sources ok; the unmatched Linux-only ignore entries warn on Windows) |
+| `bash tools/check-workflows.sh` | exit 0 |
+| `bash tools/test-release-scripts.sh` | exit 0, 48/48 passed |
+| `dotnet run tools/roadmap.cs -- check` | "Roadmap is valid and ROADMAP.md is up to date." |
+
+The live SSH integration tests skip locally without the throwaway container (they count only through the CI `rust` job of the release PR). The RDP tests that need a host (`cargo test -p fernjo-rdp --test connect` with `FERNJO_TEST_RDP_ADDR`: NLA, session, damage, resize, clipboard) skip locally; their only evidence is the owner's run of 2026-11-21 (14 passed from the Mac against a Windows 11 host), made **before** the fix below.
+
+**Security review of `v0.1.1..HEAD`** (90 files, about 10,000 added lines; static review, no tests or app run by the reviewer):
+
+- Independent review by a fresh read-only reviewer (the code, the v0.1.0 review areas and the RDP areas as the brief, no conclusions given):
+  1. **High, fixed:** `ironrdp_tls::upgrade` (ironrdp-tls 0.3.0) uses a verifier that also accepts TLS handshake signatures, so the certificate pin (a hash of a public certificate) could be passed by a server that only replays the real certificate; with a TLS-only server that exposes the user name and password, with NLA the NTLM response. Confirmed in the library source. Fixed in PR #25 (`fix(rdp): check the TLS handshake signature ...`, merged into `dev` as `b46508d`): the connect uses `upgrade_with_certificate_validation_callback_for_endpoint` with a callback that accepts chain, name and expiry failures (self-signed is normal) while the handshake signature is still checked. Test `a_server_that_cannot_sign_for_its_certificate_fails_the_handshake_before_any_prompt` (fake server `Behaviour::ImpersonatedTls`) failed before the change (the connection went past the certificate decision) and passes after; the whole suite is green (794). The fix was **not** reviewed again by a fresh reviewer, and it is **not verified against a real Windows host** (the fake server uses an ECDSA certificate, Windows presents RSA): owner check, `cargo test -p fernjo-rdp --test connect` plus one connection from the app. Decision text: `Docs/DECISIONS.md` "M8 RDP TLS handshake signature check".
+  2. **Medium, open (owner to accept):** a hostile RDP server can make the client buffer unbounded data on a static virtual channel (ironrdp-svc reassembly has no cap; the 1 MiB clipboard cap applies after reassembly). Not fixable here without an upstream change; mitigation: clipboard off for untrusted hosts. Backlog "RDP: cap static channel reassembly"; named in the CHANGELOG. This one is the reviewer's claim and was not verified by us in the library source.
+  3. **Medium (design), open (owner to accept):** the RDP clipboard is on by default and syncs the local clipboard to the remote host when the desktop gets focus; the remote side can overwrite the local clipboard. Backlog "RDP clipboard default and indicator"; named in the CHANGELOG.
+  4. Low, backlog "RDP review Low items" (no-secret guard has no RDP user or domain sentinel, password in IronRDP's plain `String` config, desktop area not clamped, `app_menu.rs` temp name, `.bak` copy), plus the stalled-server close in "RDP: cap static channel reassembly"; `ironrdp-tls` writes TLS secrets to `SSLKEYLOGFILE` when that variable is set (local only, accepted).
+  Areas examined and found sound: secrets in `ConnectParams`, `RdpError` and prompts; the connect order (credentials only after the certificate decision); the pin file's I/O; desktop size checks; webview surface, CSP and capabilities unchanged, no `{@html}`, `innerHTML` or `eval`; host validation for RDP; the `.desktop` writer; schema 3 migration; mRemoteNG RDP fields. The `rsa` change from 0.10.0 to `0.10.0-rc.18` (IronRDP's `picky` pins it, so SSH RSA signing runs on it too) is a real downgrade; accepted by the owner on 2026-11-20 and stated in the CHANGELOG.
+- `gh api "repos/benjo-code/fernjo/code-scanning/alerts?state=open" --jq length`: `6`: #122 to #127 (`rust/hard-coded-cryptographic-value`, made-up sentinel passwords in test code of `fernjo-rdp` and `src-tauri/src/sessions/rdp/tests.rs`; each line was read and is a literal inside `#[cfg(test)]` or `tests/`). They need the owner's word to be dismissed as "used in tests"; until then the release PR's CodeQL check would report them as new.
+- gitleaks v8.30.1 via Docker with the repo's `.gitleaks.toml` over the history: `no leaks found`, before and after the fix commit (Docker Desktop had to be started first).
+- M8-touched items by their own tests, all in the green `cargo test` run: `no_response_contains_a_secret` and `command_table_covers_every_tauri_command` (they list `rdp_input` and `rdp_clipboard`), the `fernjo-rdp` unit tests and the fake-TLS-server tests (prompt order, timeouts, failure codes, the new handshake test), `webview2_arguments_keep_wry_defaults_and_turn_off_the_component_updater`. `cargo deny check` passes with the three new ignores of M8 (`RUSTSEC-2023-0071`, `RUSTSEC-2023-0089`, `RUSTSEC-2026-0441`, each with a reason in `deny.toml`).
+
+**Known gaps**
+
+| # | Gap | Disposition |
+|---|-----|-------------|
+| 1 | RDP never run in a release build or an installer (the owner's run used `pnpm tauri dev`); the dry-run installers prove start-up only | Accepted for this release: the owner declined the installer check on 2026-11-22; CHANGELOG and README say "development builds" |
+| 2 | The TLS handshake fix against a real Windows host (RSA certificate) | Accepted for this release, owner check right after it (`cargo test -p fernjo-rdp --test connect` with `FERNJO_TEST_RDP_ADDR`, or one connection); if every RDP connection fails with `tls_failed` the fix is the first suspect (CHANGELOG says it is untried on a Windows host); see finding 1 |
+| 3 | Windows Server with NLA, `DOMAIN\user` names | Accepted, README says "not tried" |
+| 4 | Clipboard mechanism per web view | Accepted, README says it depends |
+| 5 | Two unexplained `spike_bench` lines | Accepted, no effect on the shipped path |
+| 6 | M7 owner checks still waived | Accepted (owner waiver 2026-11-20) |
+| 7 | Linux title bar icon; the new AppImage menu offer untried by the owner | Unproven, cosmetic; CHANGELOG says "not confirmed yet" |
+| 8 | Apple Silicon dmg and `.deb` on real hardware | Accepted, README says so |
+| 9 | `rsa` release candidate (`RUSTSEC-2023-0071` ignore) | Accepted by owner decision 2026-11-20, revisit at every IronRDP update |
+| 10 | Medium findings 2 and 3 above | Accepted for this release (owner, 2026-11-22, on the recommendation); backlog entries and CHANGELOG text |
+| 11 | CodeQL #122 to #127 | Dismissed as "used in tests" on the owner's go of 2026-11-22 (Task 4 of the plan) |
+| 12 | SSH container tests | Count through the CI `rust` job of the release PR |
+
+**Verdict**
+
+| Area | Verdict | Reasoning |
+|---|---|---|
+| Security review | Go, with named gaps | The High finding is fixed and tested against the fake server; the two Medium findings are accepted by the owner and documented; the fix has no second review and no real-host run (gap 2) |
+| Installers | Go on the dry run | Judged by the dry run of the release PR (evidence added after the release); RDP in an installed build unverified (gap 1, accepted) |
+| Docs | Go | README, CHANGELOG, SECURITY.md, roadmap and this file match the code and the evidence; unverified items are named as such |
+| Performance | Not re-run | The M6 and M7 measurements in `Docs/performance.md` were taken before RDP; no claim is made for v0.2.0 |
+| Repo settings | Go | Required checks of `main` and `dev` as before; this release changes no setting |
+
+**Overall: no unfixed High finding; no blocker for v0.2.0 after the owner's acceptance of 2026-11-22 (Mediums, gaps 1 and 2) and the dismissal of the alerts.**
 
 ## v0.1.0 security review
 

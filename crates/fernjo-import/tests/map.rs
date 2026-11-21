@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use fernjo_core::{Node, NodeKind, Protocol, Source, Tree};
+use fernjo_core::{Node, NodeKind, Protocol, RdpResolution, Source, Tree};
 use fernjo_import::mremoteng::{
     Clipped, ImportPlan, Inherit, PlannedEntry, RawDocument, RawKind, RawNode, plan, read,
 };
@@ -27,6 +27,8 @@ fn raw(kind: RawKind, name: &str) -> RawNode {
         password_error: false,
         inherit: Inherit::default(),
         putty_session: String::new(),
+        resolution: String::new(),
+        colors: String::new(),
         clipped: Clipped::default(),
         children: Vec::new(),
     }
@@ -55,6 +57,8 @@ fn inheriting(mut n: RawNode) -> RawNode {
         password: true,
         domain: true,
         port: true,
+        resolution: true,
+        colors: true,
     };
     n
 }
@@ -856,4 +860,134 @@ fn cut_values_are_reported_once_on_their_node() {
     assert_eq!(p.report.skipped.len(), 1);
     assert_eq!(p.report.skipped[0].path, "F / c");
     assert!(p.report.skipped[0].text.ends_with("… is not supported"));
+}
+
+fn rdp_with(resolution: &str, colors: &str) -> RawNode {
+    let mut n = conn("r", "RDP", "h");
+    n.resolution = resolution.to_owned();
+    n.colors = colors.to_owned();
+    n
+}
+
+fn settings_of(plan: &ImportPlan) -> fernjo_core::Settings {
+    children(&plan.folder)[0].settings.clone()
+}
+
+#[test]
+fn colors_map_to_color_depth() {
+    for (text, depth) in [
+        ("Colors16Bit", 16),
+        ("Colors24Bit", 24),
+        ("Colors32Bit", 32),
+    ] {
+        let p = run(vec![rdp_with("", text)]);
+        assert_eq!(settings_of(&p).rdp_color_depth, Some(depth), "{text}");
+    }
+}
+
+#[test]
+fn fit_to_window_maps_to_fit() {
+    for text in ["FitToWindow", "Fullscreen"] {
+        let p = run(vec![rdp_with(text, "")]);
+        assert_eq!(
+            settings_of(&p).rdp_resolution,
+            Some(RdpResolution::Fit),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn fixed_resolution_maps_to_width_and_height() {
+    let p = run(vec![rdp_with("Res1920x1080", "")]);
+    assert_eq!(
+        settings_of(&p).rdp_resolution,
+        Some(RdpResolution::Fixed {
+            width: 1920,
+            height: 1080
+        })
+    );
+    let p = run(vec![rdp_with("Res640x480", "")]);
+    assert_eq!(
+        settings_of(&p).rdp_resolution,
+        Some(RdpResolution::Fixed {
+            width: 640,
+            height: 480
+        })
+    );
+}
+
+#[test]
+fn unknown_resolution_is_unset_and_reported() {
+    for text in [
+        "SmartSize",
+        "Banana",
+        "Res100x100",
+        "Res1920x",
+        "Res99999x1080",
+    ] {
+        let p = run(vec![rdp_with(text, "Colors256")]);
+        let s = settings_of(&p);
+        assert_eq!(s.rdp_resolution, None, "{text}");
+        assert_eq!(s.rdp_color_depth, None, "Colors256");
+        let lines: Vec<&str> = p.report.partial.iter().map(|l| l.text.as_str()).collect();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("resolution") && l.contains("not carried over")),
+            "{text}: {lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("colour depth") && l.contains("not carried over")),
+            "{text}: {lines:?}"
+        );
+    }
+    // an empty value (an old file without the attribute) is simply unset, nothing to report
+    let p = run(vec![rdp_with("", "")]);
+    assert_eq!(settings_of(&p).rdp_resolution, None);
+    assert!(
+        p.report
+            .partial
+            .iter()
+            .all(|l| !l.text.contains("its resolution")),
+        "{:?}",
+        p.report.partial
+    );
+}
+
+#[test]
+fn an_inherited_resolution_or_colour_depth_is_left_unset() {
+    let p = run(vec![inheriting(rdp_with("Res1920x1080", "Colors32Bit"))]);
+    let s = settings_of(&p);
+    assert_eq!(s.rdp_resolution, None);
+    assert_eq!(s.rdp_color_depth, None);
+    assert!(
+        p.report
+            .partial
+            .iter()
+            .all(|l| !l.text.contains("its resolution")),
+        "{:?}",
+        p.report.partial
+    );
+}
+
+#[test]
+fn ssh_connections_get_no_rdp_settings() {
+    let mut s = ssh("s");
+    s.resolution = "Res1920x1080".to_owned();
+    s.colors = "Colors16Bit".to_owned();
+    let p = run(vec![s]);
+    let settings = settings_of(&p);
+    assert_eq!(settings.rdp_resolution, None);
+    assert_eq!(settings.rdp_color_depth, None);
+    assert_eq!(p.report.counts.partial, 0);
+    // folders carry no display settings either
+    let mut f = folder("f", vec![]);
+    f.resolution = "FitToWindow".to_owned();
+    f.colors = "Colors32Bit".to_owned();
+    let p = run(vec![f]);
+    assert_eq!(children(&p.folder)[0].settings.rdp_resolution, None);
+    assert_eq!(children(&p.folder)[0].settings.rdp_color_depth, None);
 }

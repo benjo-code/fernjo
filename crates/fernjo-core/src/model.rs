@@ -15,6 +15,18 @@ pub const DEFAULT_KEEPALIVE_SECS: u32 = 30;
 pub const DEFAULT_SSH_PORT: u16 = 22;
 /// Built-in default port for RDP connections.
 pub const DEFAULT_RDP_PORT: u16 = 3389;
+/// Built-in default colour depth (bits per pixel) of an RDP session.
+pub const DEFAULT_RDP_COLOR_DEPTH: u8 = 32;
+/// Colour depths an RDP session may ask for.
+pub const RDP_COLOR_DEPTHS: [u8; 3] = [16, 24, 32];
+/// Built-in default: the text clipboard is shared with the remote desktop.
+pub const DEFAULT_RDP_CLIPBOARD: bool = true;
+/// Smallest width or height of a fixed RDP resolution.
+pub const MIN_RDP_DIMENSION: u16 = 200;
+/// Largest width or height of a fixed RDP resolution (and of any remote desktop).
+pub const MAX_RDP_DIMENSION: u16 = 8192;
+/// Longest domain name setting, in characters.
+pub const MAX_DOMAIN_CHARS: usize = 256;
 
 /// Connection protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,6 +34,35 @@ pub const DEFAULT_RDP_PORT: u16 = 3389;
 pub enum Protocol {
     Ssh,
     Rdp,
+}
+
+/// How big the remote desktop of an RDP session is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "camelCase")]
+pub enum RdpResolution {
+    /// The desktop follows the size of the tab.
+    Fit,
+    /// A fixed desktop size in pixels.
+    Fixed { width: u16, height: u16 },
+}
+
+impl RdpResolution {
+    /// A fixed size must lie between [`MIN_RDP_DIMENSION`] and [`MAX_RDP_DIMENSION`] on both sides.
+    pub fn is_valid(&self) -> bool {
+        match *self {
+            RdpResolution::Fit => true,
+            RdpResolution::Fixed { width, height } => {
+                (MIN_RDP_DIMENSION..=MAX_RDP_DIMENSION).contains(&width)
+                    && (MIN_RDP_DIMENSION..=MAX_RDP_DIMENSION).contains(&height)
+            }
+        }
+    }
+}
+
+/// Whether `domain` is an acceptable domain setting: at most [`MAX_DOMAIN_CHARS`] characters and
+/// no control characters.
+pub fn is_valid_domain(domain: &str) -> bool {
+    domain.chars().count() <= MAX_DOMAIN_CHARS && !domain.chars().any(char::is_control)
 }
 
 /// Inheritable settings. `None` means "inherit".
@@ -37,6 +78,18 @@ pub struct Settings {
     /// Reference to a vault entry (schema 2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential: Option<CredentialId>,
+    /// Windows domain for RDP logins (schema 3). A domain on the vault entry wins over this one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+    /// Desktop size of an RDP session (schema 3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rdp_resolution: Option<RdpResolution>,
+    /// Colour depth of an RDP session: 16, 24 or 32 (schema 3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rdp_color_depth: Option<u8>,
+    /// Whether an RDP session shares the text clipboard (schema 3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rdp_clipboard: Option<bool>,
 }
 
 /// A node of the tree: a folder or a connection.
@@ -109,4 +162,8 @@ pub struct ResolvedNode {
     pub port: Field<u16>,
     pub keepalive_secs: Field<u32>,
     pub credential: Field<CredentialId>,
+    pub domain: Field<String>,
+    pub rdp_resolution: Field<RdpResolution>,
+    pub rdp_color_depth: Field<u8>,
+    pub rdp_clipboard: Field<bool>,
 }

@@ -1634,6 +1634,40 @@ mod tests {
         (id, events)
     }
 
+    /// Like `opened` for an RDP connection that references the password entry (so a sentinel
+    /// password is in the plan), pointed at a port that refuses at once.
+    fn opened_rdp(w: &World) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use crate::session_commands::open_session;
+        use tauri::ipc::{Channel, InvokeResponseBody};
+        let node = commands::create_connection(
+            &w.st,
+            None,
+            None,
+            "rdp".into(),
+            fernjo_core::Protocol::Rdp,
+            "127.0.0.1".into(),
+        )
+        .unwrap()
+        .id
+        .unwrap();
+        commands::update_node(
+            &w.st,
+            node,
+            patch(json!({"port": 1, "credential": w.pw_id, "domain": "SENTINEL-domain"})),
+        )
+        .unwrap();
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = std::sync::Arc::clone(&events);
+        let channel = Channel::new(move |body: InvokeResponseBody| {
+            if let InvokeResponseBody::Json(text) = body {
+                sink.lock().unwrap().push(text);
+            }
+            Ok(())
+        });
+        let id = open_session(&w.st, node, channel, 1280, 800).unwrap();
+        (id, events)
+    }
+
     fn dump(events: &std::sync::Mutex<Vec<String>>) -> String {
         events.lock().unwrap().join("|")
     }
@@ -1798,6 +1832,28 @@ mod tests {
             entry("resume_session", |w| {
                 let (id, events) = opened(w);
                 let r = j(crate::session_commands::resume_session(&w.st, &id, true));
+                format!("{r}{}", dump(&events))
+            }),
+            entry("rdp_input", |w| {
+                let (id, events) = opened_rdp(w);
+                let r = j(crate::rdp_commands::rdp_input(
+                    &w.st,
+                    &id,
+                    vec![fernjo_rdp::InputEvent::Key {
+                        scancode: 30,
+                        extended: false,
+                        pressed: true,
+                    }],
+                ));
+                format!("{r}{}", dump(&events))
+            }),
+            entry("rdp_clipboard", |w| {
+                let (id, events) = opened_rdp(w);
+                let r = j(crate::rdp_commands::rdp_clipboard(
+                    &w.st,
+                    &id,
+                    [PW, KEY].concat(),
+                ));
                 format!("{r}{}", dump(&events))
             }),
             entry("import_inspect", |w| {
@@ -2054,6 +2110,7 @@ mod tests {
             include_str!("vault_commands.rs"),
             include_str!("data_folder.rs"),
             include_str!("session_commands.rs"),
+            include_str!("rdp_commands.rs"),
             include_str!("import_commands.rs"),
             include_str!("app_settings.rs"),
         ];

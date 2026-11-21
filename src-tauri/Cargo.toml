@@ -23,6 +23,7 @@ tauri = { version = "2.12", features = [] }
 fernjo-core = { path = "../crates/fernjo-core" }
 fernjo-vault = { path = "../crates/fernjo-vault" }
 fernjo-ssh = { path = "../crates/fernjo-ssh" }
+fernjo-rdp = { path = "../crates/fernjo-rdp" }
 fernjo-import = { path = "../crates/fernjo-import" }
 serde.workspace = true
 serde_json.workspace = true

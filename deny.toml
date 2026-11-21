@@ -6,6 +6,9 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "zvariant is unmaintained; pulled in by zbus via tauri-plugin-single-instance (Linux D-Bus only), no safe upgrade exists" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names is unmaintained; pulled in by zbus via tauri-plugin-single-instance (Linux D-Bus only), no safe upgrade exists" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive is unmaintained; pulled in by zbus via tauri-plugin-single-instance (Linux D-Bus only), no safe upgrade exists" },
+    { id = "RUSTSEC-2023-0071", reason = "Marvin attack in the rsa crate (RSA private-key operations are not constant time). Owner decision of 2026-11-20 (M8): IronRDP is needed for RDP, every IronRDP release pins picky, and picky pins rsa =0.10.0-rc.18, so russh (SSH RSA-key signing) runs on that release candidate too instead of the patched 0.10.0. RDP itself does no RSA private-key work in a password/NLA client. Revisit at every IronRDP update and drop this ignore once a release no longer pins rsa to a release candidate" },
+    { id = "RUSTSEC-2023-0089", reason = "atomic-polyfill is unmaintained; pulled in on non-Windows targets by sspi (winscard, iso7816, heapless) under ironrdp-connector (M8), a notice not a vulnerability, no safe upgrade of sspi exists. Drop it when sspi moves off heapless 0.7" },
+    { id = "RUSTSEC-2026-0441", reason = "pin-utils is unmaintained; pulled in on Linux by sspi (async-dnssd, Kerberos discovery) under ironrdp-connector (M8), a notice not a vulnerability, no safe upgrade of sspi exists. Drop it when sspi stops using async-dnssd" },
     { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained, all versions affected, no safe upgrade; it is pulled in by russh-util (so by russh) and fernjo-app uses it only for the local date of import folder names and export file names. Remove this ignore when russh drops chrono or fernjo moves to a maintained date crate" },
 ]
 

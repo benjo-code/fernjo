@@ -5,8 +5,11 @@ import {
   SIDEBAR_DEFAULT,
   SIDEBAR_MAX,
   SIDEBAR_MIN,
+  TREE_ROWS_DEFAULT,
+  TREE_ROWS_SIZED,
   clampPanelHeight,
   clampSidebarWidth,
+  treeMinHeight,
 } from "./layout.svelte";
 
 afterEach(() => {
@@ -31,6 +34,19 @@ test("clampPanelHeight leaves the tree its minimum rows (23 rows at 1280x800)", 
   expect(treeMin / 24).toBeGreaterThanOrEqual(23);
   expect(clampPanelHeight(5, available, treeMin)).toBe(26);
   expect(clampPanelHeight(5000, 100, treeMin)).toBe(26);
+});
+
+test("a panel the user sized may grow past the 23-row default and leaves the tree 6 rows", () => {
+  const available = 800 - 90;
+  const row = 24;
+  const byDefault = clampPanelHeight(5000, available, treeMinHeight(false, row, 800));
+  const sized = clampPanelHeight(5000, available, treeMinHeight(true, row, 800));
+  expect(treeMinHeight(false, row, 800)).toBe(row * TREE_ROWS_DEFAULT);
+  expect(treeMinHeight(true, row, 800)).toBe(row * TREE_ROWS_SIZED);
+  expect(sized).toBeGreaterThan(byDefault);
+  expect(sized).toBe(available - row * 6);
+  // a very short window never asks for more rows than fit
+  expect(treeMinHeight(false, row, 400)).toBe(280);
 });
 
 test("a corrupt stored value falls back to the defaults", () => {

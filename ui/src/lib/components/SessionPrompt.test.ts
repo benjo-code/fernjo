@@ -76,6 +76,21 @@ test("session_prompt_picks_the_variant", async () => {
   expect(title()).toContain("host key has changed");
   expect(document.querySelector('[role="alertdialog"]')).not.toBeNull();
 
+  await show({
+    kind: "prompt",
+    id: 21,
+    prompt: { kind: "certificate", host: "h", port: 3389, fingerprint: "sha256:x" },
+  });
+  expect(title()).toBe("Trust this server certificate?");
+
+  await show({
+    kind: "prompt",
+    id: 22,
+    prompt: { kind: "certificateChanged", host: "h", port: 3389, old: "sha256:a", new: "sha256:b" },
+  });
+  expect(title()).toBe("The server certificate has changed");
+  expect(document.querySelector('[role="alertdialog"]')).not.toBeNull();
+
   await show({ kind: "prompt", id: 3, prompt: { kind: "password", user: "u", host: "h" } });
   expect(title()).toBe("Password required");
 

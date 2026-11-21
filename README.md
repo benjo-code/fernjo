@@ -4,7 +4,7 @@ A lightweight, cross-platform remote connection manager for **SSH and RDP** on W
 
 All your connections live in one folder tree in the sidebar, sessions open as tabs in a single window, and passwords and keys are kept in an encrypted vault. Existing connections can be imported from mRemoteNG, including saved passwords.
 
-**Status:** in development – see [Docs/ROADMAP.md](Docs/ROADMAP.md). The latest release, v0.1.1, is published: SSH, the vault, import and backup are implemented, and the installers for Windows, macOS and Linux are on the [releases page](https://github.com/benjo-code/fernjo/releases). v0.2.0 adds RDP.
+**Status:** in development – see [Docs/ROADMAP.md](Docs/ROADMAP.md). The latest release, v0.2.0, is published: SSH and RDP sessions, the vault, import and backup are implemented, and the installers for Windows, macOS and Linux are on the [releases page](https://github.com/benjo-code/fernjo/releases).
 
 ## Features
 
@@ -12,14 +12,11 @@ Working now:
 
 - Connection tree with nested folders; folders pass settings such as username, credential or port down to their connections
 - SSH sessions in tabs with a full terminal (xterm.js), agent/key/password/keyboard-interactive login and host key verification
+- RDP sessions in tabs (IronRDP): TLS and network level authentication, certificate pinning, a canvas that follows the tab size (or a fixed resolution), keyboard and mouse, text clipboard both ways and an in-app full screen. Tried by the owner from Windows, macOS and Linux against Windows 11 hosts with development builds (`pnpm tauri dev`), not against Windows Server, and not yet in an installed release build; the clipboard depends on what each web view allows. Not supported: drive, printer and audio redirection, gateways and Kerberos.
 - Encrypted credential vault (Argon2id + XChaCha20-Poly1305), optional unlock via the OS keychain
 - Import from mRemoteNG (`confCons.xml` 2.6, including saved passwords), export of the connections as JSON and an encrypted full backup with restore (formats in [Docs/backup-format.md](Docs/backup-format.md))
 - Data folder you can sync yourself (Syncthing, Nextcloud, iCloud) – the vault stays encrypted
 - Light and dark theme, following the system or set by hand
-
-Planned:
-
-- RDP sessions in tabs (IronRDP)
 
 Design and scope: [Docs/superpowers/specs/2026-11-15-fernjo-design.md](Docs/superpowers/specs/2026-11-15-fernjo-design.md)
 
@@ -50,7 +47,7 @@ shasum -a 256 <file>                       # macOS: compare the printed hash wit
 
 **macOS** (the flow below, from the quarantine flag through Open Anyway to the running app, was reported to work by the project owner on an Intel Mac (macOS 15) on 2026-11-18, so with the Intel image; no per-step details. The Apple Silicon image has not been started on a real Apple Silicon Mac). Open the `.dmg` and drag fernjo to Applications. The first start is blocked because the app is unsigned and not notarised: open System Settings, Privacy & Security, scroll to the message about fernjo and choose "Open Anyway". Alternatively remove the quarantine flag once: `xattr -dr com.apple.quarantine /Applications/fernjo.app`. Use the Apple Silicon image on M-series Macs and the Intel image otherwise; macOS 11 or newer.
 
-**Linux** (Wayland on recent GNOME and KDE is the target setup; Ubuntu 22.04 or newer). Debian and Ubuntu: `sudo apt install ./fernjo_<version>_amd64.deb`. AppImage: `chmod +x fernjo_<version>_amd64.AppImage` and run it; it needs FUSE 2, which is the package `libfuse2` on Ubuntu 22.04 and `libfuse2t64` on 24.04. The CI release build installs the `.deb` and extracts the AppImage (`--appimage-extract`); the AppImage was reported by the project owner to start and work on a CachyOS (Arch) laptop under Wayland on 2026-11-18, without extra environment variables (details not itemised; the desktop environment and the FUSE package were not stated). The `.deb` on a real Debian or Ubuntu desktop, other distributions, and the FUSE note (from documented behaviour) are not checked.
+**Linux** (Wayland on recent GNOME and KDE is the target setup; Ubuntu 22.04 or newer). Debian and Ubuntu: `sudo apt install ./fernjo_<version>_amd64.deb`. AppImage: `chmod +x fernjo_<version>_amd64.AppImage` and run it; it needs FUSE 2, which is the package `libfuse2` on Ubuntu 22.04 and `libfuse2t64` on 24.04. The CI release build installs the `.deb` and extracts the AppImage (`--appimage-extract`); the AppImage was reported by the project owner to start and work on a CachyOS (Arch) laptop under Wayland on 2026-11-18, without extra environment variables (details not itemised; the desktop environment and the FUSE package were not stated). The `.deb` on a real Debian or Ubuntu desktop, other distributions, and the FUSE note (from documented behaviour) are not checked. The title bar icon needs a desktop entry: the `.deb` installs one; an AppImage has none until something integrates it, so fernjo offers to add one at its start (to `~/.local/share`, only if you agree; Gear Lever or AppImageLauncher do the same).
 
 ## Settings
 
@@ -78,10 +75,11 @@ Plain Ctrl+letter and Alt+letter always go to the shell. App shortcuts are Ctrl+
 | Search in the terminal | Ctrl+Shift+F | Cmd+F |
 | Copy selection (terminal) | Ctrl+Shift+C | Cmd+C |
 | Paste (terminal) | Ctrl+Shift+V | Cmd+V |
+| Remote desktop full screen (in and out) | Ctrl+Shift+F11 | Ctrl+Shift+F11 |
 | Select several connections (tree) | Ctrl+click | Cmd+click |
 | Select a range (tree) | Shift+click | Shift+click |
 
-Copy and paste only apply while the terminal has focus; elsewhere the page keeps its normal behaviour.
+Copy and paste only apply while the terminal has focus; elsewhere the page keeps its normal behaviour. In a remote desktop (RDP tab) only full screen and Ctrl+Tab belong to fernjo; every other key goes to the remote machine.
 
 ## Setup
 
@@ -102,7 +100,7 @@ cargo deny check                                       # licences, advisories, s
 
 Please report vulnerabilities privately, see [SECURITY.md](SECURITY.md).
 
-**Privacy.** fernjo's own code makes no network connections except the SSH sessions you open. It has no update check, no telemetry and no analytics. Your connections, settings and encrypted vault stay in your data folder on your computer. The window itself is drawn by your operating system's web view (WebView2 on Windows, WebKit on macOS and Linux), a separate component that is outside fernjo's code. On Windows we measured what that component does while fernjo sits idle (WebView2 runtime 157.0.4341.60 on Windows 11, every process that fernjo starts watched with `Get-NetTCPConnection`): in three runs of 100 to 180 s, about 62 s after start the WebView2 network process opened one HTTPS connection to an address that belongs to `edge.microsoft.com`, and a network log showed it was the runtime's component updater (a POST to `edge.microsoft.com/componentupdater/api/v1/update`). fernjo switches that updater off for its own window (`--disable-component-update`); with the switch no connection appeared in four runs of 100 to 180 s, the last one with the setting built into the release binary. This covers one machine, one runtime version and a few idle minutes: the Windows web view may still contact Microsoft for other reasons (for example crash reports), and keeping the installed WebView2 runtime itself up to date stays with Windows. The web views on macOS and Linux may make background connections of their own; they were not checked. Notes on the synced data folder are in [SECURITY.md](SECURITY.md).
+**Privacy.** fernjo's own code makes no network connections except the SSH and RDP sessions you open. It has no update check, no telemetry and no analytics. Your connections, settings and encrypted vault stay in your data folder on your computer. The window itself is drawn by your operating system's web view (WebView2 on Windows, WebKit on macOS and Linux), a separate component that is outside fernjo's code. On Windows we measured what that component does while fernjo sits idle (WebView2 runtime 157.0.4341.60 on Windows 11, every process that fernjo starts watched with `Get-NetTCPConnection`): in three runs of 100 to 180 s, about 62 s after start the WebView2 network process opened one HTTPS connection to an address that belongs to `edge.microsoft.com`, and a network log showed it was the runtime's component updater (a POST to `edge.microsoft.com/componentupdater/api/v1/update`). fernjo switches that updater off for its own window (`--disable-component-update`); with the switch no connection appeared in four runs of 100 to 180 s, the last one with the setting built into the release binary. This covers one machine, one runtime version and a few idle minutes: the Windows web view may still contact Microsoft for other reasons (for example crash reports), and keeping the installed WebView2 runtime itself up to date stays with Windows. The web views on macOS and Linux may make background connections of their own; they were not checked. Notes on the synced data folder are in [SECURITY.md](SECURITY.md).
 
 ## License
 

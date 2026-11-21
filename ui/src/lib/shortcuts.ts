@@ -1,5 +1,15 @@
 export type AppAction =
-  "nextTab" | "prevTab" | "closeTab" | "focusFilter" | "terminalSearch" | "copy" | "paste";
+  | "nextTab"
+  | "prevTab"
+  | "closeTab"
+  | "focusFilter"
+  | "terminalSearch"
+  | "copy"
+  | "paste"
+  | "fullscreen";
+
+/** Where the keyboard focus is: a terminal, a remote desktop, or anything else. */
+export type FocusKind = "none" | "terminal" | "remote";
 
 type Key = Pick<KeyboardEvent, "key" | "ctrlKey" | "shiftKey" | "altKey" | "metaKey">;
 
@@ -11,21 +21,29 @@ const CHORDS: Record<string, AppAction> = {
   v: "paste",
 };
 
+/** Ctrl+Shift+F11 on every platform. */
+const FULLSCREEN_KEY = "F11";
+
 /**
- * Which app action a key press is, or `null` when the terminal or the page gets it. Plain
- * Ctrl+letter and Alt+letter always belong to the shell. Chords are Ctrl+Shift+letter, or
- * Cmd+letter on macOS (where Ctrl+Shift+letter stays with the terminal).
+ * Which app action a key press is, or `null` when the terminal, the remote desktop or the page
+ * gets it. Plain Ctrl+letter and Alt+letter always belong to the shell. Chords are
+ * Ctrl+Shift+letter, or Cmd+letter on macOS (where Ctrl+Shift+letter stays with the terminal).
+ * Full screen (Ctrl+Shift+F11) and the tab switch (Ctrl+Tab, Ctrl+Shift+Tab) work from every
+ * focus; in a remote desktop nothing else is taken, so a chord like Ctrl+Shift+W reaches the
+ * remote machine.
  */
-export function routeKey(e: Key, mac: boolean, inTerminal: boolean): AppAction | null {
+export function routeKey(e: Key, mac: boolean, focus: FocusKind): AppAction | null {
   if (e.altKey) return null;
+  if (e.key === FULLSCREEN_KEY && e.ctrlKey && e.shiftKey && !e.metaKey) return "fullscreen";
   if (e.key === "Tab" && e.ctrlKey && !e.metaKey) return e.shiftKey ? "prevTab" : "nextTab";
+  if (focus === "remote") return null;
   const action = CHORDS[e.key.toLowerCase()];
   if (!action) return null;
   const isChord = mac
     ? e.metaKey && !e.ctrlKey && !e.shiftKey
     : e.ctrlKey && e.shiftKey && !e.metaKey;
   if (!isChord) return null;
-  if ((action === "copy" || action === "paste") && !inTerminal) return null;
+  if ((action === "copy" || action === "paste") && focus !== "terminal") return null;
   return action;
 }
 
@@ -53,6 +71,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { label: "Search in the terminal", action: "terminalSearch", key: "F" },
   { label: "Copy in the terminal", action: "copy", key: "C" },
   { label: "Paste in the terminal", action: "paste", key: "V" },
+  { label: "Remote desktop full screen", action: "fullscreen", key: FULLSCREEN_KEY, shift: true },
   { label: "Open a connection", text: () => "Double-click or Enter" },
   { label: "Select several", text: (mac) => `${mac ? "Cmd" : "Ctrl"}+click` },
   { label: "Select a range", text: () => "Shift+click" },
@@ -69,19 +88,21 @@ export function shortcutFor(action: AppAction): Shortcut | undefined {
 export function shortcutKeys(s: Shortcut, mac: boolean): string {
   if (!s.action) return s.text(mac);
   if (s.key === TAB_KEY) return s.shift ? "Ctrl+Shift+Tab" : "Ctrl+Tab";
+  if (s.key === FULLSCREEN_KEY) return "Ctrl+Shift+F11";
   return mac ? `Cmd+${s.key}` : `Ctrl+Shift+${s.key}`;
 }
 
 /** The key event `routeKey` receives for a chord entry; `null` for the gestures without one. */
 export function shortcutEvent(s: Shortcut, mac: boolean): Key | null {
   if (!s.action) return null;
-  const tab = s.key === TAB_KEY;
+  // the tab switch and full screen are the same chord on every platform
+  const same = s.key === TAB_KEY || s.key === FULLSCREEN_KEY;
   return {
     key: s.key,
-    ctrlKey: tab || !mac,
-    shiftKey: tab ? !!s.shift : !mac,
+    ctrlKey: same || !mac,
+    shiftKey: same ? !!s.shift : !mac,
     altKey: false,
-    metaKey: !tab && mac,
+    metaKey: !same && mac,
   };
 }
 

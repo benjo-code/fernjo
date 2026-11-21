@@ -35,6 +35,7 @@
     api,
     (id) => findNode(store.children, id)?.name ?? "Session",
     () => (terminal.info ?? DEFAULT_TERMINAL).closeOnExit,
+    protocolOf,
   );
 
   // svelte-ignore state_referenced_locally
@@ -141,16 +142,25 @@
   }
 
   /**
-   * Only the app chords are handled here: tab switching, closing and the filter. Copy, paste and
-   * search belong to the terminal controller, which leaves the app chords unhandled so they get here.
+   * Only the app chords are handled here: tab switching, full screen, closing and the filter. Copy,
+   * paste and search belong to the terminal controller, which leaves the app chords unhandled so
+   * they get here. A remote desktop keeps every key except full screen and the tab switch.
    */
   function onkeydown(e: KeyboardEvent) {
     // a modal (settings, any confirm dialog) owns the keyboard; so does anything that handled the key
     if (e.defaultPrevented || folderOpen || importOpen || sessions.closeRequest) return;
     if (document.querySelector("[aria-modal='true']")) return;
-    const inTerminal = e.target instanceof Element && e.target.closest(".xterm") !== null;
-    const action = routeKey(e, isMac(), inTerminal);
-    if (action === "nextTab" || action === "prevTab") {
+    const target = e.target instanceof Element ? e.target : null;
+    const focus = target?.closest(".xterm")
+      ? "terminal"
+      : target?.closest("[data-remote-desktop]")
+        ? "remote"
+        : "none";
+    const action = routeKey(e, isMac(), focus);
+    if (action === "fullscreen") {
+      // a held key must not flip it back and forth
+      if (!e.repeat) sessions.toggleFullscreen();
+    } else if (action === "nextTab" || action === "prevTab") {
       if (sessions.tabs.length === 0) return;
       if (action === "nextTab") sessions.next();
       else sessions.previous();
@@ -186,7 +196,11 @@
   {onkeydown}
 />
 
-<div class="shell" style:grid-template-columns={gridColumns}>
+<div
+  class="shell"
+  class:fullscreen={sessions.remoteFullscreen}
+  style:grid-template-columns={sessions.remoteFullscreen ? "1fr" : gridColumns}
+>
   <Sidebar
     bind:this={sidebar}
     {store}
@@ -209,7 +223,7 @@
     />
   </Sidebar>
   <main class="main">
-    {#if sessions.tabs.length > 0}
+    {#if sessions.tabs.length > 0 && !sessions.remoteFullscreen}
       <TabStrip {sessions} {protocolOf} />
     {/if}
     <div class="content">
@@ -281,6 +295,11 @@
     display: grid;
     grid-template-columns: var(--sidebar-width) 1fr;
     height: 100%;
+  }
+
+  /* Full screen hides the sidebar without unmounting it, so the tree keeps its scroll position */
+  .shell.fullscreen > :global(:first-child) {
+    display: none;
   }
 
   .main {

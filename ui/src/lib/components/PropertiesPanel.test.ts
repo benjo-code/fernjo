@@ -393,6 +393,10 @@ describe("PropertiesPanel row order", () => {
       "username",
       "credential",
       "port",
+      "domain",
+      "resolution",
+      "colordepth",
+      "clipboard",
       "description",
       "protocol",
     ]);
@@ -411,7 +415,18 @@ describe("PropertiesPanel row order", () => {
       },
       "Homelab",
     );
-    expect(order()).toEqual(["name", "username", "credential", "port", "description", "keepalive"]);
+    expect(order()).toEqual([
+      "name",
+      "username",
+      "credential",
+      "port",
+      "domain",
+      "resolution",
+      "colordepth",
+      "clipboard",
+      "description",
+      "keepalive",
+    ]);
   });
 
   test("only_the_credential_row_wraps_its_aux_column_under_the_value", async () => {
@@ -752,5 +767,148 @@ describe("PropertiesPanel credential row", () => {
     store.toggleSelect("DC01");
     await settle();
     expect(document.querySelector(".title")!.textContent!.trim()).toBe("web-01");
+  });
+});
+
+describe("PropertiesPanel RDP settings", () => {
+  const RDP_ROWS = ["domain", "resolution", "colordepth", "clipboard"];
+  const rdp = (extra: Partial<ResolvedNode> = {}) => ({
+    DC01: resolved({ id: "DC01", name: "DC01", protocol: "rdp", ...extra }),
+  });
+  const fixed = (width: number, height: number) => ({
+    local: { mode: "fixed" as const, width, height },
+    effective: { mode: "fixed" as const, width, height },
+    source: { kind: "local" as const },
+  });
+  const dim = (label: "Width" | "Height") =>
+    field("resolution")!.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
+  async function type(el: HTMLInputElement, text: string) {
+    el.value = text;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await settle();
+  }
+
+  test("rdp_connection_shows_the_rdp_rows_and_no_keepalive", async () => {
+    await setup(rdp(), "DC01");
+    for (const row of RDP_ROWS) expect(hasField(row), row).toBe(true);
+    expect(hasField("keepalive")).toBe(false);
+    expect(input("colordepth").value).toBe("32");
+    expect(selectEl("resolution").value).toBe("fit");
+    expect(input("clipboard").checked).toBe(true);
+    expect(field("colordepth")!.textContent).toContain("default");
+    // a fit resolution has no size inputs
+    expect(dim("Width")).toBeNull();
+  });
+
+  test("ssh_connection_shows_no_rdp_rows", async () => {
+    await setup({ "web-01": resolved({ id: "web-01", name: "web-01" }) });
+    for (const row of RDP_ROWS) expect(hasField(row), row).toBe(false);
+  });
+
+  test("folder_shows_both_groups", async () => {
+    await setup(
+      {
+        Homelab: resolved({
+          id: "Homelab",
+          name: "Homelab",
+          kind: "folder",
+          protocol: null,
+          host: null,
+        }),
+      },
+      "Homelab",
+    );
+    for (const row of RDP_ROWS) expect(hasField(row), row).toBe(true);
+    expect(hasField("keepalive")).toBe(true);
+  });
+
+  test("changing_the_colour_depth_saves_rdpColorDepth", async () => {
+    const { calls } = await setup(rdp(), "DC01");
+    await commit("colordepth", "16");
+    expect(calls.updateNode).toEqual([["DC01", { rdpColorDepth: 16 }]]);
+  });
+
+  test("domain_is_saved_as_text_and_blank_resets_it", async () => {
+    const { calls } = await setup(
+      rdp({ domain: { local: "OLD", effective: "OLD", source: { kind: "local" } } }),
+      "DC01",
+    );
+    await commit("domain", " CORP ");
+    await commit("domain", "");
+    expect(calls.updateNode).toEqual([
+      ["DC01", { domain: "CORP" }],
+      ["DC01", { domain: null }],
+    ]);
+  });
+
+  test("the_clipboard_checkbox_saves_a_boolean", async () => {
+    const { calls } = await setup(rdp(), "DC01");
+    const box = input("clipboard");
+    box.checked = false;
+    box.dispatchEvent(new Event("change", { bubbles: true }));
+    await settle();
+    expect(calls.updateNode).toEqual([["DC01", { rdpClipboard: false }]]);
+  });
+
+  test("choosing_fixed_size_saves_rdpResolution_with_width_and_height", async () => {
+    const { calls } = await setup(rdp(), "DC01");
+    await commit("resolution", "fixed");
+    expect(calls.updateNode).toEqual([
+      ["DC01", { rdpResolution: { mode: "fixed", width: 1920, height: 1080 } }],
+    ]);
+    unmount(mounted!);
+    document.body.innerHTML = "";
+
+    const second = await setup(rdp({ rdpResolution: fixed(1280, 720) }), "DC01");
+    expect(selectEl("resolution").value).toBe("fixed");
+    expect(dim("Width").value).toBe("1280");
+    expect(dim("Height").value).toBe("720");
+    await type(dim("Width"), " 1600 ");
+    expect(second.calls.updateNode).toEqual([
+      ["DC01", { rdpResolution: { mode: "fixed", width: 1600, height: 720 } }],
+    ]);
+    await commit("resolution", "fit");
+    expect(second.calls.updateNode[1]).toEqual(["DC01", { rdpResolution: { mode: "fit" } }]);
+  });
+
+  test("an_invalid_width_shows_the_error_and_does_not_save", async () => {
+    const message = "A fixed resolution needs a width and a height between 200 and 8192 pixels";
+    const { calls } = await setup(rdp({ rdpResolution: fixed(1280, 720) }), "DC01", {
+      updateNode: async () => {
+        throw apiError("invalid_resolution", message);
+      },
+    });
+    // not a number, or too large for the wire type: never sent
+    await type(dim("Width"), "abc");
+    expect(calls.updateNode).toHaveLength(0);
+    expect(field("resolution")!.querySelector("[role=alert]")).not.toBeNull();
+    await type(dim("Width"), "70000");
+    expect(calls.updateNode).toHaveLength(0);
+    // a number Rust refuses shows Rust's message and the field goes back to the stored value
+    await type(dim("Width"), "100");
+    expect(calls.updateNode).toHaveLength(1);
+    expect(field("resolution")!.textContent).toContain(message);
+    expect(dim("Width").value).toBe("1280");
+  });
+
+  test("reset_sends_null", async () => {
+    const { calls } = await setup(
+      rdp({
+        domain: { local: "CORP", effective: "CORP", source: { kind: "local" } },
+        rdpResolution: fixed(1280, 720),
+        rdpColorDepth: { local: 16, effective: 16, source: { kind: "local" } },
+        rdpClipboard: { local: false, effective: false, source: { kind: "local" } },
+      }),
+      "DC01",
+    );
+    for (const row of RDP_ROWS) await buttonIn(row, "Inherit")!.click();
+    await settle();
+    expect(calls.updateNode).toEqual([
+      ["DC01", { domain: null }],
+      ["DC01", { rdpResolution: null }],
+      ["DC01", { rdpColorDepth: null }],
+      ["DC01", { rdpClipboard: null }],
+    ]);
   });
 });

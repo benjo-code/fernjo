@@ -55,7 +55,12 @@
   let noteOpen = $state(false);
 </script>
 
-<aside class="sidebar" class:note-open={noteOpen} aria-label="Connections">
+<aside
+  class="sidebar"
+  class:note-open={noteOpen}
+  class:panel-sized={layout.propertiesHeight !== null}
+  aria-label="Connections"
+>
   <div class="head">
     <div class="filter"><FilterBox bind:this={filterBox} {store} /></div>
     <VaultChip {vault} onOpenManager={onOpenVault} onFocusUnlock={() => void note?.focusForm()} />
@@ -154,8 +159,10 @@
     overflow-y: auto;
   }
 
-  /* the vault form is open: it is taller than the compact note, so the tree may shrink */
-  .note-open .tree-slot {
+  /* the vault form is open: it is taller than the compact note, so the tree may shrink; the same
+     when the user has set the properties panel's height (TREE_ROWS_SIZED in layout.svelte.ts) */
+  .note-open .tree-slot,
+  .panel-sized .tree-slot {
     min-height: calc(var(--row-height-tree) * 6);
   }
 </style>

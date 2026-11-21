@@ -179,6 +179,8 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     restartApp: [],
     openSession: [],
     sessionInput: [],
+    rdpInput: [],
+    rdpClipboard: [],
     sessionResize: [],
     sessionAck: [],
     closeSession: [],
@@ -327,6 +329,14 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
       calls.sessionInput.push(args);
       if (impl.sessionInput) await impl.sessionInput(...args);
     },
+    rdpInput: async (...args) => {
+      calls.rdpInput.push(args);
+      if (impl.rdpInput) await impl.rdpInput(...args);
+    },
+    rdpClipboard: async (...args) => {
+      calls.rdpClipboard.push(args);
+      if (impl.rdpClipboard) await impl.rdpClipboard(...args);
+    },
     sessionResize: async (...args) => {
       calls.sessionResize.push(args);
       if (impl.sessionResize) await impl.sessionResize(...args);
@@ -423,6 +433,10 @@ export function resolved(partial: Partial<ResolvedNode> & { id: string; name: st
     port: { local: null, effective: 22, source: { kind: "default" } },
     keepaliveSecs: { local: null, effective: 30, source: { kind: "default" } },
     credential: none,
+    domain: none,
+    rdpResolution: { local: null, effective: { mode: "fit" }, source: { kind: "default" } },
+    rdpColorDepth: { local: null, effective: 32, source: { kind: "default" } },
+    rdpClipboard: { local: null, effective: true, source: { kind: "default" } },
     ...partial,
   };
   return node;
