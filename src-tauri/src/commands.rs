@@ -729,6 +729,10 @@ mod tests {
         assert_eq!(node["username"]["source"]["kind"], "default");
         assert_eq!(node["port"]["effective"], 22);
         assert_eq!(node["kind"], "connection");
+        assert_eq!(node["rdpResolution"]["effective"]["mode"], "fit");
+        assert_eq!(node["rdpColorDepth"]["effective"], 32);
+        assert_eq!(node["rdpClipboard"]["effective"], true);
+        assert!(node["domain"]["effective"].is_null());
 
         let err =
             serde_json::to_value(create_folder(&st, None, None, " ".into()).unwrap_err()).unwrap();

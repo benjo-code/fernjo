@@ -33,7 +33,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 | – | **Release `v0.1.0`** – Daily SSH driver (M0 to M6) | – | ✅ done | – | 2026-11-18 |
 | 7 | Daily-use polish and hardening | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-19-milestone-07-polish-hardening.md) | 2026-11-20 |
 | – | **Release `v0.1.1`** – Polish and hardening (M7) | – | ✅ done | – | 2026-11-20 |
-| 8 | RDP sessions | 1 – fernjo app | ⬜ open | – | – |
+| 8 | RDP sessions | 1 – fernjo app | 🔵 in progress | [Plan](superpowers/plans/2026-11-20-milestone-08-rdp-sessions.md) | – |
 | – | **Release `v0.2.0`** – RDP (M8) | – | ⬜ open | – | – |
 
 ## Scope changes
@@ -105,6 +105,7 @@ Postponed by the owner on 2026-11-15 until a macOS and a Linux machine are at ha
 - M7: discoverability walk-through (owner, the criterion 'Manual, owner: the owner finds the vault, Import & backup and Settings without a hint' stays open until this is run): start fernjo on a scratch data folder (`FERNJO_DATA_DIR`) with no vault and no connections and look for three things without a hint: where logins are stored (the chip 'Vault: none' and the start list), how to import or export and what the dialog is called ('Import, export & backup' behind the footer button 'Import / Export'), and where Settings are ('Settings' in the footer). Then create a connection and find 'Create vault' / 'Manage…' / 'New credential…' from its Credential row, press Enter on a connection to open it, let a session drop and read the reason bar. Note anything you looked for and did not find; each such item becomes a follow-up (`Docs/design/m07-discoverability-review.md` has the 13 agreed items D1 to D13).
 - M7: real-app re-run of the whole milestone on a machine with a working WebView2 runtime (or on macOS and Linux): sub-tasks 19.1 to 19.8 (vault wording, Credential row, footer, properties panel order, start list, Settings, reason bar, hints) were checked visually in a Chromium harness with a mocked API only, because the development VM had the WebView2 registry entry but not the runtime files after the move to a new device (`winget install Microsoft.EdgeWebView2Runtime` fixes it). Re-run `pnpm tauri dev` on a scratch `FERNJO_DATA_DIR`, drive it over the DevTools port (see `CLAUDE.md`) and look at the vault chip, the Credential row at 1280x800 (visible without scrolling, 23 tree rows), the footer at 240 px width (no clipping on WebKitGTK and macOS), the start list, the Settings dialog, the reason bar above a dropped tab and the context menu hints, light and dark. Also on macOS and Linux: the feel of the resizable panels, multi-select with Cmd or Ctrl+click (Ctrl+click on macOS may open the context menu, unverified) and the batch drag.
 - M7: CI proofs of pull request 16 (head 9d449b3, release dry run https://github.com/benjo-code/fernjo/actions/runs/44712339675, 2026-11-20), now done and no longer an owner check: the step "Check the binary for build paths" (`tools/check-no-build-paths.sh`) ran and succeeded on all four builds (linux `target/release/fernjo`, windows `target/release/fernjo.exe`, macos-arm64 `target/aarch64-apple-darwin/release/fernjo`, macos-x64 `target/x86_64-apple-darwin/release/fernjo`), each built with the `--remap-path-prefix` RUSTFLAGS, so the task 'Release binaries no longer embed the runner's cargo registry paths' is ticked; the `#[cfg(target_os = "linux")]` window icon branch in `src-tauri/src/lib.rs` compiled on the Linux runners (`rust` job clippy with `-D warnings` and tests, `tauri-build`, `build (linux)`). Still the owner's: the look at the Linux title bar (bullet above) decides the icon task; CI cannot show how the title bar renders.
+- M8: RDP (nothing below has run through the app against a real server; the RDP spike and the headless benchmark did connect with NLA to a Windows 11 VM on Windows, macOS and Linux, see `Docs/DECISIONS.md` "M8: RDP render path spike"). (a) Windows 11 and Windows Server with NLA: connect from the tree with a vault credential, the certificate prompt once and then silent, type in a real session, scroll and drag, resize the window and the sidebar, full screen in and out (Ctrl+Shift+F11), clipboard both ways with text from Notepad and from fernjo's own terminal tab, a logoff on the server ends the tab with the reason and Reconnect works. (b) The same on macOS and on the CachyOS laptop under Wayland. (c) The real-app rerun, on a machine with a working WebView2 runtime, of everything the jsdom tests cover (canvas painting, the resize observer, the pointer mapping, the paste key waiting for the clipboard). (d) Latency: type in an RDP tab and judge it against the OS's own RDP client; the spike could not show it, so the criterion "owner judges keystroke latency acceptable" stays open and `RDP_FRAMES_IN_FLIGHT` (3) is the number to lower if it feels laggy. (e) Which clipboard mechanism each web view allows (`Docs/DECISIONS.md` "M8 clipboard path"): if "The clipboard is blocked by the web view" shows, note the platform. (f) `FERNJO_TEST_RDP_ADDR=host:3389 FERNJO_TEST_RDP_USER=... FERNJO_TEST_RDP_PASSWORD=... cargo test -p fernjo-rdp --test connect` against a Windows host with NLA (the in-process host is not possible, so this is the only run of those tests). (g) Colour depth 24 against a real server. (h) The two spike lines that look off and were not explained: Windows scroll 1.6 messages/s and macOS pointer moves 0.1 messages/s in `spike_bench`.
 
 ---
 
@@ -389,21 +390,21 @@ No item was changed or declined. Implemented in eight sub-tasks 19.1 to 19.8 of 
 Closes the known gaps of 0.1.0: no silent loss of synced data, clearer UI, resizable panels, multi-select in the tree.
 
 ## Milestone 8 – RDP sessions
-**Status:** ⬜ open · **Plan:** – · **Prerequisites:** M6
+**Status:** 🔵 in progress · **Plan:** [2026-11-20-milestone-08-rdp-sessions.md](superpowers/plans/2026-11-20-milestone-08-rdp-sessions.md) · **Prerequisites:** M6
 
 Goal: RDP connections in the tree open as tabs next to SSH sessions, smoothly enough for daily admin work.
 
 **Tasks**
-- [ ] Throwaway spike: IronRDP → framebuffer → Tauri channel → canvas at 1920×1080 on all three OSes, measured; result in `Docs/DECISIONS.md`
-- [ ] `fernjo-rdp`: IronRDP client with TLS + NLA (CredSSP), credentials and domain from the vault
-- [ ] RDP tab: fit to tab with dynamic resize (fixed size as fallback), keyboard and mouse input, text clipboard both ways, fullscreen
-- [ ] RDP settings (domain, resolution/scaling, colour depth, clipboard) as inheritable settings
-- [ ] If the bar is missed after optimising the canvas path: record a scope change and insert a native-surface milestone before v0.2.0
+- [x] Throwaway spike: IronRDP → framebuffer → Tauri channel → canvas at 1920×1080 on all three OSes, measured; result in `Docs/DECISIONS.md`
+- [x] `fernjo-rdp`: IronRDP client with TLS + NLA (CredSSP), credentials and domain from the vault
+- [x] RDP tab: fit to tab with dynamic resize (fixed size as fallback), keyboard and mouse input, text clipboard both ways, fullscreen
+- [x] RDP settings (domain, resolution/scaling, colour depth, clipboard) as inheritable settings
+- [x] If the bar is missed after optimising the canvas path: record a scope change and insert a native-surface milestone before v0.2.0 (not needed: the bar was met, see `Docs/DECISIONS.md` "M8: RDP render path spike")
 
 **Acceptance criteria**
 - [ ] Spike measured ≥ 30 frames/s while scrolling and dragging; owner judges keystroke latency acceptable
 - [ ] Manual: connect to Windows 11 / Windows Server with NLA; clipboard both ways, resize and fullscreen work
-- [ ] Build, test and lint are green
+- [x] Build, test and lint are green – 2026-11-21, Windows 11, branch `feature/m08-rdp-sessions` at the head of the M8 implementation: `cargo fmt --all --check` (clean), `cargo clippy --workspace --all-targets -- -D warnings` (clean), `cargo test --workspace` (core 174, rdp 38 unit + 14 connect (fake TLS server; the NLA, session and clipboard tests skip without `FERNJO_TEST_RDP_ADDR`), app 249 + 11 tauri_conf, import 16 + 16 + 12 + 45 + 1 + 40, vault 97 + 2 ignored + 3; the SSH tests skip without the container; all passed), `pnpm lint` (0 errors, 0 warnings), `pnpm test` (686 passed in 52 files, exit code 0), `cargo deny check` (advisories, bans, licenses, sources ok; the unmatched Linux-only ignore entries warn on Windows as before), `bash tools/test-release-scripts.sh` (48/48), `dotnet run tools/roadmap.cs -- check` (valid). NOT run: `pnpm tauri build` and the app (no WebView2 runtime on this machine; the UI was checked in jsdom with mocked controllers only), CI (not pushed yet).
 
 ## Release `v0.2.0` – Acceptance
 

@@ -781,3 +781,25 @@ fn a_file_of_huge_names_reads_and_plans_quickly() {
             .any(|l| l.text.contains("shortened to"))
     );
 }
+
+#[test]
+fn resolution_colors_and_their_inherit_flags_are_read() {
+    let n = one_node(r#"Resolution="Res1920x1080" Colors="Colors32Bit" InheritResolution="true""#);
+    assert_eq!(n.resolution, "Res1920x1080");
+    assert_eq!(n.colors, "Colors32Bit");
+    assert!(n.inherit.resolution);
+    assert!(!n.inherit.colors);
+    let none = one_node(r#"Name="n""#);
+    assert!(none.resolution.is_empty() && none.colors.is_empty());
+}
+
+#[test]
+fn an_overlong_resolution_or_colors_attribute_is_cut_to_the_cap() {
+    let n = one_node(&format!(
+        r#"Resolution="{}" Colors="{}""#,
+        "R".repeat(1_000_000),
+        "C".repeat(MAX_PROTOCOL_CHARS + 1)
+    ));
+    assert_eq!(n.resolution.chars().count(), MAX_PROTOCOL_CHARS);
+    assert_eq!(n.colors.chars().count(), MAX_PROTOCOL_CHARS);
+}

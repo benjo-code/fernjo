@@ -13,8 +13,10 @@ pub mod tree;
 pub use conflicts::find_conflicts;
 pub use error::{DocumentError, LoadError, SaveError, StoreError, TreeError};
 pub use model::{
-    CredentialId, DEFAULT_KEEPALIVE_SECS, DEFAULT_RDP_PORT, DEFAULT_SSH_PORT, Field, Node, NodeId,
-    NodeKind, NodeType, Protocol, ResolvedNode, Settings, Source,
+    CredentialId, DEFAULT_KEEPALIVE_SECS, DEFAULT_RDP_CLIPBOARD, DEFAULT_RDP_COLOR_DEPTH,
+    DEFAULT_RDP_PORT, DEFAULT_SSH_PORT, Field, MAX_DOMAIN_CHARS, MAX_RDP_DIMENSION,
+    MIN_RDP_DIMENSION, Node, NodeId, NodeKind, NodeType, Protocol, RDP_COLOR_DEPTHS, RdpResolution,
+    ResolvedNode, Settings, Source, is_valid_domain,
 };
 pub use paths::{
     DATA_DIR_ENV, DEVICE_DIR_NAME, DEVICE_SUBDIR_ENV, DataDirSource, Location, device_dir_from,

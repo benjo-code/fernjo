@@ -1,4 +1,4 @@
-//! The session manager: terminal sessions, their prompts and their output flow.
+//! The session manager: terminal and RDP sessions, their prompts and their output flow.
 //!
 //! # Wire contract (what the UI mirrors)
 //!
@@ -34,6 +34,29 @@
 //! with `{kind:"hostKey", decision:"once"|"always"|"reject"}`; for the synced one "always" confirms
 //! the key on this device and "once" records nothing.
 //!
+//! # RDP sessions
+//!
+//! An RDP connection uses the same channel, events, prompts and commands with these differences
+//! (the code is in `sessions/rdp.rs`):
+//!
+//! * The raw message is a **region** of the desktop: `u16 x, u16 y, u16 width, u16 height` (little
+//!   endian) followed by `width * height * 4` RGBA bytes, row by row. The forwarder sends one
+//!   region per available credit, covering everything that changed since the last one (the latest
+//!   pixels win). `session_ack(id, bytes)` acknowledges a region by its byte length; at most about
+//!   `rdp::RDP_FRAMES_IN_FLIGHT` (3) whole-desktop messages are unacknowledged (the number comes
+//!   from the spike, `Docs/DECISIONS.md` "M8: RDP render path spike").
+//! * Two more JSON events: `{kind:"desktop", width, height}` (before the first region and on every
+//!   desktop size change) and `{kind:"clipboard", text}` (the remote side copied text).
+//! * `open_session`, `session_resize` and `reconnect_session` carry **pixels** in their `cols` and
+//!   `rows` arguments. Input is `rdp_input(id, events)` (not `session_input`) and clipboard text
+//!   `rdp_clipboard(id, text)`.
+//! * Prompts: `certificate {host, port, fingerprint}` is answered with `{kind:"hostKey",
+//!   decision}` and `certificateChanged {host, port, old, new}` with `{kind:"hostKeyChanged",
+//!   decision}`; `username` and `password` are the shared ones. Pins live in
+//!   `<device folder>/rdp_certs.confirmed` (memory for the run without a device folder).
+//! * An RDP session never ends "cleanly" (`endedCleanly` is always `false`): there is no shell exit
+//!   status and the tab stays until the user closes it.
+//!
 //! No event carries a secret: prompts describe what is asked, answers travel UI to Rust only.
 
 use std::collections::HashMap;
@@ -57,7 +80,7 @@ use tokio::sync::{Notify, oneshot};
 use tokio::time::Instant;
 
 use crate::commands::CommandError;
-use crate::connect_plan::{self, ConnectPlan, CredentialPlan};
+use crate::connect_plan::{self, ConnectPlan, CredentialPlan, Plan};
 use crate::session_flow::FlowControl;
 use crate::state::AppState;
 
@@ -119,6 +142,16 @@ pub enum UiEvent {
         id: u64,
         prompt: PromptView,
     },
+    /// RDP only: the remote desktop has this size (pixels). Sent before the first region and on
+    /// every size change; the canvas takes its size from it.
+    Desktop {
+        width: u16,
+        height: u16,
+    },
+    /// RDP only: the remote side copied this text (line ends converted, size capped).
+    Clipboard {
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -159,6 +192,21 @@ pub enum PromptView {
         name: String,
         instructions: String,
         prompts: Vec<KiPromptView>,
+    },
+    /// RDP: a server certificate this device has not pinned for `host:port`. Answered with
+    /// `{kind:"hostKey", decision}` (the same shape as an SSH host key).
+    Certificate {
+        host: String,
+        port: u16,
+        fingerprint: String,
+    },
+    /// RDP: the certificate differs from the pinned one. Answered with
+    /// `{kind:"hostKeyChanged", decision}`.
+    CertificateChanged {
+        host: String,
+        port: u16,
+        old: String,
+        new: String,
     },
     Password {
         user: String,
@@ -403,13 +451,13 @@ pub struct TauriInteraction {
 }
 
 impl TauriInteraction {
-    async fn ask(&self, prompt: PromptView) -> Option<PromptAnswer> {
+    pub(crate) async fn ask(&self, prompt: PromptView) -> Option<PromptAnswer> {
         let (id, rx) = self.hub.register()?;
         self.sink.event(&UiEvent::Prompt { id, prompt });
         rx.await.ok()
     }
 
-    async fn ask_secrets(&self, prompt: PromptView) -> Option<Vec<SecretString>> {
+    pub(crate) async fn ask_secrets(&self, prompt: PromptView) -> Option<Vec<SecretString>> {
         match self.ask(prompt).await? {
             PromptAnswer::Secrets { values } => Some(values),
             _ => None,
@@ -519,9 +567,13 @@ enum Phase {
     Disconnected,
 }
 
-/// What the ordered writer task does with the live `Session`.
+/// What the ordered writer task does with the live session. `Resize` carries character cells for
+/// a terminal and pixels for an RDP desktop; `Rdp` and `Clipboard` only exist for RDP and `Data`
+/// only for SSH (the other protocol's writer ignores them).
 enum Op {
     Data(Vec<u8>),
+    Rdp(Vec<fernjo_rdp::InputEvent>),
+    Clipboard(String),
     Resize(u32, u32),
     Close,
 }
@@ -579,6 +631,8 @@ pub struct SessionManager {
     /// Hosts confirmed during this run, used when the device has no folder for the persistent
     /// file (see `confirmed_layer`).
     confirmed_in_memory: KnownHosts,
+    /// The RDP certificate pins of this run when the device has no folder for the file.
+    rdp_certs_in_memory: fernjo_rdp::CertStore,
 }
 
 impl Default for SessionManager {
@@ -586,19 +640,24 @@ impl Default for SessionManager {
         Self {
             entries: Mutex::default(),
             confirmed_in_memory: KnownHosts::in_memory(),
+            rdp_certs_in_memory: fernjo_rdp::CertStore::in_memory(),
         }
     }
 }
 
-/// Where a connect looks for the hosts this device confirmed.
+/// Where a connect looks for the hosts and certificates this device confirmed.
 struct HostFiles {
     known_hosts: PathBuf,
     confirmed_hosts: Option<PathBuf>,
     confirmed_in_memory: Option<KnownHosts>,
+    /// The device's RDP certificate pins (SSH sessions ignore it).
+    rdp_certs: fernjo_rdp::CertStore,
 }
 
 /// Name of the device-local file of confirmed hosts inside `AppState::device_dir`.
 const CONFIRMED_HOSTS_FILE: &str = "known_hosts.confirmed";
+/// Name of the device-local file of pinned RDP certificates inside `AppState::device_dir`.
+const RDP_CERTS_FILE: &str = "rdp_certs.confirmed";
 
 const GONE: &str = "the connection no longer exists";
 
@@ -642,11 +701,13 @@ impl SessionManager {
                 known_hosts,
                 confirmed_hosts: Some(dir.join(CONFIRMED_HOSTS_FILE)),
                 confirmed_in_memory: None,
+                rdp_certs: fernjo_rdp::CertStore::open(dir.join(RDP_CERTS_FILE)),
             },
             None => HostFiles {
                 known_hosts,
                 confirmed_hosts: None,
                 confirmed_in_memory: Some(self.confirmed_in_memory.clone()),
+                rdp_certs: self.rdp_certs_in_memory.clone(),
             },
         })
     }
@@ -663,8 +724,9 @@ impl SessionManager {
     /// Resolves the connection and starts its session.
     ///
     /// # Errors
-    /// What `connect_plan::resolve` reports (`not_found`, `not_a_connection`, ...), or
-    /// `no_data_dir`.
+    /// What `connect_plan::resolve_session` reports (`not_found`, `not_a_connection`, ...), or
+    /// `no_data_dir`. `cols` and `rows` are character cells for an SSH connection and pixels for
+    /// an RDP one.
     pub fn open(
         &self,
         state: &AppState,
@@ -673,7 +735,7 @@ impl SessionManager {
         cols: u32,
         rows: u32,
     ) -> Result<String, CommandError> {
-        let plan = connect_plan::resolve(state, node_id, false)?;
+        let plan = connect_plan::resolve_session(state, node_id, false)?;
         let hosts = self.host_files(state)?;
         let shared = Arc::new(Shared {
             sink: Arc::new(Sink::new(channel)),
@@ -741,7 +803,7 @@ impl SessionManager {
         entry: &Arc<Entry>,
         skip_vault: bool,
     ) -> Result<(), CommandError> {
-        let plan = connect_plan::resolve(state, entry.node_id, skip_vault);
+        let plan = connect_plan::resolve_session(state, entry.node_id, skip_vault);
         match (plan, self.host_files(state)) {
             (Ok(plan), Ok(hosts)) => start(entry, plan, hosts),
             (Err(e), _) | (_, Err(e)) => {
@@ -887,9 +949,17 @@ fn known_hosts_path(state: &AppState) -> Result<PathBuf, CommandError> {
         .ok_or_else(|| error("no_data_dir", "there is no data folder for the known hosts"))
 }
 
+/// Starts the session for a resolved plan of either protocol.
+fn start(entry: &Arc<Entry>, plan: Plan, hosts: HostFiles) {
+    match plan {
+        Plan::Ssh(plan) => start_ssh(entry, plan, hosts),
+        Plan::Rdp(plan) => rdp::start(entry, plan, hosts.rdp_certs),
+    }
+}
+
 /// Starts (or restarts) the connect task for a resolved plan, or parks the session until the
 /// vault is unlocked.
-fn start(entry: &Arc<Entry>, plan: ConnectPlan, hosts: HostFiles) {
+fn start_ssh(entry: &Arc<Entry>, plan: ConnectPlan, hosts: HostFiles) {
     let shared = &entry.shared;
     let note = match &plan.credential {
         CredentialPlan::NeedsVault => {
@@ -970,6 +1040,8 @@ async fn write_ops(session: Session, mut ops: UnboundedReceiver<Op>) {
             Op::Resize(cols, rows) => {
                 let _ = session.resize(cols, rows).await;
             }
+            // RDP only
+            Op::Rdp(_) | Op::Clipboard(_) => {}
             Op::Close => {
                 session.close();
                 break;
@@ -1047,6 +1119,8 @@ async fn forward(shared: &Shared, mut rx: Receiver<SessionEvent>, connected_at: 
         }
     }
 }
+
+mod rdp;
 
 #[cfg(test)]
 mod tests;

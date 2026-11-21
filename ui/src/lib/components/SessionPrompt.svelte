@@ -1,6 +1,8 @@
 <script lang="ts">
   import type { SessionStore, Tab } from "../sessions.svelte";
   import type { VaultStore } from "../vault.svelte";
+  import CertificateChangedPrompt from "./CertificateChangedPrompt.svelte";
+  import CertificatePrompt from "./CertificatePrompt.svelte";
   import HostKeyChangedPrompt from "./HostKeyChangedPrompt.svelte";
   import HostKeyPrompt from "./HostKeyPrompt.svelte";
   import HostKeySyncedPrompt from "./HostKeySyncedPrompt.svelte";
@@ -31,6 +33,10 @@
       <HostKeySyncedPrompt {tab} {sessions} prompt={asked.prompt} />
     {:else if asked.prompt.kind === "hostKeyChanged"}
       <HostKeyChangedPrompt {tab} {sessions} prompt={asked.prompt} />
+    {:else if asked.prompt.kind === "certificate"}
+      <CertificatePrompt {tab} {sessions} prompt={asked.prompt} />
+    {:else if asked.prompt.kind === "certificateChanged"}
+      <CertificateChangedPrompt {tab} {sessions} prompt={asked.prompt} />
     {:else}
       <SecretsPrompt {tab} {sessions} prompt={asked.prompt} />
     {/if}

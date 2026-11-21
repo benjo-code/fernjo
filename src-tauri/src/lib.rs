@@ -5,6 +5,7 @@ mod connect_plan;
 mod data_folder;
 mod import_commands;
 mod nav_guard;
+mod rdp_commands;
 mod session_commands;
 mod session_flow;
 mod sessions;
@@ -153,6 +154,8 @@ pub fn run() {
             session_commands::handlers::answer_prompt,
             session_commands::handlers::resume_session,
             session_commands::handlers::open_external_url,
+            rdp_commands::handlers::rdp_input,
+            rdp_commands::handlers::rdp_clipboard,
             import_commands::handlers::import_pick,
             import_commands::handlers::import_inspect,
             import_commands::handlers::import_apply,

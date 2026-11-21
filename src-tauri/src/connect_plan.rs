@@ -1,13 +1,19 @@
 //! Resolves what a session needs before it can connect: effective host, port, username and
-//! credential of one connection node.
+//! credential of one connection node, as an SSH plan or an RDP plan.
 //!
 //! The effective values come from `Tree::resolve_node` (inheritance is not re-derived here).
 //! Secrets are read from the vault only when it is unlocked and `skip_vault` is false; they
-//! leave this module as `fernjo_ssh::Credential` (secrecy types, redacted `Debug`).
+//! leave this module as `fernjo_ssh::Credential` or a `SecretString` (secrecy types, redacted
+//! `Debug`).
 
-use fernjo_core::{DEFAULT_KEEPALIVE_SECS, DEFAULT_SSH_PORT, NodeId, NodeType, Protocol};
+use fernjo_core::{
+    CredentialId, DEFAULT_KEEPALIVE_SECS, DEFAULT_RDP_CLIPBOARD, DEFAULT_RDP_COLOR_DEPTH,
+    DEFAULT_RDP_PORT, DEFAULT_SSH_PORT, NodeId, NodeType, Protocol, RdpResolution, ResolvedNode,
+    is_valid_domain,
+};
 use fernjo_ssh::Credential;
-use fernjo_vault::{Secret, VaultError};
+use fernjo_vault::{Secret, SecretKind, VaultError};
+use secrecy::SecretString;
 
 use crate::commands::{CommandError, with_store};
 use crate::state::{AppState, VaultState};
@@ -23,6 +29,8 @@ pub enum MissingReason {
     VaultUnusable,
     /// The user chose to connect without the vault.
     Skipped,
+    /// The credential is not of a kind this protocol can use (a private key for RDP).
+    WrongKind,
 }
 
 impl MissingReason {
@@ -32,6 +40,7 @@ impl MissingReason {
             Self::VaultNone => "There is no vault yet",
             Self::VaultUnusable => "The vault cannot be used",
             Self::Skipped => "Vault skipped",
+            Self::WrongKind => "The credential is not a password",
         }
     }
 }
@@ -58,6 +67,40 @@ pub struct ConnectPlan {
     pub credential: CredentialPlan,
 }
 
+/// What to authenticate an RDP session with (a password only).
+#[derive(Debug)]
+pub enum RdpCredentialPlan {
+    /// The connection references no credential.
+    None,
+    /// A credential is referenced but not available.
+    Missing(MissingReason),
+    /// The vault is locked; unlock it and resolve again.
+    NeedsVault,
+    Ready(SecretString),
+}
+
+/// Everything the session manager needs to open an RDP connection. `Debug` never shows the
+/// password.
+#[derive(Debug)]
+pub struct RdpPlan {
+    pub host: String,
+    pub port: u16,
+    pub username: Option<String>,
+    /// The domain of the credential when it has one, else the connection's effective domain.
+    pub domain: Option<String>,
+    pub resolution: RdpResolution,
+    pub color_depth: u8,
+    pub clipboard: bool,
+    pub credential: RdpCredentialPlan,
+}
+
+/// The plan for either protocol.
+#[derive(Debug)]
+pub enum Plan {
+    Ssh(ConnectPlan),
+    Rdp(RdpPlan),
+}
+
 fn non_blank(name: &str) -> Option<String> {
     let name = name.trim();
     (!name.is_empty()).then(|| name.to_string())
@@ -70,38 +113,87 @@ fn error(code: &str, message: impl Into<String>) -> CommandError {
     }
 }
 
-/// Builds the plan for `node_id`.
-///
-/// # Errors
-/// `not_found`, `not_a_connection`, `unsupported_protocol`, `invalid_host`, or a vault error
-/// other than a missing entry (for example `internal`).
-pub fn resolve(
+/// What the vault says about the credential a connection references.
+enum Lookup {
+    /// The connection references no credential.
+    None,
+    Missing(MissingReason),
+    NeedsVault,
+    Found {
+        username: Option<String>,
+        domain: Option<String>,
+        secret: Secret,
+    },
+}
+
+/// Looks the credential up. With `only_passwords` an entry of another kind is reported as
+/// `WrongKind` without its secret being read out of the vault.
+fn lookup(
     state: &AppState,
-    node_id: NodeId,
+    credential: Option<CredentialId>,
     skip_vault: bool,
-) -> Result<ConnectPlan, CommandError> {
+    only_passwords: bool,
+) -> Result<Lookup, CommandError> {
+    let Some(credential_id) = credential else {
+        return Ok(Lookup::None);
+    };
+    if skip_vault {
+        return Ok(Lookup::Missing(MissingReason::Skipped));
+    }
+    let guard = state.vault.lock().map_err(|_| CommandError::internal())?;
+    let vault = match &*guard {
+        VaultState::None => return Ok(Lookup::Missing(MissingReason::VaultNone)),
+        VaultState::Unusable { .. } => return Ok(Lookup::Missing(MissingReason::VaultUnusable)),
+        VaultState::Open(v) if !v.is_unlocked() => return Ok(Lookup::NeedsVault),
+        VaultState::Open(v) => v,
+    };
+    let entry = match vault.get(credential_id) {
+        Ok(entry) => entry,
+        Err(VaultError::NotFound) => return Ok(Lookup::Missing(MissingReason::Dangling)),
+        Err(e) => return Err(e.into()),
+    };
+    if only_passwords && entry.kind != SecretKind::Password {
+        return Ok(Lookup::Missing(MissingReason::WrongKind));
+    }
+    Ok(Lookup::Found {
+        username: entry.username.as_deref().and_then(non_blank),
+        domain: entry.domain.as_deref().and_then(non_blank),
+        secret: vault.reveal(credential_id)?,
+    })
+}
+
+/// The effective values of a connection node (not a folder).
+fn connection(state: &AppState, node_id: NodeId) -> Result<ResolvedNode, CommandError> {
     let node = with_store(state, |store| Ok(store.tree().resolve_node(node_id)?))?;
     if node.kind != NodeType::Connection {
         return Err(error("not_a_connection", "only connections can be opened"));
     }
-    if node.protocol != Some(Protocol::Ssh) {
-        return Err(error(
-            "unsupported_protocol",
-            "RDP sessions are not available yet",
-        ));
-    }
+    Ok(node)
+}
+
+/// The trimmed host of a connection, refused before any session, prompt or network traffic when
+/// it is empty or could not be recorded safely in `known_hosts` or a certificate pin (see
+/// `fernjo_ssh::validate_host`).
+fn checked_host(node: &ResolvedNode) -> Result<String, CommandError> {
     let host = node.host.as_deref().unwrap_or_default().trim().to_string();
     if host.is_empty() {
         return Err(error("invalid_host", "the connection has no host"));
     }
-    // Refused before any session, prompt or network traffic: such a host cannot be recorded
-    // safely in `known_hosts` (see `fernjo_ssh::validate_host`).
     if fernjo_ssh::validate_host(&host).is_err() {
         return Err(error(
             "invalid_host",
             "the host name contains characters that are not allowed (use a DNS name or an IP address)",
         ));
     }
+    Ok(host)
+}
+
+fn ssh_plan(
+    state: &AppState,
+    node: &ResolvedNode,
+    skip_vault: bool,
+) -> Result<ConnectPlan, CommandError> {
+    let host = checked_host(node)?;
     let mut plan = ConnectPlan {
         host,
         port: node.port.effective.unwrap_or(DEFAULT_SSH_PORT),
@@ -113,46 +205,91 @@ pub fn resolve(
             .unwrap_or(DEFAULT_KEEPALIVE_SECS),
         credential: CredentialPlan::None,
     };
-    let Some(credential_id) = node.credential.effective else {
-        return Ok(plan);
-    };
-    if skip_vault {
-        plan.credential = CredentialPlan::Missing(MissingReason::Skipped);
-        return Ok(plan);
+    match lookup(state, node.credential.effective, skip_vault, false)? {
+        Lookup::None => {}
+        Lookup::Missing(reason) => plan.credential = CredentialPlan::Missing(reason),
+        Lookup::NeedsVault => plan.credential = CredentialPlan::NeedsVault,
+        Lookup::Found {
+            username, secret, ..
+        } => {
+            // The connection's own or inherited username wins over the entry's.
+            if plan.username.is_none() {
+                plan.username = username;
+            }
+            plan.credential = CredentialPlan::Ready(match secret {
+                Secret::Password { password } => Credential::Password(password),
+                Secret::PrivateKey { key, passphrase } => {
+                    Credential::PrivateKey { key, passphrase }
+                }
+            });
+        }
     }
-    let guard = state.vault.lock().map_err(|_| CommandError::internal())?;
-    let vault = match &*guard {
-        VaultState::None => {
-            plan.credential = CredentialPlan::Missing(MissingReason::VaultNone);
-            return Ok(plan);
-        }
-        VaultState::Unusable { .. } => {
-            plan.credential = CredentialPlan::Missing(MissingReason::VaultUnusable);
-            return Ok(plan);
-        }
-        VaultState::Open(v) if !v.is_unlocked() => {
-            plan.credential = CredentialPlan::NeedsVault;
-            return Ok(plan);
-        }
-        VaultState::Open(v) => v,
-    };
-    let entry = match vault.get(credential_id) {
-        Ok(entry) => entry,
-        Err(VaultError::NotFound) => {
-            plan.credential = CredentialPlan::Missing(MissingReason::Dangling);
-            return Ok(plan);
-        }
-        Err(e) => return Err(e.into()),
-    };
-    // The connection's own or inherited username wins over the entry's.
-    if plan.username.is_none() {
-        plan.username = entry.username.as_deref().and_then(non_blank);
-    }
-    plan.credential = CredentialPlan::Ready(match vault.reveal(credential_id)? {
-        Secret::Password { password } => Credential::Password(password),
-        Secret::PrivateKey { key, passphrase } => Credential::PrivateKey { key, passphrase },
-    });
     Ok(plan)
+}
+
+fn rdp_plan(
+    state: &AppState,
+    node: &ResolvedNode,
+    skip_vault: bool,
+) -> Result<RdpPlan, CommandError> {
+    let host = checked_host(node)?;
+    let mut plan = RdpPlan {
+        host,
+        port: node.port.effective.unwrap_or(DEFAULT_RDP_PORT),
+        username: node.username.effective.as_deref().and_then(non_blank),
+        domain: node.domain.effective.as_deref().and_then(non_blank),
+        resolution: node.rdp_resolution.effective.unwrap_or(RdpResolution::Fit),
+        color_depth: node
+            .rdp_color_depth
+            .effective
+            .unwrap_or(DEFAULT_RDP_COLOR_DEPTH),
+        clipboard: node
+            .rdp_clipboard
+            .effective
+            .unwrap_or(DEFAULT_RDP_CLIPBOARD),
+        credential: RdpCredentialPlan::None,
+    };
+    match lookup(state, node.credential.effective, skip_vault, true)? {
+        Lookup::None => {}
+        Lookup::Missing(reason) => plan.credential = RdpCredentialPlan::Missing(reason),
+        Lookup::NeedsVault => plan.credential = RdpCredentialPlan::NeedsVault,
+        Lookup::Found {
+            username,
+            domain,
+            secret,
+        } => {
+            if plan.username.is_none() {
+                plan.username = username;
+            }
+            // the credential's domain wins over the connection's setting
+            if let Some(domain) = domain.filter(|d| is_valid_domain(d)) {
+                plan.domain = Some(domain);
+            }
+            plan.credential = match secret {
+                Secret::Password { password } => RdpCredentialPlan::Ready(password),
+                // `lookup` only lets passwords through here
+                Secret::PrivateKey { .. } => RdpCredentialPlan::Missing(MissingReason::WrongKind),
+            };
+        }
+    }
+    Ok(plan)
+}
+
+/// Builds the plan for `node_id`, SSH or RDP by the node's protocol.
+///
+/// # Errors
+/// `not_found`, `not_a_connection`, `invalid_host`, or a vault error other than a missing entry.
+pub fn resolve_session(
+    state: &AppState,
+    node_id: NodeId,
+    skip_vault: bool,
+) -> Result<Plan, CommandError> {
+    let node = connection(state, node_id)?;
+    match node.protocol {
+        Some(Protocol::Ssh) => ssh_plan(state, &node, skip_vault).map(Plan::Ssh),
+        Some(Protocol::Rdp) => rdp_plan(state, &node, skip_vault).map(Plan::Rdp),
+        None => Err(error("not_a_connection", "only connections can be opened")),
+    }
 }
 
 #[cfg(test)]
@@ -164,6 +301,18 @@ mod tests {
     use secrecy::{ExposeSecret, SecretString};
     use serde_json::{Value, json};
     use std::path::Path;
+
+    /// The SSH plan of a node (the tests below that are about SSH only use SSH nodes).
+    fn resolve_ssh(
+        state: &AppState,
+        node_id: NodeId,
+        skip_vault: bool,
+    ) -> Result<ConnectPlan, CommandError> {
+        match resolve_session(state, node_id, skip_vault)? {
+            Plan::Ssh(plan) => Ok(plan),
+            Plan::Rdp(_) => panic!("expected an SSH plan"),
+        }
+    }
 
     const MASTER: &str = "SENTINEL-master-1a2b3c";
     const PW: &str = "SENTINEL-password-7f3a9b";
@@ -244,12 +393,12 @@ mod tests {
         set(&st, c, json!({"credential": entry}));
         set(&st, f, json!({"username": "folderuser"}));
         assert_eq!(
-            resolve(&st, c, false).unwrap().username.as_deref(),
+            resolve_ssh(&st, c, false).unwrap().username.as_deref(),
             Some("folderuser")
         );
         set(&st, c, json!({"username": "own"}));
         assert_eq!(
-            resolve(&st, c, false).unwrap().username.as_deref(),
+            resolve_ssh(&st, c, false).unwrap().username.as_deref(),
             Some("own")
         );
     }
@@ -262,16 +411,16 @@ mod tests {
         let c = conn(&st, None, "h");
         set(&st, c, json!({"credential": entry, "username": "  "}));
         assert_eq!(
-            resolve(&st, c, false).unwrap().username.as_deref(),
+            resolve_ssh(&st, c, false).unwrap().username.as_deref(),
             Some("entryuser")
         );
         set(&st, c, json!({"username": "  padded "}));
         assert_eq!(
-            resolve(&st, c, false).unwrap().username.as_deref(),
+            resolve_ssh(&st, c, false).unwrap().username.as_deref(),
             Some("padded")
         );
         set(&st, c, json!({"credential": null, "username": ""}));
-        assert_eq!(resolve(&st, c, false).unwrap().username, None);
+        assert_eq!(resolve_ssh(&st, c, false).unwrap().username, None);
     }
 
     #[test]
@@ -282,7 +431,7 @@ mod tests {
         let c = conn(&st, None, "h");
         set(&st, c, json!({"credential": entry}));
         assert_eq!(
-            resolve(&st, c, false).unwrap().username.as_deref(),
+            resolve_ssh(&st, c, false).unwrap().username.as_deref(),
             Some("entryuser")
         );
     }
@@ -294,7 +443,7 @@ mod tests {
         let entry = pw_entry(&st, None);
         let c = conn(&st, None, "h");
         set(&st, c, json!({"credential": entry}));
-        assert_eq!(resolve(&st, c, false).unwrap().username, None);
+        assert_eq!(resolve_ssh(&st, c, false).unwrap().username, None);
     }
 
     #[test]
@@ -303,14 +452,14 @@ mod tests {
         let st = state(dir.path());
         let f = folder(&st);
         let c = conn(&st, Some(f), "h");
-        let plain = resolve(&st, c, false).unwrap();
+        let plain = resolve_ssh(&st, c, false).unwrap();
         assert_eq!((plain.port, plain.keepalive_secs), (22, 30));
         assert_eq!(plain.host.as_str(), "h");
         set(&st, f, json!({"port": 2222, "keepaliveSecs": 60}));
-        let inherited = resolve(&st, c, false).unwrap();
+        let inherited = resolve_ssh(&st, c, false).unwrap();
         assert_eq!((inherited.port, inherited.keepalive_secs), (2222, 60));
         set(&st, c, json!({"port": 2200}));
-        assert_eq!(resolve(&st, c, false).unwrap().port, 2200);
+        assert_eq!(resolve_ssh(&st, c, false).unwrap().port, 2200);
     }
 
     #[test]
@@ -321,7 +470,7 @@ mod tests {
         let c = conn(&st, None, "h");
         set(&st, c, json!({"credential": entry}));
         vault_lock(&st).unwrap();
-        let plan = resolve(&st, c, false).unwrap();
+        let plan = resolve_ssh(&st, c, false).unwrap();
         assert!(matches!(plan.credential, CredentialPlan::NeedsVault));
         // the entry's username lives in the encrypted body too, so it is not read either
         assert_eq!(plan.username, None);
@@ -334,7 +483,7 @@ mod tests {
         let entry = pw_entry(&st, Some("entryuser"));
         let c = conn(&st, None, "h");
         set(&st, c, json!({"credential": entry}));
-        let plan = resolve(&st, c, true).unwrap();
+        let plan = resolve_ssh(&st, c, true).unwrap();
         assert!(matches!(
             plan.credential,
             CredentialPlan::Missing(MissingReason::Skipped)
@@ -349,7 +498,7 @@ mod tests {
         let c = conn(&st, None, "h");
         set(&st, c, json!({"credential": DANGLING}));
         assert!(matches!(
-            resolve(&st, c, false).unwrap().credential,
+            resolve_ssh(&st, c, false).unwrap().credential,
             CredentialPlan::Missing(MissingReason::Dangling)
         ));
     }
@@ -362,7 +511,7 @@ mod tests {
         let c = conn(&st, None, "h");
         set(&st, c, json!({"credential": DANGLING}));
         assert!(matches!(
-            resolve(&st, c, false).unwrap().credential,
+            resolve_ssh(&st, c, false).unwrap().credential,
             CredentialPlan::Missing(MissingReason::VaultUnusable)
         ));
     }
@@ -374,7 +523,7 @@ mod tests {
         let c = conn(&st, None, "h");
         set(&st, c, json!({"credential": DANGLING}));
         assert!(matches!(
-            resolve(&st, c, false).unwrap().credential,
+            resolve_ssh(&st, c, false).unwrap().credential,
             CredentialPlan::Missing(MissingReason::VaultNone)
         ));
     }
@@ -386,7 +535,7 @@ mod tests {
         let c = conn(&st, None, "h");
         for skip in [false, true] {
             assert!(matches!(
-                resolve(&st, c, skip).unwrap().credential,
+                resolve_ssh(&st, c, skip).unwrap().credential,
                 CredentialPlan::None
             ));
         }
@@ -400,7 +549,7 @@ mod tests {
         let c = conn(&st, None, "h");
         set(&st, c, json!({"credential": entry}));
         let CredentialPlan::Ready(Credential::Password(p)) =
-            resolve(&st, c, false).unwrap().credential
+            resolve_ssh(&st, c, false).unwrap().credential
         else {
             panic!("expected a password credential");
         };
@@ -415,7 +564,7 @@ mod tests {
         let c = conn(&st, None, "h");
         set(&st, c, json!({"credential": entry}));
         let CredentialPlan::Ready(Credential::PrivateKey { key, passphrase }) =
-            resolve(&st, c, false).unwrap().credential
+            resolve_ssh(&st, c, false).unwrap().credential
         else {
             panic!("expected a key credential");
         };
@@ -423,16 +572,233 @@ mod tests {
         assert_eq!(passphrase.unwrap().expose_secret(), PASS);
     }
 
+    // ---- RDP -----------------------------------------------------------------------------
+
+    fn rdp(st: &AppState, parent: Option<NodeId>, host: &str) -> NodeId {
+        commands::create_connection(st, parent, None, "r".into(), Protocol::Rdp, host.into())
+            .unwrap()
+            .id
+            .unwrap()
+    }
+
+    fn rdp_plan(st: &AppState, id: NodeId, skip_vault: bool) -> RdpPlan {
+        match resolve_session(st, id, skip_vault).unwrap() {
+            Plan::Rdp(plan) => plan,
+            other => panic!("expected an RDP plan, got {other:?}"),
+        }
+    }
+
+    fn entry_with_domain(st: &AppState, username: Option<&str>, domain: Option<&str>) -> NodeId {
+        create_credential(
+            st,
+            draft(json!({
+                "name": "pw", "kind": "password", "username": username,
+                "domain": domain, "password": PW
+            })),
+        )
+        .unwrap()
+        .id
+    }
+
     #[test]
-    fn rdp_is_refused() {
+    fn resolve_session_returns_the_rdp_plan_with_defaults() {
         let dir = tempfile::tempdir().unwrap();
         let st = state(dir.path());
-        let id =
-            commands::create_connection(&st, None, None, "r".into(), Protocol::Rdp, "h".into())
-                .unwrap()
-                .id
-                .unwrap();
-        assert_eq!(code(resolve(&st, id, false)), "unsupported_protocol");
+        let id = rdp(&st, None, " dc01 ");
+        let plan = rdp_plan(&st, id, false);
+        assert_eq!(plan.host, "dc01");
+        assert_eq!(plan.port, 3389);
+        assert_eq!(plan.username, None);
+        assert_eq!(plan.domain, None);
+        assert_eq!(plan.resolution, RdpResolution::Fit);
+        assert_eq!(plan.color_depth, 32);
+        assert!(plan.clipboard);
+        assert!(matches!(plan.credential, RdpCredentialPlan::None));
+        // an SSH node still gets the SSH plan
+        let ssh = conn(&st, None, "h");
+        assert!(matches!(
+            resolve_session(&st, ssh, false).unwrap(),
+            Plan::Ssh(_)
+        ));
+    }
+
+    #[test]
+    fn rdp_settings_are_inherited_from_a_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = state(dir.path());
+        let f = folder(&st);
+        set(
+            &st,
+            f,
+            json!({
+                "port": 3390, "domain": "CORP", "rdpColorDepth": 16, "rdpClipboard": false,
+                "rdpResolution": {"mode": "fixed", "width": 1920, "height": 1080}
+            }),
+        );
+        let id = rdp(&st, Some(f), "h");
+        let plan = rdp_plan(&st, id, false);
+        assert_eq!(plan.port, 3390);
+        assert_eq!(plan.domain.as_deref(), Some("CORP"));
+        assert_eq!(plan.color_depth, 16);
+        assert!(!plan.clipboard);
+        assert_eq!(
+            plan.resolution,
+            RdpResolution::Fixed {
+                width: 1920,
+                height: 1080
+            }
+        );
+    }
+
+    #[test]
+    fn credential_domain_beats_node_domain() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = with_vault_state(dir.path());
+        let id = rdp(&st, None, "h");
+        set(&st, id, json!({"domain": "NODE"}));
+        let with = entry_with_domain(&st, Some("admin"), Some("ENTRY"));
+        set(&st, id, json!({"credential": with}));
+        assert_eq!(rdp_plan(&st, id, false).domain.as_deref(), Some("ENTRY"));
+        // an entry without a domain leaves the node's domain in force
+        let without = entry_with_domain(&st, Some("admin"), None);
+        set(&st, id, json!({"credential": without}));
+        assert_eq!(rdp_plan(&st, id, false).domain.as_deref(), Some("NODE"));
+    }
+
+    #[test]
+    fn blank_domain_is_unset() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = with_vault_state(dir.path());
+        let id = rdp(&st, None, "h");
+        set(&st, id, json!({"domain": "   "}));
+        assert_eq!(rdp_plan(&st, id, false).domain, None);
+        // a blank domain on the entry does not hide the node's
+        set(&st, id, json!({"domain": "NODE"}));
+        let blank = entry_with_domain(&st, None, Some("  "));
+        set(&st, id, json!({"credential": blank}));
+        assert_eq!(rdp_plan(&st, id, false).domain.as_deref(), Some("NODE"));
+    }
+
+    #[test]
+    fn private_key_credential_is_missing_wrong_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = with_vault_state(dir.path());
+        let id = rdp(&st, None, "h");
+        let key = key_entry(&st);
+        set(&st, id, json!({"credential": key}));
+        let plan = rdp_plan(&st, id, false);
+        assert!(matches!(
+            plan.credential,
+            RdpCredentialPlan::Missing(MissingReason::WrongKind)
+        ));
+        assert_eq!(
+            MissingReason::WrongKind.text(),
+            "The credential is not a password"
+        );
+        assert!(!format!("{plan:?}").contains(KEY));
+    }
+
+    #[test]
+    fn typed_domain_backslash_user_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = state(dir.path());
+        let id = rdp(&st, None, "h");
+        set(&st, id, json!({"username": "CORP\\admin"}));
+        let plan = rdp_plan(&st, id, false);
+        assert_eq!(plan.username.as_deref(), Some("CORP\\admin"));
+        assert_eq!(plan.domain, None);
+        // with a configured domain the typed form is kept as is and the domain is passed too
+        set(
+            &st,
+            id,
+            json!({"domain": "CORP", "username": "admin@corp.example"}),
+        );
+        let plan = rdp_plan(&st, id, false);
+        assert_eq!(plan.username.as_deref(), Some("admin@corp.example"));
+        assert_eq!(plan.domain.as_deref(), Some("CORP"));
+    }
+
+    #[test]
+    fn rdp_username_precedence_and_a_ready_password() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = with_vault_state(dir.path());
+        let id = rdp(&st, None, "h");
+        let entry = entry_with_domain(&st, Some("entryuser"), None);
+        set(&st, id, json!({"credential": entry}));
+        let plan = rdp_plan(&st, id, false);
+        assert_eq!(plan.username.as_deref(), Some("entryuser"));
+        match plan.credential {
+            RdpCredentialPlan::Ready(password) => assert_eq!(password.expose_secret(), PW),
+            other => panic!("expected a ready password, got {other:?}"),
+        }
+        set(&st, id, json!({"username": "own"}));
+        assert_eq!(rdp_plan(&st, id, false).username.as_deref(), Some("own"));
+    }
+
+    #[test]
+    fn locked_vault_is_needs_vault_for_rdp() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = with_vault_state(dir.path());
+        let id = rdp(&st, None, "h");
+        let entry = pw_entry(&st, None);
+        set(&st, id, json!({"credential": entry}));
+        vault_lock(&st).unwrap();
+        assert!(matches!(
+            rdp_plan(&st, id, false).credential,
+            RdpCredentialPlan::NeedsVault
+        ));
+    }
+
+    #[test]
+    fn skip_vault_is_missing_skipped_for_rdp() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = with_vault_state(dir.path());
+        let id = rdp(&st, None, "h");
+        let entry = pw_entry(&st, None);
+        set(&st, id, json!({"credential": entry}));
+        assert!(matches!(
+            rdp_plan(&st, id, true).credential,
+            RdpCredentialPlan::Missing(MissingReason::Skipped)
+        ));
+    }
+
+    #[test]
+    fn a_dangling_credential_is_missing_dangling_for_rdp() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = with_vault_state(dir.path());
+        let id = rdp(&st, None, "h");
+        set(&st, id, json!({"credential": DANGLING}));
+        assert!(matches!(
+            rdp_plan(&st, id, false).credential,
+            RdpCredentialPlan::Missing(MissingReason::Dangling)
+        ));
+    }
+
+    #[test]
+    fn invalid_host_is_refused_for_rdp() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = state(dir.path());
+        for bad in ["", "   ", "a b", "bad,host"] {
+            let id = rdp(&st, None, bad);
+            assert_eq!(
+                code(resolve_session(&st, id, false)),
+                "invalid_host",
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rdp_plan_debug_shows_no_password() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = with_vault_state(dir.path());
+        let id = rdp(&st, None, "h");
+        let entry = pw_entry(&st, Some("u"));
+        set(&st, id, json!({"credential": entry}));
+        let plan = resolve_session(&st, id, false).unwrap();
+        let text = format!("{plan:?}");
+        assert!(!text.contains(PW), "{text}");
+        assert!(text.contains("Ready"));
     }
 
     #[test]
@@ -440,8 +806,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let st = state(dir.path());
         let f = folder(&st);
-        assert_eq!(code(resolve(&st, f, false)), "not_a_connection");
-        assert_eq!(code(resolve(&st, NodeId::new_v4(), false)), "not_found");
+        assert_eq!(code(resolve_ssh(&st, f, false)), "not_a_connection");
+        assert_eq!(code(resolve_ssh(&st, NodeId::new_v4(), false)), "not_found");
     }
 
     #[test]
@@ -449,7 +815,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let st = state(dir.path());
         let c = conn(&st, None, "   ");
-        assert_eq!(code(resolve(&st, c, false)), "invalid_host");
+        assert_eq!(code(resolve_ssh(&st, c, false)), "invalid_host");
     }
 
     #[test]
@@ -466,11 +832,11 @@ victim2",
             &"a".repeat(256),
         ] {
             let c = conn(&st, None, host);
-            assert_eq!(code(resolve(&st, c, false)), "invalid_host", "{host:?}");
+            assert_eq!(code(resolve_ssh(&st, c, false)), "invalid_host", "{host:?}");
         }
         for host in ["web-01.lab", "10.0.0.1", "fe80::1%eth0", " padded.example "] {
             let c = conn(&st, None, host);
-            assert_eq!(code(resolve(&st, c, false)), "ok", "{host:?}");
+            assert_eq!(code(resolve_ssh(&st, c, false)), "ok", "{host:?}");
         }
     }
 
@@ -483,7 +849,7 @@ victim2",
         for entry in [pw, key] {
             let c = conn(&st, None, "h");
             set(&st, c, json!({"credential": entry}));
-            let plan = resolve(&st, c, false).unwrap();
+            let plan = resolve_ssh(&st, c, false).unwrap();
             assert!(matches!(plan.credential, CredentialPlan::Ready(_)));
             let text = format!("{plan:?}");
             for s in [MASTER, PW, KEY, PASS] {

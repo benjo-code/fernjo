@@ -58,6 +58,8 @@ export const tauriApi: Api = {
   },
   // the input is the raw request body, the session id travels in a header
   sessionInput: (id, data) => call("session_input", data, { headers: { "x-fernjo-session": id } }),
+  rdpInput: (id, events) => call("rdp_input", { id, events }),
+  rdpClipboard: (id, text) => call("rdp_clipboard", { id, text }),
   sessionResize: (id, cols, rows) => call("session_resize", { id, cols, rows }),
   sessionAck: (id, bytes) => call("session_ack", { id, bytes }),
   closeSession: (id) => call("close_session", { id }),

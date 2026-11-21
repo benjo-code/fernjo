@@ -74,6 +74,8 @@ pub struct Inherit {
     pub password: bool,
     pub domain: bool,
     pub port: bool,
+    pub resolution: bool,
+    pub colors: bool,
 }
 
 /// Which attributes of a node were longer than their cap and were cut (see the `MAX_*_CHARS`
@@ -107,6 +109,11 @@ pub struct RawNode {
     pub password_error: bool,
     pub inherit: Inherit,
     pub putty_session: String,
+    /// The RDP `Resolution` attribute (cut at `MAX_PROTOCOL_CHARS`; a longer value is not one of
+    /// the known values anyway).
+    pub resolution: String,
+    /// The RDP `Colors` attribute (cut at `MAX_PROTOCOL_CHARS`).
+    pub colors: String,
     pub clipped: Clipped,
     pub children: Vec<RawNode>,
 }
@@ -124,6 +131,8 @@ impl fmt::Debug for RawNode {
             .field("has_password", &self.password.is_some())
             .field("password_error", &self.password_error)
             .field("inherit", &self.inherit)
+            .field("resolution", &self.resolution)
+            .field("colors", &self.colors)
             .field("children", &self.children)
             .finish_non_exhaustive()
     }
@@ -402,6 +411,8 @@ fn read_node(
     let (username, username_cut) = attr(el, "Username", MAX_IDENTITY_CHARS);
     let (domain, domain_cut) = attr(el, "Domain", MAX_IDENTITY_CHARS);
     let (putty_session, _) = attr(el, "PuttySession", MAX_IDENTITY_CHARS);
+    let (resolution, _) = attr(el, "Resolution", MAX_PROTOCOL_CHARS);
+    let (colors, _) = attr(el, "Colors", MAX_PROTOCOL_CHARS);
     let kind = match el.attribute("Type").map(str::trim) {
         Some("Container") => RawKind::Container,
         Some("Connection") | None => RawKind::Connection,
@@ -444,8 +455,12 @@ fn read_node(
             password: flag(el, "InheritPassword"),
             domain: flag(el, "InheritDomain"),
             port: flag(el, "InheritPort"),
+            resolution: flag(el, "InheritResolution"),
+            colors: flag(el, "InheritColors"),
         },
         putty_session,
+        resolution,
+        colors,
         clipped: Clipped {
             name: name_cut,
             description: description_cut,

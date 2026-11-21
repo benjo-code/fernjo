@@ -15,6 +15,12 @@ pub enum TreeError {
     EmptyName,
     #[error("the port must be between 1 and 65535")]
     InvalidPort,
+    #[error("a fixed resolution needs a width and a height between 200 and 8192 pixels")]
+    InvalidResolution,
+    #[error("the colour depth must be 16, 24 or 32")]
+    InvalidColorDepth,
+    #[error("the domain must be at most 256 characters without control characters")]
+    InvalidDomain,
     #[error("a folder cannot be moved into itself or one of its subfolders")]
     InvalidMove,
     #[error("the position is outside the folder")]
@@ -37,6 +43,9 @@ impl TreeError {
             TreeError::NotAConnection => "not_a_connection",
             TreeError::EmptyName => "empty_name",
             TreeError::InvalidPort => "invalid_port",
+            TreeError::InvalidResolution => "invalid_resolution",
+            TreeError::InvalidColorDepth => "invalid_color_depth",
+            TreeError::InvalidDomain => "invalid_domain",
             TreeError::InvalidMove => "invalid_move",
             TreeError::IndexOutOfRange => "index_out_of_range",
             TreeError::DuplicateId(_) => "duplicate_id",

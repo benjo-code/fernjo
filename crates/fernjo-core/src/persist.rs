@@ -12,11 +12,11 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::error::{DocumentError, LoadError, SaveError};
-use crate::model::{Node, NodeId, NodeKind};
+use crate::model::{Node, NodeId, NodeKind, RDP_COLOR_DEPTHS, Settings, is_valid_domain};
 use crate::tree::Tree;
 
 /// File format version this build writes and understands.
-pub const CURRENT_VERSION: u32 = 2;
+pub const CURRENT_VERSION: u32 = 3;
 /// Name of the connections file inside the data folder.
 pub const FILE_NAME: &str = "connections.json";
 
@@ -202,12 +202,20 @@ pub fn migrate_with(value: Value, from: u32, steps: &[fn(Value) -> Value]) -> Va
 }
 
 /// Upgrade steps; step `i` upgrades version `i + 1` to `i + 2`.
-const MIGRATIONS: [fn(Value) -> Value; 1] = [one_to_two];
+const MIGRATIONS: [fn(Value) -> Value; 2] = [one_to_two, two_to_three];
 
 /// 1 -> 2: schema 2 adds the optional `credential` setting, so nothing is rewritten. The
 /// version still has to change: an older build would silently drop `credential` on its next
 /// save, so it must refuse the file as a newer schema instead.
 fn one_to_two(value: Value) -> Value {
+    value
+}
+
+/// 2 -> 3: schema 3 adds the optional RDP settings (`domain`, `rdpResolution`,
+/// `rdpColorDepth`, `rdpClipboard`), so nothing is rewritten. The version still has to change: an
+/// older build would silently drop them on its next save, so it must refuse the file as a newer
+/// schema instead.
+fn two_to_three(value: Value) -> Value {
     value
 }
 
@@ -344,11 +352,33 @@ fn sanitize(nodes: &mut [Node], seen: &mut HashSet<NodeId>) -> Result<(), String
         if node.settings.port == Some(0) {
             return Err(format!("\"{}\" has the invalid port 0", node.name));
         }
+        drop_invalid_rdp_settings(&mut node.settings);
         if let NodeKind::Folder { children } = &mut node.kind {
             sanitize(children, seen)?;
         }
     }
     Ok(())
+}
+
+/// A hand-edited RDP value that no operation can produce is dropped (the node inherits again)
+/// instead of making the whole file unreadable: the settings are only a preference.
+fn drop_invalid_rdp_settings(settings: &mut Settings) {
+    if settings
+        .rdp_color_depth
+        .is_some_and(|d| !RDP_COLOR_DEPTHS.contains(&d))
+    {
+        settings.rdp_color_depth = None;
+    }
+    if settings.rdp_resolution.is_some_and(|r| !r.is_valid()) {
+        settings.rdp_resolution = None;
+    }
+    if settings
+        .domain
+        .as_deref()
+        .is_some_and(|d| !is_valid_domain(d))
+    {
+        settings.domain = None;
+    }
 }
 
 /// Loads `path`, falling back to its `.bak` when the main file is missing or unreadable.
@@ -522,7 +552,7 @@ mod tests {
         save(&main_path(dir.path()), &sample_tree("dc01")).unwrap();
         let text = fs::read_to_string(main_path(dir.path())).unwrap();
         let v: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(v["schemaVersion"], 2);
+        assert_eq!(v["schemaVersion"], 3);
         assert_eq!(v["children"][0]["type"], "folder");
         assert_eq!(v["children"][0]["settings"]["port"], 2200);
         assert!(text.contains("\n  "));
@@ -583,7 +613,7 @@ mod tests {
                 found, supported, ..
             } => {
                 assert_eq!(found, 99);
-                assert_eq!(supported, 2);
+                assert_eq!(supported, 3);
             }
             other => panic!("expected NewerSchema, got {other:?}"),
         }
@@ -690,7 +720,7 @@ mod tests {
     }
 
     #[test]
-    fn version_one_file_loads_and_is_written_as_version_two() {
+    fn version_one_file_loads_and_is_written_as_the_current_version() {
         let dir = tempfile::tempdir().unwrap();
         let text = json!({ "schemaVersion": 1, "children": [{
             "id": "11111111-1111-4111-8111-111111111111", "type": "connection",
@@ -703,7 +733,7 @@ mod tests {
         assert_eq!(loaded.tree.children()[0].settings.port, Some(2200));
         save(&main_path(dir.path()), &loaded.tree).unwrap();
         let v: Value = serde_json::from_slice(&fs::read(main_path(dir.path())).unwrap()).unwrap();
-        assert_eq!(v["schemaVersion"], 2);
+        assert_eq!(v["schemaVersion"], 3);
         assert_eq!(v["children"][0]["settings"]["port"], 2200);
         // the previous (version 1) bytes are kept as the backup
         let bak: Value = serde_json::from_slice(&fs::read(bak_path(dir.path())).unwrap()).unwrap();
@@ -743,9 +773,9 @@ mod tests {
     }
 
     #[test]
-    fn version_three_file_is_refused_as_newer_schema() {
+    fn version_four_file_is_refused_as_newer_schema() {
         let dir = tempfile::tempdir().unwrap();
-        let text = json!({ "schemaVersion": 3, "children": [] }).to_string();
+        let text = json!({ "schemaVersion": 4, "children": [] }).to_string();
         fs::write(main_path(dir.path()), &text).unwrap();
         let before = files(dir.path());
         let err = load(&main_path(dir.path())).unwrap_err();
@@ -753,8 +783,8 @@ mod tests {
             matches!(
                 err,
                 LoadError::NewerSchema {
-                    found: 3,
-                    supported: 2,
+                    found: 4,
+                    supported: 3,
                     ..
                 }
             ),
@@ -764,13 +794,106 @@ mod tests {
     }
 
     #[test]
-    fn migration_chain_has_a_one_to_two_step() {
+    fn version_two_file_loads_and_is_saved_as_three() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = json!({ "schemaVersion": 2, "children": [{
+            "id": "11111111-1111-4111-8111-111111111111", "type": "connection",
+            "name": "x", "protocol": "rdp", "host": "h", "settings": { "port": 3390 }
+        }] })
+        .to_string();
+        fs::write(main_path(dir.path()), text).unwrap();
+        let loaded = load(&main_path(dir.path())).unwrap();
+        assert_eq!(loaded.notice, None);
+        assert_eq!(loaded.tree.children()[0].settings.port, Some(3390));
+        save(&main_path(dir.path()), &loaded.tree).unwrap();
+        let v: Value = serde_json::from_slice(&fs::read(main_path(dir.path())).unwrap()).unwrap();
+        assert_eq!(v["schemaVersion"], 3);
+        let bak: Value = serde_json::from_slice(&fs::read(bak_path(dir.path())).unwrap()).unwrap();
+        assert_eq!(bak["schemaVersion"], 2);
+    }
+
+    #[test]
+    fn rdp_settings_round_trip_through_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut tree = Tree::new();
+        let c = tree
+            .create_connection(None, None, "c", Protocol::Rdp, "h")
+            .unwrap();
+        tree.update(
+            c,
+            NodePatch {
+                domain: Patch::Set("CORP".into()),
+                rdp_resolution: Patch::Set(crate::model::RdpResolution::Fixed {
+                    width: 1920,
+                    height: 1080,
+                }),
+                rdp_color_depth: Patch::Set(16),
+                rdp_clipboard: Patch::Set(false),
+                ..NodePatch::default()
+            },
+        )
+        .unwrap();
+        save(&main_path(dir.path()), &tree).unwrap();
+        let v: Value = serde_json::from_slice(&fs::read(main_path(dir.path())).unwrap()).unwrap();
+        let settings = &v["children"][0]["settings"];
+        assert_eq!(settings["domain"], "CORP");
+        assert_eq!(
+            settings["rdpResolution"],
+            json!({ "mode": "fixed", "width": 1920, "height": 1080 })
+        );
+        assert_eq!(settings["rdpColorDepth"], 16);
+        assert_eq!(settings["rdpClipboard"], false);
+        let loaded = load(&main_path(dir.path())).unwrap();
+        assert_eq!(loaded.tree, tree);
+        // unset values are not written at all
+        let mut plain = Tree::new();
+        plain
+            .create_connection(None, None, "p", Protocol::Rdp, "h")
+            .unwrap();
+        save(&main_path(dir.path()), &plain).unwrap();
+        let text = fs::read_to_string(main_path(dir.path())).unwrap();
+        assert!(
+            !text.contains("rdpResolution") && !text.contains("rdpColorDepth"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("rdpClipboard") && !text.contains("domain"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn an_invalid_stored_rdp_value_is_dropped_on_load() {
+        let tree = parse_document(json!({ "schemaVersion": 3, "children": [{
+            "id": "11111111-1111-4111-8111-111111111111", "type": "connection",
+            "name": "x", "protocol": "rdp", "host": "h", "settings": {
+                "rdpColorDepth": 7,
+                "rdpResolution": { "mode": "fixed", "width": 5, "height": 600 },
+                "domain": "bad\u{7}domain",
+                "rdpClipboard": false
+            }
+        }] }))
+        .unwrap();
+        let s = &tree.children()[0].settings;
+        assert_eq!(s.rdp_color_depth, None);
+        assert_eq!(s.rdp_resolution, None);
+        assert_eq!(s.domain, None);
+        // a valid neighbour is kept
+        assert_eq!(s.rdp_clipboard, Some(false));
+    }
+
+    #[test]
+    fn migration_chain_has_a_one_to_two_and_a_two_to_three_step() {
         assert_eq!(MIGRATIONS.len(), CURRENT_VERSION as usize - 1);
         let v1 = json!({ "schemaVersion": 1, "children": [{ "name": "a" }] });
         // the 1 -> 2 step only exists to make older builds refuse the file: nothing is rewritten
         assert_eq!(migrate_with(v1.clone(), 1, &MIGRATIONS), v1);
         let v2 = json!({ "schemaVersion": 2, "children": [] });
         assert_eq!(migrate_with(v2.clone(), 2, &MIGRATIONS), v2);
+        // the 2 -> 3 step only exists so that v0.1.1 refuses the file instead of dropping the
+        // RDP settings on its next save
+        let v3 = json!({ "schemaVersion": 3, "children": [] });
+        assert_eq!(migrate_with(v3.clone(), 3, &MIGRATIONS), v3);
     }
 
     #[test]
@@ -891,7 +1014,7 @@ mod tests {
         save(&main_path(dir.path()), &tree).unwrap();
         let text = fs::read_to_string(main_path(dir.path())).unwrap();
         assert!(
-            text.starts_with("{\n  \"schemaVersion\": 2,\n  \"children\": ["),
+            text.starts_with("{\n  \"schemaVersion\": 3,\n  \"children\": ["),
             "{text}"
         );
         let pos = |key: &str| text.find(&format!("\"{key}\"")).unwrap();

@@ -114,19 +114,18 @@ describe("TreeView sessions", () => {
     expect(menuLabels()).not.toContain("Open another session");
   });
 
-  test("rdp_connection_shows_a_message_and_opens_no_tab", async () => {
+  test("an_rdp_connection_opens_a_tab_like_any_other", async () => {
     const { store, sessions } = await setup();
     doubleClick(row("DC01"));
-    expect(sessions.tabs).toHaveLength(0);
-    expect(store.error).toBe("RDP sessions are not available yet");
+    expect(sessions.tabs.map((t) => t.nodeId)).toEqual(["DC01"]);
+    expect(store.error).toBeNull();
 
-    store.dismissError();
-    flushSync();
     contextMenu(row("DC01"));
     item("Connect").click();
     flushSync();
-    expect(sessions.tabs).toHaveLength(0);
-    expect(store.error).toBe("RDP sessions are not available yet");
+    // the second Connect only brings the existing tab to the front
+    expect(sessions.tabs).toHaveLength(1);
+    expect(store.error).toBeNull();
   });
 
   test("row_shows_the_lamp_for_the_strongest_session_state", async () => {
