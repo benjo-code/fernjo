@@ -230,7 +230,7 @@ Still unverified after the release: the waived owner checks (gap 1), the Linux t
 
 ## v0.2.0 result
 
-Date 2026-11-21. Branch `release/v0.2.0` from `dev` (`09d08b7`, the M8 docs commit), merged with `dev` after the fix PR #25 (`b46508d`, see the security review below); plan `Docs/superpowers/plans/2026-11-21-release-v0.2.0.md`, design `Docs/superpowers/specs/2026-11-21-release-v0.2.0-design.md`. The commands ran on the merge commit `3f07831` plus the release edits (version bump with `Cargo.lock`: only the six workspace crate version lines changed, CHANGELOG `[0.2.0] - 2026-11-21`, README, SECURITY.md, roadmap), which were uncommitted at that moment, as for v0.1.1. Unlike v0.1.1 the owner has not given an advance go for the irreversible steps; the merge to `main`, the release and the dismissal of the CodeQL alerts wait for an explicit instruction.
+Date 2026-11-21. Branch `release/v0.2.0` from `dev` (`09d08b7`, the M8 docs commit), merged with `dev` after the fix PR #25 (`b46508d`, see the security review below); plan `Docs/superpowers/plans/2026-11-21-release-v0.2.0.md`, design `Docs/superpowers/specs/2026-11-21-release-v0.2.0-design.md`. The commands ran on the merge commit `3f07831` plus the release edits (version bump with `Cargo.lock`: only the six workspace crate version lines changed, CHANGELOG `[0.2.0] - 2026-11-21`, README, SECURITY.md, roadmap), which were uncommitted at that moment, as for v0.1.1. The owner gave the go for the irreversible steps on 2026-11-22, after the report of this section: merge to `main`, release, back-merge, and (by delegating the decision to the recommendation to dismiss) the dismissal of the CodeQL alerts #122 to #127; the owner also accepted the two Medium findings on the same terms and declined the optional installer check. The release day is 2026-11-22 (CHANGELOG and roadmap date).
 
 | Command | Result |
 |---|---|
@@ -264,8 +264,8 @@ The live SSH integration tests skip locally without the throwaway container (the
 
 | # | Gap | Disposition |
 |---|-----|-------------|
-| 1 | RDP never run in a release build or an installer (the owner's run used `pnpm tauri dev`); the dry-run installers prove start-up only | Open until the owner tries the dry-run Windows installer (optional gate in the plan); CHANGELOG and README say "development builds" |
-| 2 | The TLS handshake fix against a real Windows host (RSA certificate) | Owner check before or right after the release; see finding 1 |
+| 1 | RDP never run in a release build or an installer (the owner's run used `pnpm tauri dev`); the dry-run installers prove start-up only | Accepted for this release: the owner declined the installer check on 2026-11-22; CHANGELOG and README say "development builds" |
+| 2 | The TLS handshake fix against a real Windows host (RSA certificate) | Accepted for this release, owner check right after it (`cargo test -p fernjo-rdp --test connect` with `FERNJO_TEST_RDP_ADDR`, or one connection); if every RDP connection fails with `tls_failed` the fix is the first suspect (CHANGELOG says it is untried on a Windows host); see finding 1 |
 | 3 | Windows Server with NLA, `DOMAIN\user` names | Accepted, README says "not tried" |
 | 4 | Clipboard mechanism per web view | Accepted, README says it depends |
 | 5 | Two unexplained `spike_bench` lines | Accepted, no effect on the shipped path |
@@ -273,21 +273,21 @@ The live SSH integration tests skip locally without the throwaway container (the
 | 7 | Linux title bar icon; the new AppImage menu offer untried by the owner | Unproven, cosmetic; CHANGELOG says "not confirmed yet" |
 | 8 | Apple Silicon dmg and `.deb` on real hardware | Accepted, README says so |
 | 9 | `rsa` release candidate (`RUSTSEC-2023-0071` ignore) | Accepted by owner decision 2026-11-20, revisit at every IronRDP update |
-| 10 | Medium findings 2 and 3 above | Open: the owner accepts or schedules them |
-| 11 | CodeQL #122 to #127 | Open: dismissal needs the owner's word |
+| 10 | Medium findings 2 and 3 above | Accepted for this release (owner, 2026-11-22, on the recommendation); backlog entries and CHANGELOG text |
+| 11 | CodeQL #122 to #127 | Dismissed as "used in tests" on the owner's go of 2026-11-22 (Task 4 of the plan) |
 | 12 | SSH container tests | Count through the CI `rust` job of the release PR |
 
 **Verdict**
 
 | Area | Verdict | Reasoning |
 |---|---|---|
-| Security review | Conditional go | The High finding is fixed and tested against the fake server; two Medium findings are open and need the owner's acceptance; the fix has no second review and no real-host run |
-| Installers | Pending | Dry run of the release PR not run yet; RDP in an installed build unverified |
+| Security review | Go, with named gaps | The High finding is fixed and tested against the fake server; the two Medium findings are accepted by the owner and documented; the fix has no second review and no real-host run (gap 2) |
+| Installers | Go on the dry run | Judged by the dry run of the release PR (evidence added after the release); RDP in an installed build unverified (gap 1, accepted) |
 | Docs | Go | README, CHANGELOG, SECURITY.md, roadmap and this file match the code and the evidence; unverified items are named as such |
 | Performance | Not re-run | The M6 and M7 measurements in `Docs/performance.md` were taken before RDP; no claim is made for v0.2.0 |
 | Repo settings | Go | Required checks of `main` and `dev` as before; this release changes no setting |
 
-**Overall: no unfixed High finding; not a go until the owner accepts the two Medium findings and the open gaps 1, 2 and 11.**
+**Overall: no unfixed High finding; no blocker for v0.2.0 after the owner's acceptance of 2026-11-22 (Mediums, gaps 1 and 2) and the dismissal of the alerts.**
 
 ## v0.1.0 security review
 

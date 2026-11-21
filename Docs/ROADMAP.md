@@ -34,7 +34,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 | 7 | Daily-use polish and hardening | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-19-milestone-07-polish-hardening.md) | 2026-11-20 |
 | – | **Release `v0.1.1`** – Polish and hardening (M7) | – | ✅ done | – | 2026-11-20 |
 | 8 | RDP sessions | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-20-milestone-08-rdp-sessions.md) | 2026-11-21 |
-| – | **Release `v0.2.0`** – RDP (M8) | – | ✅ done | – | 2026-11-21 |
+| – | **Release `v0.2.0`** – RDP (M8) | – | ✅ done | – | 2026-11-22 |
 
 ## Scope changes
 
