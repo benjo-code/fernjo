@@ -65,3 +65,46 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.sha1]
 opt-level = 3
+
+# Decoding the RDP stream (bitmap and RemoteFX tiles, colour conversion, the TLS records) is a hot
+# loop; unoptimised, as in `pnpm tauri dev`, it cannot keep up with scrolling or dragging a window
+# (the render spike was measured with release builds). `ironrdp-*` and `rustls` are generic code that
+# compiles into the crates that use it, so `fernjo-rdp` is optimised as well.
+[profile.dev.package.ironrdp-async]
+opt-level = 3
+[profile.dev.package.ironrdp-bulk]
+opt-level = 3
+[profile.dev.package.ironrdp-cliprdr]
+opt-level = 3
+[profile.dev.package.ironrdp-connector]
+opt-level = 3
+[profile.dev.package.ironrdp-core]
+opt-level = 3
+[profile.dev.package.ironrdp-displaycontrol]
+opt-level = 3
+[profile.dev.package.ironrdp-dvc]
+opt-level = 3
+[profile.dev.package.ironrdp-egfx]
+opt-level = 3
+[profile.dev.package.ironrdp-error]
+opt-level = 3
+[profile.dev.package.ironrdp-graphics]
+opt-level = 3
+[profile.dev.package.ironrdp-input]
+opt-level = 3
+[profile.dev.package.ironrdp-pdu]
+opt-level = 3
+[profile.dev.package.ironrdp-rdpei]
+opt-level = 3
+[profile.dev.package.ironrdp-session]
+opt-level = 3
+[profile.dev.package.ironrdp-svc]
+opt-level = 3
+[profile.dev.package.ironrdp-tls]
+opt-level = 3
+[profile.dev.package.ironrdp-tokio]
+opt-level = 3
+[profile.dev.package.fernjo-rdp]
+opt-level = 3
+[profile.dev.package.rustls]
+opt-level = 3

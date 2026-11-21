@@ -28,6 +28,8 @@ use crate::{ConnectParams, Framebuffer, InputEvent, Interaction, MouseButton, Rd
 const EVENT_QUEUE: usize = 8;
 /// Commands waiting for the connection task.
 const COMMAND_QUEUE: usize = 64;
+/// How long a resize waits for the display channel to become ready.
+const RESIZE_RETRY_LIMIT: Duration = Duration::from_secs(60);
 /// How long one step of a reactivation may wait for the server.
 const REACTIVATION_STEP_LIMIT: Duration = Duration::from_secs(30);
 /// How long a final event may wait for a consumer that has stopped reading.
@@ -244,6 +246,9 @@ async fn drive(
     };
     let mut keys = Database::new();
     let mut last_remote_text: Option<String> = None;
+    // A resize that the display channel could not take yet (it only works after the server has sent
+    // its capabilities); it is tried again after every message until it goes out or it is stale.
+    let mut pending_resize: Option<(u32, u32, std::time::Instant)> = None;
 
     loop {
         let reserve_tx = emitter.tx.clone();
@@ -269,12 +274,9 @@ async fn drive(
                     Command::Resize(width, height) => {
                         let (width, height) =
                             MonitorLayoutEntry::adjust_display_size(u32::from(width), u32::from(height));
-                        match stage.encode_resize(width, height, None, None) {
-                            Some(Ok(frame)) => vec![ActiveStageOutput::ResponseFrame(frame)],
-                            Some(Err(_)) => return CloseReason::ConnectionLost,
-                            // no display control channel: the desktop keeps its size
-                            None => Vec::new(),
-                        }
+                        // sent below, with the retry for a channel that is not ready yet
+                        pending_resize = Some((width, height, std::time::Instant::now()));
+                        Vec::new()
                     }
                     Command::Clipboard(text) => {
                         if last_remote_text.as_deref() == Some(text.as_str()) {
@@ -343,6 +345,20 @@ async fn drive(
             }
         };
 
+        let mut outputs = outputs;
+        if let Some((width, height, asked)) = pending_resize {
+            match stage.encode_resize(width, height, None, None) {
+                Some(Ok(frame)) => {
+                    outputs.push(ActiveStageOutput::ResponseFrame(frame));
+                    pending_resize = None;
+                }
+                Some(Err(_)) => return CloseReason::ConnectionLost,
+                // no display channel (or not ready): the desktop keeps its size, and the request is
+                // dropped when it has waited too long for one
+                None if asked.elapsed() > RESIZE_RETRY_LIMIT => pending_resize = None,
+                None => {}
+            }
+        }
         for output in outputs {
             match output {
                 ActiveStageOutput::ResponseFrame(frame) => {

@@ -91,7 +91,7 @@ test("text over one mebibyte is not sent", async () => {
   expect(sent).toHaveLength(1);
 });
 
-test("a slow read times out and reports blocked once", async () => {
+test("a slow read times out quietly", async () => {
   vi.useFakeTimers();
   const sync = make({ read: () => new Promise<string>(() => {}), timeoutMs: 1500 });
   const first = sync.syncLocal();
@@ -99,11 +99,11 @@ test("a slow read times out and reports blocked once", async () => {
   expect(blocked).toBe(0);
   await vi.advanceTimersByTimeAsync(1);
   await first;
-  expect(blocked).toBe(1);
   const second = sync.syncLocal();
   await vi.advanceTimersByTimeAsync(2000);
   await second;
-  expect(blocked).toBe(1);
+  // a permission the user has not answered is not an error worth a banner
+  expect(blocked).toBe(0);
   expect(sent).toEqual([]);
 });
 
@@ -119,15 +119,26 @@ test("a late answer after the timeout is dropped", async () => {
   expect(sent).toEqual([]);
 });
 
-test("a read that fails is blocked", async () => {
+test("a read that fails is given up on quietly", async () => {
   const sync = make({
     read: async () => {
       throw new Error("denied");
     },
   });
   await sync.syncLocal();
-  expect(blocked).toBe(1);
+  expect(blocked).toBe(0);
   expect(sent).toEqual([]);
+});
+
+test("text taken from a paste event is sent once, unless empty, unchanged or too big", () => {
+  const sync = make();
+  sync.offer("");
+  sync.offer("from the paste event");
+  sync.offer("from the paste event");
+  sync.offer("x".repeat(MAX_CLIPBOARD_BYTES + 1));
+  expect(sent).toEqual(["from the paste event"]);
+  sync.offer("another");
+  expect(sent).toEqual(["from the paste event", "another"]);
 });
 
 test("a failed write reports blocked", async () => {
