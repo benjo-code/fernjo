@@ -182,17 +182,47 @@
     });
   }
 
+  /** How long a paste chord waits for the browser's `paste` event before it reads instead. */
+  const PASTE_EVENT_MS = 300;
+  let pasteSeen: (() => void) | null = null;
+
+  /** Resolves when the `paste` event arrived, or after reading the clipboard when none came. */
+  function awaitPasteEvent(): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        pasteSeen = null;
+        // no paste event (a web view that does not send one for this element): read instead
+        void (sync?.syncLocal() ?? Promise.resolve()).then(resolve);
+      }, PASTE_EVENT_MS);
+      pasteSeen = () => {
+        clearTimeout(timer);
+        pasteSeen = null;
+        resolve();
+      };
+    });
+  }
+
   function onkeydown(e: KeyboardEvent) {
     if (ours(e) || !scancodeFor(e.code)) return;
-    e.preventDefault();
-    // The local clipboard goes over before a paste chord reaches the remote machine: the key
-    // waits (at most the read timeout) so the remote side pastes what was copied here.
-    if (sync && tab.state === "connected" && isPasteChord(e, isMac())) {
-      const wait = sync.syncLocal();
+    // The local clipboard goes over before a paste chord reaches the remote machine, so the remote
+    // side pastes what was copied here. The chord is left to the browser: its `paste` event hands
+    // over the text without any permission, and the key waits for it.
+    const pasting = sync && tab.state === "connected" && isPasteChord(e, isMac());
+    if (!pasting) e.preventDefault();
+    if (pasting) {
+      const wait = awaitPasteEvent();
       gate = gate ? gate.then(() => wait) : wait;
     }
     const code = e.code;
     ordered(() => void controller?.keyDown({ code }));
+  }
+
+  function onpaste(e: ClipboardEvent) {
+    // the text goes to the remote clipboard and nowhere else on this page
+    e.preventDefault();
+    const text = e.clipboardData?.getData("text/plain") ?? "";
+    sync?.offer(text);
+    pasteSeen?.();
   }
 
   function onkeyup(e: KeyboardEvent) {
@@ -230,6 +260,7 @@
       style:height={shown ? `${shown.height}px` : null}
       {onkeydown}
       {onkeyup}
+      {onpaste}
       {onpointerdown}
       {onpointerup}
       onpointermove={(e) => controller?.pointerMove(e)}

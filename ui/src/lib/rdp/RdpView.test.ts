@@ -336,27 +336,53 @@ test("text the remote side copied is written locally and not sent back", async (
   expect(t.calls.rdpClipboard).toEqual([]);
 });
 
-test("a paste chord waits for the clipboard and keeps the order of the keys", async () => {
-  let release: (text: string) => void = () => {};
-  fakeClipboard(() => new Promise<string>((r) => (release = r)));
+const pasteEvent = (text: string) => {
+  const e = new Event("paste", { bubbles: true, cancelable: true });
+  Object.defineProperty(e, "clipboardData", { value: { getData: () => text } });
+  return e;
+};
+
+test("a paste chord takes the text from the paste event, without reading the clipboard", async () => {
+  const clip = fakeClipboard(async () => "never asked");
   const t = await connected(true);
+  clip.readText.mockClear();
   const canvas = canvases()[0]!;
   h.made[0]!.calls.length = 0;
-  const key = (type: string, code: string, ctrlKey = true) =>
-    canvas.dispatchEvent(
-      new KeyboardEvent(type, { code, ctrlKey, bubbles: true, cancelable: true }),
-    );
+  const key = (type: string, code: string, ctrlKey = true) => {
+    const e = new KeyboardEvent(type, { code, ctrlKey, bubbles: true, cancelable: true });
+    canvas.dispatchEvent(e);
+    return e;
+  };
   key("keydown", "ControlLeft");
-  key("keydown", "KeyV");
+  const v = key("keydown", "KeyV");
   key("keyup", "KeyV");
   key("keyup", "ControlLeft", false);
   await flush();
-  // control went through at once, the paste waits for the read
+  // the chord is left to the browser (so it sends the paste event); the paste key waits for it
+  expect(v.defaultPrevented).toBe(false);
   expect(h.made[0]!.calls).toEqual(["down:ControlLeft"]);
-  release("copied here");
+  const paste = pasteEvent("copied here");
+  canvas.dispatchEvent(paste);
   await flush();
-  expect(t.calls.rdpClipboard).toEqual([["sid-1", "copied here"]]);
+  expect(paste.defaultPrevented).toBe(true);
+  // the focus sync on connect sent the older text first
+  expect(t.calls.rdpClipboard.at(-1)).toEqual(["sid-1", "copied here"]);
   expect(h.made[0]!.calls).toEqual(["down:ControlLeft", "down:KeyV", "up:KeyV", "up:ControlLeft"]);
+  expect(clip.readText).not.toHaveBeenCalled();
+});
+
+test("without a paste event the chord reads the clipboard after a short wait", async () => {
+  fakeClipboard(async () => "read instead");
+  const t = await connected(true);
+  const canvas = canvases()[0]!;
+  h.made[0]!.calls.length = 0;
+  canvas.dispatchEvent(
+    new KeyboardEvent("keydown", { code: "KeyV", ctrlKey: true, bubbles: true, cancelable: true }),
+  );
+  expect(h.made[0]!.calls).toEqual([]);
+  await new Promise((r) => setTimeout(r, 450));
+  expect(t.calls.rdpClipboard).toContainEqual(["sid-1", "read instead"]);
+  expect(h.made[0]!.calls).toEqual(["down:KeyV"]);
 });
 
 test("losing the focus while a paste waits drops the waiting keys", async () => {
@@ -374,20 +400,25 @@ test("losing the focus while a paste waits drops the waiting keys", async () => 
   expect(h.made[0]!.calls).toEqual(["blur"]);
 });
 
-test("a refused read shows one line and the keys still arrive", async () => {
+test("a refused read shows no banner", async () => {
   fakeClipboard(async () => {
     throw new Error("denied");
   });
   await connected(true);
-  const canvas = canvases()[0]!;
-  canvas.dispatchEvent(new FocusEvent("focus"));
-  canvas.dispatchEvent(
-    new KeyboardEvent("keydown", { code: "KeyV", ctrlKey: true, bubbles: true, cancelable: true }),
-  );
+  canvases()[0]!.dispatchEvent(new FocusEvent("focus"));
+  await flush();
+  expect(document.querySelector(".note")).toBeNull();
+});
+
+test("a refused write of the remote text shows one line", async () => {
+  const clip = fakeClipboard(async () => "");
+  clip.writeText.mockRejectedValue(new Error("denied"));
+  await connected(true);
+  handlers[0]!({ kind: "clipboard", text: "one" });
+  handlers[0]!({ kind: "clipboard", text: "two" });
   await flush();
   expect(document.querySelectorAll(".note")).toHaveLength(1);
   expect(document.querySelector(".note")?.textContent).toBe(
     "The clipboard is blocked by the web view",
   );
-  expect(h.made[0]!.calls).toContain("down:KeyV");
 });

@@ -1,6 +1,7 @@
 // Text clipboard sync for an RDP tab. Rust moves the text between the two machines; this side only
-// decides when to read the local clipboard (on focus and before a paste chord reaches the remote
-// machine) and when to write what the remote side copied.
+// decides when to take the local clipboard (from the `paste` event of a paste chord, which needs no
+// permission, and by reading it when the desktop gets the focus) and when to write what the remote
+// side copied.
 
 /** Largest text sent to the remote clipboard, in UTF-8 bytes (Rust drops anything bigger too). */
 export const MAX_CLIPBOARD_BYTES = 1024 * 1024;
@@ -14,7 +15,11 @@ export interface ClipboardSyncOptions {
   /** Hands text to the remote clipboard. */
   send(text: string): void;
   timeoutMs?: number;
-  /** Called at most once, the first time the web view refuses a read or a write. */
+  /**
+   * Called at most once, the first time the web view refuses to write what the remote side copied.
+   * A refused read is not reported: it only happens on the focus sync (a paste chord does not read),
+   * and the web view may simply be waiting for a permission the user has not given.
+   */
   onBlocked?(): void;
 }
 
@@ -50,8 +55,8 @@ export class ClipboardSync {
 
   /**
    * Reads the local clipboard and sends it when it is text that changed, is not empty and fits the
-   * cap. A read that fails or takes longer than the timeout counts as blocked; a late answer is
-   * dropped, because it could belong to a later moment than the one that asked.
+   * cap. A read that fails or takes longer than the timeout is given up on quietly; a late answer
+   * is dropped, because it could belong to a later moment than the one that asked.
    */
   async syncLocal(): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -66,10 +71,14 @@ export class ClipboardSync {
     } finally {
       clearTimeout(timer);
     }
-    if (text === null) {
-      this.#block();
-      return;
-    }
+    if (text !== null) this.offer(text);
+  }
+
+  /**
+   * Sends text taken from the local clipboard (the `paste` event of a paste chord) when it is text
+   * that changed, is not empty and fits the cap.
+   */
+  offer(text: string): void {
     if (text === "" || text === this.#last) return;
     if (encoder.encode(text).length > MAX_CLIPBOARD_BYTES) return;
     this.#last = text;
