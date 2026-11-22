@@ -7,5 +7,5 @@ pub mod config;
 pub mod server;
 pub mod store;
 
-pub use server::{router, serve};
+pub use server::{router, serve, shutdown_signal};
 pub use store::{Expected, GroupId, HubStore, MAX_ENVELOPE_LEN, PutError, peek_header};

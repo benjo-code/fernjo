@@ -1,0 +1,12 @@
+# Build context for `docker build` / `podman build` (Podman reads this file too).
+# The hub image needs only the workspace manifests, rust-toolchain.toml, Cargo.lock and the
+# crate sources; keep everything else out of the context (target/ alone can be tens of GB).
+target
+node_modules
+.git
+.superpowers
+.impeccable
+.env*
+ui/dist
+src-tauri/gen
+*.fernjo

@@ -17,6 +17,8 @@ DropCapability=ALL
 # the image runs as 10001; in a rootless user namespace map it onto the volume's owner
 UserNS=keep-id:uid=10001,gid=10001
 User=10001:10001
+# a tiny init as PID 1 (belt and braces next to the hub's own SIGTERM handling)
+Init=true
 
 [Service]
 Restart=always

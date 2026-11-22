@@ -17,7 +17,11 @@ From the repository root:
 podman build -f crates/fernjo-hub/Containerfile -t fernjo-hub .
 ```
 
-The result is a static musl binary on an empty base image, running as the unprivileged user 10001. It listens on port 8787 inside the container and writes only to `/data`.
+`docker build -f crates/fernjo-hub/Containerfile -t fernjo-hub .` works the same. The `.dockerignore` at the repository root keeps `target/`, `node_modules/`, `.git/` and similar out of the build context (without it the context is tens of gigabytes); Podman reads that file too.
+
+The result is a static musl binary on an empty base image, running as the unprivileged user 10001. It listens on port 8787 inside the container and writes only to `/data`. The image contains an empty `/data` owned by 10001, so a new named volume mounted there is writable by that user without a `chown`. The build stage uses `rust:1.100.0-alpine`, the version `rust-toolchain.toml` pins; `rustup` still downloads the `rustfmt` and `clippy` components listed there during the build.
+
+Stopping the container (`podman stop`, `docker stop`, `systemctl --user stop fernjo-hub`) sends SIGTERM; `fernjo-hub serve` handles it (and SIGINT), finishes a write that is already running and exits with status 0 within a second.
 
 ## Run it rootless under Podman (Quadlet)
 
@@ -37,7 +41,9 @@ The result is a static musl binary on an empty base image, running as the unpriv
    loginctl enable-linger "$USER"   # keep it running without a login
    ```
 
-   The unit publishes `127.0.0.1:8787` only, mounts the root file system read-only, drops all capabilities and keeps the data in the named volume.
+   The unit publishes `127.0.0.1:8787` only, mounts the root file system read-only, drops all capabilities, runs a tiny init as PID 1 (`Init=true`, belt and braces next to the hub's own signal handling) and keeps the data in the named volume.
+
+   The supported rootless path is the one in these two steps: `--userns=keep-id:uid=10001,gid=10001` (and `UserNS=` in the unit) maps your user onto 10001, so the volume that the image's `/data` seeded stays writable for the hub. Whether that mapping works on your Podman version is an owner check (see the end of this page).
 
 3. Check: `curl -H "Authorization: Bearer <secret>" http://127.0.0.1:8787/v1/info` answers `{"protocol":1,"maxBytes":67108864}`.
 
@@ -56,7 +62,7 @@ fernjo-hub rotate-secret --data <dir>
 - `--data` is required by every command; `--listen` must be an IP address with a port (`127.0.0.1:8787`, `0.0.0.0:8787`, `[::1]:8787`), a host name is not accepted. A missing command or flag, an unknown command or an unparsable address prints the usage text to stderr and exits with 1.
 - `init` creates the folder and `config.json` and prints `Hub secret (shown once, store it safely): <secret>` on stdout. The secret is 32 random bytes in base64url (43 characters). Exit 0; exit 1 with a message on stderr when the folder already holds a `config.json` ("already initialised; use rotate-secret").
 - `rotate-secret` prints `New hub secret (shown once): <secret>` and a reminder to restart `serve`. Exit 1 when the folder was not initialised or `config.json` is damaged (also when larger than 4 KiB).
-- `serve` prints `fernjo-hub listening on <addr>` to stderr and runs until it is stopped (there is no clean-shutdown handling: every write is atomic, so stopping at any moment is safe). Exit 1 with a message when the folder was not initialised, `config.json` is damaged, the data folder cannot be prepared or the port cannot be bound. At start it creates `history/` (mode 0700 on Unix) and removes `*.tmp` leftovers of a crashed write. Nothing is logged per request: no path, header, body or secret.
+- `serve` prints `fernjo-hub listening on <addr>` to stderr and runs until it receives SIGINT (Ctrl+C) or, on Unix, SIGTERM, prints `fernjo-hub stopping`, lets a write that is already running finish and exits with 0 (every write is atomic as well, so a kill at any moment is also safe). Exit 1 with a message when the folder was not initialised, `config.json` is damaged, the data folder cannot be prepared or the port cannot be bound. At start it creates `history/` (mode 0700 on Unix) and removes `*.tmp` leftovers of a crashed write. Nothing is logged per request: no path, header, body or secret.
 - Files in `<dir>`: `config.json` (`{"secretSha256": "<hex>"}`), `head.env`, `history/<seq>.env`.
 
 ## Caddy
@@ -105,11 +111,16 @@ Each replaced head is kept as `history/<seq>.env`, the newest ten. They are encr
 
 Wire formats, the envelope layout and the merge rules are in `Docs/sync-format.md`; that page is enough to write a compatible hub or client.
 
+## Verified so far
+
+- The hub and the sync client were tested with in-process tests (the hub on loopback, two clients against it, fake servers for the client's refusals).
+- **Built and run with Docker (not Podman)**: the image builds from a clean `git archive` of the repository (context about 0.3 MB with the root `.dockerignore`); `fernjo-hub init --data /data` succeeds as user 10001 on a fresh Docker named volume; `serve` runs, and `docker stop` ends it in about half a second with exit status 0 (before the signal handler it took 7 s and ended with 137). The hub's Unix test of SIGTERM and SIGINT (`crates/fernjo-hub/tests/shutdown.rs`) ran in a Linux container.
+
 ## Not verified yet (owner checks)
 
-The hub and the sync client were tested with in-process tests only (the hub on loopback, two clients against it, fake servers for the client's refusals). Still open, to be run by the owner:
+Podman rootless and the Quadlet unit were **not run**; Docker is not a check of either. Still open, to be run by the owner:
 
-- `podman build -f crates/fernjo-hub/Containerfile -t fernjo-hub .` and the rootless Quadlet unit on the Ubuntu or Debian VM (the image build, the `keep-id` user mapping and the read-only root file system have not been run).
+- `podman build -f crates/fernjo-hub/Containerfile -t fernjo-hub .` and the rootless Quadlet unit on the Ubuntu or Debian VM (the `keep-id` user mapping, `Init=true`, the `:Z` label on a named volume and the read-only root file system have not been run under Podman).
 - Caddy with `tls internal` in front of the hub, including a Caddy restart and a hub restart that lose nothing, with the CA pasted into fernjo.
 - Two real devices syncing through that hub (create, edit, delete, conflict copy, vault entry, offline then online), and the OS keychain items on Windows, macOS and Linux.
 - The `host.containers.internal` address and a LAN `PublishPort` for a Caddy that runs in a container (named under "Caddy" as untried advice).

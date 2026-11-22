@@ -47,6 +47,33 @@ pub async fn serve(addr: SocketAddr, router: Router) -> std::io::Result<SocketAd
     Ok(bound)
 }
 
+/// Resolves when the process is asked to stop: Ctrl+C (SIGINT) everywhere, and SIGTERM on Unix
+/// (what `docker stop`, `podman stop` and systemd send; the hub runs as PID 1 in its container,
+/// where a signal without a handler is ignored). A handler that cannot be installed never
+/// resolves, so a failure to register does not stop the hub by itself.
+pub async fn shutdown_signal() {
+    async fn interrupt() {
+        if tokio::signal::ctrl_c().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => {
+                tokio::select! {
+                    () = interrupt() => {}
+                    _ = term.recv() => {}
+                }
+            }
+            Err(_) => interrupt().await,
+        }
+    }
+    #[cfg(not(unix))]
+    interrupt().await;
+}
+
 fn status(code: StatusCode) -> Response {
     code.into_response()
 }

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use fernjo_hub::{HubStore, config, router, serve};
+use fernjo_hub::{HubStore, config, router, serve, shutdown_signal};
 
 const USAGE: &str = "usage:\n  fernjo-hub init --data <dir>\n  fernjo-hub serve --data <dir> --listen <addr:port>\n  fernjo-hub rotate-secret --data <dir>";
 
@@ -62,7 +62,10 @@ async fn main() -> ExitCode {
             match serve(addr, router(store, hash)).await {
                 Ok(bound) => {
                     eprintln!("fernjo-hub listening on {bound}");
-                    std::future::pending::<()>().await;
+                    shutdown_signal().await;
+                    // returning from `main` drops the runtime, which waits for a write that is
+                    // already running on the blocking pool before the process exits
+                    eprintln!("fernjo-hub stopping");
                     ExitCode::SUCCESS
                 }
                 Err(e) => fail(&e.to_string()),
