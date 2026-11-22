@@ -19,6 +19,7 @@ const TEXT: Record<string, string> = {
   already_paired: "This device is already part of a sync group.",
   changed_on_disk:
     "The data changed on disk while syncing. Reload and try again, or lock and unlock the vault.",
+  hub_rolled_back: "The hub shows an older state than this device has seen. Re-seed it from here.",
   rolled_back: "The hub shows an older state than this device has seen.",
 };
 

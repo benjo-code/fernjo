@@ -70,6 +70,26 @@ export class TreeStore {
     this.loaded = true;
   }
 
+  /**
+   * Fetches the tree again without touching the error flags: for changes that arrived in the
+   * background (sync), where a failure or an unrelated bar must not change. Quiet on failure.
+   */
+  async refresh(): Promise<void> {
+    try {
+      const snapshot = await this.#api.listTree();
+      await this.#queue;
+      this.#apply(snapshot.children, snapshot.notices);
+      await this.#refreshDetail();
+    } catch {
+      // the next run or a manual reload shows the real state
+    }
+  }
+
+  /** Another command (vault, restore) found connections.json changed on disk: show the Reload bar. */
+  markChangedOnDisk() {
+    this.changedOnDisk = true;
+  }
+
   select(id: string | null) {
     this.selectOnly(id);
   }

@@ -16,8 +16,9 @@ export const TREE_ROWS_DEFAULT = 23;
 export const TREE_ROWS_SIZED = 6;
 
 /**
- * The tree slot's minimum height. Sidebar.svelte mirrors it in CSS (`.panel-sized .tree-slot`
- * and `.tree-slot`); the two must stay in step or the sidebar overflows.
+ * The tree slot's minimum height. Sidebar.svelte mirrors it in CSS: `.tree-slot` is the default
+ * (`panelSized` false), and `.panel-sized`, `.note-open` and `.bars-open` (a notice bar or the sync
+ * line is shown) use the small one; the two must stay in step or the sidebar overflows.
  */
 export function treeMinHeight(
   panelSized: boolean,

@@ -18,7 +18,7 @@
 </script>
 
 {#if line}
-  <div class="sync" class:attention={line.tone === "attention"}>
+  <div class="sync" role="status" class:attention={line.tone === "attention"}>
     <button type="button" class="text" title={line.title} onclick={() => ondetails?.()}>
       {line.text}
     </button>

@@ -5,6 +5,7 @@
   import type { SyncStore } from "../sync.svelte";
   import type { VaultStore } from "../vault.svelte";
   import { LayoutStore, SIDEBAR_MIN, sidebarMax } from "../layout.svelte";
+  import { syncLine } from "../sync-line";
   import FilterBox from "./FilterBox.svelte";
   import Icon from "./Icon.svelte";
   import NoticeBar from "./NoticeBar.svelte";
@@ -64,11 +65,24 @@
 
   let note: VaultNote | undefined = $state();
   let noteOpen = $state(false);
+
+  // Any bar above the tree or the sync line below the panel takes height the 23-row minimum has
+  // no room for, so the tree may shrink to 6 rows and the properties panel stays reachable.
+  const barsOpen = $derived(
+    store.loadError !== null ||
+      store.error !== null ||
+      store.changedOnDisk ||
+      store.notices.length > 0 ||
+      restartPending ||
+      (sync?.status?.findings.length ?? 0) > 0 ||
+      syncLine(sync?.status ?? null) !== null,
+  );
 </script>
 
 <aside
   class="sidebar"
   class:note-open={noteOpen}
+  class:bars-open={barsOpen}
   class:panel-sized={layout.propertiesHeight !== null}
   aria-label="Connections"
 >
@@ -174,8 +188,10 @@
   }
 
   /* the vault form is open: it is taller than the compact note, so the tree may shrink; the same
-     when the user has set the properties panel's height (TREE_ROWS_SIZED in layout.svelte.ts) */
+     when the user has set the properties panel's height (TREE_ROWS_SIZED in layout.svelte.ts)
+     and while a notice bar or the sync line is shown */
   .note-open .tree-slot,
+  .bars-open .tree-slot,
   .panel-sized .tree-slot {
     min-height: calc(var(--row-height-tree) * 6);
   }

@@ -249,4 +249,25 @@ describe("SyncSettings", () => {
     await click("Sync now");
     expect(calls.syncNow).toHaveLength(1);
   });
+
+  test("cancelling_the_join_confirmation_clears_the_typed_pairing_code", async () => {
+    await setup(syncStatus(), {
+      syncJoin: async () =>
+        syncStatus({
+          state: "needs_confirmation",
+          confirmation: { connections: 0, folders: 0, vaultEntries: 0, hasVault: false },
+        }),
+    });
+    await click("Join with a pairing code");
+    await fill("#sync-code", "SECRET-CODE");
+    await fill("#sync-device", "D");
+    await click("Join");
+    await click("Cancel");
+    expect(document.querySelector<HTMLTextAreaElement>("#sync-code")!.value).toBe("");
+  });
+
+  test("the_status_row_is_a_polite_live_region", async () => {
+    await setup(paired());
+    expect(document.querySelector('dd[role="status"]')?.textContent).toContain("Synced");
+  });
 });

@@ -121,7 +121,7 @@
     flex: 1;
     min-width: 0;
     /* many findings scroll inside the bar instead of pushing the tree out of the window */
-    max-height: 7em;
+    max-height: 4.5em;
     overflow-y: auto;
     margin: 0;
     padding: 0;

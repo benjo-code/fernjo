@@ -160,7 +160,7 @@
       await store.apply({ withoutPasswords });
       // a restore that found connections.json changed on disk: offer the Reload bar
       if (store.kind === "backup" && store.error?.code === "changed_on_disk") {
-        tree.changedOnDisk = true;
+        tree.markChangedOnDisk();
       }
     } catch {
       // the snapshot callback failed after Rust applied the plan; the step is already `done`

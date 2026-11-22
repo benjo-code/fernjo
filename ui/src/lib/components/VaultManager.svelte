@@ -231,7 +231,7 @@
     const { value, error } = await vault.deleteCredential(target.id);
     if (error) {
       // the credential list is in the vault, but the nodes that used it are in connections.json
-      if (error.code === "changed_on_disk") tree.changedOnDisk = true;
+      if (error.code === "changed_on_disk") tree.markChangedOnDisk();
       return showError(error);
     }
     await tree.applySnapshot(value.snapshot);

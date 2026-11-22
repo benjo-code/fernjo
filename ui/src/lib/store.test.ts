@@ -582,6 +582,35 @@ describe("TreeStore selection", () => {
   });
 });
 
+describe("TreeStore background refresh", () => {
+  test("refresh_keeps_the_error_and_changed_on_disk_flags", async () => {
+    const { store, setTree, calls } = await started();
+    store.showError("boom");
+    store.markChangedOnDisk();
+    setTree([conn("remote")]);
+    await store.refresh();
+    expect(store.children.map((n) => n.name)).toEqual(["remote"]);
+    expect(store.error).toBe("boom");
+    expect(store.changedOnDisk).toBe(true);
+    expect(calls.reloadTree).toHaveLength(0);
+  });
+
+  test("refresh_is_quiet_when_listing_fails", async () => {
+    const { store } = await started(tree(), {});
+    const failing = mockApi(tree(), {
+      listTree: async () => {
+        throw apiError("load_failed", "nope");
+      },
+    });
+    const other = new TreeStore(failing.api);
+    await other.refresh();
+    expect(other.error).toBeNull();
+    expect(other.loadError).toBeNull();
+    expect(other.changedOnDisk).toBe(false);
+    expect(store.children.length).toBeGreaterThan(0);
+  });
+});
+
 describe("SyncStore", () => {
   test("sync_store_ignores_a_new_action_while_busy", async () => {
     const gate = deferred<ReturnType<typeof syncStatus>>();
@@ -631,5 +660,70 @@ describe("SyncStore", () => {
     await sync.init();
     await sync.setup("https://h", "secret", null, "PC");
     expect(localStorage.length).toBe(0);
+  });
+
+  test("a_successful_join_calls_on_joined_but_a_confirmation_does_not", async () => {
+    const mock = mockApi([], {
+      syncJoin: async (_c, _n, confirm) =>
+        confirm
+          ? syncStatus({ state: "ok" })
+          : syncStatus({
+              state: "needs_confirmation",
+              confirmation: { connections: 1, folders: 0, vaultEntries: null, hasVault: false },
+            }),
+    });
+    const onJoined = vi.fn();
+    const sync = new SyncStore(mock.api, () => {}, onJoined);
+    expect(await sync.join("c", "d", false)).toBe("confirm");
+    expect(onJoined).not.toHaveBeenCalled();
+    expect(await sync.join("c", "d", true)).toBe("joined");
+    expect(onJoined).toHaveBeenCalledTimes(1);
+  });
+
+  test("a_pairing_code_that_arrives_after_hide_is_not_stored", async () => {
+    const gate = deferred<string>();
+    const mock = mockApi([], { syncPairingCode: () => gate.promise });
+    const sync = new SyncStore(mock.api);
+    const shown = sync.showPairingCode();
+    sync.hidePairingCode();
+    gate.resolve("LATE-CODE");
+    await shown;
+    expect(sync.pairingCode).toBeNull();
+  });
+
+  test("a_pairing_code_that_arrives_after_dispose_is_not_stored", async () => {
+    const gate = deferred<string>();
+    const mock = mockApi([], { syncPairingCode: () => gate.promise });
+    const sync = new SyncStore(mock.api);
+    const shown = sync.showPairingCode();
+    sync.dispose();
+    gate.resolve("LATE-CODE");
+    await shown;
+    expect(sync.pairingCode).toBeNull();
+  });
+
+  test("a_pairing_code_that_arrives_after_leave_is_not_stored", async () => {
+    const gate = deferred<string>();
+    const mock = mockApi([], { syncPairingCode: () => gate.promise });
+    const sync = new SyncStore(mock.api);
+    const shown = sync.showPairingCode();
+    await sync.leave();
+    gate.resolve("LATE-CODE");
+    await shown;
+    expect(sync.pairingCode).toBeNull();
+  });
+
+  test("closing_the_panel_while_setup_runs_drops_the_code_it_fetches_afterwards", async () => {
+    const gate = deferred<ReturnType<typeof syncStatus>>();
+    const mock = mockApi([], {
+      syncSetup: () => gate.promise,
+      syncPairingCode: async () => "CODE",
+    });
+    const sync = new SyncStore(mock.api);
+    const running = sync.setup("https://h", "s", null, "PC");
+    sync.hidePairingCode(); // the Settings dialog was closed
+    gate.resolve(syncStatus({ state: "ok" }));
+    expect(await running).toBe(true);
+    expect(sync.pairingCode).toBeNull();
   });
 });

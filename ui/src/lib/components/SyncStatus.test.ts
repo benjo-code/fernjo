@@ -4,6 +4,9 @@ import { SyncStore } from "../sync.svelte";
 import { TreeStore } from "../store.svelte";
 import { mockApi, syncStatus } from "../testing";
 import type { SyncStatus as Status } from "../types";
+import { SessionStore } from "../sessions.svelte";
+import { VaultStore } from "../vault.svelte";
+import Sidebar from "./Sidebar.svelte";
 import NoticeBar from "./NoticeBar.svelte";
 import SyncStatusLine from "./SyncStatus.svelte";
 
@@ -99,5 +102,33 @@ describe("SyncStatus", () => {
     );
     button("Details").click();
     expect(ondetails).toHaveBeenCalled();
+  });
+
+  test("the_line_is_a_polite_live_region_never_an_alert", async () => {
+    await setup(syncStatus({ state: "offline", pendingChanges: 2 }));
+    expect(document.querySelector('[role="status"]')?.textContent).toContain("Offline");
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  test("the_sidebar_lets_the_tree_shrink_while_the_sync_line_is_shown", async () => {
+    const m = mockApi([], { syncStatus: async () => syncStatus({ state: "ok" }) });
+    const sync = new SyncStore(m.api);
+    await sync.init();
+    const store = new TreeStore(m.api);
+    const vault = new VaultStore(m.api);
+    const sessions = new SessionStore(
+      m.api,
+      (id) => id,
+      () => true,
+    );
+    mounted = mount(Sidebar, {
+      target: document.body,
+      props: { store, vault, sessions, onOpenVault: () => {}, sync },
+    });
+    await settle();
+    expect(document.querySelector("aside")!.classList.contains("bars-open")).toBe(true);
+    m.emitSync(syncStatus({ state: "off" }));
+    await settle();
+    expect(document.querySelector("aside")!.classList.contains("bars-open")).toBe(false);
   });
 });

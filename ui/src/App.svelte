@@ -48,10 +48,20 @@
   // A run that wrote remote changes locally: fetch the tree and the vault status again. Reload
   // goes through the same path as the "changed on disk" bar.
   // svelte-ignore state_referenced_locally
-  const sync = new SyncStore(api, () => {
-    void store.reload();
-    void vault.init();
-  });
+  const sync = new SyncStore(
+    api,
+    () => {
+      void store.refresh();
+      void vault.init();
+    },
+    () => {
+      // a join ended every session in Rust without an event: drop the tabs, or they would stay
+      // "connected" over a frozen terminal (the same as after a restore)
+      sessions.closeAll();
+      void store.refresh();
+      void vault.init();
+    },
+  );
 
   const layout = new LayoutStore();
   // nothing stored: the grid keeps the stylesheet's token, so the default layout is unchanged

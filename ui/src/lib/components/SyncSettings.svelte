@@ -59,9 +59,14 @@
     else if (next === "join") codeInput?.focus();
   }
 
+  function cancelJoin() {
+    sync.dropConfirmation();
+    joinCode = "";
+  }
+
   function back() {
     sync.error = null;
-    sync.dropConfirmation();
+    cancelJoin();
     mode = "choose";
   }
 
@@ -230,11 +235,8 @@
         <button type="button" class="btn" onclick={() => onexport?.()}
           >Export a backup first…</button
         >
-        <button
-          bind:this={replaceCancel}
-          type="button"
-          class="btn"
-          onclick={() => sync.dropConfirmation()}>Cancel</button
+        <button bind:this={replaceCancel} type="button" class="btn" onclick={cancelJoin}
+          >Cancel</button
         >
         <button
           type="button"
@@ -276,7 +278,7 @@
 {:else}
   <dl class="facts">
     <dt>Status</dt>
-    <dd>{line?.text ?? "Synced"}</dd>
+    <dd role="status">{line?.text ?? "Synced"}</dd>
     <dt>Device</dt>
     <dd>{status.deviceName ?? ""}</dd>
     <dt>Hub</dt>
