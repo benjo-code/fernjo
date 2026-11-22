@@ -1,0 +1,6 @@
+# Add to the Caddyfile you already run. The hub speaks plain HTTP on loopback only;
+# Caddy terminates TLS (internal CA) and adds nothing else.
+benjo.loc {
+	tls internal
+	reverse_proxy 127.0.0.1:8787
+}
