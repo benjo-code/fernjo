@@ -14,6 +14,7 @@ import type {
   ResolvedNode,
   SessionEvent,
   Snapshot,
+  SyncStatus,
   TerminalSettings,
   Theme,
   ThemeInfo,
@@ -110,6 +111,22 @@ export function themeInfo(partial: Partial<ThemeInfo> = {}): ThemeInfo {
   return { theme: "system", persistent: true, unsavedReason: null, ...partial };
 }
 
+export function syncStatus(partial: Partial<SyncStatus> = {}): SyncStatus {
+  return {
+    state: "off",
+    lastSyncedAt: null,
+    pendingChanges: 0,
+    deviceName: null,
+    hubUrl: null,
+    findings: [],
+    error: null,
+    running: false,
+    applied: 0,
+    confirmation: null,
+    ...partial,
+  };
+}
+
 export function report(partial: Partial<Report> = {}): Report {
   return {
     counts: {
@@ -198,7 +215,18 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     importCancel: [],
     exportConnections: [],
     exportBackup: [],
+    syncStatus: [],
+    syncSetup: [],
+    syncPairingCode: [],
+    syncJoin: [],
+    syncNow: [],
+    syncReseed: [],
+    syncEditSecret: [],
+    syncLeave: [],
+    syncDismissFindings: [],
+    onSyncStatus: [],
   };
+  const syncHandlers = new Set<(status: SyncStatus) => void>();
   let current = initial;
   const mutation = (id: string | null): Mutation => ({ id, snapshot: snapshot(current) });
   const api: Api = {
@@ -411,10 +439,56 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
         ? impl.exportBackup(...args)
         : { fileName: "fernjo-backup.fjbk", droppedCredentials: 0 };
     },
+    syncStatus: async () => {
+      calls.syncStatus.push([]);
+      return impl.syncStatus ? impl.syncStatus() : syncStatus();
+    },
+    syncSetup: async (...args) => {
+      calls.syncSetup.push(args);
+      return impl.syncSetup ? impl.syncSetup(...args) : syncStatus({ state: "ok" });
+    },
+    syncPairingCode: async () => {
+      calls.syncPairingCode.push([]);
+      return impl.syncPairingCode ? impl.syncPairingCode() : "PAIRING-CODE";
+    },
+    syncJoin: async (...args) => {
+      calls.syncJoin.push(args);
+      return impl.syncJoin ? impl.syncJoin(...args) : syncStatus({ state: "ok" });
+    },
+    syncNow: async () => {
+      calls.syncNow.push([]);
+      return impl.syncNow ? impl.syncNow() : syncStatus({ state: "ok" });
+    },
+    syncReseed: async () => {
+      calls.syncReseed.push([]);
+      return impl.syncReseed ? impl.syncReseed() : syncStatus({ state: "ok" });
+    },
+    syncEditSecret: async (...args) => {
+      calls.syncEditSecret.push(args);
+      return impl.syncEditSecret ? impl.syncEditSecret(...args) : syncStatus({ state: "ok" });
+    },
+    syncLeave: async () => {
+      calls.syncLeave.push([]);
+      return impl.syncLeave ? impl.syncLeave() : syncStatus();
+    },
+    syncDismissFindings: async () => {
+      calls.syncDismissFindings.push([]);
+      if (impl.syncDismissFindings) await impl.syncDismissFindings();
+    },
+    onSyncStatus: async (handler) => {
+      calls.onSyncStatus.push([]);
+      if (impl.onSyncStatus) return impl.onSyncStatus(handler);
+      syncHandlers.add(handler);
+      return () => void syncHandlers.delete(handler);
+    },
   };
   return {
     api,
     calls,
+    /** Plays the part of Rust's `sync-status` event. */
+    emitSync(status: SyncStatus) {
+      for (const h of [...syncHandlers]) h(status);
+    },
     /** Changes what the default implementations return as the tree. */
     setTree(children: TreeNode[]) {
       current = children;

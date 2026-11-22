@@ -1,7 +1,9 @@
 import { flushSync, mount, tick, unmount } from "svelte";
 import { afterEach, describe, expect, test } from "vitest";
 import { TreeStore } from "../store.svelte";
-import { apiError, conn, mockApi } from "../testing";
+import { SyncStore } from "../sync.svelte";
+import { apiError, conn, mockApi, syncStatus } from "../testing";
+import type { SyncFinding } from "../types";
 import NoticeBar from "./NoticeBar.svelte";
 
 let mounted: ReturnType<typeof mount> | null = null;
@@ -58,5 +60,87 @@ describe("NoticeBar", () => {
     expect(text).toContain("/sync/fernjo/dev");
     expect(text).toContain("device-local folder");
     expect(text).toContain("data folder");
+  });
+
+  test("findings_are_listed_and_dismissable", async () => {
+    const mock = mockApi([conn("a")], {
+      syncStatus: async () =>
+        syncStatus({
+          state: "ok",
+          findings: [
+            {
+              id: "n1",
+              name: "web",
+              kind: "conflictCopy",
+              message: "web was edited on two devices: kept both.",
+            },
+            { id: "n2", name: "db", kind: "moveUndone", message: "Your move of db was undone." },
+          ],
+        }),
+    });
+    const store = new TreeStore(mock.api);
+    await store.init();
+    store.showError("boom");
+    store.changedOnDisk = true;
+    const sync = new SyncStore(mock.api);
+    await sync.init();
+    mounted = mount(NoticeBar, { target: document.body, props: { store, sync } });
+    await settle();
+    const text = () => document.body.textContent ?? "";
+    expect(text()).toContain("web was edited on two devices: kept both.");
+    expect(text()).toContain("Your move of db was undone.");
+    // the other bars are still there
+    expect(text()).toContain("boom");
+    expect(text()).toContain("connections.json was changed by another program");
+
+    const dismiss = document.body.querySelector<HTMLButtonElement>(
+      "button[data-dismiss-findings]",
+    )!;
+    dismiss.click();
+    await settle();
+    expect(mock.calls.syncDismissFindings).toHaveLength(1);
+    expect(text()).not.toContain("kept both");
+    expect(text()).toContain("boom");
+  });
+
+  test("findings_are_keyed_by_their_content_so_a_changed_list_keeps_the_rows_that_stay", async () => {
+    const f = (id: string, kind: SyncFinding["kind"], message: string): SyncFinding => ({
+      id,
+      name: "x",
+      kind,
+      message,
+    });
+    const mock = mockApi([], {
+      syncStatus: async () =>
+        syncStatus({
+          state: "ok",
+          findings: [f("a", "keptEdit", "first"), f("b", "moveUndone", "second")],
+        }),
+    });
+    const store = new TreeStore(mock.api);
+    await store.init();
+    const sync = new SyncStore(mock.api);
+    await sync.init();
+    mounted = mount(NoticeBar, { target: document.body, props: { store, sync } });
+    await settle();
+    const rows = () => [...document.querySelectorAll(".findings li")];
+    const [firstRow, secondRow] = rows();
+    expect(rows().map((r) => r.textContent)).toEqual(["first", "second"]);
+
+    // a new notice arrives in front; the two existing rows are the same elements, moved down
+    mock.emitSync(
+      syncStatus({
+        state: "ok",
+        findings: [
+          f("c", "passwordChangeDropped", "third"),
+          f("a", "keptEdit", "first"),
+          f("b", "moveUndone", "second"),
+        ],
+      }),
+    );
+    await settle();
+    expect(rows().map((r) => r.textContent)).toEqual(["third", "first", "second"]);
+    expect(rows()[1]).toBe(firstRow);
+    expect(rows()[2]).toBe(secondRow);
   });
 });

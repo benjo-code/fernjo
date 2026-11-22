@@ -23,4 +23,4 @@ pub use keystore::{
     AutoUnlock, KeyStore, KeyStoreError, MemoryKeyStore, OsKeyStore, try_auto_unlock,
 };
 pub use sealed::{SealedError, open_with_password, seal_with_password};
-pub use vault::{Vault, VaultId};
+pub use vault::{Contents, FileInfo, STALE_TEMP_AGE, Vault, VaultId, inspect_file, read_entries};

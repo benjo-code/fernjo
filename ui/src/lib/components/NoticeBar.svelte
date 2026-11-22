@@ -1,14 +1,18 @@
 <script lang="ts">
   import type { TreeStore } from "../store.svelte";
+  import type { SyncStore } from "../sync.svelte";
   import type { Notice } from "../types";
   import Icon from "./Icon.svelte";
 
   let {
     store,
+    sync,
     restartPending = false,
     onRestart,
   }: {
     store: TreeStore;
+    /** Its merge findings are listed in a bar of their own, below the errors. */
+    sync?: SyncStore;
     /** A new data folder was chosen; the bar stays until the app restarts. */
     restartPending?: boolean;
     onRestart?: () => void;
@@ -64,6 +68,22 @@
   </div>
 {/if}
 
+{#if sync?.status && sync.status.findings.length > 0}
+  <div class="bar" role="status">
+    <ul class="findings">
+      {#each sync.status.findings as finding (`${finding.kind}:${finding.id}:${finding.message}`)}
+        <li>{finding.message}</li>
+      {/each}
+    </ul>
+    <button
+      type="button"
+      class="dismiss"
+      data-dismiss-findings
+      onclick={() => void sync.dismissFindings()}>Dismiss</button
+    >
+  </div>
+{/if}
+
 {#each store.notices as notice, index (index)}
   <div class="bar" role="status">
     <span class="text">{noticeText(notice)}</span>
@@ -95,6 +115,22 @@
     flex: 1;
     min-width: 0;
     overflow-wrap: anywhere;
+  }
+
+  .findings {
+    flex: 1;
+    min-width: 0;
+    /* many findings scroll inside the bar instead of pushing the tree out of the window */
+    max-height: 4.5em;
+    overflow-y: auto;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    overflow-wrap: anywhere;
+  }
+
+  .findings li + li {
+    margin-top: var(--space-2);
   }
 
   .dismiss {

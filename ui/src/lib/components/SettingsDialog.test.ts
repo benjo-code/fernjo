@@ -1,6 +1,7 @@
 import { flushSync, mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { TerminalSettingsStore } from "../terminal-settings.svelte";
+import { SyncStore } from "../sync.svelte";
 import { ThemeStore } from "../theme.svelte";
 import { apiError, dataFolder, deferred, mockApi, terminalSettings, themeInfo } from "../testing";
 import type { Api, DataFolderInfo } from "../types";
@@ -36,6 +37,7 @@ async function setup(impl: Partial<Api> = {}, mac?: boolean) {
       api: m.api,
       terminal: new TerminalSettingsStore(m.api),
       theme: new ThemeStore(m.api),
+      sync: new SyncStore(m.api),
       onclose,
       onchange,
       ...(mac === undefined ? {} : { mac }),
@@ -142,6 +144,7 @@ describe("SettingsDialog", () => {
         api: m.api,
         terminal: new TerminalSettingsStore(m.api),
         theme: new ThemeStore(m.api),
+        sync: new SyncStore(m.api),
         onclose: () => {},
         onchange: () => {},
       },

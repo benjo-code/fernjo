@@ -521,6 +521,21 @@ describe("VaultManager", () => {
     expect(document.querySelector('[role="alertdialog"]')).toBeNull();
   });
 
+  test("a_changed_on_disk_from_delete_credential_shows_the_reload_bar", async () => {
+    const { tree } = await setup({
+      deleteCredential: async () => {
+        throw apiError("changed_on_disk");
+      },
+    });
+    pick(0);
+    await settle();
+    button("Delete")!.click();
+    await settle();
+    document.querySelector<HTMLButtonElement>('[role="alertdialog"] .danger')!.click();
+    await settle();
+    expect(tree.changedOnDisk).toBe(true);
+  });
+
   test("no_secret_is_rendered_before_reveal", async () => {
     // the mock hands out the sentinel on reveal and nowhere else
     const { calls } = await setup({ revealCredential: async () => ({ password: SENTINEL }) });

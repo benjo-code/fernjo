@@ -3,18 +3,23 @@
   import { SvelteSet } from "svelte/reactivity";
   import { toApiError } from "../api";
   import type { TerminalSettingsStore } from "../terminal-settings.svelte";
+  import type { SyncStore } from "../sync.svelte";
   import type { ThemeStore } from "../theme.svelte";
   import type { Api, DataFolderInfo, Theme } from "../types";
   import { isMac, SHORTCUTS, shortcutKeys } from "../shortcuts";
   import { unsavedNote } from "../unsaved";
   import Icon from "./Icon.svelte";
+  import SyncSettings from "./SyncSettings.svelte";
 
   let {
     api,
     terminal,
     theme,
+    sync,
     onclose,
     onchange,
+    onexport,
+    scrollToSync = false,
     mac = isMac(),
   }: {
     api: Api;
@@ -22,6 +27,12 @@
     terminal: TerminalSettingsStore;
     /** Holds the theme choice; picking one applies it at once. */
     theme: ThemeStore;
+    /** Holds the sync status; the Sync section shows and drives it. */
+    sync: SyncStore;
+    /** Opens the import, export & backup dialog (the join confirmation offers a backup first). */
+    onexport?: () => void;
+    /** Scroll the Sync section into view (the status line's "Details"). */
+    scrollToSync?: boolean;
     onclose: () => void;
     /** A folder was chosen (the info carries the pending restart). */
     onchange: (info: DataFolderInfo) => void;
@@ -163,6 +174,10 @@
       fillTerminal();
     });
     void theme.load();
+    void sync.refresh();
+    if (scrollToSync) {
+      dialog?.querySelector("[data-section='sync']")?.scrollIntoView?.({ block: "start" });
+    }
     void (async () => {
       try {
         info = await api.getDataFolder();
@@ -217,6 +232,8 @@
   }
 
   function onkeydown(e: KeyboardEvent) {
+    // a confirmation inside the dialog (Sync) handles its own keys
+    if ((e.target as Element | null)?.closest?.("[role='alertdialog']")) return;
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
@@ -225,7 +242,9 @@
       // keep focus inside the dialog
       e.preventDefault();
       const items = [
-        ...dialog.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled)"),
+        ...dialog.querySelectorAll<HTMLElement>(
+          "button:not(:disabled), input:not(:disabled), textarea:not(:disabled)",
+        ),
       ];
       if (items.length === 0) return;
       const index = items.indexOf(document.activeElement as HTMLElement);
@@ -383,6 +402,8 @@
         >
       {/if}
     </div>
+
+    <SyncSettings {sync} {onexport} />
 
     <h3 class="section">Keyboard and mouse</h3>
     <ul class="keys">

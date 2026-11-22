@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { onMount, untrack } from "svelte";
+  import { onDestroy, onMount, untrack } from "svelte";
   import { tauriApi, toApiError } from "./lib/api";
+  import ConfirmDialog from "./lib/components/ConfirmDialog.svelte";
   import SettingsDialog from "./lib/components/SettingsDialog.svelte";
   import ImportDialog from "./lib/components/ImportDialog.svelte";
   import PropertiesPanel from "./lib/components/PropertiesPanel.svelte";
@@ -14,6 +15,9 @@
   import { SessionStore } from "./lib/sessions.svelte";
   import { isMac, routeKey } from "./lib/shortcuts";
   import { TreeStore } from "./lib/store.svelte";
+  import { SyncStore } from "./lib/sync.svelte";
+  import { syncErrorText } from "./lib/sync-errors";
+  import { RESEED_CONFIRM } from "./lib/sync-line";
   import { TerminalSettingsStore } from "./lib/terminal-settings.svelte";
   import { ThemeStore } from "./lib/theme.svelte";
   import type { Api, Protocol, TerminalSettings } from "./lib/types";
@@ -40,6 +44,24 @@
 
   // svelte-ignore state_referenced_locally
   const theme = new ThemeStore(api);
+
+  // A run that wrote remote changes locally: fetch the tree and the vault status again. Reload
+  // goes through the same path as the "changed on disk" bar.
+  // svelte-ignore state_referenced_locally
+  const sync = new SyncStore(
+    api,
+    () => {
+      void store.refresh();
+      void vault.init();
+    },
+    () => {
+      // a join ended every session in Rust without an event: drop the tabs, or they would stay
+      // "connected" over a frozen terminal (the same as after a restore)
+      sessions.closeAll();
+      void store.refresh();
+      void vault.init();
+    },
+  );
 
   const layout = new LayoutStore();
   // nothing stored: the grid keeps the stylesheet's token, so the default layout is unchanged
@@ -89,6 +111,18 @@
   });
 
   let folderOpen = $state(false);
+  let settingsAtSync = $state(false);
+  let reseedAsk = $state(false);
+
+  function openSettings(atSync: boolean) {
+    settingsAtSync = atSync;
+    folderOpen = true;
+  }
+
+  async function reseed() {
+    reseedAsk = false;
+    if (!(await sync.reseed()) && sync.error) store.showError(syncErrorText(sync.error).text);
+  }
   let importOpen = $state(false);
   let restartPending = $state(false);
 
@@ -186,7 +220,10 @@
     void refreshRestart();
     void terminal.load();
     void theme.load();
+    void sync.init();
   });
+
+  onDestroy(() => sync.dispose());
 </script>
 
 <svelte:window
@@ -207,8 +244,11 @@
     {vault}
     {sessions}
     onOpenVault={openVault}
-    onsettings={() => (folderOpen = true)}
+    onsettings={() => openSettings(false)}
     onimport={() => (importOpen = true)}
+    {sync}
+    onsyncdetails={() => openSettings(true)}
+    onreseed={() => (reseedAsk = true)}
     {restartPending}
     onRestart={() => void restart()}
     {layout}
@@ -281,8 +321,21 @@
     {api}
     {terminal}
     {theme}
+    {sync}
+    scrollToSync={settingsAtSync}
+    onexport={() => (importOpen = true)}
     onclose={() => (folderOpen = false)}
     onchange={(info) => (restartPending = info.restartRequired)}
+  />
+{/if}
+
+{#if reseedAsk}
+  <ConfirmDialog
+    title={RESEED_CONFIRM.title}
+    detail={RESEED_CONFIRM.detail}
+    confirmLabel={RESEED_CONFIRM.confirmLabel}
+    onConfirm={() => void reseed()}
+    onCancel={() => (reseedAsk = false)}
   />
 {/if}
 

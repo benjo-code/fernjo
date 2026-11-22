@@ -23,10 +23,9 @@ fernjo is a cross-platform (Windows, macOS, Linux) remote connection manager for
 - Native installers for Windows, macOS and Linux.
 
 **Non-goals (for now, may move to the backlog)**
-- Built-in device sync (users sync the data folder themselves, see §5.4).
 - Protocols other than SSH and RDP (VNC, Telnet, serial, HTTP).
 - SFTP file browser, port forwarding UI, jump hosts, local shell tabs, split panes.
-- Team/multi-user features, a server component, a plugin system, mobile apps.
+- Team/multi-user features, a server component (the one exception is the optional self-hosted sync hub, added in M9, see §5.4), a plugin system, mobile apps.
 - Code signing, notarisation and auto-update.
 
 **Anti-goals (failure even if it "works")**
@@ -111,7 +110,7 @@ Each crate is created in the milestone that needs it, not up front.
 
 ### 5.4 Data folder and sync
 - Default data folder: the OS config directory (`directories` crate), e.g. `%APPDATA%\fernjo`, `~/Library/Application Support/fernjo`, `~/.config/fernjo`.
-- The user can choose another folder in settings. Because the vault is encrypted and the connections file holds no secrets, putting the folder in Syncthing/Nextcloud/iCloud gives end-to-end-encrypted sync without sync code in fernjo. Concurrent edits on two devices are not merged (last writer wins, `.bak` kept). Built-in sync is backlog.
+- The user can choose another folder in settings. Because the vault is encrypted and the connections file holds no secrets, putting the folder in Syncthing/Nextcloud/iCloud gives end-to-end-encrypted sync without sync code in fernjo. Concurrent edits on two devices are not merged (last writer wins, `.bak` kept). Built-in sync now exists as an alternative (milestone M9): devices sync through a self-hosted hub with end-to-end-encrypted snapshots and a three-way merge, see `Docs/superpowers/specs/2026-11-22-m09-multi-device-sync-design.md` and `Docs/sync-format.md`; it must not be combined with a file-sync tool on the same data folder.
 - **Single instance:** a second launch focuses the running window (Tauri single-instance plugin). On start, fernjo looks for sync-conflict copies next to its files (e.g. Syncthing's `*.sync-conflict-*`) and shows a warning naming them; it does not merge them. *(Builder call.)*
 - App settings (theme, terminal font, data folder location) live in `settings.json` in the OS config directory, never in the synced folder's vault.
 

@@ -72,7 +72,7 @@ impl Store {
     /// Refuses with `ChangedOnDisk` when the file no longer holds the bytes this store last
     /// read or wrote. A missing file is recreated. A check, not a lock: a sync tool can still
     /// win the race between this check and the rename.
-    fn check_unchanged(&self) -> Result<(), StoreError> {
+    pub fn check_unchanged(&self) -> Result<(), StoreError> {
         let current = persist::fingerprint(&self.path).map_err(|source| SaveError {
             path: self.path.clone(),
             source,
@@ -681,6 +681,22 @@ mod tests {
         assert_eq!(fs::read(store.path()).unwrap(), external);
         assert_eq!(store.tree(), &tree_before);
         assert_eq!(fs::read(&bak).unwrap(), bak_before);
+    }
+
+    #[test]
+    fn check_unchanged_reports_a_foreign_write_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = open(dir.path());
+        store.create_folder(None, None, "one").unwrap();
+        store.check_unchanged().unwrap();
+        let external = external_document("external");
+        fs::write(store.path(), &external).unwrap();
+        let err = store.check_unchanged().unwrap_err();
+        assert!(matches!(err, StoreError::ChangedOnDisk), "{err:?}");
+        assert_eq!(fs::read(store.path()).unwrap(), external);
+        // a missing file is fine (a save recreates it)
+        fs::remove_file(store.path()).unwrap();
+        store.check_unchanged().unwrap();
     }
 
     #[test]
