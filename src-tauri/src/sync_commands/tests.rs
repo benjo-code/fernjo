@@ -11,9 +11,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
-use fernjo_core::{Protocol, Tree};
+use fernjo_core::{Node, NodeKind, Protocol, Tree};
 use fernjo_hub::{HubStore, config, router, serve};
-use fernjo_sync::ports::{LocalChange, LocalState};
+use fernjo_sync::ports::{LocalChange, LocalState, VaultChange};
 use serde_json::{Value, json};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tempfile::TempDir;
@@ -889,4 +889,171 @@ fn a_vault_file_that_cannot_be_read_ends_the_run_and_is_never_replaced() {
     let v: Value = serde_json::to_value(&s).unwrap();
     assert_eq!(v["state"], "error");
     assert!(v["pendingChanges"].is_number());
+}
+
+// ---- apply: consistency of the vault and tree writes -------------------------------------------
+
+/// A device with a tree and an unlocked vault, and the bytes of a vault of another id.
+fn device_with_vault() -> (Dev, Vec<u8>, Dev) {
+    let x = dev();
+    folder(&x, "mine");
+    vault_create(&x.st, sec(MASTER), false).unwrap();
+    credential(&x, "mine-entry");
+    let other = dev();
+    vault_create(&other.st, sec("SENTINEL-other-master-88"), false).unwrap();
+    let bytes = vault_file(&other);
+    (x, bytes, other)
+}
+
+/// A `connections.json` written by somebody else.
+fn write_foreign_tree(d: &Dev) -> Vec<u8> {
+    let other = TempDir::new().unwrap();
+    let other_st = AppState::open(Some(other.path().to_path_buf()));
+    commands::create_folder(&other_st, None, None, "foreign".into()).unwrap();
+    let foreign = fs::read(other.path().join(fernjo_core::FILE_NAME)).unwrap();
+    fs::write(d.data.join(fernjo_core::FILE_NAME), &foreign).unwrap();
+    foreign
+}
+
+#[test]
+fn a_foreign_connections_file_refuses_an_apply_with_a_vault_change_before_any_vault_write() {
+    for merged in [false, true] {
+        let (x, other_bytes, _other) = device_with_vault();
+        let port = AppPort(&x.st);
+        let expected = port.read().unwrap();
+        let (vault_before, id_before) = (vault_file(&x), vault_status(&x.st).unwrap().path);
+        let foreign = write_foreign_tree(&x);
+        let vault = if merged {
+            VaultChange::Merged {
+                head: vault_before.clone(),
+                entries: Vec::new(),
+            }
+        } else {
+            VaultChange::Adopt(other_bytes)
+        };
+        let err = port
+            .apply(
+                &expected,
+                LocalChange {
+                    tree: Some(Tree::new()),
+                    vault,
+                },
+            )
+            .unwrap_err();
+        assert_eq!(err, SyncError::LocalFailed("changed_on_disk".into()));
+        assert_eq!(vault_file(&x), vault_before, "merged: {merged}");
+        assert_eq!(vault_state(&x), "unlocked", "the handle is untouched");
+        assert_eq!(vault_status(&x.st).unwrap().path, id_before);
+        assert_eq!(credential_names(&x), ["mine-entry"]);
+        assert_eq!(x.st.sync_applied.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            fs::read(x.data.join(fernjo_core::FILE_NAME)).unwrap(),
+            foreign
+        );
+    }
+}
+
+#[test]
+fn a_failed_tree_write_after_a_vault_write_still_counts_as_applied() {
+    let (x, other_bytes, other) = device_with_vault();
+    let port = AppPort(&x.st);
+    let expected = port.read().unwrap();
+    // a tree deeper than the limit passes the fingerprint check and fails in `replace_tree`
+    let mut deep = Node {
+        id: fernjo_core::NodeId::new_v4(),
+        name: "leaf".into(),
+        description: String::new(),
+        settings: Default::default(),
+        kind: NodeKind::Folder {
+            children: Vec::new(),
+        },
+    };
+    for _ in 0..=fernjo_core::MAX_TREE_DEPTH {
+        deep = Node {
+            id: fernjo_core::NodeId::new_v4(),
+            name: "d".into(),
+            description: String::new(),
+            settings: Default::default(),
+            kind: NodeKind::Folder {
+                children: vec![deep],
+            },
+        };
+    }
+    let tree_before = tree(&x);
+    let err = port
+        .apply(
+            &expected,
+            LocalChange {
+                tree: Some(Tree::from_children(vec![deep])),
+                vault: VaultChange::Adopt(other_bytes.clone()),
+            },
+        )
+        .unwrap_err();
+    assert_eq!(err, SyncError::LocalFailed("too_deep".into()));
+    // the vault file was replaced, so the UI is told to look again
+    assert_eq!(vault_file(&x), other_bytes);
+    assert_eq!(vault_state(&x), "locked");
+    assert_eq!(x.st.sync_applied.load(Ordering::SeqCst), 1);
+    assert_eq!(tree(&x), tree_before, "the tree stayed");
+    let _ = other;
+}
+
+#[test]
+fn a_join_refused_by_the_fingerprint_leaves_the_device_unpaired_and_untouched() {
+    let hub = start_hub();
+    let (a, b) = (dev(), dev());
+    folder(&a, "from-a");
+    vault_create(&a.st, sec(MASTER), false).unwrap();
+    setup(&a, &hub, "a");
+    folder(&b, "mine");
+    vault_create(&b.st, sec("SENTINEL-other-master-77"), false).unwrap();
+    let vault_before = vault_file(&b);
+    let foreign = write_foreign_tree(&b);
+    let group = state_file(&a).group;
+
+    let code = sec(&sync_pairing_code(&a.st).unwrap());
+    let err = sync_join(&b.st, &code, "b".into(), true).unwrap_err();
+    assert_eq!(err.code, "changed_on_disk");
+    assert!(!b.device.join("sync.json").exists());
+    assert!(!b.device.join("sync-base.json").exists());
+    assert!(b.st.sync_secrets.get(group).unwrap().is_none());
+    assert_eq!(vault_file(&b), vault_before);
+    assert_eq!(vault_state(&b), "unlocked");
+    assert_eq!(
+        fs::read(b.data.join(fernjo_core::FILE_NAME)).unwrap(),
+        foreign
+    );
+    assert_eq!(b.st.sync_applied.load(Ordering::SeqCst), 0);
+    assert_eq!(sync_status(&b.st).unwrap().state, "off");
+}
+
+#[test]
+fn apply_refuses_with_local_changed_when_only_the_vault_file_differs_from_expected() {
+    let (x, other_bytes, _other) = device_with_vault();
+    let port = AppPort(&x.st);
+    let expected = port.read().unwrap();
+    // the user saves a credential after the engine read the data: tree equal, vault file not
+    credential(&x, "added-meanwhile");
+    let vault_now = vault_file(&x);
+    let err = port
+        .apply(
+            &expected,
+            LocalChange {
+                tree: None,
+                vault: VaultChange::Adopt(other_bytes),
+            },
+        )
+        .unwrap_err();
+    assert_eq!(err, SyncError::LocalChanged);
+    assert_eq!(vault_file(&x), vault_now);
+    assert_eq!(x.st.sync_applied.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn reset_keeps_the_running_flag_of_the_command_that_holds_the_slot() {
+    let d = dev();
+    let _guard = try_begin(&d.st).unwrap();
+    runtime(&d.st).reset();
+    assert!(runtime(&d.st).running);
+    assert!(try_begin(&d.st).is_none());
 }

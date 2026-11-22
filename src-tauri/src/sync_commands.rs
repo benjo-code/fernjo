@@ -114,8 +114,13 @@ impl SyncRuntime {
         }
     }
 
+    /// Forgets the last run's results. `running` stays: the command that resets still holds
+    /// the run slot (its guard clears the flag).
     fn reset(&mut self) {
-        *self = SyncRuntime::default();
+        *self = SyncRuntime {
+            running: self.running,
+            ..SyncRuntime::default()
+        };
     }
 }
 

@@ -11,8 +11,10 @@
 //! `Vault` and `Store`, which keep their own guards (the vault header guard, the generation
 //! floor, the `connections.json` fingerprint): a refusal of one of them (`changed_on_disk`,
 //! `rolled_back`, ...) is reported as `SyncError::LocalFailed(code)` with that stable code and
-//! ends the run. The vault is written before the tree, so the more guarded write refuses first;
-//! a run that is cut off between the two is repaired by the next one (the merge is idempotent).
+//! ends the run. Before the first write the `connections.json` fingerprint is checked without
+//! writing (the likeliest refusal), so a refused apply leaves the vault alone; the vault is then
+//! written before the tree, `sync_applied` is bumped as soon as the vault file changed, and a run
+//! cut off between the two writes is repaired by the next one (the merge is idempotent).
 
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -112,8 +114,23 @@ impl LocalPort for AppPort<'_> {
             return Err(SyncError::LocalChanged);
         }
 
-        let changes_something = next.tree.is_some() || !matches!(next.vault, VaultChange::Keep);
+        // The likeliest refusal (a foreign writer changed `connections.json`) is found before
+        // anything is written, so a refused apply leaves the vault as it was. Same locks, no
+        // write, the store's own fingerprint logic.
+        if next.tree.is_some() {
+            match &*locked.store {
+                Ok(store) => store
+                    .check_unchanged()
+                    .map_err(|e| local_failed(e.code()))?,
+                Err(failure) => return Err(local_failed(&failure.code)),
+            }
+        }
+        let vault_changes = !matches!(next.vault, VaultChange::Keep);
         apply_vault(state, &mut locked.vault, next.vault)?;
+        if vault_changes {
+            // The vault file changed: the UI must look again whatever the tree write does.
+            state.sync_applied.fetch_add(1, Ordering::SeqCst);
+        }
         if let Some(tree) = next.tree {
             match &mut *locked.store {
                 Ok(store) => store
@@ -121,9 +138,9 @@ impl LocalPort for AppPort<'_> {
                     .map_err(|e| local_failed(e.code()))?,
                 Err(failure) => return Err(local_failed(&failure.code)),
             }
-        }
-        if changes_something {
-            state.sync_applied.fetch_add(1, Ordering::SeqCst);
+            if !vault_changes {
+                state.sync_applied.fetch_add(1, Ordering::SeqCst);
+            }
         }
         Ok(())
     }

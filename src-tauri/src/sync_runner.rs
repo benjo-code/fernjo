@@ -185,7 +185,9 @@ fn run_loop(app: &AppHandle) {
         if !ready(&state) {
             continue;
         }
-        if run_background(&state) {
+        // A panic in one run must not end the runner (the run guard resets `running`).
+        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_background(&state)));
+        if ran.unwrap_or(false) {
             let _ = app.emit("sync-status", build_status(&state));
         }
         scheduler.finished(epoch.elapsed());
