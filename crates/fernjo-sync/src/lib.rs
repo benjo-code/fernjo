@@ -10,3 +10,5 @@ pub use envelope::{
 };
 pub use error::SyncError;
 pub use snapshot::{DeviceInfo, Snapshot};
+pub mod client;
+pub mod pairing;

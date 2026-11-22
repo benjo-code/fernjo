@@ -19,6 +19,26 @@ pub enum SyncError {
     SnapshotTooLarge,
     /// The operating system gave no random bytes.
     RandomFailed,
+    /// The hub did not answer (connect failure or timeout): the quiet offline state.
+    HubUnreachable,
+    /// The hub refused the secret (401).
+    HubUnauthorized,
+    /// The hub's TLS certificate is not trusted (unknown CA, wrong name, expired).
+    HubTlsUntrusted,
+    /// Another device wrote first (412).
+    HubConflict,
+    /// The hub answered something the protocol does not allow.
+    HubProtocol(String),
+    /// The hub's answer is larger than an envelope may be.
+    HubTooLarge,
+    /// The hub address is not allowed (not https, and not plain http to a loopback address).
+    InvalidHubUrl(String),
+    /// The pinned CA certificate is not valid PEM.
+    InvalidCa,
+    /// The pairing code is damaged, truncated or not a pairing code.
+    InvalidPairingCode,
+    /// The pairing code was made by a newer version of fernjo.
+    NewerPairingCode,
 }
 
 impl SyncError {
@@ -33,6 +53,16 @@ impl SyncError {
             Self::SnapshotInvalid(_) => "snapshot_invalid",
             Self::SnapshotTooLarge => "snapshot_too_large",
             Self::RandomFailed => "random_failed",
+            Self::HubUnreachable => "hub_unreachable",
+            Self::HubUnauthorized => "hub_unauthorized",
+            Self::HubTlsUntrusted => "hub_tls_untrusted",
+            Self::HubConflict => "hub_conflict",
+            Self::HubProtocol(_) => "hub_protocol",
+            Self::HubTooLarge => "hub_too_large",
+            Self::InvalidHubUrl(_) => "invalid_hub_url",
+            Self::InvalidCa => "invalid_ca",
+            Self::InvalidPairingCode => "invalid_pairing_code",
+            Self::NewerPairingCode => "newer_pairing_code",
         }
     }
 }
@@ -50,6 +80,18 @@ impl fmt::Display for SyncError {
             Self::SnapshotInvalid(reason) => write!(f, "the snapshot is invalid: {reason}"),
             Self::SnapshotTooLarge => f.write_str("the snapshot is too large"),
             Self::RandomFailed => f.write_str("no random source available"),
+            Self::HubUnreachable => f.write_str("the sync hub is not reachable"),
+            Self::HubUnauthorized => f.write_str("the sync hub refused the secret"),
+            Self::HubTlsUntrusted => f.write_str("the sync hub's certificate is not trusted"),
+            Self::HubConflict => f.write_str("another device changed the data first"),
+            Self::HubProtocol(reason) => write!(f, "unexpected answer from the sync hub: {reason}"),
+            Self::HubTooLarge => f.write_str("the sync hub's answer is too large"),
+            Self::InvalidHubUrl(reason) => write!(f, "the hub address is not allowed: {reason}"),
+            Self::InvalidCa => f.write_str("the CA certificate is not valid PEM"),
+            Self::InvalidPairingCode => f.write_str("this is not a valid pairing code"),
+            Self::NewerPairingCode => {
+                f.write_str("this pairing code was made by a newer version of fernjo")
+            }
         }
     }
 }
