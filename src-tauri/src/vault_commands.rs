@@ -155,6 +155,7 @@ pub fn vault_create(
     }
     *guard = VaultState::Open(vault);
     clear_auto_unlock_issue(state);
+    state.note_local_edit();
     Ok(view(state, &guard))
 }
 
@@ -192,6 +193,8 @@ pub fn vault_unlock_older(
         Ok(())
     })?;
     clear_auto_unlock_issue(state);
+    // the file was re-stamped
+    state.note_local_edit();
     vault_status(state)
 }
 
@@ -211,6 +214,7 @@ pub fn vault_change_password(
 ) -> Result<VaultStatus, CommandError> {
     ensure_writable(state)?;
     with_vault(state, |v| Ok(v.change_password(&old, &new)?))?;
+    state.note_local_edit();
     vault_status(state)
 }
 
@@ -424,6 +428,7 @@ pub fn create_credential(
             secret,
             notes: draft.notes,
         })?;
+        state.note_local_edit();
         Ok(v.get(id)?.into())
     })
 }
@@ -446,6 +451,7 @@ pub fn update_credential(
                 notes: update.notes,
             },
         )?;
+        state.note_local_edit();
         Ok(v.get(id)?.into())
     })
 }
@@ -497,6 +503,7 @@ pub fn delete_credential(state: &AppState, id: CredentialId) -> Result<Mutation,
             Ok(())
         })?;
         v.delete(id)?;
+        state.note_local_edit();
         with_store(state, |store| {
             Ok(Mutation {
                 id: None,
@@ -687,7 +694,9 @@ mod tests {
     const PW: &str = "SENTINEL-password-7f3a9b";
     const KEY: &str = "SENTINEL-privatekey-9c1b2d";
     const PASS: &str = "SENTINEL-passphrase-4d2e8f";
-    const SENTINELS: [&str; 5] = [MASTER, NEW_MASTER, PW, KEY, PASS];
+    // the hub secret typed into the sync commands
+    const SYNC_SECRET: &str = "SENTINEL-hubsecret-3e8d52";
+    const SENTINELS: [&str; 6] = [MASTER, NEW_MASTER, PW, KEY, PASS, SYNC_SECRET];
     // Import and export: the passwords inside the mRemoteNG fixtures (stored encrypted in the
     // files), the custom file key and the backup password.
     const DEFAULT_KEY_XML: &[u8] =
@@ -1880,6 +1889,45 @@ mod tests {
                 assert!(w.st.pending.lock().unwrap().is_none());
                 format!("{picked:?}")
             }),
+            // sync: the world has no device folder, so setup and join are refused and the rest
+            // reports "not paired"; the paired flows are scanned in `sync_commands::tests`
+            entry("sync_status", |w| {
+                j(crate::sync_commands::sync_status(&w.st))
+            }),
+            entry("sync_setup", |w| {
+                j(crate::sync_commands::sync_setup(
+                    &w.st,
+                    "https://hub.example".into(),
+                    sec(SYNC_SECRET),
+                    None,
+                    "device".into(),
+                ))
+            }),
+            entry("sync_pairing_code", |w| {
+                j(crate::sync_commands::sync_pairing_code(&w.st))
+            }),
+            entry("sync_join", |w| {
+                j(crate::sync_commands::sync_join(
+                    &w.st,
+                    &sec(&format!("fernjo-sync-1:{SYNC_SECRET}")),
+                    "device".into(),
+                    true,
+                ))
+            }),
+            entry("sync_now", |w| j(crate::sync_commands::sync_now(&w.st))),
+            entry("sync_reseed", |w| {
+                j(crate::sync_commands::sync_reseed(&w.st))
+            }),
+            entry("sync_edit_secret", |w| {
+                j(crate::sync_commands::sync_edit_secret(
+                    &w.st,
+                    sec(SYNC_SECRET),
+                ))
+            }),
+            entry("sync_leave", |w| j(crate::sync_commands::sync_leave(&w.st))),
+            entry("sync_dismiss_findings", |w| {
+                j(crate::sync_commands::sync_dismiss_findings(&w.st))
+            }),
             // not IPC commands (see `NOT_A_COMMAND`), but called as plain functions
             entry("import_begin", |w| {
                 let p = import_begin(&w.st, ImportKind::Backup, w._dir.path().join("x.fjbk"));
@@ -2113,6 +2161,7 @@ mod tests {
             include_str!("rdp_commands.rs"),
             include_str!("import_commands.rs"),
             include_str!("app_settings.rs"),
+            include_str!("sync_commands.rs"),
         ];
         // Only lines that start with the attribute count (not doc comments or strings), so
         // `#[tauri::command(async)]` and similar forms are counted too.

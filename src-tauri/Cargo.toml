@@ -25,6 +25,7 @@ fernjo-vault = { path = "../crates/fernjo-vault" }
 fernjo-ssh = { path = "../crates/fernjo-ssh" }
 fernjo-rdp = { path = "../crates/fernjo-rdp" }
 fernjo-import = { path = "../crates/fernjo-import" }
+fernjo-sync = { path = "../crates/fernjo-sync" }
 serde.workspace = true
 serde_json.workspace = true
 secrecy.workspace = true
@@ -37,3 +38,5 @@ uuid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+fernjo-hub = { path = "../crates/fernjo-hub" }
+base64.workspace = true

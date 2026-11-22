@@ -1663,11 +1663,14 @@ dependencies = [
 name = "fernjo-app"
 version = "0.2.0"
 dependencies = [
+ "base64 0.23.1",
  "chrono",
  "fernjo-core",
+ "fernjo-hub",
  "fernjo-import",
  "fernjo-rdp",
  "fernjo-ssh",
+ "fernjo-sync",
  "fernjo-vault",
  "secrecy",
  "serde",

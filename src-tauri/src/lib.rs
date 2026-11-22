@@ -10,6 +10,9 @@ mod session_commands;
 mod session_flow;
 mod sessions;
 mod state;
+mod sync_commands;
+mod sync_port;
+mod sync_runner;
 mod vault_commands;
 
 use std::sync::atomic::Ordering;
@@ -47,8 +50,9 @@ pub fn run() {
         .setup(|app| {
             #[cfg(target_os = "linux")]
             app_menu::offer(app.handle());
-            #[cfg(not(target_os = "linux"))]
-            let _ = app;
+            // Background sync (a no-op while sync is off). `AppState` is built, and with it the
+            // startup auto-unlock tried, before `setup` runs.
+            sync_runner::spawn_triggers(app.handle());
             Ok(())
         })
         // A reload or a crashed page leaves its sessions running without a UI (the page's
@@ -71,10 +75,19 @@ pub fn run() {
             if window.label() != "main" {
                 return;
             }
+            if matches!(event, tauri::WindowEvent::Focused(true)) {
+                window.state::<AppState>().sync_wake.focus();
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let state = window.state::<AppState>();
                 let connected = state.sessions.connected_count();
                 if !sessions::needs_close_confirmation(connected) {
+                    // No session to ask about: with sync set up the window waits (at most a
+                    // few seconds, on another thread) for a last push, then closes.
+                    if sync_runner::hold_close(&state) {
+                        api.prevent_close();
+                        sync_runner::destroy_after_push(window.clone());
+                    }
                     return;
                 }
                 api.prevent_close();
@@ -107,7 +120,7 @@ pub fn run() {
                                 .store(false, Ordering::SeqCst);
                             if confirmed {
                                 window.state::<AppState>().sessions.close_all();
-                                let _ = window.destroy();
+                                sync_runner::destroy_after_push(window.clone());
                             }
                         }
                     });
@@ -162,6 +175,15 @@ pub fn run() {
             import_commands::handlers::import_cancel,
             import_commands::handlers::export_connections,
             import_commands::handlers::export_backup,
+            sync_commands::handlers::sync_status,
+            sync_commands::handlers::sync_setup,
+            sync_commands::handlers::sync_pairing_code,
+            sync_commands::handlers::sync_join,
+            sync_commands::handlers::sync_now,
+            sync_commands::handlers::sync_reseed,
+            sync_commands::handlers::sync_edit_secret,
+            sync_commands::handlers::sync_leave,
+            sync_commands::handlers::sync_dismiss_findings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running fernjo");

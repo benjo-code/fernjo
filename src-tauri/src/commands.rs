@@ -102,6 +102,7 @@ fn mutate(
     ensure_writable(state)?;
     with_store(state, |store| {
         let id = f(store)?;
+        state.note_local_edit();
         Ok(Mutation {
             id,
             snapshot: snapshot(store, Vec::new()),

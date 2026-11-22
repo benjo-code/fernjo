@@ -468,6 +468,8 @@ pub fn import_apply(state: &AppState, options: ApplyOptions) -> Result<ApplyResu
     if result.is_ok() {
         *slot = None;
     }
+    // also a failed apply may have written part of it
+    state.note_local_edit();
     result
 }
 

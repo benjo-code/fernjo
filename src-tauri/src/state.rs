@@ -1,7 +1,7 @@
 //! Application state shared by all commands.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use fernjo_core::{
@@ -15,6 +15,9 @@ use fernjo_vault::{
 use crate::commands::CommandError;
 use crate::import_commands::Pending;
 use crate::sessions::SessionManager;
+use crate::sync_commands::SyncRuntime;
+use crate::sync_runner::SyncWake;
+use fernjo_sync::secrets::{MemorySyncSecrets, OsSyncSecrets, SyncSecrets};
 
 /// Why the data could not be opened. Every command reports this until the app restarts.
 #[derive(Debug, Clone)]
@@ -139,6 +142,22 @@ pub struct AppState {
     pub sessions: SessionManager,
     /// The import or restore that waits for inspect/apply (one at a time).
     pub pending: Mutex<Option<Pending>>,
+    /// Multi-device sync (M9): what the last run reported, the findings still to show and the
+    /// running flag. Holds no secret. A leaf lock: never held while taking another one.
+    pub sync: Mutex<SyncRuntime>,
+    /// The hub secret and the sync key per group (the OS keychain in the app, memory in tests).
+    pub sync_secrets: Box<dyn SyncSecrets>,
+    /// Counts every local edit of the synced data (tree command, credential command, import);
+    /// the sync runner debounces its "after a local save" trigger on it. Sync's own writes do
+    /// not count.
+    pub edit_seq: AtomicU64,
+    /// Counts the sync runs that wrote remote changes into the local data; the UI reloads the
+    /// tree and the vault when it changes.
+    pub sync_applied: AtomicU64,
+    /// Wakes the sync runner (window focus).
+    pub sync_wake: SyncWake,
+    /// The window is closing and the best-effort push is under way (set once).
+    pub sync_closing: AtomicBool,
 }
 
 /// Debug output never includes the vault, the key store or the connection data.
@@ -210,7 +229,7 @@ impl AppState {
                 };
                 let terminal = loaded.as_ref().and_then(|s| s.terminal.clone());
                 let theme = loaded.and_then(|s| s.theme);
-                let state = Self::build(
+                let mut state = Self::build(
                     Some(l.data_dir),
                     Folders {
                         config_dir: Some(l.config_dir),
@@ -225,6 +244,7 @@ impl AppState {
                     KdfParams::default(),
                     None,
                 );
+                state.sync_secrets = Box::new(OsSyncSecrets);
                 if let (Some(prefs), Ok(mut slot)) = (terminal, state.terminal.lock()) {
                     *slot = prefs;
                 }
@@ -357,7 +377,36 @@ impl AppState {
             theme: Mutex::new(Theme::default()),
             sessions: SessionManager::default(),
             pending: Mutex::new(None),
+            sync: Mutex::new(SyncRuntime::default()),
+            sync_secrets: Box::new(MemorySyncSecrets::default()),
+            edit_seq: AtomicU64::new(0),
+            sync_applied: AtomicU64::new(0),
+            sync_wake: SyncWake::default(),
+            sync_closing: AtomicBool::new(false),
         }
+    }
+
+    /// Records a local edit of the synced data (the sync runner's debounce trigger).
+    pub fn note_local_edit(&self) {
+        self.edit_seq.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Test constructor with a device folder (sync keeps its state there) and memory secrets.
+    #[cfg(test)]
+    pub(crate) fn open_with_device_dir(dir: PathBuf, device_dir: PathBuf) -> AppState {
+        Self::build(
+            Some(dir),
+            Folders {
+                config_dir: None,
+                device_dir: Some(device_dir),
+                source: DataDirSource::Default,
+            },
+            false,
+            None,
+            Box::new(MemoryKeyStore::default()),
+            KdfParams::TEST,
+            None,
+        )
     }
 
     #[cfg(test)]
