@@ -43,6 +43,22 @@ The result is a static musl binary on an empty base image, running as the unpriv
 
 Without Podman the same binary runs anywhere: `fernjo-hub serve --data <dir> --listen 127.0.0.1:8787` (after `fernjo-hub init --data <dir>`). `serve` refuses to start in a folder that was not initialised.
 
+Run exactly one `serve` process per data directory: the compare-and-swap lock is inside the process, so two hubs on one folder could both accept a write against the same head.
+
+## Command line
+
+```
+fernjo-hub init --data <dir>
+fernjo-hub serve --data <dir> --listen <addr:port>
+fernjo-hub rotate-secret --data <dir>
+```
+
+- `--data` is required by every command; `--listen` must be an IP address with a port (`127.0.0.1:8787`, `0.0.0.0:8787`, `[::1]:8787`), a host name is not accepted. A missing command or flag, an unknown command or an unparsable address prints the usage text to stderr and exits with 1.
+- `init` creates the folder and `config.json` and prints `Hub secret (shown once, store it safely): <secret>` on stdout. The secret is 32 random bytes in base64url (43 characters). Exit 0; exit 1 with a message on stderr when the folder already holds a `config.json` ("already initialised; use rotate-secret").
+- `rotate-secret` prints `New hub secret (shown once): <secret>` and a reminder to restart `serve`. Exit 1 when the folder was not initialised or `config.json` is damaged (also when larger than 4 KiB).
+- `serve` prints `fernjo-hub listening on <addr>` to stderr and runs until it is stopped (there is no clean-shutdown handling: every write is atomic, so stopping at any moment is safe). Exit 1 with a message when the folder was not initialised, `config.json` is damaged, the data folder cannot be prepared or the port cannot be bound. At start it creates `history/` (mode 0700 on Unix) and removes `*.tmp` leftovers of a crashed write. Nothing is logged per request: no path, header, body or secret.
+- Files in `<dir>`: `config.json` (`{"secretSha256": "<hex>"}`), `head.env`, `history/<seq>.env`.
+
 ## Caddy
 
 Add the snippet from `crates/fernjo-hub/deploy/Caddyfile.example`:
@@ -53,6 +69,8 @@ benjo.loc {
 	reverse_proxy 127.0.0.1:8787
 }
 ```
+
+If Caddy itself runs in a container, `127.0.0.1` inside that container is the container, not the host: point `reverse_proxy` at the host's address instead (the host's LAN address, `host.containers.internal` under Podman, or put both containers on one Podman network and use the hub container's name and port 8787). Because the unit publishes `127.0.0.1:8787` only, a Caddy container that must reach the hub over the host's LAN address needs `PublishPort=<host address>:8787:8787` in the unit instead; keep it off any address that is reachable from outside the home network, because the hub itself speaks plain HTTP.
 
 fernjo only talks HTTPS (plain `http://` is accepted for loopback only), so each device must trust Caddy's internal root certificate. Get it on the Caddy host with either of:
 
@@ -84,3 +102,13 @@ Each replaced head is kept as `history/<seq>.env`, the newest ten. They are encr
 | `GET /v1/info` | `{"protocol":1,"maxBytes":67108864}` |
 
 `PUT` errors: 401 (bad or missing secret), 400 (not an envelope, bad precondition header), 409 (`seq` not higher, or another group), 412 (the head is not the one expected), 413 (over 64 MiB, refused without reading the rest), 428 (no precondition header).
+
+Wire formats, the envelope layout and the merge rules are in `Docs/sync-format.md`; that page is enough to write a compatible hub or client.
+
+## Not verified yet (owner checks)
+
+The hub and the sync client were tested with in-process tests only (the hub on loopback, two clients against it, fake servers for the client's refusals). Still open, to be run by the owner:
+
+- `podman build -f crates/fernjo-hub/Containerfile -t fernjo-hub .` and the rootless Quadlet unit on the Ubuntu or Debian VM (the image build, the `keep-id` user mapping and the read-only root file system have not been run).
+- Caddy with `tls internal` in front of the hub, including a Caddy restart and a hub restart that lose nothing, with the CA pasted into fernjo.
+- Two real devices syncing through that hub (create, edit, delete, conflict copy, vault entry, offline then online), and the OS keychain items on Windows, macOS and Linux.
