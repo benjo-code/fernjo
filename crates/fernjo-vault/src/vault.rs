@@ -6,6 +6,7 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -165,6 +166,7 @@ impl Vault {
     /// # Errors
     /// `unreadable`, `newer_format`, `invalid_kdf_params`.
     pub fn open(path: &Path) -> Result<Option<Self>, VaultError> {
+        sweep_stale_temp_files(path, STALE_TEMP_AGE);
         let bytes = match read_capped(path, MAX_FILE_LEN) {
             Ok(b) => b,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -459,18 +461,7 @@ impl Vault {
             .body
             .entries
             .iter()
-            .map(|e| {
-                (
-                    e.id,
-                    NewEntry {
-                        name: e.name.clone(),
-                        username: e.username.clone(),
-                        domain: e.domain.clone(),
-                        secret: e.secret.clone(),
-                        notes: e.notes.clone(),
-                    },
-                )
-            })
+            .map(export_pair)
             .collect())
     }
 
@@ -539,6 +530,124 @@ impl Vault {
             }
             Ok(())
         })
+    }
+
+    /// The current vault file, read with the size cap (for sync: the local side of a merge).
+    ///
+    /// # Errors
+    /// `unreadable` (missing, unreadable or larger than `MAX_FILE_LEN`).
+    pub fn file_bytes(&self) -> Result<Vec<u8>, VaultError> {
+        read_capped(&self.path, MAX_FILE_LEN).map_err(|e| VaultError::Unreadable(e.to_string()))
+    }
+
+    /// Parses `bytes` as a file of this vault: size cap, header (KDF bounds, newer-format rule)
+    /// and vault id. Nothing is decrypted.
+    fn parse_foreign<'a>(&self, bytes: &'a [u8]) -> Result<(Header, &'a [u8]), VaultError> {
+        check_foreign_len(bytes)?;
+        let (header, ciphertext) = Header::parse(bytes)?;
+        if header.id != self.header.id {
+            return Err(VaultError::Unreadable(
+                "the file belongs to a different vault".to_owned(),
+            ));
+        }
+        Ok((header, ciphertext))
+    }
+
+    /// Like `parse_foreign`, and opens the body with the held data key. A body that does not
+    /// open is `unreadable` here: the data key is stable across password changes, so it is a
+    /// different vault or a damaged file, never a reason to write.
+    fn open_foreign(&self, bytes: &[u8]) -> Result<(Header, Body), VaultError> {
+        let key = &self.unlocked()?.key;
+        let (header, ciphertext) = self.parse_foreign(bytes)?;
+        let body = open_body(key, &header, &header.encode(), ciphertext).map_err(|_| {
+            VaultError::Unreadable("the file does not open with this vault's data key".to_owned())
+        })?;
+        Ok((header, body))
+    }
+
+    /// Makes `bytes` the vault file as they are (sync rule: only the other side changed the
+    /// vault), also while the vault is locked. Nothing is written when `bytes` are larger than
+    /// `MAX_FILE_LEN` or belong to another vault (`unreadable`), are a newer format, do not
+    /// open with the held key (unlocked: `unreadable`), have a generation below the floor
+    /// (unlocked: `rolled_back`), or when the file on disk is not the one this handle knows
+    /// (`changed_on_disk`). The file is written atomically with a `.bak`. An unlocked vault
+    /// stays unlocked with the new entries and keeps its key; a locked vault stays locked and
+    /// neither the floor nor the device mark is touched (the next unlock does that). The floor
+    /// and the mark are never lowered.
+    ///
+    /// # Errors
+    /// `unreadable`, `newer_format`, `invalid_kdf_params`, `rolled_back`, `changed_on_disk`,
+    /// `save_failed`.
+    pub fn adopt_file(&mut self, bytes: &[u8]) -> Result<(), VaultError> {
+        let (header, body) = if self.unlocked.is_some() {
+            let (header, body) = self.open_foreign(bytes)?;
+            if body.generation < self.floor {
+                return Err(VaultError::RolledBack {
+                    found: body.generation,
+                    seen: self.floor,
+                });
+            }
+            (header, Some(body))
+        } else {
+            (self.parse_foreign(bytes)?.0, None)
+        };
+        self.check_unchanged_on_disk()?;
+        write_atomic(&self.path, bytes).map_err(|e| VaultError::SaveFailed(e.to_string()))?;
+        *self.disk_header = header.encode();
+        *self.header = header;
+        if let Some(body) = body {
+            self.floor = self.floor.max(body.generation);
+            if let Some(store) = &self.generations {
+                store.raise(self.header.id, self.floor);
+            }
+            if let Some(u) = self.unlocked.as_mut() {
+                u.body = body;
+            }
+        }
+        Ok(())
+    }
+
+    /// Writes the merge of both sides (sync rule: both changed the vault; needs an unlocked
+    /// vault): `entries` under the held data key, with the header of `head_bytes` (its
+    /// password wrap and KDF cost) and a generation above both this handle's and the head's.
+    /// `head_bytes` must belong to this vault and open with the held key, otherwise nothing is
+    /// written (`unreadable`). Entries are validated like [`Vault::replace_entries`]. On any
+    /// error the handle and the file stay as they were.
+    ///
+    /// # Errors
+    /// `vault_locked`, `unreadable`, `newer_format`, `invalid_kdf_params`, `empty_name`,
+    /// `duplicate_entry`, `changed_on_disk`, `save_failed`.
+    pub fn adopt_merged(
+        &mut self,
+        head_bytes: &[u8],
+        entries: Vec<(EntryId, NewEntry)>,
+    ) -> Result<(), VaultError> {
+        let (head_header, head_body) = self.open_foreign(head_bytes)?;
+        let mut seen = std::collections::HashSet::new();
+        let mut list = Vec::with_capacity(entries.len());
+        for (id, new) in entries {
+            let name = checked_name(&new.name)?;
+            if !seen.insert(id) {
+                return Err(VaultError::DuplicateEntry);
+            }
+            list.push(entry_from(id, name, new));
+        }
+        let previous_header = std::mem::replace(&mut self.header, Box::new(head_header));
+        let previous_floor = self.floor;
+        self.floor = self.floor.max(head_body.generation);
+        let previous_entries = match self.unlocked.as_mut() {
+            Some(u) => std::mem::replace(&mut u.body.entries, list),
+            None => Vec::new(),
+        };
+        let result = self.save();
+        if result.is_err() {
+            self.header = previous_header;
+            self.floor = previous_floor;
+            if let Some(u) = self.unlocked.as_mut() {
+                u.body.entries = previous_entries;
+            }
+        }
+        result
     }
 
     /// Runs `f` on the entry list, saves, and restores the previous list if `f` or the
@@ -727,6 +836,138 @@ fn open_body(
     let plain = crypto::open(key.as_bytes(), &header.body_nonce, header_bytes, ciphertext)
         .map_err(|()| VaultError::Tampered)?;
     serde_json::from_slice(&plain).map_err(|_| VaultError::Tampered)
+}
+
+/// An entry as the (id, `NewEntry`) pair the backup and sync paths use.
+fn export_pair(e: &Entry) -> (EntryId, NewEntry) {
+    (
+        e.id,
+        NewEntry {
+            name: e.name.clone(),
+            username: e.username.clone(),
+            domain: e.domain.clone(),
+            secret: e.secret.clone(),
+            notes: e.notes.clone(),
+        },
+    )
+}
+
+/// What `inspect_file` learns from the header of a vault file without unlocking.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileInfo {
+    /// The vault id from the header.
+    pub id: VaultId,
+    /// The header bytes (150): they include the body nonce, which is fresh on every save, so
+    /// they identify this version of the file.
+    pub version_header: Vec<u8>,
+}
+
+/// Reads the vault id and version identity of file bytes. Uses the same parser as `open`, so
+/// the KDF bounds, the newer-format rule and the size cap apply.
+///
+/// # Errors
+/// `unreadable`, `newer_format`, `invalid_kdf_params`.
+pub fn inspect_file(bytes: &[u8]) -> Result<FileInfo, VaultError> {
+    check_foreign_len(bytes)?;
+    let (header, _) = Header::parse(bytes)?;
+    Ok(FileInfo {
+        id: header.id,
+        version_header: bytes[..HEADER_LEN].to_vec(),
+    })
+}
+
+/// The decrypted content of a vault file: its generation and entries with secrets.
+pub struct Contents {
+    pub generation: u64,
+    pub entries: Vec<(EntryId, NewEntry)>,
+}
+
+impl fmt::Debug for Contents {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Contents")
+            .field("generation", &self.generation)
+            .field("entries", &self.entries.len())
+            .finish()
+    }
+}
+
+/// Opens the body of file bytes with a data key (the password is not needed: the key is stable
+/// across password changes). Secret material leaves here; the caller handles it like
+/// [`Vault::export_entries`].
+///
+/// # Errors
+/// `unreadable`, `newer_format`, `invalid_kdf_params`, `tampered` (the key does not open it).
+pub fn read_entries(bytes: &[u8], key: &DataKey) -> Result<Contents, VaultError> {
+    check_foreign_len(bytes)?;
+    let (header, ciphertext) = Header::parse(bytes)?;
+    let body = open_body(key, &header, &header.encode(), ciphertext)?;
+    Ok(Contents {
+        generation: body.generation,
+        entries: body.entries.iter().map(export_pair).collect(),
+    })
+}
+
+fn check_foreign_len(bytes: &[u8]) -> Result<(), VaultError> {
+    if bytes.len() as u64 > MAX_FILE_LEN {
+        return Err(VaultError::Unreadable(
+            "the file is larger than the vault size limit".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// A temp file of an interrupted save older than this is left over and gets removed by
+/// [`Vault::open`].
+pub const STALE_TEMP_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Whether `name` is `<file name>.<16 lowercase hex>.tmp`, the temp name `write_atomic` uses.
+fn is_temp_name(file_name: &str, name: &str) -> bool {
+    let Some(rest) = name.strip_prefix(file_name) else {
+        return false;
+    };
+    let Some(hex) = rest.strip_prefix('.').and_then(|r| r.strip_suffix(".tmp")) else {
+        return false;
+    };
+    hex.len() == 16 && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Removes regular files named like a vault temp file next to `path` that were last modified
+/// more than `age` ago. Symlinks, directories and every other name stay; errors are ignored.
+fn sweep_stale_temp_files(path: &Path, age: Duration) {
+    let (Some(dir), Some(file_name)) = (
+        path.parent().filter(|p| !p.as_os_str().is_empty()),
+        path.file_name().and_then(|n| n.to_str()),
+    ) else {
+        return;
+    };
+    let Ok(read) = fs::read_dir(dir) else {
+        return;
+    };
+    let now = SystemTime::now();
+    for entry in read.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !is_temp_name(file_name, name) {
+            continue;
+        }
+        let candidate = entry.path();
+        let Ok(meta) = fs::symlink_metadata(&candidate) else {
+            continue;
+        };
+        if !meta.file_type().is_file() {
+            continue;
+        }
+        let stale = meta
+            .modified()
+            .ok()
+            .and_then(|m| now.duration_since(m).ok())
+            .is_some_and(|d| d > age);
+        if stale {
+            let _ = fs::remove_file(&candidate);
+        }
+    }
 }
 
 /// Creates `dir` and its missing parents; on Unix with mode 0700 (folders that already exist
@@ -1266,3 +1507,7 @@ mod entry_tests;
 #[cfg(test)]
 #[path = "generation_tests.rs"]
 mod generation_tests;
+
+#[cfg(test)]
+#[path = "adopt_tests.rs"]
+mod adopt_tests;
