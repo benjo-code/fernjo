@@ -617,7 +617,8 @@ impl Vault {
     /// here; a different id starts from that mark alone). Nothing is written on an error.
     ///
     /// # Errors
-    /// `unreadable`, `newer_format`, `invalid_kdf_params`, `changed_on_disk`, `save_failed`.
+    /// `unreadable` (also a KDF cost above the cap), `newer_format`, `changed_on_disk`,
+    /// `save_failed`.
     pub fn replace_with_file(&mut self, bytes: &[u8]) -> Result<(), VaultError> {
         check_foreign_len(bytes)?;
         let (header, _) = Header::parse(bytes)?;
