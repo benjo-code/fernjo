@@ -292,7 +292,8 @@ export type SyncFindingKind =
   | "placementKept"
   | "moveUndone"
   | "entryConflictCopy"
-  | "entryKeptEdit";
+  | "entryKeptEdit"
+  | "passwordChangeDropped";
 
 export interface SyncFinding {
   id: string;

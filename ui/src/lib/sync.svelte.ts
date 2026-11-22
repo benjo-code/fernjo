@@ -180,6 +180,9 @@ export class SyncStore {
       this.hidePairingCode();
       this.confirmation = null;
     }
-    if (previous !== null && previous !== status.applied) this.#onApplied();
+    // The first status counts too when runs already applied something: the tree was listed before
+    // this store was told anything, so a startup run may have changed the data since.
+    const changed = previous === null ? status.applied > 0 : previous !== status.applied;
+    if (changed) this.#onApplied();
   }
 }

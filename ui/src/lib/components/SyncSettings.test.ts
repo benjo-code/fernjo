@@ -231,6 +231,25 @@ describe("SyncSettings", () => {
     expect(calls.syncLeave).toHaveLength(1);
   });
 
+  test("a_leave_that_could_not_clear_the_keychain_shows_rusts_note_on_the_start_screen", async () => {
+    const note =
+      'This device left sync, but the keychain item could not be removed. Delete "sync-g1".';
+    await setup(paired(), {
+      syncLeave: async () =>
+        syncStatus({ state: "off", error: { code: "keychain_unavailable", message: note } }),
+    });
+    await click("Leave sync…");
+    document.querySelector<HTMLButtonElement>('[role="alertdialog"] .danger')!.click();
+    await settle();
+    expect(button("Set up this device")).toBeDefined();
+    expect(document.querySelector("[data-leave-note]")?.textContent).toBe(note);
+  });
+
+  test("a_normal_start_screen_shows_no_leave_note", async () => {
+    await setup(syncStatus());
+    expect(document.querySelector("[data-leave-note]")).toBeNull();
+  });
+
   test("edit_hub_secret_sends_it_and_clears_the_field", async () => {
     const gate = deferred<SyncStatus>();
     const { calls } = await setup(paired(), { syncEditSecret: () => gate.promise });

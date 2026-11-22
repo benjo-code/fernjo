@@ -71,7 +71,7 @@
 {#if sync?.status && sync.status.findings.length > 0}
   <div class="bar" role="status">
     <ul class="findings">
-      {#each sync.status.findings as finding, index (index)}
+      {#each sync.status.findings as finding (`${finding.kind}:${finding.id}:${finding.message}`)}
         <li>{finding.message}</li>
       {/each}
     </ul>

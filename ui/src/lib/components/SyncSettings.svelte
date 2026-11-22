@@ -171,6 +171,10 @@
   <p class="note">Loading…</p>
 {:else if !paired}
   {#if mode === "choose"}
+    {#if status.error}
+      <!-- a leave that could not remove the keychain item: Rust's message names the item -->
+      <p class="warning-text" role="status" data-leave-note>{status.error.message}</p>
+    {/if}
     <p class="note">
       Keep your connections and vault in step across your devices through a hub you run yourself.
     </p>

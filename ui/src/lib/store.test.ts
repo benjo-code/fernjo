@@ -627,20 +627,33 @@ describe("SyncStore", () => {
     expect(sync.busy).toBe(false);
   });
 
-  test("a_changed_applied_counter_reloads_tree_and_vault_but_the_first_status_does_not", async () => {
-    const mock = mockApi([], { syncStatus: async () => syncStatus({ state: "ok", applied: 2 }) });
+  test("a_changed_applied_counter_reloads_tree_and_vault_but_an_unchanged_one_does_not", async () => {
+    const mock = mockApi([], { syncStatus: async () => syncStatus({ state: "ok", applied: 0 }) });
     const onApplied = vi.fn();
     const sync = new SyncStore(mock.api, onApplied);
     await sync.init();
-    expect(onApplied).not.toHaveBeenCalled();
-    mock.emitSync(syncStatus({ state: "ok", applied: 2 }));
+    expect(onApplied, "nothing was applied yet").not.toHaveBeenCalled();
+    mock.emitSync(syncStatus({ state: "ok", applied: 0 }));
     expect(onApplied).not.toHaveBeenCalled();
     mock.emitSync(syncStatus({ state: "ok", applied: 3 }));
     expect(onApplied).toHaveBeenCalledTimes(1);
     expect(sync.status?.applied).toBe(3);
+    mock.emitSync(syncStatus({ state: "ok", applied: 3 }));
+    expect(onApplied).toHaveBeenCalledTimes(1);
     sync.dispose();
     mock.emitSync(syncStatus({ state: "ok", applied: 4 }));
     expect(onApplied).toHaveBeenCalledTimes(1);
+  });
+
+  test("a_first_status_that_already_counts_applied_runs_reloads_tree_and_vault", async () => {
+    // a startup run applied remote changes after the tree was listed, before sync was told
+    const mock = mockApi([], { syncStatus: async () => syncStatus({ state: "ok", applied: 2 }) });
+    const onApplied = vi.fn();
+    const sync = new SyncStore(mock.api, onApplied);
+    await sync.init();
+    expect(onApplied).toHaveBeenCalledTimes(1);
+    mock.emitSync(syncStatus({ state: "ok", applied: 2 }));
+    expect(onApplied, "the same counter again changes nothing").toHaveBeenCalledTimes(1);
   });
 
   test("the_pairing_code_is_dropped_when_the_status_goes_off", async () => {
