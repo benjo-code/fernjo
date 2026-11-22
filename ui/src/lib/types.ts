@@ -262,6 +262,66 @@ export interface Api {
   /** Opens the save dialog and writes the file; `null` when it was cancelled. */
   exportConnections(): Promise<ExportInfo | null>;
   exportBackup(password: string): Promise<ExportInfo | null>;
+  syncStatus(): Promise<SyncStatus>;
+  /** `caPem` is `null` when the hub's certificate comes from a public CA. */
+  syncSetup(
+    url: string,
+    secret: string,
+    caPem: string | null,
+    deviceName: string,
+  ): Promise<SyncStatus>;
+  /** The explicit reveal: the pairing code contains the keys of the sync group. */
+  syncPairingCode(): Promise<string>;
+  /** Without `confirmReplace` Rust answers `needs_confirmation` with the counts and changes nothing. */
+  syncJoin(code: string, deviceName: string, confirmReplace: boolean): Promise<SyncStatus>;
+  syncNow(): Promise<SyncStatus>;
+  syncReseed(): Promise<SyncStatus>;
+  syncEditSecret(secret: string): Promise<SyncStatus>;
+  syncLeave(): Promise<SyncStatus>;
+  syncDismissFindings(): Promise<void>;
+  /** Subscribes to the `sync-status` event; resolves with the function that unsubscribes. */
+  onSyncStatus(handler: (status: SyncStatus) => void): Promise<() => void>;
+}
+
+export type SyncState =
+  "off" | "ok" | "offline" | "waiting_for_unlock" | "rolled_back" | "error" | "needs_confirmation";
+
+export type SyncFindingKind =
+  | "conflictCopy"
+  | "keptEdit"
+  | "placementKept"
+  | "moveUndone"
+  | "entryConflictCopy"
+  | "entryKeptEdit";
+
+export interface SyncFinding {
+  id: string;
+  name: string;
+  kind: SyncFindingKind;
+  message: string;
+}
+
+export interface SyncConfirmation {
+  connections: number;
+  folders: number;
+  /** `null` while the vault is locked. */
+  vaultEntries: number | null;
+  hasVault: boolean;
+}
+
+/** The wire type of `sync_status` and the `sync-status` event (see `sync_commands.rs`). */
+export interface SyncStatus {
+  state: SyncState;
+  /** RFC 3339 UTC of the last successful run since the app started. */
+  lastSyncedAt: string | null;
+  pendingChanges: number;
+  deviceName: string | null;
+  hubUrl: string | null;
+  findings: SyncFinding[];
+  error: ApiError | null;
+  running: boolean;
+  applied: number;
+  confirmation: SyncConfirmation | null;
 }
 
 export type ImportKind = "mremoteng" | "connections" | "backup";

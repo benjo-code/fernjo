@@ -2,12 +2,14 @@
   import type { Snippet } from "svelte";
   import type { SessionStore } from "../sessions.svelte";
   import type { TreeStore } from "../store.svelte";
+  import type { SyncStore } from "../sync.svelte";
   import type { VaultStore } from "../vault.svelte";
   import { LayoutStore, SIDEBAR_MIN, sidebarMax } from "../layout.svelte";
   import FilterBox from "./FilterBox.svelte";
   import Icon from "./Icon.svelte";
   import NoticeBar from "./NoticeBar.svelte";
   import Splitter from "./Splitter.svelte";
+  import SyncStatusLine from "./SyncStatus.svelte";
   import TreeView from "./TreeView.svelte";
   import VaultChip from "./VaultChip.svelte";
   import VaultNote from "./VaultNote.svelte";
@@ -19,6 +21,9 @@
     onOpenVault,
     onsettings,
     onimport,
+    sync,
+    onsyncdetails,
+    onreseed,
     restartPending = false,
     onRestart,
     layout = new LayoutStore(),
@@ -33,6 +38,12 @@
     onsettings?: () => void;
     /** The "Import / Export" button was clicked. */
     onimport?: () => void;
+    /** Its status line sits above the footer buttons and its findings join the notice bar. */
+    sync?: SyncStore;
+    /** "Details" or the status line was clicked: open Settings at the Sync section. */
+    onsyncdetails?: () => void;
+    /** "Re-seed…" of a hub that is older than this device. */
+    onreseed?: () => void;
     restartPending?: boolean;
     onRestart?: () => void;
     layout?: LayoutStore;
@@ -66,9 +77,12 @@
     <VaultChip {vault} onOpenManager={onOpenVault} onFocusUnlock={() => void note?.focusForm()} />
   </div>
   <VaultNote bind:this={note} bind:open={noteOpen} {vault} />
-  <NoticeBar {store} {restartPending} {onRestart} />
+  <NoticeBar {store} {sync} {restartPending} {onRestart} />
   <div class="tree-slot"><TreeView {store} {sessions} {onimport} /></div>
   {@render children?.()}
+  {#if sync}
+    <SyncStatusLine {sync} {onreseed} ondetails={onsyncdetails} />
+  {/if}
   <div class="foot">
     <button
       type="button"

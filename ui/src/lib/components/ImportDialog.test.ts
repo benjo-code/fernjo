@@ -245,6 +245,50 @@ describe("ImportDialog", () => {
     expect(document.body.textContent).toContain("Restored");
   });
 
+  test("a_changed_on_disk_from_apply_backup_shows_the_reload_bar", async () => {
+    const p: ImportPreview = preview({
+      kind: "backup",
+      fileName: "fernjo-backup.fernjo",
+      report: null,
+      backup: {
+        createdAt: "2026-11-01T10:00:00Z",
+        app: "fernjo 0.5.0",
+        folders: 1,
+        connections: 4,
+        credentials: 0,
+      },
+    });
+    const { tree } = await setup({
+      importInspect: async (secret) => {
+        if (secret === null) throw apiError("password_needed", "Needs a password.");
+        return p;
+      },
+      importApply: async () => {
+        throw apiError("changed_on_disk");
+      },
+    });
+    await click("Backup file…");
+    type(input("import-secret"), "pw");
+    await click("Continue");
+    await click("Restore…");
+    [...document.querySelectorAll("[role=alertdialog] button")][1].dispatchEvent(
+      new MouseEvent("click", { bubbles: true }),
+    );
+    await settle();
+    expect(tree.changedOnDisk).toBe(true);
+  });
+
+  test("a_changed_on_disk_from_an_import_does_not_show_the_reload_bar", async () => {
+    const { tree } = await setup({
+      importApply: async () => {
+        throw apiError("changed_on_disk");
+      },
+    });
+    await click("mRemoteNG file…");
+    await click("Import");
+    expect(tree.changedOnDisk).toBe(false);
+  });
+
   /** `vault` is the state Rust reports with the preview (what the dialog decides on). */
   const backupPreview = (
     needsVault = false,
