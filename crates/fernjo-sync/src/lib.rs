@@ -3,6 +3,7 @@
 
 pub mod envelope;
 pub mod error;
+pub mod merge;
 pub mod snapshot;
 
 pub use envelope::{
