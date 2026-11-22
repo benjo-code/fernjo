@@ -361,3 +361,140 @@ fn open_removes_vault_temp_files_older_than_a_day_and_keeps_newer_and_foreign_fi
     assert!(dir_named.is_dir());
     assert_eq!(fs::read(&path).unwrap(), before);
 }
+
+/// Another vault in its own folder: its file bytes, its password and its path.
+fn other_vault_file(entries: &[&str]) -> (Vec<u8>, Vault, TempDir) {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join(FILE_NAME);
+    let mut vault = Vault::create_with(&path, &secret(PW2), KdfParams::TEST).unwrap();
+    for n in entries {
+        vault.add(new_entry(n)).unwrap();
+    }
+    (fs::read(&path).unwrap(), vault, dir)
+}
+
+#[test]
+fn replace_with_file_takes_another_vault_and_ends_locked() {
+    let dir = TempDir::new().unwrap();
+    let (mut vault, path) = new_vault(&dir);
+    vault.add(new_entry("mine")).unwrap();
+    let store = Arc::new(MemoryGenerationStore::default());
+    vault.attach_generation_store(store.clone());
+    let old_id = vault.id();
+    let before = fs::read(&path).unwrap();
+    let (foreign, other, _other_dir) = other_vault_file(&["theirs"]);
+
+    vault.replace_with_file(&foreign).unwrap();
+
+    assert_eq!(fs::read(&path).unwrap(), foreign);
+    assert_eq!(fs::read(bak(&path)).unwrap(), before);
+    assert_eq!(vault.id(), other.id());
+    assert_ne!(vault.id(), old_id);
+    assert!(!vault.is_unlocked());
+    assert_eq!(store.get(old_id), Some(2), "the old vault's mark stays");
+    // the handle follows the new file: the new password opens it, the old one does not
+    assert_eq!(code(vault.unlock(&secret(PW))), "wrong_password");
+    vault.unlock(&secret(PW2)).unwrap();
+    assert_eq!(names(&vault), ["theirs"]);
+    vault.add(new_entry("more")).unwrap();
+    assert_eq!(names(&vault), ["more", "theirs"]);
+    let leftovers: Vec<_> = fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".tmp"))
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
+#[test]
+fn replace_with_file_uses_the_device_mark_of_the_new_vault_and_never_writes_it() {
+    let dir = TempDir::new().unwrap();
+    let (mut vault, _path) = new_vault(&dir);
+    let (foreign, other, _other_dir) = other_vault_file(&[]);
+    let store = Arc::new(MemoryGenerationStore::default());
+    // this device has seen a newer generation of that vault before
+    store.raise(other.id(), 9);
+    vault.attach_generation_store(store.clone());
+
+    vault.replace_with_file(&foreign).unwrap();
+    assert_eq!(store.get(other.id()), Some(9), "the mark is not lowered");
+    assert_eq!(code(vault.unlock(&secret(PW2))), "rolled_back");
+    assert!(!vault.is_unlocked());
+}
+
+#[test]
+fn replace_with_file_of_the_same_vault_ends_locked_too() {
+    let dir = TempDir::new().unwrap();
+    let (mut vault, path) = new_vault(&dir);
+    let old = fs::read(&path).unwrap();
+    vault.add(new_entry("one")).unwrap();
+    let newer = fs::read(&path).unwrap();
+    fs::write(&path, &old).unwrap();
+    let mut handle = Vault::open(&path).unwrap().unwrap();
+    handle.unlock(&secret(PW)).unwrap();
+
+    handle.replace_with_file(&newer).unwrap();
+    assert!(!handle.is_unlocked());
+    handle.unlock(&secret(PW)).unwrap();
+    assert_eq!(names(&handle), ["one"]);
+}
+
+#[test]
+fn replace_with_file_refuses_bad_bytes_and_a_changed_file_and_writes_nothing() {
+    let dir = TempDir::new().unwrap();
+    let (mut vault, path) = new_vault(&dir);
+    vault.add(new_entry("one")).unwrap();
+    let before = fs::read(&path).unwrap();
+    let before_bak = fs::read(bak(&path)).unwrap();
+    let (foreign, _other, _other_dir) = other_vault_file(&[]);
+
+    let huge = vec![0u8; usize::try_from(MAX_FILE_LEN).unwrap() + 1];
+    assert_eq!(code(vault.replace_with_file(&huge)), "unreadable");
+    assert_eq!(code(vault.replace_with_file(b"nope")), "unreadable");
+    let mut newer = foreign.clone();
+    newer[crate::format::OFF_VERSION..crate::format::OFF_VERSION + 2]
+        .copy_from_slice(&999u16.to_be_bytes());
+    assert_eq!(code(vault.replace_with_file(&newer)), "newer_format");
+    let mut heavy = foreign.clone();
+    let too_much = KdfParams::DEFAULT.memory_kib * 4 + 1;
+    heavy[OFF_KDF_MEMORY..OFF_KDF_MEMORY + 4].copy_from_slice(&too_much.to_be_bytes());
+    assert_eq!(code(vault.replace_with_file(&heavy)), "unreadable");
+    assert_eq!(fs::read(&path).unwrap(), before);
+    assert_eq!(fs::read(bak(&path)).unwrap(), before_bak);
+    assert!(vault.is_unlocked(), "a refused replace changes nothing");
+
+    // somebody else wrote the file since this handle read it
+    let mut other = Vault::open(&path).unwrap().unwrap();
+    other.unlock(&secret(PW)).unwrap();
+    other.add(new_entry("two")).unwrap();
+    let on_disk = fs::read(&path).unwrap();
+    assert_eq!(code(vault.replace_with_file(&foreign)), "changed_on_disk");
+    assert_eq!(fs::read(&path).unwrap(), on_disk);
+}
+
+#[test]
+fn install_file_creates_a_locked_vault_and_never_overwrites() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join(FILE_NAME);
+    let (foreign, other, _other_dir) = other_vault_file(&["theirs"]);
+
+    let mut vault = Vault::install_file(&path, &foreign).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), foreign);
+    assert_eq!(vault.id(), other.id());
+    assert!(!vault.is_unlocked());
+    vault.unlock(&secret(PW2)).unwrap();
+    assert_eq!(names(&vault), ["theirs"]);
+
+    // an existing file, usable or not, is never replaced
+    assert_eq!(code(Vault::install_file(&path, &foreign)), "already_exists");
+    fs::write(&path, b"garbage").unwrap();
+    assert_eq!(code(Vault::install_file(&path, &foreign)), "already_exists");
+    assert_eq!(fs::read(&path).unwrap(), b"garbage");
+
+    // bad bytes write nothing
+    let fresh = dir.path().join("second.fernjo");
+    assert_eq!(code(Vault::install_file(&fresh, b"nope")), "unreadable");
+    let huge = vec![0u8; usize::try_from(MAX_FILE_LEN).unwrap() + 1];
+    assert_eq!(code(Vault::install_file(&fresh, &huge)), "unreadable");
+    assert!(!fresh.exists());
+}

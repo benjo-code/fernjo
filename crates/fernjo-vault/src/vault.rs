@@ -607,6 +607,64 @@ impl Vault {
         Ok(())
     }
 
+    /// Makes `bytes` the vault file even when they belong to another vault than this handle's
+    /// (sync join: the joining device takes the group's vault, replacing a vault it created on
+    /// its own). The same guards as [`Vault::adopt_file`] apply to the bytes (size cap, header
+    /// with the KDF bounds, newer-format rule) and to the file on disk (`changed_on_disk`), and
+    /// the write is atomic with a `.bak`. The handle always ends locked, because a key held for
+    /// the old file does not open the new one: it takes the header (so the vault id may change),
+    /// and its floor becomes the device mark of the new vault id (never lowered, never written
+    /// here; a different id starts from that mark alone). Nothing is written on an error.
+    ///
+    /// # Errors
+    /// `unreadable`, `newer_format`, `invalid_kdf_params`, `changed_on_disk`, `save_failed`.
+    pub fn replace_with_file(&mut self, bytes: &[u8]) -> Result<(), VaultError> {
+        check_foreign_len(bytes)?;
+        let (header, _) = Header::parse(bytes)?;
+        self.check_unchanged_on_disk()?;
+        write_atomic(&self.path, bytes).map_err(|e| VaultError::SaveFailed(e.to_string()))?;
+        let mark = self
+            .generations
+            .as_ref()
+            .and_then(|s| s.get(header.id))
+            .unwrap_or(0);
+        self.floor = if header.id == self.header.id {
+            self.floor.max(mark)
+        } else {
+            mark
+        };
+        *self.disk_header = header.encode();
+        *self.header = header;
+        self.unlocked = None;
+        Ok(())
+    }
+
+    /// Creates the vault file at `path` from `bytes` (sync join on a device that has no vault
+    /// yet) and returns the handle, locked. The bytes are checked like in
+    /// [`Vault::replace_with_file`]; an existing file (also an unreadable one) is never
+    /// overwritten (`already_exists`). Nothing is written on an error.
+    ///
+    /// # Errors
+    /// `unreadable`, `newer_format`, `invalid_kdf_params`, `already_exists`, `save_failed`.
+    pub fn install_file(path: &Path, bytes: &[u8]) -> Result<Self, VaultError> {
+        check_foreign_len(bytes)?;
+        let (header, _) = Header::parse(bytes)?;
+        // Unreadable metadata counts as "exists": never risk overwriting.
+        if path.try_exists().unwrap_or(true) {
+            return Err(VaultError::AlreadyExists);
+        }
+        write_atomic(path, bytes).map_err(|e| VaultError::SaveFailed(e.to_string()))?;
+        Ok(Self {
+            path: path.to_path_buf(),
+            disk_header: Box::new(header.encode()),
+            header: Box::new(header),
+            unlocked: None,
+            floor: 0,
+            generations: None,
+            upgrade_target: KdfParams::DEFAULT,
+        })
+    }
+
     /// Writes the merge of both sides (sync rule: both changed the vault; needs an unlocked
     /// vault): `entries` under the held data key, with the header of `head_bytes` (its
     /// password wrap and KDF cost) and a generation above both this handle's and the head's.
