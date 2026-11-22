@@ -1713,6 +1713,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "fernjo-sync"
+version = "0.2.0"
+dependencies = [
+ "base64 0.23.1",
+ "chacha20poly1305",
+ "fernjo-core",
+ "getrandom 0.4.3",
+ "hkdf",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "fernjo-vault"
 version = "0.2.0"
 dependencies = [
