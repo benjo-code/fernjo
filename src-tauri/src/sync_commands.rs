@@ -21,7 +21,7 @@
 //! | `sync_now` | none | `SyncStatus` |
 //! | `sync_reseed` | none | `SyncStatus` |
 //! | `sync_edit_secret` | `secret` | `SyncStatus` |
-//! | `sync_leave` | none | `SyncStatus` |
+//! | `sync_leave` | none | `SyncStatus` (state `off`; `error` `keychain_unavailable` when the keychain item could not be removed) |
 //! | `sync_dismiss_findings` | none | nothing |
 //!
 //! `SyncStatus` (camelCase):
@@ -35,9 +35,11 @@
 //!   differ from the base); `0` when off.
 //! - `deviceName`, `hubUrl`: from `sync.json`, `null` when off.
 //! - `findings`: `{ id, name, kind, message }` for each merge notice not yet dismissed. `kind` is
-//!   `conflictCopy`, `keptEdit`, `placementKept`, `moveUndone`, `entryConflictCopy` or
-//!   `entryKeptEdit`; `id` is the node or entry id, `message` is the sentence to show. They stay
-//!   until `sync_dismiss_findings`.
+//!   `conflictCopy`, `keptEdit`, `placementKept`, `moveUndone`, `entryConflictCopy`,
+//!   `entryKeptEdit` or `passwordChangeDropped` (the master password set on this device was
+//!   replaced by the other device's after both changed the vault; `name` is "Vault"); `id` is the
+//!   node or entry id (the vault id for `passwordChangeDropped`), `message` is the sentence to
+//!   show. They stay until `sync_dismiss_findings`.
 //! - `error`: `{ code, message }` or `null`. Codes are the stable ones of `fernjo-sync`
 //!   (`hub_unauthorized`, `hub_tls_untrusted`, `snapshot_invalid`, `state_unusable`,
 //!   `keychain_unavailable`, ...); a refusal of the local side carries the code of the `Store`
@@ -58,6 +60,7 @@
 //! so the UI needs no polling.
 
 use std::sync::MutexGuard;
+use std::time::{Duration, Instant};
 
 use fernjo_sync::SyncError;
 use fernjo_sync::client::{HubClient, HubConfig};
@@ -150,18 +153,27 @@ pub struct FindingView {
 impl FindingView {
     fn of(finding: &Finding) -> FindingView {
         let (id, name, kind) = match finding {
-            Finding::ConflictCopy { copy, name, .. } => (copy.to_string(), name, "conflictCopy"),
-            Finding::KeptEdit { node, name } => (node.to_string(), name, "keptEdit"),
-            Finding::PlacementKept { node, name } => (node.to_string(), name, "placementKept"),
-            Finding::MoveUndone { node, name } => (node.to_string(), name, "moveUndone"),
-            Finding::EntryConflictCopy { copy, name, .. } => {
-                (copy.to_string(), name, "entryConflictCopy")
+            Finding::ConflictCopy { copy, name, .. } => {
+                (copy.to_string(), name.as_str(), "conflictCopy")
             }
-            Finding::EntryKeptEdit { entry, name } => (entry.to_string(), name, "entryKeptEdit"),
+            Finding::KeptEdit { node, name } => (node.to_string(), name.as_str(), "keptEdit"),
+            Finding::PlacementKept { node, name } => {
+                (node.to_string(), name.as_str(), "placementKept")
+            }
+            Finding::MoveUndone { node, name } => (node.to_string(), name.as_str(), "moveUndone"),
+            Finding::EntryConflictCopy { copy, name, .. } => {
+                (copy.to_string(), name.as_str(), "entryConflictCopy")
+            }
+            Finding::EntryKeptEdit { entry, name } => {
+                (entry.to_string(), name.as_str(), "entryKeptEdit")
+            }
+            Finding::PasswordChangeDropped { vault } => {
+                (vault.to_string(), "Vault", "passwordChangeDropped")
+            }
         };
         FindingView {
             id,
-            name: name.clone(),
+            name: name.to_owned(),
             kind,
             message: describe(finding),
         }
@@ -457,6 +469,40 @@ pub(crate) fn run_background_with(state: &AppState, port: &dyn LocalPort) -> boo
     true
 }
 
+/// The final push when the window closes: like [`run_background`], but a run that already holds
+/// the slot is waited for (at most `budget`) instead of making the close skip the push. Once
+/// the slot is free it runs only when something still waits (the run that was in flight may have
+/// pushed everything). `true` when it ran. Blocks the calling thread, so it belongs on a worker,
+/// never on the UI thread.
+pub fn push_before_close(state: &AppState, budget: Duration) -> bool {
+    push_before_close_with(state, &AppPort(state), budget)
+}
+
+pub(crate) fn push_before_close_with(
+    state: &AppState,
+    port: &dyn LocalPort,
+    budget: Duration,
+) -> bool {
+    if !runtime(state).paired {
+        return false;
+    }
+    let deadline = Instant::now() + budget;
+    loop {
+        if let Some(_guard) = try_begin(state) {
+            if !has_pending_changes(state) {
+                return false;
+            }
+            let result = run_engine(state, port);
+            record(state, result);
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 // ---- commands ---------------------------------------------------------------------------
 
 pub fn sync_status(state: &AppState) -> Result<SyncStatus, CommandError> {
@@ -686,12 +732,21 @@ pub fn sync_edit_secret(
     Ok(build_status(state))
 }
 
-/// Leaves sync: removes the keychain item, `sync.json` and the base; the local data stays.
+/// Leaves sync: removes the keychain item, `sync.json` and the base; the local data stays. When
+/// the keychain refuses the delete, the rest is still removed and the answer (state `off`) carries
+/// `error` `keychain_unavailable` naming the item left behind.
 pub fn sync_leave(state: &AppState) -> Result<SyncStatus, CommandError> {
     let store = state_store(state).map_err(|_| error("not_paired", "this device is not set up"))?;
     let _guard = begin(state)?;
+    // A keychain that refuses the delete must not keep the device in sync: the state and the base
+    // are cleared anyway and the leftover item is named in the answer.
+    let mut leftover = None;
     match store.load() {
-        Ok(Some(st)) => state.sync_secrets.delete(st.group)?,
+        Ok(Some(st)) => {
+            if state.sync_secrets.delete(st.group).is_err() {
+                leftover = Some(st.group);
+            }
+        }
         Ok(None) => return Err(SyncError::NotPaired.into()),
         // An unusable `sync.json` can still be left; its group (and so its keychain item) is
         // unknown then.
@@ -699,7 +754,17 @@ pub fn sync_leave(state: &AppState) -> Result<SyncStatus, CommandError> {
     }
     store.clear()?;
     runtime(state).reset();
-    Ok(build_status(state))
+    let mut status = build_status(state);
+    if let Some(group) = leftover {
+        status.error = Some(StatusError {
+            code: "keychain_unavailable".to_owned(),
+            message: format!(
+                "This device left sync, but the keychain item with the sync keys could not be                  removed. Delete the item named \"{}\" (service \"fernjo\") from your OS                  keychain by hand.",
+                fernjo_sync::secrets::keychain_user(group)
+            ),
+        });
+    }
+    Ok(status)
 }
 
 /// Forgets the merge notices the user has seen.

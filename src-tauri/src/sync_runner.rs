@@ -202,7 +202,8 @@ pub fn hold_close(state: &AppState) -> bool {
     state.sync_closing.load(Ordering::SeqCst) || ready(state)
 }
 
-/// Pushes what is waiting (at most `CLOSE_BUDGET`) and then destroys the window. Never blocks
+/// Pushes what is waiting (at most `CLOSE_BUDGET`, which also covers waiting for a background
+/// run that holds the slot) and then destroys the window. Never blocks
 /// the caller: the work runs on its own threads. The run itself is the normal one on a third
 /// thread, so a slow hub costs the budget and nothing more; the process ending cuts it off, and
 /// the engine is built for that (an interrupted run is repaired by the next one). Without sync
@@ -229,10 +230,9 @@ pub fn destroy_after_push(window: tauri::Window) {
                 .name("fernjo-sync-push".to_owned())
                 .spawn(move || {
                     let state = worker.state::<AppState>();
-                    // only when something waits: a close with nothing to push stays instant
-                    if crate::sync_commands::has_pending_changes(&state) {
-                        run_background(&state);
-                    }
+                    // waits for a run that is already going, then pushes only when something
+                    // still waits: a close with nothing to push stays instant
+                    crate::sync_commands::push_before_close(&state, CLOSE_BUDGET);
                     let _ = tx.send(());
                 });
             if run.is_ok() {

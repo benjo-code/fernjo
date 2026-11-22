@@ -324,6 +324,116 @@ fn adopt_merged_refuses_and_writes_nothing_on_bad_input() {
     assert_eq!(fs::read(&path).unwrap(), before);
 }
 
+#[test]
+fn a_failed_adopt_merged_restores_header_floor_and_entries_and_a_later_save_works() {
+    let dir = TempDir::new().unwrap();
+    let (mut local, path) = new_vault(&dir);
+    local.add(new_entry("one")).unwrap();
+    let original = fs::read(&path).unwrap();
+    assert_eq!(local.generation(), Some(2));
+
+    // the head: another device changed the password and added entries (generation 6)
+    let dir2 = TempDir::new().unwrap();
+    let (mut remote, remote_path) = second_device(&path, &dir2);
+    remote.change_password(&secret(PW), &secret(PW2)).unwrap();
+    for n in ["r1", "r2", "r3"] {
+        remote.add(new_entry(n)).unwrap();
+    }
+    assert_eq!(remote.generation(), Some(6));
+    let head = fs::read(&remote_path).unwrap();
+    let merged = remote.export_entries().unwrap();
+
+    // a foreign writer changes the file under this handle, so the merge's save is refused
+    let mut other = Vault::open(&path).unwrap().unwrap();
+    other.unlock(&secret(PW)).unwrap();
+    other.add(new_entry("foreign")).unwrap();
+    let on_disk = fs::read(&path).unwrap();
+    let on_disk_bak = fs::read(bak(&path)).unwrap();
+
+    assert_eq!(code(local.adopt_merged(&head, merged)), "changed_on_disk");
+    assert_eq!(fs::read(&path).unwrap(), on_disk, "the file is untouched");
+    assert_eq!(fs::read(bak(&path)).unwrap(), on_disk_bak);
+    assert_eq!(local.generation(), Some(2), "the generation is as before");
+    assert_eq!(names(&local), ["one"], "the entries are as before");
+
+    // the foreign change goes away (the sync tool puts the old file back): the handle is usable
+    // again and writes with its own old header and the old floor, not the head's
+    fs::write(&path, &original).unwrap();
+    local.add(new_entry("later")).unwrap();
+    assert_eq!(
+        local.generation(),
+        Some(3),
+        "the floor of the head (6) was not kept"
+    );
+    let saved = fs::read(&path).unwrap();
+    assert_eq!(
+        inspect_file(&saved).unwrap().password_wrap,
+        inspect_file(&original).unwrap().password_wrap,
+        "the head's password wrap was not kept"
+    );
+    let mut fresh = Vault::open(&path).unwrap().unwrap();
+    assert_eq!(code(fresh.unlock(&secret(PW2))), "wrong_password");
+    fresh.unlock(&secret(PW)).unwrap();
+    assert_eq!(names(&fresh), ["later", "one"]);
+}
+
+#[test]
+fn a_locked_adopt_of_an_older_file_is_refused_at_the_next_unlock_by_the_device_mark() {
+    let dir = TempDir::new().unwrap();
+    let (mut vault, path) = new_vault(&dir);
+    let store = Arc::new(MemoryGenerationStore::default());
+    vault.attach_generation_store(store.clone());
+    let first = fs::read(&path).unwrap();
+    vault.add(new_entry("one")).unwrap();
+    vault.add(new_entry("two")).unwrap();
+    assert_eq!(store.get(vault.id()), Some(3));
+    vault.lock();
+
+    // locked, the generation cannot be read: the older file is taken as it is ...
+    vault.adopt_file(&first).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), first);
+    // ... and the unlock finds out. A wrong password is still just a wrong password.
+    assert_eq!(
+        code(vault.unlock(&secret("not the password"))),
+        "wrong_password"
+    );
+    let err = vault.unlock(&secret(PW)).unwrap_err();
+    assert_eq!(err.code(), "rolled_back");
+    assert!(!vault.is_unlocked());
+    assert_eq!(store.get(vault.id()), Some(3), "the mark is never lowered");
+    // the explicit choice of the user opens it and re-stamps the file above the mark
+    vault.unlock_accepting_older(&secret(PW)).unwrap();
+    assert!(vault.generation().unwrap() > 3);
+    assert_eq!(names(&vault), Vec::<String>::new());
+}
+
+#[test]
+fn password_wrap_is_stable_across_saves_and_changes_with_the_password() {
+    let dir = TempDir::new().unwrap();
+    let (mut vault, path) = new_vault(&dir);
+    let wrap_of = |path: &Path| {
+        inspect_file(&fs::read(path).unwrap())
+            .unwrap()
+            .password_wrap
+    };
+    let first = wrap_of(&path);
+    assert_eq!(
+        first.len(),
+        12 + 16 + 24 + 48,
+        "cost, salt, nonce, wrapped key"
+    );
+    vault.add(new_entry("one")).unwrap();
+    assert_eq!(wrap_of(&path), first, "an ordinary save keeps the wrap");
+    vault.change_password(&secret(PW), &secret(PW2)).unwrap();
+    assert_ne!(wrap_of(&path), first, "a password change re-wraps");
+    // the version header differs on every save, the wrap does not say anything about the entries
+    let before = inspect_file(&fs::read(&path).unwrap()).unwrap();
+    vault.add(new_entry("two")).unwrap();
+    let after = inspect_file(&fs::read(&path).unwrap()).unwrap();
+    assert_ne!(before.version_header, after.version_header);
+    assert_eq!(before.password_wrap, after.password_wrap);
+}
+
 fn set_age(path: &Path, age: Duration) {
     let file = fs::OpenOptions::new().write(true).open(path).unwrap();
     file.set_modified(SystemTime::now() - age).unwrap();

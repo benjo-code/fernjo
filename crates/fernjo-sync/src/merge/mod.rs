@@ -10,7 +10,7 @@ mod tree;
 mod tree_tests;
 
 use fernjo_core::NodeId;
-use fernjo_vault::EntryId;
+use fernjo_vault::{EntryId, VaultId};
 
 pub use entries::{EntriesMerge, merge_entries};
 pub use tree::{TreeMerge, merge_tree};
@@ -48,6 +48,10 @@ pub enum Finding {
     },
     /// An edited vault entry beat a delete on the other side (V2).
     EntryKeptEdit { entry: EntryId, name: String },
+    /// Both sides changed the vault, so the other device's header (and with it its master
+    /// password) was kept (V3); the password this device had set is gone. The vault id is the
+    /// only thing carried: no password, wrap or key.
+    PasswordChangeDropped { vault: VaultId },
 }
 
 /// What the three-way rule says about one field.

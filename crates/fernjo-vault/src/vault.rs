@@ -919,6 +919,11 @@ pub struct FileInfo {
     /// The header bytes (150): they include the body nonce, which is fresh on every save, so
     /// they identify this version of the file.
     pub version_header: Vec<u8>,
+    /// The part of the header that belongs to the master password: the KDF cost, the salt and
+    /// the wrapped data key (the id, the version and the body nonce are left out). It changes
+    /// when the password is changed or the wrap is re-made and stays the same across ordinary
+    /// saves, so two files with the same wrap open with the same password.
+    pub password_wrap: Vec<u8>,
 }
 
 /// Reads the vault id and version identity of file bytes. Uses the same parser as `open`, so
@@ -929,9 +934,11 @@ pub struct FileInfo {
 pub fn inspect_file(bytes: &[u8]) -> Result<FileInfo, VaultError> {
     check_foreign_len(bytes)?;
     let (header, _) = Header::parse(bytes)?;
+    let password_wrap = header.password_wrap();
     Ok(FileInfo {
         id: header.id,
         version_header: bytes[..HEADER_LEN].to_vec(),
+        password_wrap,
     })
 }
 

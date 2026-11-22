@@ -11,7 +11,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::client::check_hub_url;
 use crate::envelope::{GroupId, SyncKey};
@@ -56,6 +56,14 @@ struct Payload {
     ca: Option<String>,
 }
 
+// the two secret strings are wiped when the payload goes out of scope, on every path
+impl Drop for Payload {
+    fn drop(&mut self) {
+        self.secret.zeroize();
+        self.key.zeroize();
+    }
+}
+
 impl PairingCode {
     /// The shareable text. Contains the secrets: only for an explicit "show pairing code".
     #[must_use]
@@ -80,10 +88,11 @@ impl PairingCode {
     /// Parses a pasted code. Whitespace and line breaks anywhere are ignored. Nothing is
     /// trusted before the checksum, the JSON and the hub address have been checked.
     pub fn decode(text: &str) -> Result<PairingCode, SyncError> {
-        let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
-        if compact.len() > MAX_CODE_LEN {
+        // the raw length first: nothing is copied or scanned for an input that cannot be a code
+        if text.len() > MAX_CODE_LEN {
             return Err(SyncError::InvalidPairingCode);
         }
+        let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
         let rest = compact
             .strip_prefix(PREFIX)
             .ok_or(SyncError::InvalidPairingCode)?;
@@ -111,7 +120,7 @@ impl PairingCode {
         if Sha256::digest(json)[..CHECKSUM_LEN] != *checksum {
             return Err(SyncError::InvalidPairingCode);
         }
-        let payload: Payload =
+        let mut payload: Payload =
             serde_json::from_slice(json).map_err(|_| SyncError::InvalidPairingCode)?;
         if payload.v != PAYLOAD_VERSION
             || payload.url.is_empty()
@@ -134,12 +143,14 @@ impl PairingCode {
             .group
             .parse()
             .map_err(|_| SyncError::InvalidPairingCode)?;
+        // the secret string moves into a `SecretString` (wiped on drop); `Payload`'s own drop wipes
+        // what is left
         Ok(PairingCode {
-            url: payload.url,
-            secret: SecretString::from(payload.secret),
+            url: std::mem::take(&mut payload.url),
+            secret: SecretString::from(std::mem::take(&mut payload.secret)),
             key: SyncKey::from_bytes(key),
             group,
-            ca_pem: payload.ca,
+            ca_pem: payload.ca.take(),
         })
     }
 }
@@ -252,6 +263,42 @@ mod tests {
         assert_eq!(err.code(), "invalid_pairing_code");
         code.url = "http://127.0.0.1:8787".to_owned();
         assert!(PairingCode::decode(&code.encode()).is_ok());
+    }
+
+    #[test]
+    fn an_input_over_the_length_limit_is_refused_by_its_raw_length() {
+        // far over the limit, and mostly blanks: refused although little remains after stripping
+        let blanks = " ".repeat(MAX_CODE_LEN + 1);
+        assert_eq!(
+            PairingCode::decode(&blanks).unwrap_err().code(),
+            "invalid_pairing_code"
+        );
+        let text = sample(None).encode();
+        let padded = format!("{text}{}", " ".repeat(MAX_CODE_LEN));
+        assert_eq!(
+            PairingCode::decode(&padded).unwrap_err().code(),
+            "invalid_pairing_code"
+        );
+        // a normal code is nowhere near the limit
+        assert!(text.len() < MAX_CODE_LEN / 8);
+        assert!(PairingCode::decode(&text).is_ok());
+    }
+
+    #[test]
+    fn a_code_with_a_query_or_fragment_in_the_url_is_refused() {
+        for url in [
+            "https://hub.example.test/?x=1",
+            "https://hub.example.test/path#frag",
+            "https://hub.example.test?x",
+        ] {
+            let mut code = sample(None);
+            code.url = url.to_owned();
+            assert_eq!(
+                PairingCode::decode(&code.encode()).unwrap_err().code(),
+                "invalid_pairing_code",
+                "{url}"
+            );
+        }
     }
 
     #[test]

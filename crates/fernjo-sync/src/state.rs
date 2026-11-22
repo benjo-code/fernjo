@@ -309,6 +309,86 @@ mod tests {
     }
 
     #[test]
+    fn a_newer_schema_base_is_state_unusable_and_save_base_leaves_it_alone() {
+        let (_dir, store) = store();
+        store.save_base(&base(None)).unwrap();
+        let path = store.dir.join(BASE_FILE);
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        value["schema"] = (u64::from(SCHEMA) + 1).into();
+        let newer = serde_json::to_vec(&value).unwrap();
+        fs::write(&path, &newer).unwrap();
+
+        assert_eq!(store.load_base().unwrap_err().code(), "state_unusable");
+        let err = store.save_base(&base(Some(vec![1, 2, 3]))).unwrap_err();
+        assert_eq!(err.code(), "state_unusable");
+        assert!(err.to_string().contains("newer"), "{err}");
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            newer,
+            "the newer file is untouched"
+        );
+        let leftovers = fs::read_dir(&store.dir).unwrap().count();
+        assert_eq!(leftovers, 1, "no temp file was left behind");
+    }
+
+    #[test]
+    fn files_over_the_cap_are_state_unusable_and_never_overwritten() {
+        let (_dir, store) = store();
+        store.save(&state(1)).unwrap();
+        store.save_base(&base(None)).unwrap();
+        for name in [STATE_FILE, BASE_FILE] {
+            let file = fs::OpenOptions::new()
+                .write(true)
+                .open(store.dir.join(name))
+                .unwrap();
+            file.set_len(fernjo_core::MAX_DATA_FILE_LEN + 1).unwrap();
+        }
+        let err = store.load().unwrap_err();
+        assert_eq!(err.code(), "state_unusable");
+        assert!(err.to_string().contains("64 MiB"), "{err}");
+        assert_eq!(store.load_base().unwrap_err().code(), "state_unusable");
+        assert_eq!(store.save(&state(2)).unwrap_err().code(), "state_unusable");
+        assert_eq!(
+            store.save_base(&base(None)).unwrap_err().code(),
+            "state_unusable"
+        );
+        for name in [STATE_FILE, BASE_FILE] {
+            let len = fs::metadata(store.dir.join(name)).unwrap().len();
+            assert_eq!(len, fernjo_core::MAX_DATA_FILE_LEN + 1, "{name} was kept");
+        }
+    }
+
+    /// The base file is the snapshot plus a small wrapper, so the largest snapshot the engine can
+    /// seal (an envelope of at most 64 MiB, the same number as the read cap) must still fit under
+    /// the read cap: otherwise a device could push a state it could not read back as its base.
+    /// Measured on a small file (the wrapper does not grow with the snapshot) and shown by
+    /// arithmetic, because writing and reading 64 MiB takes about 20 seconds in a debug build.
+    #[test]
+    fn the_largest_sealable_snapshot_still_fits_the_read_cap_as_a_base() {
+        use crate::envelope::{HEADER_LEN, MAX_ENVELOPE_LEN, TAG_LEN};
+
+        let (_dir, store) = store();
+        let snapshot = base(Some(vec![0xA5; 3000]));
+        let plain_len = snapshot.to_plaintext().unwrap().len() as u64;
+        store.save_base(&snapshot).unwrap();
+        let file_len = fs::metadata(store.dir.join(BASE_FILE)).unwrap().len();
+        let wrapper = file_len - plain_len;
+        assert!(wrapper > 0, "the file is the snapshot plus a wrapper");
+
+        let largest_plaintext = (MAX_ENVELOPE_LEN - HEADER_LEN - TAG_LEN) as u64;
+        assert!(
+            largest_plaintext + wrapper <= fernjo_core::MAX_DATA_FILE_LEN,
+            "a base of the largest sealable snapshot ({} bytes) must not exceed the read cap",
+            largest_plaintext + wrapper
+        );
+        // and a base of a few MiB goes through save and load unchanged
+        let big = base(Some(vec![0x5A; 3 * 1024 * 1024]));
+        store.save_base(&big).unwrap();
+        assert_eq!(store.load_base().unwrap(), Some(big));
+    }
+
+    #[test]
     fn base_round_trips_with_a_vault_and_without() {
         let (_dir, store) = store();
         assert_eq!(store.load_base().unwrap(), None);

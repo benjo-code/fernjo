@@ -247,3 +247,46 @@ pub(crate) fn merge_entries_with(
     }
     EntriesMerge { entries, findings }
 }
+
+#[cfg(test)]
+mod tests {
+    use secrecy::SecretString;
+
+    use super::*;
+
+    fn pw(p: &str) -> SecretValue {
+        SecretValue(Secret::Password {
+            password: SecretString::from(p),
+        })
+    }
+
+    fn key(k: &str, passphrase: Option<&str>) -> SecretValue {
+        SecretValue(Secret::PrivateKey {
+            key: SecretString::from(k),
+            passphrase: passphrase.map(SecretString::from),
+        })
+    }
+
+    #[test]
+    fn secret_equality_looks_at_kind_key_and_passphrase() {
+        assert!(pw("a") == pw("a"));
+        assert!(pw("a") != pw("b"));
+        assert!(key("K", Some("p")) == key("K", Some("p")));
+        assert!(key("K", None) == key("K", None));
+        assert!(key("K", Some("p")) != key("K", Some("q")), "passphrase");
+        assert!(key("K", Some("p")) != key("K", None), "passphrase removed");
+        assert!(key("K", None) != key("L", None), "key");
+        assert!(pw("K") != key("K", None), "kind");
+        assert!(key("K", None) != pw("K"), "kind, the other way");
+    }
+
+    #[test]
+    fn debug_shows_no_secret() {
+        let shown = format!(
+            "{:?} {:?}",
+            pw("SENTINEL-PW"),
+            key("SENTINEL-KEY", Some("SENTINEL-PASS"))
+        );
+        assert_eq!(shown, "SecretValue(<redacted>) SecretValue(<redacted>)");
+    }
+}

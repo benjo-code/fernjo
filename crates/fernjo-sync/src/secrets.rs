@@ -167,11 +167,18 @@ fn map_err(e: &keyring::Error) -> SyncError {
     SyncError::KeychainUnavailable(e.to_string())
 }
 
+/// The keychain user name of a group's item (service `fernjo`): `sync-<group id>`. Public so a
+/// message can name the item a user has to remove by hand; the name holds no secret.
+#[must_use]
+pub fn keychain_user(group: GroupId) -> String {
+    format!("sync-{group}")
+}
+
 fn entry(group: GroupId) -> Result<keyring_core::Entry, SyncError> {
     if let Err(e) = keyring::Entry::store_status() {
         return Err(map_err(e));
     }
-    let user = format!("sync-{group}");
+    let user = keychain_user(group);
     // Windows: ask for "Local" persistence so the item does not roam with a domain profile
     // (the same as the vault's data key).
     #[cfg(windows)]
@@ -246,6 +253,17 @@ mod tests {
         store.delete(group).unwrap();
         store.delete(group).unwrap();
         assert!(store.get(group).unwrap().is_none());
+    }
+
+    #[test]
+    fn the_keychain_user_name_is_sync_and_the_group_id() {
+        // a stored item is found by this name: changing it would orphan every paired device's item
+        let group = Uuid::from_u128(0x0123_4567_89ab_cdef_0123_4567_89ab_cdef);
+        assert_eq!(
+            keychain_user(group),
+            "sync-01234567-89ab-cdef-0123-456789abcdef"
+        );
+        assert_eq!(SERVICE, "fernjo");
     }
 
     #[test]

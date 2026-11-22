@@ -27,7 +27,8 @@ pub struct Snapshot {
     pub group_id: GroupId,
     pub seq: u64,
     pub writer: DeviceInfo,
-    /// RFC 3339 time of the write; informational only.
+    /// A label for the write, informational only: the engine writes the writer's local calendar
+    /// date (`YYYY-MM-DD`), not a timestamp. No rule reads it and a reader must not parse it.
     pub written_at: String,
     pub connections: Tree,
     /// The `vault.fernjo` bytes exactly as on disk, if the writer has a vault.

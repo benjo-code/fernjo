@@ -172,6 +172,9 @@ pub fn vault_unlock(
         Ok(())
     })?;
     clear_auto_unlock_issue(state);
+    // a sync run that waits for the unlock ("paused: unlock the vault") should not wait for the
+    // next five-minute tick: this is the runner's debounce trigger, a run follows in a few seconds
+    state.note_local_edit();
     vault_status(state)
 }
 
@@ -1078,6 +1081,47 @@ mod tests {
             marks.clone(),
         );
         assert_eq!(vault_status(&again).unwrap().state, "unlocked");
+    }
+
+    /// A successful unlock is a trigger for the sync runner (a run that waits for the unlock must
+    /// not wait for the five-minute tick); a failed one is not.
+    #[test]
+    fn unlocking_the_vault_wakes_the_sync_runner_but_a_wrong_password_does_not() {
+        use crate::sync_runner::{DEBOUNCE, Scheduler, Why};
+        use std::sync::atomic::Ordering;
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().unwrap();
+        let st = state(dir.path());
+        vault_create(&st, sec(MASTER), false).unwrap();
+        vault_lock(&st).unwrap();
+        let start = st.edit_seq.load(Ordering::SeqCst);
+        // the runner has done its startup run and is idle
+        let mut scheduler = Scheduler::new(start);
+        scheduler.begin(Duration::from_secs(0));
+        scheduler.finished(Duration::from_secs(1));
+
+        assert_eq!(
+            code(vault_unlock(&st, sec("wrong password"), false)),
+            "wrong_password"
+        );
+        assert_eq!(st.edit_seq.load(Ordering::SeqCst), start, "no trigger");
+
+        vault_unlock(&st, sec(MASTER), false).unwrap();
+        let now = Duration::from_secs(10);
+        scheduler.observe(now, st.edit_seq.load(Ordering::SeqCst));
+        assert_eq!(scheduler.due(now), None, "the debounce still applies");
+        assert_eq!(scheduler.due(now + DEBOUNCE), Some(Why::Edit));
+    }
+
+    #[test]
+    fn unlocking_an_older_vault_wakes_the_sync_runner() {
+        use std::sync::atomic::Ordering;
+        let dir = tempfile::tempdir().unwrap();
+        let (st, _keys, _marks) = start_with_rolled_back_vault(dir.path());
+        let start = st.edit_seq.load(Ordering::SeqCst);
+        vault_unlock_older(&st, sec(MASTER), false).unwrap();
+        assert!(st.edit_seq.load(Ordering::SeqCst) > start);
     }
 
     #[test]

@@ -30,6 +30,10 @@ pub fn describe(finding: &Finding) -> String {
                 "Vault entry \"{name}\" was deleted on another device but changed here, so it was kept."
             )
         }
+        Finding::PasswordChangeDropped { .. } => {
+            "The master password you set on this device was replaced by the one from your other device. Change it again if you still want a different one."
+                .to_owned()
+        }
     }
 }
 
@@ -72,5 +76,16 @@ mod tests {
         for finding in &all {
             assert!(describe(finding).contains("\"web\""));
         }
+    }
+
+    #[test]
+    fn the_password_notice_says_what_to_do_and_names_no_secret() {
+        let finding = Finding::PasswordChangeDropped {
+            vault: uuid::Uuid::nil(),
+        };
+        let text = describe(&finding);
+        assert!(text.contains("Change it again"));
+        assert!(text.contains("master password"));
+        assert!(format!("{finding:?}").starts_with("PasswordChangeDropped"));
     }
 }

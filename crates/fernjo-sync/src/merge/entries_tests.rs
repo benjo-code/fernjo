@@ -219,3 +219,104 @@ fn findings_never_contain_a_secret() {
         assert!(!text.contains(s), "{s} leaked");
     }
 }
+
+fn key_entry(n: u128, key: &str, passphrase: Option<&str>) -> (EntryId, NewEntry) {
+    let (i, mut e) = entry(n, "deploy key", "unused");
+    e.secret = Secret::PrivateKey {
+        key: SecretString::from(key),
+        passphrase: passphrase.map(SecretString::from),
+    };
+    (i, e)
+}
+
+#[test]
+fn a_private_key_secret_counts_as_changed_when_the_passphrase_the_key_or_the_kind_differs() {
+    // passphrase only: the local change is taken, no conflict
+    let base = vec![key_entry(1, "KEY", Some("p1"))];
+    let local = vec![key_entry(1, "KEY", Some("p2"))];
+    let out = merge(&base, &local, &base);
+    assert_eq!(view(&out.entries)[0].5, "key:KEY:Some(\"p2\")");
+    assert!(out.findings.is_empty());
+    // removing the passphrase is a change as well
+    let local = vec![key_entry(1, "KEY", None)];
+    let out = merge(&base, &local, &base);
+    assert_eq!(view(&out.entries)[0].5, "key:KEY:None");
+
+    // both sides changed only the passphrase, to different values: a conflict copy
+    let local = vec![key_entry(1, "KEY", Some("mine"))];
+    let head = vec![key_entry(1, "KEY", Some("theirs"))];
+    let out = merge(&base, &local, &head);
+    let v = view(&out.entries);
+    assert_eq!(v.len(), 2);
+    assert_eq!(v[0].5, "key:KEY:Some(\"theirs\")");
+    assert_eq!(v[1].5, "key:KEY:Some(\"mine\")");
+    assert_eq!(out.findings.len(), 1);
+
+    // the key only
+    let local = vec![key_entry(1, "KEY-2", Some("p1"))];
+    let out = merge(&base, &local, &base);
+    assert_eq!(view(&out.entries)[0].5, "key:KEY-2:Some(\"p1\")");
+    let head = vec![key_entry(1, "KEY-3", Some("p1"))];
+    assert_eq!(
+        merge(&base, &local, &head).entries.len(),
+        2,
+        "two new keys conflict"
+    );
+
+    // the kind: a password replaced by a key on one side, untouched on the other
+    let base = vec![entry(1, "deploy key", "secret")];
+    let local = vec![key_entry(1, "KEY", None)];
+    let out = merge(&base, &local, &base);
+    assert_eq!(view(&out.entries)[0].5, "key:KEY:None");
+    assert!(out.findings.is_empty());
+    // and both sides changing the kind to different secrets conflicts
+    let head = vec![entry(1, "deploy key", "other")];
+    assert_eq!(merge(&base, &local, &head).entries.len(), 2);
+    // equal private keys on both sides agree
+    let same = vec![key_entry(1, "KEY", Some("p"))];
+    let out = merge(&base, &same, &same);
+    assert_eq!(out.entries.len(), 1);
+    assert!(out.findings.is_empty());
+}
+
+#[test]
+fn a_duplicate_id_in_one_list_keeps_the_first_entry_and_drops_the_rest() {
+    // the documented rule: a list is read first-wins, a later entry with the same id is ignored
+    let mut first = entry(1, "first", "pw-1");
+    first.1.username = Some("one".into());
+    let second = entry(1, "second", "pw-2");
+    let out = merge(
+        &Vec::new(),
+        &vec![first.clone(), second.clone()],
+        &Vec::new(),
+    );
+    assert_eq!(view(&out.entries).len(), 1);
+    assert_eq!(view(&out.entries)[0].1, "first");
+    // the same in the head list
+    let out = merge(&Vec::new(), &Vec::new(), &vec![first, second]);
+    assert_eq!(view(&out.entries).len(), 1);
+    assert_eq!(view(&out.entries)[0].1, "first");
+    assert!(out.findings.is_empty());
+}
+
+#[test]
+fn a_generator_that_keeps_colliding_falls_back_to_the_first_unused_ids() {
+    let base = vec![entry(1, "a", "old"), entry(2, "b", "old")];
+    let local = vec![entry(1, "a", "mine"), entry(2, "b", "mine")];
+    let head = vec![entry(1, "a", "theirs"), entry(2, "b", "theirs")];
+    // every candidate the generator offers is an id that is already in use
+    let out = merge_entries_with(&base, &local, &head, &ctx(), &mut || id(1));
+    let copies: Vec<EntryId> = out
+        .findings
+        .iter()
+        .map(|f| match f {
+            Finding::EntryConflictCopy { copy, .. } => *copy,
+            other => panic!("unexpected finding {other:?}"),
+        })
+        .collect();
+    assert_eq!(copies, [id(3), id(4)], "counted up past 1 and 2");
+    let ids: Vec<EntryId> = out.entries.iter().map(|(i, _)| *i).collect();
+    let unique: std::collections::HashSet<_> = ids.iter().collect();
+    assert_eq!(ids.len(), 4);
+    assert_eq!(unique.len(), 4, "no id twice: {ids:?}");
+}

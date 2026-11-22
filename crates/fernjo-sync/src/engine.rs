@@ -81,7 +81,12 @@ pub enum Outcome {
 enum VaultPlan {
     Keep,
     Adopt(Vec<u8>),
-    Merge,
+    /// Both sides changed the vault. `dropped_password` is the vault id when this device had
+    /// changed the master password (its wrap differs from the base's and from the head's) and the
+    /// merge keeps the head's header, so the notice of V3 is due.
+    Merge {
+        dropped_password: Option<fernjo_vault::VaultId>,
+    },
 }
 
 /// Merged entries and the findings of the entry merge.
@@ -300,12 +305,29 @@ impl Engine<'_> {
                     .map_err(|_| invalid("the vault in the snapshot is not usable"))?
                     .id;
                 if local_id == head_id {
-                    Ok(VaultPlan::Merge)
+                    Ok(VaultPlan::Merge {
+                        dropped_password: Self::dropped_password(base, local_file, head),
+                    })
                 } else {
                     Err(SyncError::VaultConflictDifferentVaults)
                 }
             }
         }
+    }
+
+    /// V3: the vault id when this device's master password wrap differs from the base's and from
+    /// the head's. The merge installs the head's header, so that password change is lost.
+    /// Without a readable base there is nothing to compare, so no notice.
+    fn dropped_password(
+        base: Option<&[u8]>,
+        local: &[u8],
+        head: &[u8],
+    ) -> Option<fernjo_vault::VaultId> {
+        let base = inspect_file(base?).ok()?;
+        let local = inspect_file(local).ok()?;
+        let head = inspect_file(head).ok()?;
+        (local.password_wrap != base.password_wrap && local.password_wrap != head.password_wrap)
+            .then_some(local.id)
     }
 
     /// The merged entries and findings, or `None` when the vault is locked.
@@ -494,7 +516,7 @@ impl Engine<'_> {
         let vault_change = match plan {
             VaultPlan::Keep => VaultChange::Keep,
             VaultPlan::Adopt(bytes) => VaultChange::Adopt(bytes),
-            VaultPlan::Merge => {
+            VaultPlan::Merge { dropped_password } => {
                 let head_file = head.vault.as_deref().unwrap_or_default();
                 let side = local.vault.as_ref().expect("a merge needs a local vault");
                 match self.merge_vault(base.vault.as_deref(), side, head_file)? {
@@ -502,6 +524,9 @@ impl Engine<'_> {
                     None => return Ok(Planned::Stop(Outcome::WaitingForUnlock)),
                     Some((entries, entry_findings)) => {
                         findings.extend(entry_findings);
+                        if let Some(vault) = dropped_password {
+                            findings.push(Finding::PasswordChangeDropped { vault });
+                        }
                         VaultChange::Merged {
                             head: head_file.to_vec(),
                             entries,

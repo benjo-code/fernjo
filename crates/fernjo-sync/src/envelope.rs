@@ -39,8 +39,8 @@ const OFF_SEQ: usize = 26;
 const OFF_NONCE: usize = 34;
 const AAD_LEN: usize = OFF_NONCE;
 const NONCE_LEN: usize = 24;
-const HEADER_LEN: usize = OFF_NONCE + NONCE_LEN;
-const TAG_LEN: usize = 16;
+pub(crate) const HEADER_LEN: usize = OFF_NONCE + NONCE_LEN;
+pub(crate) const TAG_LEN: usize = 16;
 const HKDF_INFO: &[u8] = b"fernjo-sync v1 snapshot";
 
 /// The random 256-bit key shared by the devices of a group. Zeroised on drop, never printed.

@@ -56,7 +56,7 @@ pub struct HubInfo {
 }
 
 /// Accepts `https://...`, and `http://` only for the literal addresses `127.0.0.1` and `[::1]`.
-/// `localhost` is not accepted, and neither is a user name in the address.
+/// `localhost` is not accepted, and neither is a user name, a query or a fragment in the address.
 pub(crate) fn check_hub_url(url: &str) -> Result<(), SyncError> {
     let refuse = |why: &str| Err(SyncError::InvalidHubUrl(why.to_owned()));
     let (secure, rest) = if let Some(rest) = url.strip_prefix("https://") {
@@ -72,7 +72,10 @@ pub(crate) fn check_hub_url(url: &str) -> Result<(), SyncError> {
     {
         return refuse("the address contains blanks or control characters");
     }
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if rest.contains(['?', '#']) {
+        return refuse("the address must not contain a query or a fragment");
+    }
+    let authority = rest.split('/').next().unwrap_or("");
     if authority.is_empty() || authority.contains('@') {
         return refuse("the address needs a host and no user name");
     }
@@ -388,6 +391,11 @@ mod tests {
             "http://user@127.0.0.1/",
             "ftp://x",
             "hub.example.test",
+            // a query or fragment would be glued onto every request path
+            "https://hub.example.test/?x=1",
+            "https://hub.example.test/#frag",
+            "https://hub.example.test?x",
+            "http://127.0.0.1:8787/?x",
         ] {
             let err = HubClient::new(&config(url)).unwrap_err();
             assert_eq!(err.code(), "invalid_hub_url", "{url}");

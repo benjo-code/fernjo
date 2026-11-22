@@ -164,6 +164,19 @@ fn be_u32(bytes: &[u8], at: usize) -> u32 {
 }
 
 impl Header {
+    /// The KDF cost, salt, wrap nonce and wrapped key as bytes: what the master password
+    /// decides. Everything else in the header (id, version, body nonce) is left out.
+    pub(crate) fn password_wrap(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(12 + SALT_LEN + NONCE_LEN + WRAPPED_KEY_LEN);
+        out.extend_from_slice(&self.kdf.memory_kib.to_be_bytes());
+        out.extend_from_slice(&self.kdf.iterations.to_be_bytes());
+        out.extend_from_slice(&self.kdf.parallelism.to_be_bytes());
+        out.extend_from_slice(&self.salt);
+        out.extend_from_slice(&self.wrap_nonce);
+        out.extend_from_slice(&self.wrapped_key);
+        out
+    }
+
     pub(crate) fn encode(&self) -> [u8; HEADER_LEN] {
         let mut out = [0u8; HEADER_LEN];
         out[..8].copy_from_slice(MAGIC);

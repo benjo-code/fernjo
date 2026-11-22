@@ -404,7 +404,8 @@ fn save_never_waits_for_the_hub() {
     let started = Instant::now();
     conn(&a, "while-offline");
     assert!(
-        started.elapsed() < Duration::from_millis(500),
+        // the point is "not waiting for the hub" (an unreachable hub takes seconds), not fsync speed
+        started.elapsed() < Duration::from_secs(2),
         "a save waited for the hub"
     );
     let s = sync_status(&a.st).unwrap();
@@ -413,6 +414,63 @@ fn save_never_waits_for_the_hub() {
     assert_eq!(s.state, "offline");
     assert_eq!(s.pending_changes, 1);
     assert_eq!(s.error, None, "an unreachable hub is not an error");
+}
+
+#[test]
+fn a_close_push_waits_for_a_run_that_holds_the_slot_and_then_pushes() {
+    let hub = start_hub();
+    let a = dev();
+    setup(&a, &hub, "a");
+    conn(&a, "waiting for the push");
+    assert_eq!(sync_status(&a.st).unwrap().pending_changes, 1);
+
+    let guard = try_begin(&a.st).expect("the slot is free");
+    let started = Instant::now();
+    let released = thread::scope(|scope| {
+        let releaser = scope.spawn(move || {
+            thread::sleep(Duration::from_millis(200));
+            drop(guard);
+        });
+        let ran = push_before_close_with(&a.st, &AppPort(&a.st), Duration::from_secs(5));
+        releaser.join().unwrap();
+        ran
+    });
+    assert!(released, "the push ran once the slot was free");
+    assert!(
+        started.elapsed() >= Duration::from_millis(150),
+        "it waited for the other run"
+    );
+    assert_eq!(sync_status(&a.st).unwrap().pending_changes, 0);
+}
+
+#[test]
+fn a_close_push_gives_up_when_the_slot_stays_taken_and_skips_when_nothing_waits() {
+    let hub = start_hub();
+    let a = dev();
+    setup(&a, &hub, "a");
+    // nothing pending: no run, at once
+    let started = Instant::now();
+    assert!(!push_before_close_with(
+        &a.st,
+        &AppPort(&a.st),
+        Duration::from_secs(5)
+    ));
+    assert!(started.elapsed() < Duration::from_secs(2));
+
+    conn(&a, "x");
+    let _guard = try_begin(&a.st).expect("the slot is free");
+    let started = Instant::now();
+    assert!(!push_before_close_with(
+        &a.st,
+        &AppPort(&a.st),
+        Duration::from_millis(300)
+    ));
+    let waited = started.elapsed();
+    assert!(
+        waited >= Duration::from_millis(250) && waited < Duration::from_secs(3),
+        "bounded by the budget, waited {waited:?}"
+    );
+    assert_eq!(sync_status(&a.st).unwrap().pending_changes, 1);
 }
 
 #[test]
@@ -832,6 +890,177 @@ fn leave_removes_state_base_and_keychain_items_and_keeps_local_data() {
     // and the device can set up again against an empty hub
     let hub2 = start_hub();
     assert_eq!(setup(&a, &hub2, "a again").state, "ok");
+}
+
+/// A secrets store that works except that it refuses to delete.
+struct StuckDelete(fernjo_sync::secrets::MemorySyncSecrets);
+
+impl fernjo_sync::secrets::SyncSecrets for StuckDelete {
+    fn get(
+        &self,
+        group: fernjo_sync::GroupId,
+    ) -> Result<Option<(SecretString, fernjo_sync::SyncKey)>, SyncError> {
+        self.0.get(group)
+    }
+    fn set(
+        &self,
+        group: fernjo_sync::GroupId,
+        hub_secret: &SecretString,
+        key: &fernjo_sync::SyncKey,
+    ) -> Result<(), SyncError> {
+        self.0.set(group, hub_secret, key)
+    }
+    fn delete(&self, _: fernjo_sync::GroupId) -> Result<(), SyncError> {
+        Err(SyncError::KeychainUnavailable(
+            "the keychain is locked".to_owned(),
+        ))
+    }
+}
+
+#[test]
+fn leave_completes_when_the_keychain_cannot_delete_and_names_the_leftover_item() {
+    let hub = start_hub();
+    let mut a = dev();
+    conn(&a, "web");
+    vault_create(&a.st, sec(MASTER), false).unwrap();
+    credential(&a, "one");
+    a.st.sync_secrets = Box::new(StuckDelete(Default::default()));
+    setup(&a, &hub, "a");
+    let group = state_file(&a).group;
+    let (tree_before, vault_before) = (tree(&a), vault_file(&a));
+
+    let s = sync_leave(&a.st).unwrap();
+    assert_eq!(s.state, "off", "the device left sync");
+    assert!(!a.device.join("sync.json").exists());
+    assert!(!a.device.join("sync-base.json").exists());
+    assert_eq!(tree(&a), tree_before, "local data stays");
+    assert_eq!(vault_file(&a), vault_before);
+    let e = s.error.expect("the leftover item is reported");
+    assert_eq!(e.code, "keychain_unavailable");
+    assert!(
+        e.message.contains(&format!("sync-{group}")),
+        "{}",
+        e.message
+    );
+    assert!(e.message.contains("fernjo"), "{}", e.message);
+    // the answer carries no secret
+    assert!(!shown(&e).contains(HUB_SECRET));
+    // later status reads are plain "off" and the device can leave no more
+    let later = sync_status(&a.st).unwrap();
+    assert_eq!(later.state, "off");
+    assert_eq!(later.error, None);
+    assert_eq!(codes(sync_leave(&a.st)), "not_paired");
+}
+
+#[test]
+fn join_edit_secret_reseed_leave_and_the_event_payload_carry_no_secret() {
+    let hub = start_hub();
+    let (a, b) = (dev(), dev());
+    vault_create(&a.st, sec(MASTER), false).unwrap();
+    credential(&a, "one");
+    setup(&a, &hub, "device-a");
+    let code = sync_pairing_code(&a.st).unwrap();
+    let group = state_file(&a).group;
+    let (_, key) = a.st.sync_secrets.get(group).unwrap().unwrap();
+    let raw = *key.as_bytes();
+    let forbidden = [
+        HUB_SECRET.to_owned(),
+        WRONG_SECRET.to_owned(),
+        MASTER.to_owned(),
+        "pw-1".to_owned(),
+        code.clone(),
+        base64::engine::general_purpose::STANDARD.encode(raw),
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw),
+        raw.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+    ];
+    let mut seen: Vec<(String, String)> = Vec::new();
+    let mut note = |what: &str, text: String| seen.push((what.to_owned(), text));
+    // the `sync-status` event carries `build_status`, serialised as the runner emits it
+    let event = |d: &Dev| serde_json::to_string(&build_status(&d.st)).unwrap();
+
+    // join: the confirmation step, a refused code, the real join and the status after it
+    let asked = sync_join(&b.st, &sec(&code), "device-b".into(), false).unwrap();
+    assert_eq!(asked.state, "needs_confirmation");
+    note("join (ask)", shown(&asked));
+    let e = sync_join(
+        &b.st,
+        &sec("fernjo-sync-1:garbage"),
+        "device-b".into(),
+        true,
+    )
+    .unwrap_err();
+    note("join (bad code)", shown(&e));
+    let joined = sync_join(&b.st, &sec(&code), "device-b".into(), true).unwrap();
+    assert_eq!(joined.state, "ok");
+    note("join", shown(&joined));
+    note("event after join", event(&b));
+    let e = sync_join(&b.st, &sec(&code), "device-b".into(), true).unwrap_err();
+    assert_eq!(e.code, "already_paired");
+    note("join again", shown(&e));
+
+    // edit secret: refused with a wrong one, accepted with the right one
+    let e = sync_edit_secret(&a.st, sec(WRONG_SECRET)).unwrap_err();
+    assert_eq!(e.code, "hub_unauthorized");
+    note("edit secret (wrong)", shown(&e));
+    let s = sync_edit_secret(&a.st, sec(HUB_SECRET)).unwrap();
+    note("edit secret", shown(&s));
+    note("event after edit secret", event(&a));
+
+    // a run that ends in an error (the stored secret went stale), as status and as event
+    a.st.sync_secrets
+        .set(group, &sec(WRONG_SECRET), &key)
+        .unwrap();
+    let s = now(&a);
+    assert_eq!(s.state, "error");
+    note("now (error)", shown(&s));
+    note("event (error)", event(&a));
+    sync_edit_secret(&a.st, sec(HUB_SECRET)).unwrap();
+
+    // a conflict notice goes out with its text
+    folder(&a, "x");
+    now(&a);
+    let s = now(&b);
+    note("now (applied)", shown(&s));
+    note("event (applied)", event(&b));
+
+    // reseed and leave
+    let s = sync_reseed(&a.st).unwrap();
+    note("reseed", shown(&s));
+    note("event after reseed", event(&a));
+    let s = sync_leave(&b.st).unwrap();
+    note("leave", shown(&s));
+    note("event after leave", event(&b));
+    note("AppState Debug", format!("{:?}", b.st));
+    note("runtime Debug", format!("{:?}", a.st.sync));
+
+    // a leave that could not clear the keychain names the item, not its contents
+    let mut c = dev();
+    c.st.sync_secrets = Box::new(StuckDelete(Default::default()));
+    let hub2 = start_hub();
+    setup(&c, &hub2, "device-c");
+    let s = sync_leave(&c.st).unwrap();
+    note("leave (keychain stuck)", shown(&s));
+    note("event after stuck leave", event(&c));
+
+    assert!(seen.len() > 15, "every step was recorded");
+    for (what, text) in &seen {
+        for s in &forbidden {
+            assert!(!text.contains(s), "{what} leaked {s}: {text}");
+        }
+    }
+}
+
+#[test]
+fn a_password_notice_reaches_the_ui_as_a_finding_with_the_vault_id_and_no_secret() {
+    let vault = uuid::Uuid::from_u128(0xAB);
+    let view = FindingView::of(&Finding::PasswordChangeDropped { vault });
+    assert_eq!(view.kind, "passwordChangeDropped");
+    assert_eq!(view.id, vault.to_string());
+    assert_eq!(view.name, "Vault");
+    assert!(view.message.contains("master password"), "{}", view.message);
+    assert!(view.message.contains("Change it again"), "{}", view.message);
+    let wire = serde_json::to_value(&view).unwrap();
+    assert_eq!(wire["kind"], "passwordChangeDropped");
 }
 
 #[test]
