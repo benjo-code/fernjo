@@ -1786,6 +1786,8 @@ dependencies = [
  "fernjo-vault",
  "getrandom 0.4.3",
  "hkdf",
+ "keyring",
+ "keyring-core",
  "rcgen",
  "rustls",
  "rustls-native-certs",

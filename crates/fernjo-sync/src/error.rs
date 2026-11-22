@@ -39,6 +39,13 @@ pub enum SyncError {
     InvalidPairingCode,
     /// The pairing code was made by a newer version of fernjo.
     NewerPairingCode,
+    /// `sync.json` or `sync-base.json` is unreadable, damaged, too large or from a newer
+    /// version; it is never overwritten.
+    StateUnusable(String),
+    /// A device-local sync file could not be written or removed.
+    StateWriteFailed(String),
+    /// The OS keychain is unavailable, locked, denied, or holds a damaged item.
+    KeychainUnavailable(String),
 }
 
 impl SyncError {
@@ -63,6 +70,9 @@ impl SyncError {
             Self::InvalidCa => "invalid_ca",
             Self::InvalidPairingCode => "invalid_pairing_code",
             Self::NewerPairingCode => "newer_pairing_code",
+            Self::StateUnusable(_) => "state_unusable",
+            Self::StateWriteFailed(_) => "state_write_failed",
+            Self::KeychainUnavailable(_) => "keychain_unavailable",
         }
     }
 }
@@ -92,6 +102,13 @@ impl fmt::Display for SyncError {
             Self::NewerPairingCode => {
                 f.write_str("this pairing code was made by a newer version of fernjo")
             }
+            Self::StateUnusable(reason) => {
+                write!(f, "the device-local sync data is unusable: {reason}")
+            }
+            Self::StateWriteFailed(reason) => {
+                write!(f, "the device-local sync data could not be saved: {reason}")
+            }
+            Self::KeychainUnavailable(reason) => write!(f, "OS keychain: {reason}"),
         }
     }
 }
