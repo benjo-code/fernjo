@@ -23,7 +23,6 @@
 
 use std::collections::HashMap;
 
-use fernjo_core::persist::document;
 use fernjo_core::{Node, NodeId, NodeKind, Tree};
 use fernjo_vault::{EntryId, NewEntry, inspect_file, read_entries};
 use secrecy::SecretString;
@@ -31,7 +30,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::client::{Expected, HubClient, HubConfig};
-use crate::envelope::{GroupId, MAX_ENVELOPE_LEN, SyncKey, open, peek_header, seal};
+use crate::envelope::{GroupId, SyncKey, open, peek_header, seal};
 use crate::error::SyncError;
 use crate::merge::{Finding, MergeContext, merge_entries, merge_tree};
 use crate::pairing::PairingCode;
@@ -63,9 +62,14 @@ pub enum Outcome {
     Synced { findings: Vec<Finding>, seq: u64 },
     /// Local data and head already agree.
     NothingToDo,
-    /// The hub could not be reached; `pending_changes` is the count waiting (see
-    /// [`Engine::pending_changes`]).
-    Offline { pending_changes: usize },
+    /// The hub could not be reached (or the push did not arrive); `pending_changes` is the count
+    /// waiting (see
+    /// [`Engine::pending_changes`]). `findings` are those of a merge that was already applied
+    /// locally before the push failed: they still have to be shown.
+    Offline {
+        pending_changes: usize,
+        findings: Vec<Finding>,
+    },
     /// Both sides changed the vault and it is locked: nothing was pulled or pushed.
     WaitingForUnlock,
     /// The hub shows an older state than this device has seen (`found` is 0 for an empty hub);
@@ -78,6 +82,31 @@ enum VaultPlan {
     Keep,
     Adopt(Vec<u8>),
     Merge,
+}
+
+/// Merged entries and the findings of the entry merge.
+type MergedEntries = (Vec<(EntryId, NewEntry)>, Vec<Finding>);
+
+/// Everything one attempt decided before it writes anything.
+struct Work {
+    st: SyncState,
+    base: Snapshot,
+    local: LocalState,
+    key: SyncKey,
+    head_seq: u64,
+    head: Snapshot,
+    findings: Vec<Finding>,
+    merged_tree: Tree,
+    tree_change: Option<Tree>,
+    vault_change: VaultChange,
+    /// Whether the result differs from the head and has to be pushed.
+    push: bool,
+}
+
+enum Planned {
+    /// The run ends here with this outcome, nothing was written.
+    Stop(Outcome),
+    Go(Box<Work>),
 }
 
 fn invalid(reason: &str) -> SyncError {
@@ -170,17 +199,14 @@ fn count_pending(base: Option<&Snapshot>, local: &LocalState) -> usize {
     changed + removed + vault
 }
 
-fn tree_doc_len(tree: &Tree) -> usize {
-    serde_json::to_vec(&document(tree)).map_or(usize::MAX, |v| v.len())
-}
-
 impl Engine<'_> {
-    fn snapshot(
+    fn build_snapshot(
         group: GroupId,
         seq: u64,
         writer: &DeviceInfo,
         written_at: &str,
-        local: LocalState,
+        tree: Tree,
+        vault: Option<Vec<u8>>,
     ) -> Snapshot {
         Snapshot {
             format_version: SNAPSHOT_FORMAT_VERSION,
@@ -188,9 +214,26 @@ impl Engine<'_> {
             seq,
             writer: writer.clone(),
             written_at: written_at.to_owned(),
-            connections: local.tree,
-            vault: local.vault.map(|v| v.file),
+            connections: tree,
+            vault,
         }
+    }
+
+    fn snapshot(
+        group: GroupId,
+        seq: u64,
+        writer: &DeviceInfo,
+        written_at: &str,
+        local: LocalState,
+    ) -> Snapshot {
+        Self::build_snapshot(
+            group,
+            seq,
+            writer,
+            written_at,
+            local.tree,
+            local.vault.map(|v| v.file),
+        )
     }
 
     /// Authenticates `bytes`, checks them against the group and builds the snapshot; nothing is
@@ -266,13 +309,12 @@ impl Engine<'_> {
     }
 
     /// The merged entries and findings, or `None` when the vault is locked.
-    #[allow(clippy::type_complexity)]
     fn merge_vault(
         &self,
         base: Option<&[u8]>,
         side: &VaultSide,
         head: &[u8],
-    ) -> Result<Option<(Vec<(EntryId, NewEntry)>, Vec<Finding>)>, SyncError> {
+    ) -> Result<Option<MergedEntries>, SyncError> {
         let (Some(key), Some(local_entries)) = (&side.key, &side.entries) else {
             return Ok(None);
         };
@@ -327,26 +369,75 @@ impl Engine<'_> {
 
     /// One sync run (spec decision 3).
     ///
+    /// A run starts over (at most five attempts) when the local data changed under it
+    /// (`local_changed`) or its push was refused (`hub_conflict`). Findings accumulate across the
+    /// attempts: every attempt that got past "apply locally" adds its findings, de-duplicated by
+    /// equality, and the outcome (`Synced`, `Offline`) carries all of them, so a conflict copy
+    /// that was applied before an interrupted push is still reported. An attempt that fails with
+    /// `local_changed` applied nothing and contributes nothing. If the five attempts run out
+    /// after something was applied, the outcome is `Offline` with the findings (the merge sits
+    /// locally and the next run pushes it); without findings it is the plain error. Other
+    /// errors after an applied merge (for example `hub_unauthorized` on the push) are plain
+    /// errors and their findings are not returned; the next run merges again and, because the
+    /// merge is idempotent, creates no second copy. A `WaitingForUnlock` or `HubRolledBack`
+    /// that follows an applied attempt likewise does not carry the earlier findings.
+    ///
+    /// `VaultChange::Adopt` may carry a head whose vault id differs from the local one (a
+    /// device that created its own vault and then joined); `Vault::adopt_file` refuses another
+    /// id, so the port must replace the vault file itself in that case.
+    ///
     /// # Errors
     /// Hub errors other than "unreachable" (`hub_unauthorized`, `hub_tls_untrusted`,
     /// `hub_protocol`, ...), `wrong_group`, `wrong_key_or_damaged`, `snapshot_invalid`,
-    /// `newer_format`, `snapshot_too_large`, `vault_conflict_different_vaults`, `not_paired`,
-    /// `state_unusable`, `local_failed`, and `local_changed` or `hub_conflict` when a run had to
-    /// start over more than five times.
+    /// `newer_format`, `snapshot_too_large` (decided before anything is applied),
+    /// `vault_conflict_different_vaults`, `not_paired`, `state_unusable`, `local_failed` (also
+    /// `vault_unreadable` for a local vault file that does not parse: it is never pushed), and
+    /// `local_changed` or `hub_conflict` when a run had to start over more than five times
+    /// without having applied anything.
     pub fn run_once(&self) -> Result<Outcome, SyncError> {
+        let mut seen: Vec<Finding> = Vec::new();
         let mut last = SyncError::LocalChanged;
         for _ in 0..MAX_ATTEMPTS {
-            match self.attempt() {
+            match self.attempt(&mut seen) {
+                Ok(Outcome::Synced { seq, .. }) => {
+                    return Ok(Outcome::Synced {
+                        findings: seen,
+                        seq,
+                    });
+                }
+                Ok(Outcome::Offline {
+                    pending_changes, ..
+                }) => {
+                    return Ok(Outcome::Offline {
+                        pending_changes,
+                        findings: seen,
+                    });
+                }
+                // an earlier attempt applied a merge whose findings are still unreported
+                Ok(Outcome::NothingToDo) if !seen.is_empty() => {
+                    let seq = self.state.load()?.map_or(0, |s| s.last_seq);
+                    return Ok(Outcome::Synced {
+                        findings: seen,
+                        seq,
+                    });
+                }
+                Ok(other) => return Ok(other),
                 Err(e @ (SyncError::LocalChanged | SyncError::HubConflict)) => last = e,
-                other => return other,
+                Err(e) => return Err(e),
             }
         }
-        Err(last)
+        if seen.is_empty() {
+            Err(last)
+        } else {
+            Ok(Outcome::Offline {
+                pending_changes: self.pending_changes().unwrap_or(0),
+                findings: seen,
+            })
+        }
     }
 
-    #[allow(clippy::too_many_lines)]
-    fn attempt(&self) -> Result<Outcome, SyncError> {
-        // 1. Read the local data and the stored state (the port takes and releases its locks).
+    /// Read, fetch, check the head, merge. Writes nothing.
+    fn plan(&self) -> Result<Planned, SyncError> {
         let st = self.state.load()?.ok_or(SyncError::NotPaired)?;
         let base = self.state.load_base()?.ok_or_else(|| {
             SyncError::StateUnusable("the base snapshot is missing; re-seed or leave sync".into())
@@ -358,61 +449,57 @@ impl Engine<'_> {
         }
         let local = self.local.read()?;
 
-        // 2. Fetch the head, outside any lock. Unreachable (also a timeout on a large head) is
-        //    the quiet offline state; nothing has been touched.
+        // Fetch the head, outside any lock. Unreachable (also a timeout on a large head) is the
+        // quiet offline state; nothing has been touched.
         let head = match self.hub.get_head() {
             Ok(head) => head,
             Err(SyncError::HubUnreachable) => {
-                return Ok(Outcome::Offline {
+                return Ok(Planned::Stop(Outcome::Offline {
                     pending_changes: count_pending(Some(&base), &local),
-                });
+                    findings: Vec::new(),
+                }));
             }
             Err(e) => return Err(e),
         };
 
-        // 3. Rollback protection, before anything is decrypted or merged.
+        // Rollback protection, before anything is decrypted or merged.
         let Some((head_seq, head_bytes)) = head else {
-            return Ok(Outcome::HubRolledBack {
+            return Ok(Planned::Stop(Outcome::HubRolledBack {
                 found: 0,
                 seen: st.last_seq,
-            });
+            }));
         };
         let (head_group, _) = peek_header(&head_bytes)?;
         if head_group != st.group {
             return Err(SyncError::WrongGroup);
         }
         if head_seq < st.last_seq {
-            return Ok(Outcome::HubRolledBack {
+            return Ok(Planned::Stop(Outcome::HubRolledBack {
                 found: head_seq,
                 seen: st.last_seq,
-            });
+            }));
         }
         let (_, key) = self.keys(st.group)?;
-        let head_snapshot = Self::open_head(&key, st.group, head_seq, &head_bytes)?;
+        let head = Self::open_head(&key, st.group, head_seq, &head_bytes)?;
         drop(head_bytes);
 
-        // 4. Merge: the tree always, the vault by V1 to V5.
-        let tree = merge_tree(
-            &base.connections,
-            &local.tree,
-            &head_snapshot.connections,
-            &self.ctx,
-        )?;
+        // Merge: the tree always, the vault by V1 to V5.
+        let tree = merge_tree(&base.connections, &local.tree, &head.connections, &self.ctx)?;
         let mut findings = tree.findings;
         let plan = Self::plan_vault(
             base.vault.as_deref(),
             local.vault.as_ref(),
-            head_snapshot.vault.as_deref(),
+            head.vault.as_deref(),
         )?;
         let vault_change = match plan {
             VaultPlan::Keep => VaultChange::Keep,
             VaultPlan::Adopt(bytes) => VaultChange::Adopt(bytes),
             VaultPlan::Merge => {
-                let head_file = head_snapshot.vault.as_deref().unwrap_or_default();
+                let head_file = head.vault.as_deref().unwrap_or_default();
                 let side = local.vault.as_ref().expect("a merge needs a local vault");
                 match self.merge_vault(base.vault.as_deref(), side, head_file)? {
                     // V2: locked, so the whole run waits: nothing applied, nothing pushed
-                    None => return Ok(Outcome::WaitingForUnlock),
+                    None => return Ok(Planned::Stop(Outcome::WaitingForUnlock)),
                     Some((entries, entry_findings)) => {
                         findings.extend(entry_findings);
                         VaultChange::Merged {
@@ -432,32 +519,87 @@ impl Engine<'_> {
         let push_vault = match &vault_change {
             VaultChange::Merged { .. } => true,
             VaultChange::Adopt(_) => false,
-            VaultChange::Keep => local_file.is_some_and(|l| {
-                head_snapshot
-                    .vault
-                    .as_deref()
-                    .is_none_or(|h| !same_version(l, h))
-            }),
+            VaultChange::Keep => local_file
+                .is_some_and(|l| head.vault.as_deref().is_none_or(|h| !same_version(l, h))),
         };
-        let push = merged_tree != head_snapshot.connections || push_vault;
-        let apply = tree_change.is_some() || !matches!(vault_change, VaultChange::Keep);
+        let push = merged_tree != head.connections || push_vault;
+        Ok(Planned::Go(Box::new(Work {
+            st,
+            base,
+            local,
+            key,
+            head_seq,
+            head,
+            findings,
+            merged_tree,
+            tree_change,
+            vault_change,
+            push,
+        })))
+    }
 
-        // The size rule, checked before anything is written (the merged vault file is not
-        // known yet, so the larger side stands in for it).
-        if push {
-            let vault_len = local_file
-                .map_or(0, <[u8]>::len)
-                .max(head_snapshot.vault.as_ref().map_or(0, Vec::len));
-            let estimate = tree_doc_len(&merged_tree)
-                .saturating_add(vault_len.saturating_add(2) / 3 * 4)
-                .saturating_add(1024);
-            if estimate > MAX_ENVELOPE_LEN {
-                return Err(SyncError::SnapshotTooLarge);
-            }
+    /// Builds and seals the snapshot to push (`seq` = head + 1) without writing anything, so the
+    /// size rule (`snapshot_too_large`) is decided before the local apply. For `Keep` and
+    /// `Adopt` the vault bytes are final; for `Merged` the head's file stands in (the merged
+    /// file exists only after the apply; `attempt` seals again then).
+    fn prepare_push(&self, w: &Work) -> Result<(Snapshot, Vec<u8>), SyncError> {
+        let vault = match &w.vault_change {
+            VaultChange::Keep => w.local.vault.as_ref().map(|v| v.file.clone()),
+            VaultChange::Adopt(bytes) => Some(bytes.clone()),
+            VaultChange::Merged { head, .. } => Some(head.clone()),
+        };
+        let snapshot = Self::build_snapshot(
+            w.st.group,
+            w.head_seq + 1,
+            &w.st.device,
+            &self.ctx.date,
+            w.merged_tree.clone(),
+            vault,
+        );
+        let envelope = Self::seal_snapshot(&w.key, &snapshot)?;
+        Ok((snapshot, envelope))
+    }
+
+    fn seal_snapshot(key: &SyncKey, snapshot: &Snapshot) -> Result<Vec<u8>, SyncError> {
+        let plaintext = Zeroizing::new(snapshot.to_plaintext()?);
+        seal(key, snapshot.group_id, snapshot.seq, &plaintext)
+    }
+
+    /// One attempt: plan, seal, apply, push, store. `seen` collects the findings (see
+    /// `run_once`); they are added right after the apply step passed.
+    fn attempt(&self, seen: &mut Vec<Finding>) -> Result<Outcome, SyncError> {
+        let work = match self.plan()? {
+            Planned::Stop(outcome) => return Ok(outcome),
+            Planned::Go(work) => *work,
+        };
+        // Everything that can refuse happens before the first local write: the size rule and
+        // the check that a local vault file which would be pushed or merged parses.
+        let mut prepared = if work.push {
+            Some(self.prepare_push(&work)?)
+        } else {
+            None
+        };
+        if let Some(side) = &work.local.vault {
+            inspect_file(&side.file)
+                .map_err(|_| SyncError::LocalFailed("vault_unreadable".to_owned()))?;
         }
+        let merged_vault = matches!(work.vault_change, VaultChange::Merged { .. });
+        let apply = work.tree_change.is_some() || !matches!(work.vault_change, VaultChange::Keep);
+        let Work {
+            st,
+            base,
+            local,
+            key,
+            head_seq,
+            head,
+            findings,
+            tree_change,
+            vault_change,
+            ..
+        } = work;
 
-        // 5. Apply locally; the port refuses with `local_changed` when the data moved on, and
-        //    the run starts over.
+        // Apply locally; the port refuses with `local_changed` when the data moved on, and the
+        // run starts over (that attempt contributes no findings).
         if apply {
             self.local.apply(
                 &local,
@@ -467,31 +609,43 @@ impl Engine<'_> {
                 },
             )?;
         }
+        for finding in findings {
+            if !seen.contains(&finding) {
+                seen.push(finding);
+            }
+        }
 
-        if !push {
+        let Some((mut snapshot, mut envelope)) = prepared.take() else {
             // Local data equals the head now: it becomes the base.
             if apply || base.seq != head_seq || st.last_seq != head_seq {
-                self.store(&st, &head_snapshot)?;
+                self.store(&st, &head)?;
             }
             return Ok(if apply {
                 Outcome::Synced {
-                    findings,
+                    findings: Vec::new(),
                     seq: head_seq,
                 }
             } else {
                 Outcome::NothingToDo
             });
+        };
+        if merged_vault {
+            // The merged vault file exists only now; push exactly what is on disk.
+            let current = self.local.read()?;
+            snapshot = Self::build_snapshot(
+                st.group,
+                head_seq + 1,
+                &st.device,
+                &self.ctx.date,
+                current.tree,
+                current.vault.map(|v| v.file),
+            );
+            envelope = Self::seal_snapshot(&key, &snapshot)?;
         }
 
-        // 6. Push exactly what is on disk now (the merged vault file exists only after apply).
-        let current = if apply { self.local.read()? } else { local };
-        let new_seq = head_seq + 1;
-        let snapshot = Self::snapshot(st.group, new_seq, &st.device, &self.ctx.date, current);
-        let plaintext = Zeroizing::new(snapshot.to_plaintext()?);
-        let envelope = seal(&key, st.group, new_seq, &plaintext)?;
         match self
             .hub
-            .put_head(Expected::Seq(head_seq), new_seq, &envelope)
+            .put_head(Expected::Seq(head_seq), snapshot.seq, &envelope)
         {
             Ok(()) => {}
             Err(SyncError::HubUnreachable) => {
@@ -507,16 +661,17 @@ impl Engine<'_> {
                             }),
                         },
                     ),
+                    findings: Vec::new(),
                 });
             }
             Err(e) => return Err(e),
         }
 
-        // 7. Base first, `sync.json` second.
+        // Base first, `sync.json` second.
         self.store(&st, &snapshot)?;
         Ok(Outcome::Synced {
-            findings,
-            seq: new_seq,
+            findings: Vec::new(),
+            seq: snapshot.seq,
         })
     }
 
@@ -577,6 +732,9 @@ impl Engine<'_> {
     /// Joins the group of `code`: the head replaces the local connections (and the vault, when
     /// the head has one; otherwise the local vault stays and the next run shares it). The base
     /// becomes the head. Confirming the replacement and offering a backup are the caller's job.
+    ///
+    /// The vault change is `Adopt` and may carry a vault id that differs from the local one;
+    /// the port must then replace the file itself (`Vault::adopt_file` refuses another id).
     ///
     /// # Errors
     /// `already_paired`, the hub errors, `hub_empty`, `wrong_group`, `wrong_key_or_damaged`,

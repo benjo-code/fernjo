@@ -807,7 +807,14 @@ fn a_crash_between_apply_and_push_is_repaired_by_the_next_run_without_a_duplicat
 
     // B merges and applies, but its push never arrives
     proxy.fail_puts.store(true, Ordering::SeqCst);
-    assert!(matches!(b.run(), Outcome::Offline { .. }));
+    // the run that applied the copy reports it, even though its push never arrived
+    let Outcome::Offline { findings, .. } = b.run() else {
+        panic!("expected offline");
+    };
+    assert!(
+        matches!(findings.as_slice(), [Finding::ConflictCopy { .. }]),
+        "the conflict copy is reported by the run that applied it"
+    );
     assert_eq!(
         count_named(&b.port.tree(), "conflict"),
         1,
@@ -819,7 +826,16 @@ fn a_crash_between_apply_and_push_is_repaired_by_the_next_run_without_a_duplicat
     // the next run merges again and changes nothing locally: still one copy
     proxy.fail_puts.store(false, Ordering::SeqCst);
     let tree_before = b.port.tree();
-    assert!(matches!(b.run(), Outcome::Synced { seq: 3, .. }));
+    let Outcome::Synced { findings, seq } = b.run() else {
+        panic!("expected a synced run");
+    };
+    assert_eq!(seq, 3);
+    assert!(
+        !findings
+            .iter()
+            .any(|f| matches!(f, Finding::ConflictCopy { .. })),
+        "the second run adds no second copy and no second notice"
+    );
     assert_eq!(
         b.port.tree(),
         tree_before,
@@ -864,6 +880,13 @@ fn a_push_conflict_restarts_the_run_and_a_notice_is_not_shown_twice() {
         panic!("expected a synced run");
     };
     assert_eq!(seq, 4);
+    // the first attempt applied the copy and its push was refused; the retry sees the copy as
+    // an ordinary local node, so the notice must come from the first attempt, exactly once
+    let copies = findings
+        .iter()
+        .filter(|f| matches!(f, Finding::ConflictCopy { .. }))
+        .count();
+    assert_eq!(copies, 1, "findings: {findings:?}");
     for (i, f) in findings.iter().enumerate() {
         assert!(!findings[..i].contains(f), "a finding is repeated");
     }
@@ -964,7 +987,10 @@ fn an_unreachable_hub_is_offline_with_the_pending_count() {
     b.port.add_connection("two");
     b.port.create_vault();
     let before = b.untouched();
-    let Outcome::Offline { pending_changes } = b.run() else {
+    let Outcome::Offline {
+        pending_changes, ..
+    } = b.run()
+    else {
         panic!("expected offline");
     };
     assert_eq!(pending_changes, 3, "two nodes and the vault");
@@ -1061,13 +1087,60 @@ fn a_snapshot_whose_group_or_seq_differs_from_its_envelope_is_refused() {
 #[test]
 fn a_merged_result_over_64_mib_is_snapshot_too_large() {
     let hub = start();
-    let (a, _b) = pair(&hub);
-    // a vault file that no envelope can carry (the engine only measures it)
+    let (a, b) = pair(&hub);
+    // the head has a change that A would have to apply, so a missing size check would be
+    // visible in A's local data
+    b.port.add_connection("pushed by B");
+    assert!(matches!(b.run(), Outcome::Synced { seq: 2, .. }));
+    // a vault file that no envelope can carry (the engine only measures it; it is checked for
+    // size before it is checked for being parseable)
     *a.port.fake_vault.lock().unwrap() = Some(vec![7u8; 65 * 1024 * 1024]);
     let before = a.untouched();
     assert_eq!(a.run_err().code(), "snapshot_too_large");
     a.assert_untouched(&before);
-    assert_eq!(head_seq(&hub), Some(1));
+    assert!(names(&a.port.tree()).is_empty(), "nothing was applied");
+    assert_eq!(head_seq(&hub), Some(2));
+}
+
+#[test]
+fn a_local_vault_file_that_does_not_parse_is_refused_before_any_apply_or_push() {
+    let hub = start();
+    let (a, b) = pair(&hub);
+    b.port.add_connection("pushed by B");
+    assert!(matches!(b.run(), Outcome::Synced { seq: 2, .. }));
+    // A's vault file is damaged: it must never reach the hub
+    *a.port.fake_vault.lock().unwrap() = Some(vec![1, 2, 3, 4]);
+    let before = a.untouched();
+    let err = a.run_err();
+    assert!(matches!(&err, SyncError::LocalFailed(c) if c == "vault_unreadable"));
+    a.assert_untouched(&before);
+    assert!(names(&a.port.tree()).is_empty(), "nothing was applied");
+    assert_eq!(head_seq(&hub), Some(2), "nothing was pushed");
+}
+
+#[test]
+fn offline_after_an_applied_merge_returns_the_findings() {
+    let hub = start();
+    let (a, b, id) = pair_with_server(&hub);
+    let proxy = start_proxy(hub.addr);
+    let mut b = Rc::try_unwrap(b).ok().unwrap();
+    b.hub = HubClient::new(&cfg(&format!("http://{}", proxy.addr))).unwrap();
+    a.port.rename(id, "srv-a");
+    b.port.rename(id, "srv-b");
+    assert!(matches!(a.run(), Outcome::Synced { seq: 2, .. }));
+    proxy.fail_puts.store(true, Ordering::SeqCst);
+    let Outcome::Offline {
+        pending_changes,
+        findings,
+    } = b.run()
+    else {
+        panic!("expected offline");
+    };
+    assert!(matches!(
+        findings.as_slice(),
+        [Finding::ConflictCopy { .. }]
+    ));
+    assert!(pending_changes >= 1, "the unpushed copy is pending");
 }
 
 #[test]

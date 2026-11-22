@@ -54,7 +54,10 @@ pub enum VaultChange {
     /// Leave it as it is.
     Keep,
     /// Make these bytes the vault file as they are (only the other side changed it); works
-    /// while the vault is locked.
+    /// while the vault is locked. The bytes can belong to another vault than the local one (a
+    /// device that created its own vault and then joined a group whose head has one);
+    /// `Vault::adopt_file` refuses another vault id, so the port must then replace the vault
+    /// file itself.
     Adopt(Vec<u8>),
     /// Both sides changed it: write `entries` with the header of `head` and a generation above
     /// both (needs the vault unlocked).
