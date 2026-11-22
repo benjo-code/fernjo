@@ -1,9 +1,11 @@
 //! Multi-device sync for fernjo: the snapshot of the synced data and the encrypted envelope
 //! that carries it to the hub. No Tauri dependency.
 
+pub mod engine;
 pub mod envelope;
 pub mod error;
 pub mod merge;
+pub mod ports;
 pub mod snapshot;
 
 pub use envelope::{

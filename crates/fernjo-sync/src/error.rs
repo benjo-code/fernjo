@@ -46,6 +46,22 @@ pub enum SyncError {
     StateWriteFailed(String),
     /// The OS keychain is unavailable, locked, denied, or holds a damaged item.
     KeychainUnavailable(String),
+    /// This device is not set up for sync (no `sync.json`).
+    NotPaired,
+    /// This device already is set up (leave first).
+    AlreadyPaired,
+    /// Set-up found a head on the hub: use Join with a pairing code instead.
+    HubNotEmpty,
+    /// Join found nothing on the hub, so there is nothing to take over.
+    HubEmpty,
+    /// Both sides created a vault on their own (different vault ids): not merged, nothing
+    /// pushed or pulled; the owner has to decide which one stays.
+    VaultConflictDifferentVaults,
+    /// The local data changed between reading it and applying the merge (the port compares).
+    LocalChanged,
+    /// The local side (the store or the vault, behind a `LocalPort`) refused or failed; the
+    /// text is the stable code of that error, never a value.
+    LocalFailed(String),
 }
 
 impl SyncError {
@@ -73,6 +89,13 @@ impl SyncError {
             Self::StateUnusable(_) => "state_unusable",
             Self::StateWriteFailed(_) => "state_write_failed",
             Self::KeychainUnavailable(_) => "keychain_unavailable",
+            Self::NotPaired => "not_paired",
+            Self::AlreadyPaired => "already_paired",
+            Self::HubNotEmpty => "hub_not_empty",
+            Self::HubEmpty => "hub_empty",
+            Self::VaultConflictDifferentVaults => "vault_conflict_different_vaults",
+            Self::LocalChanged => "local_changed",
+            Self::LocalFailed(_) => "local_failed",
         }
     }
 }
@@ -109,6 +132,17 @@ impl fmt::Display for SyncError {
                 write!(f, "the device-local sync data could not be saved: {reason}")
             }
             Self::KeychainUnavailable(reason) => write!(f, "OS keychain: {reason}"),
+            Self::NotPaired => f.write_str("this device is not set up for sync"),
+            Self::AlreadyPaired => f.write_str("this device is already set up for sync"),
+            Self::HubNotEmpty => {
+                f.write_str("the hub already holds data: join with a pairing code instead")
+            }
+            Self::HubEmpty => f.write_str("the hub holds no data to join"),
+            Self::VaultConflictDifferentVaults => f.write_str(
+                "this device and the hub each created their own vault; they cannot be merged",
+            ),
+            Self::LocalChanged => f.write_str("the local data changed while syncing"),
+            Self::LocalFailed(code) => write!(f, "the local data could not be updated ({code})"),
         }
     }
 }
