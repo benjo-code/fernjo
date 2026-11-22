@@ -23,10 +23,9 @@ fernjo is a cross-platform (Windows, macOS, Linux) remote connection manager for
 - Native installers for Windows, macOS and Linux.
 
 **Non-goals (for now, may move to the backlog)**
-- Built-in device sync (originally out of scope; added in M9, see §5.4).
 - Protocols other than SSH and RDP (VNC, Telnet, serial, HTTP).
 - SFTP file browser, port forwarding UI, jump hosts, local shell tabs, split panes.
-- Team/multi-user features, a server component, a plugin system, mobile apps.
+- Team/multi-user features, a server component (the one exception is the optional self-hosted sync hub, added in M9, see §5.4), a plugin system, mobile apps.
 - Code signing, notarisation and auto-update.
 
 **Anti-goals (failure even if it "works")**

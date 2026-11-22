@@ -70,7 +70,7 @@ benjo.loc {
 }
 ```
 
-If Caddy itself runs in a container, `127.0.0.1` inside that container is the container, not the host: point `reverse_proxy` at the host's address instead (the host's LAN address, `host.containers.internal` under Podman, or put both containers on one Podman network and use the hub container's name and port 8787). Because the unit publishes `127.0.0.1:8787` only, a Caddy container that must reach the hub over the host's LAN address needs `PublishPort=<host address>:8787:8787` in the unit instead; keep it off any address that is reachable from outside the home network, because the hub itself speaks plain HTTP.
+If Caddy itself runs in a container, `127.0.0.1` inside that container is the container, not the host: point `reverse_proxy` at the host's address instead (the host's LAN address, `host.containers.internal` under Podman (untried), or put both containers on one Podman network and use the hub container's name and port 8787). Because the unit publishes `127.0.0.1:8787` only, a Caddy container that must reach the hub over the host's LAN address needs `PublishPort=<host address>:8787:8787` in the unit instead; keep it off any address that is reachable from outside the home network, because the hub itself speaks plain HTTP.
 
 fernjo only talks HTTPS (plain `http://` is accepted for loopback only), so each device must trust Caddy's internal root certificate. Get it on the Caddy host with either of:
 
@@ -112,3 +112,4 @@ The hub and the sync client were tested with in-process tests only (the hub on l
 - `podman build -f crates/fernjo-hub/Containerfile -t fernjo-hub .` and the rootless Quadlet unit on the Ubuntu or Debian VM (the image build, the `keep-id` user mapping and the read-only root file system have not been run).
 - Caddy with `tls internal` in front of the hub, including a Caddy restart and a hub restart that lose nothing, with the CA pasted into fernjo.
 - Two real devices syncing through that hub (create, edit, delete, conflict copy, vault entry, offline then online), and the OS keychain items on Windows, macOS and Linux.
+- The `host.containers.internal` address and a LAN `PublishPort` for a Caddy that runs in a container (named under "Caddy" as untried advice).

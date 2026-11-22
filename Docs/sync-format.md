@@ -23,7 +23,7 @@ All integers are big endian. Maximum size of an envelope: **64 MiB** (67 108 864
 | 34 | 24 | nonce (random per envelope) |
 | 58 | n >= 16 | ciphertext of the snapshot JSON + 16 bytes tag |
 
-Bytes 0..58 are the header. The smallest valid envelope is 74 bytes.
+Bytes 0..58 are the header. The smallest valid envelope is 74 bytes. That minimum is the envelope rule of a client; a hub only needs the first 34 bytes (magic `FERNJOSY`, version `1`, group id, `seq`) to decide, and accepts a body of exactly 34 bytes as long as the size limit holds, because it cannot verify the tag.
 
 - **Key:** `HKDF-SHA256(salt = none, ikm = sync key (32 bytes), info = "fernjo-sync v1 snapshot")`, 32 bytes of output. The sync key itself is never used as a cipher key.
 - **Encryption:** `ciphertext = XChaCha20-Poly1305(key, nonce, aad = bytes 0..34, plaintext = snapshot JSON)`. The AAD is magic, version, group id and `seq` (not the nonce, which is authenticated by being the nonce), so an envelope cannot be moved to another group or sequence number without failing authentication.
@@ -56,7 +56,7 @@ Limits a device applies to everything it takes from the hub, before anything is 
 
 ## Hub HTTP API (protocol 1)
 
-Every request carries `Authorization: Bearer <hub secret>`. The hub stores only the SHA-256 of the secret and compares in constant time. A missing or wrong secret is `401` (with `WWW-Authenticate: Bearer`) on every path. The hub speaks plain HTTP and is meant to sit behind a TLS-terminating proxy; the client only talks HTTPS (plain `http://` only to the literal `127.0.0.1` and `[::1]`, for tests), never follows redirects, and trusts either the system roots or exactly one pinned CA certificate (PEM) from the pairing code.
+Every request carries `Authorization: Bearer <hub secret>`. The hub stores only the SHA-256 of the secret and compares in constant time. A missing or wrong secret is `401` (with `WWW-Authenticate: Bearer`) on both endpoints (the secret is checked inside the two handlers: another path answers `404`, another method `405`). The hub speaks plain HTTP and is meant to sit behind a TLS-terminating proxy; the client only talks HTTPS (plain `http://` only to the literal `127.0.0.1` and `[::1]`, for tests), never follows redirects, and trusts either the system roots or the certificates of one pinned PEM text from the pairing code (every certificate in it is trusted).
 
 | Request | Answer |
 |---|---|
@@ -171,4 +171,4 @@ Findings (the notices) are a function of the three inputs: merging the same inpu
 
 ## Errors and codes
 
-Stable codes used by the client and the app: `bad_envelope`, `newer_format`, `wrong_key_or_damaged`, `wrong_group`, `snapshot_invalid`, `snapshot_too_large`, `hub_unreachable`, `hub_unauthorized`, `hub_tls_untrusted`, `hub_conflict` (412), `hub_protocol`, `hub_too_large`, `invalid_hub_url`, `invalid_ca`, `invalid_pairing_code`, `newer_pairing_code`, `state_unusable`, `state_write_failed`, `keychain_unavailable`, `not_paired`, `already_paired`, `hub_not_empty`, `hub_empty`, `vault_conflict_different_vaults`, `local_changed`, and `local_failed` which carries the code of the local refusal (`changed_on_disk`, `rolled_back`, `vault_unreadable`, `vault_unusable`, `restart_required`, ...).
+Stable codes used by the client and the app: `bad_envelope`, `newer_format`, `wrong_key_or_damaged`, `wrong_group`, `snapshot_invalid`, `snapshot_too_large`, `hub_unreachable`, `hub_unauthorized`, `hub_tls_untrusted`, `hub_conflict` (412), `hub_rolled_back` (not a `SyncError`: the status code the app reports for an older or empty hub), `random_failed`, `hub_protocol`, `hub_too_large`, `invalid_hub_url`, `invalid_ca`, `invalid_pairing_code`, `newer_pairing_code`, `state_unusable`, `state_write_failed`, `keychain_unavailable`, `not_paired`, `already_paired`, `hub_not_empty`, `hub_empty`, `vault_conflict_different_vaults`, `local_changed`, and `local_failed` which carries the code of the local refusal (`changed_on_disk`, `rolled_back`, `vault_unreadable`, `vault_unusable`, `restart_required`, ...).
