@@ -35,7 +35,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 | – | **Release `v0.1.1`** – Polish and hardening (M7) | – | ✅ done | – | 2026-11-20 |
 | 8 | RDP sessions | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-20-milestone-08-rdp-sessions.md) | 2026-11-21 |
 | – | **Release `v0.2.0`** – RDP (M8) | – | ✅ done | – | 2026-11-22 |
-| 9 | Multi-device sync | 1 – fernjo app | ⬜ open | – | – |
+| 9 | Multi-device sync | 1 – fernjo app | 🟡 planned | [Plan](superpowers/plans/2026-11-22-milestone-09-multi-device-sync.md) | – |
 | 10 | Daily-use features | 1 – fernjo app | ⬜ open | – | – |
 | 11 | Full hardening and security check | 1 – fernjo app | ⬜ open | – | – |
 | – | **Release `v0.3.0`** – Sync, daily-use features and security check (M9 to M11) | – | ⬜ open | – | – |
@@ -416,13 +416,13 @@ Goal: RDP connections in the tree open as tabs next to SSH sessions, smoothly en
 RDP sessions in tabs next to SSH.
 
 ## Milestone 9 – Multi-device sync
-**Status:** ⬜ open · **Plan:** – · **Prerequisites:** M8
+**Status:** 🟡 planned · **Plan:** [2026-11-22-milestone-09-multi-device-sync.md](superpowers/plans/2026-11-22-milestone-09-multi-device-sync.md) · **Prerequisites:** M8
 
 Goal: Connections and vault entries made on one device show up on the owner’s other devices without copying files by hand, and edits on two devices are not lost.
 
 **Tasks**
-- [ ] Create spec: brainstorm with the owner what is synced (connections, vault, which settings stay per device), the mechanism (smarter merge on top of the synced data folder, or sync that fernjo does itself, and where it stores or relays data), the conflict rules and the threat model; store it under `Docs/superpowers/specs/` and link it from this milestone
-- [ ] Implement the synced data and the conflict handling as the spec says; refine these tasks when the spec exists
+- [x] Create spec: brainstorm with the owner what is synced (connections, vault, which settings stay per device), the mechanism (smarter merge on top of the synced data folder, or sync that fernjo does itself, and where it stores or relays data), the conflict rules and the threat model; store it under `Docs/superpowers/specs/` and link it from this milestone. Spec: [2026-11-22-m09-multi-device-sync-design.md](superpowers/specs/2026-11-22-m09-multi-device-sync-design.md), approved by the owner on 2026-11-22: sync by fernjo itself through a self-hosted hub (own program, rootless Podman behind Caddy, home network only), one end-to-end-encrypted snapshot, offline-first, three-way merge with conflict copies
+- [ ] Implement the synced data and the conflict handling as the spec says (plan tasks 1 to 10): `fernjo-sync` (envelope, hub client, pairing code, merge rules C1 to C10 and V2 to V5, device-local state, engine), `fernjo-hub` (compare-and-swap blob store, server, Containerfile, Quadlet, Caddy example), vault adopt and merge API, app commands and triggers, Settings section and status line
 - [ ] The "changed on disk" bar with its Reload button also covers a vault `delete_credential` and an import `apply_backup` that hit `changed_on_disk` (backlog item below)
 - [ ] Sweep stale `vault.fernjo.<hex>.tmp` files older than a day when the vault is opened (backlog item below)
 - [ ] Keep the existing guards working with sync: the `connections.json` fingerprint check, `Vault::save` guard, rollback protection, device-local host key and certificate confirmations
