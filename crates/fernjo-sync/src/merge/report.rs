@@ -20,6 +20,16 @@ pub fn describe(finding: &Finding) -> String {
         Finding::MoveUndone { name, .. } => {
             format!("Moving \"{name}\" would have broken the tree, so the move was undone.")
         }
+        Finding::EntryConflictCopy { name, .. } => {
+            format!(
+                "Vault entry \"{name}\" was changed on two devices; your version was kept as a copy."
+            )
+        }
+        Finding::EntryKeptEdit { name, .. } => {
+            format!(
+                "Vault entry \"{name}\" was deleted on another device but changed here, so it was kept."
+            )
+        }
     }
 }
 
@@ -47,6 +57,15 @@ mod tests {
             },
             Finding::MoveUndone {
                 node: id,
+                name: "web".into(),
+            },
+            Finding::EntryConflictCopy {
+                original: uuid::Uuid::nil(),
+                copy: uuid::Uuid::nil(),
+                name: "web".into(),
+            },
+            Finding::EntryKeptEdit {
+                entry: uuid::Uuid::nil(),
                 name: "web".into(),
             },
         ];

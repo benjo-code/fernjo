@@ -1,13 +1,18 @@
 //! Three-way merge of the synced data (spec decision 3). `merge_field` is the one field rule
 //! the tree merge and the vault merge share; `Finding` is what a merge tells the user.
 
+mod entries;
+#[cfg(test)]
+mod entries_tests;
 pub mod report;
 mod tree;
 #[cfg(test)]
 mod tree_tests;
 
 use fernjo_core::NodeId;
+use fernjo_vault::EntryId;
 
+pub use entries::{EntriesMerge, merge_entries};
 pub use tree::{TreeMerge, merge_tree};
 
 /// Labels for the conflict copies a merge creates. Both come from the caller (the merge never
@@ -34,6 +39,15 @@ pub enum Finding {
     PlacementKept { node: NodeId, name: String },
     /// A local move would have made a cycle or exceeded the depth limit (C9) and was undone.
     MoveUndone { node: NodeId, name: String },
+    /// A vault entry changed to different values on both sides (V2): the head's version stayed
+    /// on `original`, the local version is the new entry `copy`.
+    EntryConflictCopy {
+        original: EntryId,
+        copy: EntryId,
+        name: String,
+    },
+    /// An edited vault entry beat a delete on the other side (V2).
+    EntryKeptEdit { entry: EntryId, name: String },
 }
 
 /// What the three-way rule says about one field.
