@@ -36,9 +36,9 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 | 8 | RDP sessions | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-20-milestone-08-rdp-sessions.md) | 2026-11-21 |
 | – | **Release `v0.2.0`** – RDP (M8) | – | ✅ done | – | 2026-11-22 |
 | 9 | Multi-device sync | 1 – fernjo app | ⬜ open | – | – |
-| 10 | Hardening round 2 | 1 – fernjo app | ⬜ open | – | – |
-| 11 | Daily-use features | 1 – fernjo app | ⬜ open | – | – |
-| – | **Release `v0.3.0`** – Sync, hardening and daily-use features (M9 to M11) | – | ⬜ open | – | – |
+| 10 | Daily-use features | 1 – fernjo app | ⬜ open | – | – |
+| 11 | Full hardening and security check | 1 – fernjo app | ⬜ open | – | – |
+| – | **Release `v0.3.0`** – Sync, daily-use features and security check (M9 to M11) | – | ⬜ open | – | – |
 
 ## Scope changes
 
@@ -50,7 +50,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 - **2026-11-18 (M6 implementation):** Work added to M6 during execution, all in service of the security review task: the independent crate reviews of vault, SSH and import and a `/security-review` of the milestone diff (findings and dispositions in `Docs/release-checklist.md`), and the fixes that came out of them. Import limits for hostile mRemoteNG files (XML attribute and namespace scan, string length caps; `Docs/DECISIONS.md`, "M6 security review: import limits"); the tree depth limit enforced on every create, move and duplicate (`too_deep`); a 64 MiB cap on reading `vault.fernjo` and host name validation before `known_hosts` writes (`invalid_host`; "M6 security review: vault file size cap and known_hosts host validation"); plain `ssh-rsa` no longer offered, with the exact algorithm lists pinned by a test ("M6 security review: SSH algorithm policy"); russh 0.65.2 and rsa 0.10.0, so the `RUSTSEC-2023-0071` ignore is gone ("M6 security review: RUSTSEC-2023-0071 ignore removed"); owner-only file modes 0600 and 0700 on Unix ("M6 security review: data files are owner-only on Unix"). The performance task also produced measurement tooling (`tools/measure-performance.ps1`, `tools/perf/cdp.mjs`, results in `Docs/performance.md`; "M6 performance measurements: definitions and results"), and the installer smoke tests are recorded in "M6 installer smoke tests: what they prove and where they run". Findings left to the owner or to the backlog are in the block "Open manual checks (owner)" and the backlog.
 - **2026-11-18 (M6 security fixes):** After the security review the owner decided to fix four findings before v0.1.0 instead of accepting or deferring them: (1) the navigation guard on the main webview (finding 4, was backlog; remote origins are refused, WebView2 still sends one blind GET for a cancelled top-level GET navigation, so the risk is reduced, not closed); (2) vault rollback protection with a generation counter and per-device marks, including 'Open the older vault' (finding 14); (3) auto-unlock never deletes the keychain item and the unlock note says why it did not work (finding 15); (4) hosts in the synced `known_hosts` that this device has not confirmed ask once per device (finding 16, replaces the earlier 'document only' decision). Each existing `known_hosts` host asks once per device after the update; accepting an older vault re-stamps it at once. A device-local folder outside the synced data folder (`<OS local data dir>/fernjo-device`) holds the marks and the confirmed hosts. Plan: `superpowers/plans/2026-11-18-milestone-06-security-fixes.md`; decisions: `DECISIONS.md` entries 'M6 security fixes: device-local folder', 'vault rollback protection', 'hosts confirmed on this device', 'Vault: keychain behaviour' and the navigation guard update. The navigation guard backlog entry is removed.
 - **2026-11-18 (Milestone 7 inserted before RDP):** A new milestone 7, "Daily-use polish and hardening" (release 0.1.1), is inserted before the RDP milestone, which becomes milestone 8 (release 0.2.0). It takes 15 backlog items that came out of the v0.1.0 manual checks and the M6 reviews (sync-tool data loss, quit confirmation, UI discoverability, resizable panels, multi-select, close tab on shell exit, the Low findings and others); their full texts are kept as blocks of the milestone. The owner decided the order. Native clipboard commands (licence decision pending), restore tabs after restart, the minimatch alert and the feature-sized items stay in the backlog.
-- **2026-11-22 (Backlog grouped into milestones 9 to 11):** The owner asked for the backlog to be worked through in a sensible order and for device sync to be built. Three milestones are added after the RDP release and one release, `v0.3.0`, follows milestone 11 (the owner’s order). M9 “Multi-device sync” takes the backlog item “Built-in device sync” plus the two items that only matter with sync (reload bar outside the tree, stale vault temp files); it starts with a spec, the mechanism is not decided yet. M10 “Hardening round 2” takes the RDP review items, the import username cleaning, the atomic writer symlink item, `clear_pending` and the `check-no-build-paths.sh` fix. M11 “Daily-use features” takes quick connect, restore tabs, vault auto-lock, Pageant, native clipboard commands (licence decision first), the Cmd+Q quit confirmation, the restore wording, the splitter style and the M4 follow-ups. The full texts of the moved items are kept as blocks of their milestone. Still unscheduled in the backlog: SFTP, port forwarding and jump hosts, local shell, split panes, broadcast input, mRemoteNG export, the legacy mRemoteNG format, more protocols, code signing and auto-update, and the minimatch alert.
+- **2026-11-22 (Backlog grouped into milestones 9 to 11):** The owner asked for the backlog to be worked through in a sensible order and for device sync to be built. Three milestones are added after the RDP release and one release, `v0.3.0`, follows milestone 11 (the owner’s order). M9 “Multi-device sync” takes the backlog item “Built-in device sync” plus the two items that only matter with sync (reload bar outside the tree, stale vault temp files); it starts with a spec, the mechanism is not decided yet. M10 “Daily-use features” takes quick connect, restore tabs, vault auto-lock, Pageant, native clipboard commands (licence decision first), the Cmd+Q quit confirmation, the restore wording, the splitter style and the M4 follow-ups. M11 “Full hardening and security check” (the owner asked for a full review, not only the parked items) is the last milestone before the release: independent reviews per area including the new sync, a dependency check, triage in `Docs/release-checklist.md`, fixes, and the parked hardening items (RDP review items, import username cleaning, atomic writer symlink item, `clear_pending`, `check-no-build-paths.sh`), ending in a go or no-go verdict for 0.3.0. The full texts of the moved items are kept as blocks of their milestone. Still unscheduled in the backlog: SFTP, port forwarding and jump hosts, local shell, split panes, broadcast input, mRemoteNG export, the legacy mRemoteNG format, more protocols, code signing and auto-update, and the minimatch alert.
 
 ## Open manual checks (owner)
 
@@ -443,52 +443,7 @@ The "changed on disk" bar with its Reload button appears only for tree edits. A 
 **Source: Stale vault temp files after a crash**
 `write_atomic` in the vault creates `vault.fernjo.<hex>.tmp` with a random name and removes it on failure, but a crash or kill between create and rename leaves it behind, and nothing ever sweeps these files. They hold encrypted vault bytes only and are harmless, but they accumulate in a synced folder. Remove temp files of that pattern older than a day when the vault is opened.
 
-## Milestone 10 – Hardening round 2
-**Status:** ⬜ open · **Plan:** – · **Prerequisites:** M8
-
-Goal: The open Medium and Low findings of the v0.2.0 release security review and the open small hardening items are fixed or consciously accepted, so a hostile RDP server, a hostile import file or a planted symlink in the data folder cannot do more than the documented limits.
-
-**Tasks**
-- [ ] RDP: cap static virtual channel reassembly (upstream cap or a limit on the bytes read per PDU) and give the session write a timeout and a bounded `ops` channel so a server that stops reading cannot keep a closing session alive
-- [ ] RDP clipboard: the owner decides the default (off, or sync only on a paste) and whether a visible indicator is needed; implement the decision
-- [ ] RDP TLS: decide between the strict webpki verifier and an own `ServerCertVerifier`; distinct error code for an empty root store; debug logging of the TLS error cause without secrets; check with a real Windows 11 host and, if available, an older or xrdp host
-- [ ] RDP Low items: password zeroize where the API allows, `desktop_size` area clamp, no-secret guard sentinels for RDP user and domain, `app_menu.rs` temp name and absolute `APPIMAGE`, `cert_store.rs` `.bak` copy
-- [ ] Import: apply the same cap and cleaning to `settings.username` of JSON and backup imports as to the other fields
-- [ ] Atomic writers: `.bak` step no longer follows a symlink in all three writers, and `connections.json` and `settings.json` use a random `create_new` temp name
-- [ ] `clear_pending` residue after an overlapping failed apply
-- [ ] `tools/check-no-build-paths.sh` fails on a grep error instead of reading it as zero, with a test in `tools/test-release-scripts.sh`
-
-**Acceptance criteria**
-- [ ] Each item has a test or a recorded check that fails without the fix; the commands and results are listed as evidence
-- [ ] Every Medium finding of the v0.2.0 review is fixed or its remaining risk is recorded in `Docs/DECISIONS.md` with the owner’s acceptance
-- [ ] Manual, owner: RDP connect and clipboard on a real Windows 11 host still work after the TLS and clipboard changes (`cargo test -p fernjo-rdp --test connect` with `FERNJO_TEST_RDP_ADDR`)
-- [ ] Build, test and lint are green, including `cargo deny check` and `bash tools/test-release-scripts.sh`
-
-**Source: RDP TLS: own verifier, distinct errors, cause logging**
-From the review of the TLS handshake fix (PR #25, after v0.2.0): the fix keeps the handshake signature check (verified in the ironrdp-tls 0.3.0 and rustls 0.23.46 sources) but goes through the strict webpki verifier, so (1) a host whose certificate webpki cannot use now fails with `tls_failed` where it used to connect: RSA keys under 2048 or over 8192 bits, SHA-1 signatures, an unknown critical extension, a non-v3 certificate (old Windows, xrdp, embedded RDP servers); (2) an empty platform root store (a minimal Linux install without ca-certificates) makes every connect fail with `tls_failed` although roots play no part in the pin design; (3) `connect.rs` drops the cause of a TLS error, which makes (1) and (2) hard to tell apart (the new test asserts only `tls_failed`). Candidates: an own `ServerCertVerifier` that accepts the chain and checks signatures through the crypto provider, a distinct error code for the missing root store, debug logging of the cause without secrets. Check first with a real Windows 11 host (owner check, `cargo test -p fernjo-rdp --test connect` with `FERNJO_TEST_RDP_ADDR`) and, if available, an older or xrdp host.
-
-**Source: RDP: cap static channel reassembly**
-From the v0.2.0 release security review (Medium): ironrdp-svc reassembles static virtual channel data (clipboard, drdynvc) against a declared length that is never capped, so a hostile RDP server can make fernjo buffer gigabytes before the 1 MiB clipboard cap applies, and the app is killed for lack of memory. Needs a cap upstream or a limit on the bytes read per PDU in the transport. Mitigation today: switch the connection's clipboard off for hosts you do not trust. Also: a server that stops reading can keep a closing session alive (`writer.write_all` outside the `select!` in `crates/fernjo-rdp/src/session.rs`, no write timeout, unbounded `ops` channel in `src-tauri/src/sessions/rdp.rs`).
-
-**Source: RDP clipboard default and indicator**
-From the v0.2.0 release security review (Medium, design): the RDP clipboard is on by default and syncs the local clipboard to the remote host when the desktop gets focus, without a paste; the remote side can overwrite the local clipboard. Decide whether the default should be off or sync only on a paste, and whether a visible indicator is needed.
-
-**Source: RDP review Low items**
-From the v0.2.0 release security review: `build_config` puts the password into IronRDP's plain-`String` config without zeroize (API limit); `desktop_size` clamps each side to 8192 but not the area, so a very large tab makes `Framebuffer::new` fail with `desktop_too_large` instead of scaling down; the no-secret guard has no sentinel for an RDP user name or domain and its `rdp_input` and `rdp_clipboard` entries only reach the `session_not_connected` path; `app_menu.rs` uses a predictable temp name `<file>.<pid>.tmp` (`create_new`, so a planted file only causes an error) and does not require `APPIMAGE` to be absolute; `cert_store.rs` copies the `.bak` with `fs::copy` to a fixed name, as the `known_hosts` writer does.
-
-**Source: Clean the username of JSON and backup imports**
-From the v0.1.1 release security review (Low): `fernjo_import::limits::sanitize_nodes` cleans name, description and host of JSON and backup imports but not `settings.username`, which comes straight from the file (mRemoteNG usernames are cut to 256 characters at read time). A hostile file could put control characters or a very long string there; it renders as plain text and ends up as the SSH user name, with no code execution or secret exposure. Apply the same cap and cleaning as for the other fields.
-
-**Source: Atomic writers: `.bak` symlink and `connections.json` temp name**
-The M7 hardening gave `vault.fernjo` and `known_hosts` a random temp file name created with `create_new`, but the `.bak` step of all three atomic writers (`write_atomic` in `crates/fernjo-vault/src/vault.rs`, `crates/fernjo-ssh/src/known_hosts.rs` and `crates/fernjo-core/src/persist.rs`) still runs `fs::copy(path, &bak)` and `owner_only(&bak)`, which follow a symlink planted at the `.bak` name; `persist::write_atomic` (`connections.json`, `settings.json`) also still writes through the fixed `<file>.tmp` name, opened with create and truncate. Exploiting either needs write access to the data folder (a peer or a sync tool that syncs symlinks), so it is not a regression, but "followed through symlinks" is only fixed for the temp file. Fix options: remove an existing `.bak` symlink before copying, or write the `.bak` through the `create_new` plus rename helper; use a random temp name with `create_new` for `connections.json`. See `Docs/DECISIONS.md`, "M7: vault Low findings triage" (Limits).
-
-**Source: `clear_pending` residue after an overlapping failed apply**
-`AppState::clear_pending` uses `try_lock` and skips while an `import_apply` holds the lock; if that apply then fails, its pending value survives the page load that happened meanwhile. The next `import_begin` replaces it and the UI cannot apply it without one, so the effect is small. An optional fix is an `AtomicBool` set by the page-load hook that `import_apply` checks when it fails.
-
-**Source: `check-no-build-paths.sh` false-clean on grep error**
-`tools/check-no-build-paths.sh` runs without `-e` and counts matches with `n="$(grep -a -c -F -e "$pattern" "$bin")"` followed by `${n:-0}`, so a grep that fails with exit status 2 (unreadable file, I/O error) yields an empty count that reads as zero and the check passes. Capture grep's exit status and fail on anything above 1; add a test in `tools/test-release-scripts.sh`.
-
-## Milestone 11 – Daily-use features
+## Milestone 10 – Daily-use features
 **Status:** ⬜ open · **Plan:** – · **Prerequisites:** M8
 
 Goal: The small features the owner misses in daily use: connect without saving, reopen tabs after a restart, lock the vault when idle, use Pageant, and no surprises when quitting or pasting.
@@ -550,9 +505,56 @@ Deferred from the whole-branch review of M4, none of them blocks the milestone:
 - Ctrl+Shift+W with the vault view open closes an invisible tab.
 - Prompts: a keyboard-interactive round with zero prompts has no focus target; the needs-vault busy flag resets before the resume (double click); `PasswordField` `shown` is not reset after a wrong password; the `FOCUSABLE` selector omits `textarea` and `select`.
 
+## Milestone 11 – Full hardening and security check
+**Status:** ⬜ open · **Plan:** – · **Prerequisites:** M9, M10
+
+Goal: Everything in 0.3.0, including the sync of M9 and the features of M10, gets an independent security review and a hardening pass, and every finding is fixed or consciously accepted by the owner before the release.
+
+**Tasks**
+- [ ] Update the threat model for sync and the new features: what touches secrets, the data folder, the network and the webview, and what a hostile peer, server, sync folder or import file can do; record it in `Docs/DECISIONS.md`
+- [ ] Independent review per area, each by a reviewer that has not seen the others’ findings: vault, SSH, RDP, import and backup, sync (M9), session manager and IPC, webview hardening (CSP, navigation guard, Tauri capabilities and the command list), and the release workflow and scripts
+- [ ] `/security-review` of the whole diff since v0.2.0, and a dependency check: `cargo deny check`, `pnpm audit --prod`, open Dependabot and CodeQL alerts, `tools/check-workflows.sh`
+- [ ] Triage every finding in `Docs/release-checklist.md` (severity, disposition, evidence): fix all High and Medium findings, fix or have the owner accept each Low with the reason recorded in `Docs/DECISIONS.md`
+- [ ] Check that secrets still stay in Rust: the no-secret guard covers every command added since v0.2.0, and nothing secret reaches `connections.json`, `settings.json`, logs, sync data or webview storage
+- [ ] Fix the hardening items parked in the backlog (full texts below): RDP static channel reassembly cap and the write timeout, RDP clipboard default and indicator (owner decides), RDP TLS verifier and error codes, RDP Low items, import username cleaning, atomic writer `.bak` symlink and `connections.json` temp name, `clear_pending` residue, `check-no-build-paths.sh` false-clean
+- [ ] Release-readiness gate for v0.3.0: a go or no-go verdict with every known gap named in `Docs/release-checklist.md`; it prepares the release and does not perform it
+
+**Acceptance criteria**
+- [ ] Every area listed in the tasks has a written review, and all findings are in `Docs/release-checklist.md` with severity and disposition
+- [ ] No High finding is open; every Medium is fixed or its remaining risk is recorded in `Docs/DECISIONS.md` with the owner’s acceptance
+- [ ] Each fix has a test or a recorded check that fails without the fix; commands and results are listed as evidence
+- [ ] Every backlog hardening item above is fixed or consciously accepted, with the decision recorded
+- [ ] Manual, owner: RDP connect and clipboard on a real Windows 11 host still work after the TLS and clipboard changes (`cargo test -p fernjo-rdp --test connect` with `FERNJO_TEST_RDP_ADDR`), and the sync of M9 is run once more on two real devices after the fixes
+- [ ] A go or no-go verdict for v0.3.0 is written in `Docs/release-checklist.md`
+- [ ] Build, test and lint are green, including `cargo deny check`, `pnpm audit --prod` and `bash tools/test-release-scripts.sh`
+
+**Source: RDP TLS: own verifier, distinct errors, cause logging**
+From the review of the TLS handshake fix (PR #25, after v0.2.0): the fix keeps the handshake signature check (verified in the ironrdp-tls 0.3.0 and rustls 0.23.46 sources) but goes through the strict webpki verifier, so (1) a host whose certificate webpki cannot use now fails with `tls_failed` where it used to connect: RSA keys under 2048 or over 8192 bits, SHA-1 signatures, an unknown critical extension, a non-v3 certificate (old Windows, xrdp, embedded RDP servers); (2) an empty platform root store (a minimal Linux install without ca-certificates) makes every connect fail with `tls_failed` although roots play no part in the pin design; (3) `connect.rs` drops the cause of a TLS error, which makes (1) and (2) hard to tell apart (the new test asserts only `tls_failed`). Candidates: an own `ServerCertVerifier` that accepts the chain and checks signatures through the crypto provider, a distinct error code for the missing root store, debug logging of the cause without secrets. Check first with a real Windows 11 host (owner check, `cargo test -p fernjo-rdp --test connect` with `FERNJO_TEST_RDP_ADDR`) and, if available, an older or xrdp host.
+
+**Source: RDP: cap static channel reassembly**
+From the v0.2.0 release security review (Medium): ironrdp-svc reassembles static virtual channel data (clipboard, drdynvc) against a declared length that is never capped, so a hostile RDP server can make fernjo buffer gigabytes before the 1 MiB clipboard cap applies, and the app is killed for lack of memory. Needs a cap upstream or a limit on the bytes read per PDU in the transport. Mitigation today: switch the connection's clipboard off for hosts you do not trust. Also: a server that stops reading can keep a closing session alive (`writer.write_all` outside the `select!` in `crates/fernjo-rdp/src/session.rs`, no write timeout, unbounded `ops` channel in `src-tauri/src/sessions/rdp.rs`).
+
+**Source: RDP clipboard default and indicator**
+From the v0.2.0 release security review (Medium, design): the RDP clipboard is on by default and syncs the local clipboard to the remote host when the desktop gets focus, without a paste; the remote side can overwrite the local clipboard. Decide whether the default should be off or sync only on a paste, and whether a visible indicator is needed.
+
+**Source: RDP review Low items**
+From the v0.2.0 release security review: `build_config` puts the password into IronRDP's plain-`String` config without zeroize (API limit); `desktop_size` clamps each side to 8192 but not the area, so a very large tab makes `Framebuffer::new` fail with `desktop_too_large` instead of scaling down; the no-secret guard has no sentinel for an RDP user name or domain and its `rdp_input` and `rdp_clipboard` entries only reach the `session_not_connected` path; `app_menu.rs` uses a predictable temp name `<file>.<pid>.tmp` (`create_new`, so a planted file only causes an error) and does not require `APPIMAGE` to be absolute; `cert_store.rs` copies the `.bak` with `fs::copy` to a fixed name, as the `known_hosts` writer does.
+
+**Source: Clean the username of JSON and backup imports**
+From the v0.1.1 release security review (Low): `fernjo_import::limits::sanitize_nodes` cleans name, description and host of JSON and backup imports but not `settings.username`, which comes straight from the file (mRemoteNG usernames are cut to 256 characters at read time). A hostile file could put control characters or a very long string there; it renders as plain text and ends up as the SSH user name, with no code execution or secret exposure. Apply the same cap and cleaning as for the other fields.
+
+**Source: Atomic writers: `.bak` symlink and `connections.json` temp name**
+The M7 hardening gave `vault.fernjo` and `known_hosts` a random temp file name created with `create_new`, but the `.bak` step of all three atomic writers (`write_atomic` in `crates/fernjo-vault/src/vault.rs`, `crates/fernjo-ssh/src/known_hosts.rs` and `crates/fernjo-core/src/persist.rs`) still runs `fs::copy(path, &bak)` and `owner_only(&bak)`, which follow a symlink planted at the `.bak` name; `persist::write_atomic` (`connections.json`, `settings.json`) also still writes through the fixed `<file>.tmp` name, opened with create and truncate. Exploiting either needs write access to the data folder (a peer or a sync tool that syncs symlinks), so it is not a regression, but "followed through symlinks" is only fixed for the temp file. Fix options: remove an existing `.bak` symlink before copying, or write the `.bak` through the `create_new` plus rename helper; use a random temp name with `create_new` for `connections.json`. See `Docs/DECISIONS.md`, "M7: vault Low findings triage" (Limits).
+
+**Source: `clear_pending` residue after an overlapping failed apply**
+`AppState::clear_pending` uses `try_lock` and skips while an `import_apply` holds the lock; if that apply then fails, its pending value survives the page load that happened meanwhile. The next `import_begin` replaces it and the UI cannot apply it without one, so the effect is small. An optional fix is an `AtomicBool` set by the page-load hook that `import_apply` checks when it fails.
+
+**Source: `check-no-build-paths.sh` false-clean on grep error**
+`tools/check-no-build-paths.sh` runs without `-e` and counts matches with `n="$(grep -a -c -F -e "$pattern" "$bin")"` followed by `${n:-0}`, so a grep that fails with exit status 2 (unreadable file, I/O error) yields an empty count that reads as zero and the check passes. Capture grep's exit status and fail on anything above 1; add a test in `tools/test-release-scripts.sh`.
+
 ## Release `v0.3.0` – Acceptance
 
-Device sync (M9), the hardening round after the RDP release (M10) and the daily-use features (M11).
+Device sync (M9), the daily-use features (M10) and a full hardening and security check of everything in the release (M11).
 
 ## Backlog
 
