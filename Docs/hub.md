@@ -43,7 +43,7 @@ Stopping the container (`podman stop`, `docker stop`, `systemctl --user stop fer
 
    The unit publishes `127.0.0.1:8787` only, mounts the root file system read-only, drops all capabilities, runs a tiny init as PID 1 (`RunInit=true`, belt and braces next to the hub's own signal handling) and keeps the data in the named volume.
 
-   The supported rootless path is the one in these two steps: `--userns=keep-id:uid=10001,gid=10001` (and `UserNS=` in the unit) maps your user onto 10001, so the volume that the image's `/data` seeded stays writable for the hub. Whether that mapping works on your Podman version is an owner check (see the end of this page).
+   The supported rootless path is the one in these two steps: `--userns=keep-id:uid=10001,gid=10001` (and `UserNS=` in the unit) maps your user onto 10001, so the volume that the image's `/data` seeded stays writable for the hub. It was run on Podman 5.7.0 (see the end of this page).
 
 3. Check: `curl -H "Authorization: Bearer <secret>" http://127.0.0.1:8787/v1/info` answers `{"protocol":1,"maxBytes":67108864}`.
 
@@ -116,11 +116,11 @@ Wire formats, the envelope layout and the merge rules are in `Docs/sync-format.m
 - The hub and the sync client were tested with in-process tests (the hub on loopback, two clients against it, fake servers for the client's refusals).
 - **Built and run with Docker (not Podman)**: the image builds from a clean `git archive` of the repository (context about 0.3 MB with the root `.dockerignore`); `fernjo-hub init --data /data` succeeds as user 10001 on a fresh Docker named volume; `serve` runs, and `docker stop` ends it in about half a second with exit status 0 (before the signal handler it took 7 s and ended with 137). The hub's Unix test of SIGTERM and SIGINT (`crates/fernjo-hub/tests/shutdown.rs`) ran in a Linux container.
 
+- **Run by the owner on 2026-11-23** (reported by the owner, without per-step detail): the image built with `podman build` and the rootless Quadlet unit ran on a VM (Podman 5.7.0, `UserNS=keep-id:uid=10001,gid=10001`, `RunInit=true`, the `:Z` volume, the read-only root file system). Caddy with `tls internal` ran on a separate VM in front of it, with the hub published on the hub VM's LAN address (`PublishPort=<LAN address>:8787:8787`) and the CA pasted into fernjo. A Windows 11 PC and a macOS laptop synced through it: create, edit, delete versus edit, conflict copy, vault entry, offline then online, a restart of the hub container and Caddy, a hub restored from an older snapshot and re-seeded, and `rotate-secret`. The OS keychain items worked on Windows and macOS. Two defects came out of it and were fixed: the unit used the key `Init=`, which Quadlet rejects (the key is `RunInit=`), and the notice for a deleted-versus-edited item said "changed here" also on the device that had deleted it.
+
 ## Not verified yet (owner checks)
 
-Podman rootless and the Quadlet unit were **not run**; Docker is not a check of either. Still open, to be run by the owner:
-
-- `podman build -f crates/fernjo-hub/Containerfile -t fernjo-hub .` and the rootless Quadlet unit on the Ubuntu or Debian VM (the `keep-id` user mapping, `RunInit=true`, the `:Z` label on a named volume and the read-only root file system have not been run under Podman).
-- Caddy with `tls internal` in front of the hub, including a Caddy restart and a hub restart that lose nothing, with the CA pasted into fernjo.
-- Two real devices syncing through that hub (create, edit, delete, conflict copy, vault entry, offline then online), and the OS keychain items on Windows, macOS and Linux.
+- Linux: the Secret Service keychain item (set up, restart, leave sync, item gone) and a sync run from a Linux device (the CachyOS laptop).
+- That `systemctl --user stop fernjo-hub` ends the Podman unit within about a second (not reported).
+- Caddy running in a container: the `host.containers.internal` address and a shared Podman network, named under "Caddy" as untried advice. The tested set-up has Caddy on another VM.
 - The `host.containers.internal` address and a LAN `PublishPort` for a Caddy that runs in a container (named under "Caddy" as untried advice).
