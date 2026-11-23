@@ -94,9 +94,18 @@ test("pointer drag reports the new size", () => {
 test("focus_style_is_a_one_pixel_inset_line_and_the_hit_area_clears_the_scrollbar", async () => {
   const src = (await import("./Splitter.svelte?raw")).default;
   const css = src.slice(src.indexOf("<style>"));
-  const focus = /\.splitter:focus-visible\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
-  expect(focus).toMatch(/box-shadow:\s*inset[^;]*1px[^;]*var\(--color-focus\)/);
-  expect(focus).not.toMatch(/background/);
-  const vertical = /\.vertical\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
-  expect(vertical).not.toMatch(/right:\s*-3px/);
+  const body = (sel: string) => {
+    const at = css.indexOf(sel + " {");
+    return at < 0 ? "" : css.slice(at, css.indexOf("}", at));
+  };
+  // the hit area itself shows no fill while focused and stays opaque
+  const focus = body(".splitter:focus-visible");
+  expect(focus).toMatch(/background:\s*transparent/);
+  expect(focus).toMatch(/opacity:\s*1/);
+  // the line is a 1 px pseudo-element in the focus colour, one per orientation
+  expect(body(".splitter:focus-visible::after")).toMatch(/background:\s*var\(--color-focus\)/);
+  expect(body(".vertical:focus-visible::after")).toMatch(/width:\s*1px/);
+  expect(body(".horizontal:focus-visible::after")).toMatch(/height:\s*1px/);
+  // the vertical hit area hangs fully outside the sidebar, clear of the scrollbar
+  expect(body(".vertical")).toMatch(/right:\s*-6px/);
 });
