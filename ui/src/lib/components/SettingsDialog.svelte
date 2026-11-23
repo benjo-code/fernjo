@@ -82,6 +82,13 @@
     const input = e.currentTarget as HTMLInputElement;
     const text = input.value.trim();
     autoLockError = null;
+    // text that does not parse (for example "1e") reads as "" and must not turn the lock off
+    if (input.validity.badInput) {
+      autoLockError = "The time must be between 1 and 1440 minutes, or empty for off.";
+      autoLockText = autoLock?.minutes == null ? "" : String(autoLock.minutes);
+      input.value = autoLockText;
+      return;
+    }
     // anything that is not a whole number is sent as 0 so that Rust answers with its coded error
     const n = Number(text);
     const minutes = text === "" ? null : Number.isInteger(n) && n >= 0 && n <= 100_000 ? n : 0;

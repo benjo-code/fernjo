@@ -672,6 +672,18 @@ describe("vault auto-lock", () => {
     expect(field().value).toBe("15");
   });
 
+  test("unparsable_text_in_the_field_is_refused_and_does_not_turn_the_lock_off", async () => {
+    const { calls } = await setup({
+      getVaultAutoLock: async () => autoLockInfo({ minutes: 15 }),
+    });
+    // a browser reads text like "1e" as an empty value and reports badInput
+    Object.defineProperty(field(), "validity", { value: { badInput: true }, configurable: true });
+    await enter("");
+    expect(calls.setVaultAutoLock ?? []).toEqual([]);
+    expect(alert()?.textContent).toContain("between 1 and 1440");
+    expect(field().value).toBe("15");
+  });
+
   test("a_memory_only_auto_lock_says_it_is_not_remembered", async () => {
     await setup({
       getVaultAutoLock: async () => autoLockInfo({ persistent: false, unsavedReason: "env" }),
