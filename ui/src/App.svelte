@@ -14,6 +14,7 @@
   import { findNode } from "./lib/rows";
   import { SessionStore } from "./lib/sessions.svelte";
   import { isMac, routeKey } from "./lib/shortcuts";
+  import { tabToClose } from "./lib/tabs";
   import { TreeStore } from "./lib/store.svelte";
   import { SyncStore } from "./lib/sync.svelte";
   import { syncErrorText } from "./lib/sync-errors";
@@ -199,13 +200,14 @@
       if (action === "nextTab") sessions.next();
       else sessions.previous();
     } else if (action === "closeTab") {
-      if (sessions.activeId === null) return;
+      const closing = tabToClose(view, sessions.activeId);
+      if (closing === null) return;
       // a held key must not close one tab after the other
       if (e.repeat) {
         e.preventDefault();
         return;
       }
-      sessions.requestClose(sessions.activeId);
+      sessions.requestClose(closing);
     } else if (action === "focusFilter") {
       sidebar?.focusFilter();
     } else {
