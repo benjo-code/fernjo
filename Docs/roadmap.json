@@ -346,7 +346,7 @@
         {
           "id": "10",
           "title": "Daily-use features",
-          "status": "planned",
+          "status": "in-progress",
           "plan": "superpowers/plans/2026-11-23-milestone-10-daily-use-features.md",
           "prerequisites": ["8"],
           "goal": "The small features the owner misses in daily use: connect without saving, reopen tabs after a restart, lock the vault when idle, use Pageant, and no surprises when quitting or pasting.",
