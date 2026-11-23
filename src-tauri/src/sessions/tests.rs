@@ -1295,6 +1295,28 @@ fn a_confirmation_is_needed_only_with_a_connected_session() {
     assert!(needs_close_confirmation(3));
 }
 
+#[test]
+fn an_explicit_exit_code_is_never_intercepted() {
+    assert_eq!(exit_action(Some(0), 3, false), ExitAction::Allow);
+    assert_eq!(exit_action(Some(1), 3, true), ExitAction::Allow);
+}
+
+#[test]
+fn no_connected_session_allows_the_exit() {
+    assert_eq!(exit_action(None, 0, false), ExitAction::Allow);
+    assert_eq!(exit_action(None, 0, true), ExitAction::Allow);
+}
+
+#[test]
+fn a_connected_session_asks() {
+    assert_eq!(exit_action(None, 1, false), ExitAction::Ask);
+}
+
+#[test]
+fn a_second_request_while_the_dialog_is_open_prevents_without_a_second_dialog() {
+    assert_eq!(exit_action(None, 2, true), ExitAction::Prevent);
+}
+
 // ---------- input queue cap ----------
 
 #[test]

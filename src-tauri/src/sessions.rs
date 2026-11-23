@@ -955,6 +955,29 @@ pub(crate) fn needs_close_confirmation(connected: usize) -> bool {
     connected > 0
 }
 
+/// What an app exit request (`RunEvent::ExitRequested`, e.g. Cmd+Q on macOS) should do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExitAction {
+    /// Let the exit proceed.
+    Allow,
+    /// Stop the exit and show the confirmation dialog.
+    Ask,
+    /// Stop the exit; a dialog is already open.
+    Prevent,
+}
+
+/// An explicit exit code (restart, update, `app.exit(n)`) and an exit without a connected
+/// session are never intercepted; otherwise the exit waits for the dialog.
+pub(crate) fn exit_action(code: Option<i32>, connected: usize, prompt_open: bool) -> ExitAction {
+    if code.is_some() || !needs_close_confirmation(connected) {
+        ExitAction::Allow
+    } else if prompt_open {
+        ExitAction::Prevent
+    } else {
+        ExitAction::Ask
+    }
+}
+
 /// Mutes the channel, answers every prompt with the safe answer, tells the writer task to close
 /// and aborts the connect task.
 fn shut_down(entry: &Entry) {
