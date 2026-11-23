@@ -130,7 +130,9 @@ pub fn set_vault_auto_lock(
 
 /// The UI saw user input (a throttled heartbeat): restarts the idle clock.
 pub fn note_activity(state: &AppState) {
-    state.idle.note(std::time::Instant::now());
+    state
+        .idle
+        .note(std::time::Instant::now(), std::time::SystemTime::now());
 }
 
 pub mod handlers {

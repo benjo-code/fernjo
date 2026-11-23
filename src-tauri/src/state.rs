@@ -394,7 +394,7 @@ impl AppState {
             theme: Mutex::new(Theme::default()),
             vault_auto_lock_minutes: Mutex::new(None),
             reopen_tabs: Mutex::new(true),
-            idle: IdleTracker::new(std::time::Instant::now()),
+            idle: IdleTracker::new(std::time::Instant::now(), std::time::SystemTime::now()),
             sessions: SessionManager::default(),
             pending: Mutex::new(None),
             sync: Mutex::new(SyncRuntime::default()),

@@ -7,7 +7,7 @@
 //! Connected sessions keep running; only new credential lookups need the unlock again.
 
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -17,39 +17,56 @@ use crate::vault_commands::{self, VaultStatus};
 /// How often the thread looks at the clock.
 const TICK: Duration = Duration::from_secs(5);
 
-/// The time of the last user activity.
+/// The time of the last user activity, on two clocks. `Instant` is steady but stops while the
+/// machine sleeps on macOS and Linux; the wall clock keeps running, so the larger of the two
+/// elapsed values is the idle time and a laptop closed with the vault open locks on wake.
 #[derive(Debug)]
 pub struct IdleTracker {
-    last: Mutex<Instant>,
+    last: Mutex<(Instant, SystemTime)>,
 }
 
 impl IdleTracker {
-    pub fn new(now: Instant) -> Self {
+    pub fn new(now: Instant, wall: SystemTime) -> Self {
         Self {
-            last: Mutex::new(now),
+            last: Mutex::new((now, wall)),
         }
     }
 
-    /// Records activity at `now`.
-    pub fn note(&self, now: Instant) {
+    /// Records activity at `now` / `wall`.
+    pub fn note(&self, now: Instant, wall: SystemTime) {
         if let Ok(mut last) = self.last.lock() {
-            // never move the clock backwards (a late heartbeat must not shorten the idle time)
-            if now > *last {
-                *last = now;
+            // never move the steady clock backwards (a late heartbeat must not shorten the
+            // idle time); a wall clock that went back is taken over, otherwise the stamp
+            // would stay in the future and the wall side could never count again
+            if now > last.0 {
+                last.0 = now;
+            }
+            if wall > last.1
+                || last
+                    .1
+                    .duration_since(wall)
+                    .is_ok_and(|back| !back.is_zero())
+            {
+                last.1 = wall;
             }
         }
     }
 
     /// Whether the idle time has reached `limit_minutes`; never when the limit is off. A
-    /// lowered limit applies at once because the limit is read at every check.
-    pub fn is_due(&self, now: Instant, limit_minutes: Option<u32>) -> bool {
+    /// lowered limit applies at once because the limit is read at every check. The idle time
+    /// is the larger of the steady and the wall clock difference; a wall clock earlier than
+    /// the stamp counts as zero, so it falls back to the steady value and never delays the
+    /// lock.
+    pub fn is_due(&self, now: Instant, wall: SystemTime, limit_minutes: Option<u32>) -> bool {
         let Some(minutes) = limit_minutes else {
             return false;
         };
         let Ok(last) = self.last.lock() else {
             return false;
         };
-        now.saturating_duration_since(*last) >= Duration::from_secs(u64::from(minutes) * 60)
+        let steady = now.saturating_duration_since(last.0);
+        let wall = wall.duration_since(last.1).unwrap_or(Duration::ZERO);
+        steady.max(wall) >= Duration::from_secs(u64::from(minutes) * 60)
     }
 }
 
@@ -62,9 +79,9 @@ fn vault_is_unlocked(state: &AppState) -> bool {
 
 /// One look at the clock: locks the vault when it is unlocked and the idle time is over.
 /// Returns the new status when it locked. A lock error is ignored; the next tick retries.
-pub fn tick(state: &AppState, now: Instant) -> Option<VaultStatus> {
+pub fn tick(state: &AppState, now: Instant, wall: SystemTime) -> Option<VaultStatus> {
     let limit = state.vault_auto_lock_minutes.lock().ok().map(|l| *l)?;
-    if !state.idle.is_due(now, limit) || !vault_is_unlocked(state) {
+    if !state.idle.is_due(now, wall, limit) || !vault_is_unlocked(state) {
         return None;
     }
     vault_commands::vault_lock(state).ok()
@@ -78,7 +95,7 @@ pub fn spawn(app: AppHandle) {
             loop {
                 std::thread::sleep(TICK);
                 let state = app.state::<AppState>();
-                if let Some(status) = tick(&state, Instant::now()) {
+                if let Some(status) = tick(&state, Instant::now(), SystemTime::now()) {
                     let _ = app.emit("vault-status", status);
                 }
             }
@@ -91,44 +108,90 @@ mod tests {
 
     const MIN: Duration = Duration::from_secs(60);
 
+    /// Both clocks start at the same moment.
+    fn start() -> (Instant, SystemTime) {
+        (Instant::now(), SystemTime::now())
+    }
+
     #[test]
     fn not_due_while_activity_is_within_the_limit() {
-        let t0 = Instant::now();
-        let tracker = IdleTracker::new(t0);
-        assert!(!tracker.is_due(t0 + 14 * MIN, Some(15)));
+        let (t0, w0) = start();
+        let tracker = IdleTracker::new(t0, w0);
+        assert!(!tracker.is_due(t0 + 14 * MIN, w0 + 14 * MIN, Some(15)));
     }
 
     #[test]
     fn due_after_the_limit_without_input() {
-        let t0 = Instant::now();
-        let tracker = IdleTracker::new(t0);
-        assert!(tracker.is_due(t0 + 15 * MIN, Some(15)));
-        assert!(tracker.is_due(t0 + 16 * MIN, Some(15)));
+        let (t0, w0) = start();
+        let tracker = IdleTracker::new(t0, w0);
+        assert!(tracker.is_due(t0 + 15 * MIN, w0 + 15 * MIN, Some(15)));
+        assert!(tracker.is_due(t0 + 16 * MIN, w0 + 16 * MIN, Some(15)));
     }
 
     #[test]
     fn never_due_when_the_limit_is_off() {
-        let t0 = Instant::now();
-        let tracker = IdleTracker::new(t0);
-        assert!(!tracker.is_due(t0 + 100_000 * MIN, None));
+        let (t0, w0) = start();
+        let tracker = IdleTracker::new(t0, w0);
+        assert!(!tracker.is_due(t0 + 100_000 * MIN, w0 + 100_000 * MIN, None));
     }
 
     #[test]
     fn a_lowered_limit_applies_at_once() {
-        let t0 = Instant::now();
-        let tracker = IdleTracker::new(t0);
-        let now = t0 + 30 * MIN;
-        assert!(!tracker.is_due(now, Some(60)));
-        assert!(tracker.is_due(now, Some(10)));
+        let (t0, w0) = start();
+        let tracker = IdleTracker::new(t0, w0);
+        let (now, wall) = (t0 + 30 * MIN, w0 + 30 * MIN);
+        assert!(!tracker.is_due(now, wall, Some(60)));
+        assert!(tracker.is_due(now, wall, Some(10)));
     }
 
     #[test]
     fn activity_resets_the_clock() {
-        let t0 = Instant::now();
-        let tracker = IdleTracker::new(t0);
-        tracker.note(t0 + 14 * MIN);
-        assert!(!tracker.is_due(t0 + 20 * MIN, Some(15)));
-        assert!(tracker.is_due(t0 + 29 * MIN, Some(15)));
+        let (t0, w0) = start();
+        let tracker = IdleTracker::new(t0, w0);
+        tracker.note(t0 + 14 * MIN, w0 + 14 * MIN);
+        assert!(!tracker.is_due(t0 + 20 * MIN, w0 + 20 * MIN, Some(15)));
+        assert!(tracker.is_due(t0 + 29 * MIN, w0 + 29 * MIN, Some(15)));
+    }
+
+    #[test]
+    fn a_sleep_gap_in_the_wall_clock_counts_as_idle_time() {
+        let (t0, w0) = start();
+        let tracker = IdleTracker::new(t0, w0);
+        // the steady clock stood still while the machine slept: 10 s on it, 8 h on the wall
+        let eight_hours = 8 * 60 * MIN;
+        assert!(tracker.is_due(t0 + Duration::from_secs(10), w0 + eight_hours, Some(15)));
+        // without the gap the same steady time is far from due
+        assert!(!tracker.is_due(
+            t0 + Duration::from_secs(10),
+            w0 + Duration::from_secs(10),
+            Some(15)
+        ));
+    }
+
+    #[test]
+    fn a_wall_clock_that_went_backwards_does_not_delay_the_lock() {
+        let (t0, w0) = start();
+        let tracker = IdleTracker::new(t0, w0 + 60 * MIN);
+        // wall earlier than the stamp: counts as zero, the steady value decides
+        assert!(tracker.is_due(t0 + 15 * MIN, w0, Some(15)));
+        assert!(!tracker.is_due(t0 + 14 * MIN, w0, Some(15)));
+        // activity after the jump takes the earlier wall time over
+        tracker.note(t0 + 20 * MIN, w0 + 20 * MIN);
+        assert!(!tracker.is_due(t0 + 21 * MIN, w0 + 21 * MIN, Some(15)));
+        assert!(tracker.is_due(t0 + 21 * MIN, w0 + 36 * MIN, Some(15)));
+    }
+
+    #[test]
+    fn activity_resets_both_clocks() {
+        let (t0, w0) = start();
+        let tracker = IdleTracker::new(t0, w0);
+        // a long sleep, then the user moves the mouse
+        let (now, wall) = (t0 + Duration::from_secs(10), w0 + 8 * 60 * MIN);
+        assert!(tracker.is_due(now, wall, Some(15)));
+        tracker.note(now, wall);
+        assert!(!tracker.is_due(now, wall, Some(15)));
+        assert!(!tracker.is_due(now + 14 * MIN, wall + 14 * MIN, Some(15)));
+        assert!(tracker.is_due(now + 15 * MIN, wall + 15 * MIN, Some(15)));
     }
 
     #[test]
@@ -138,17 +201,17 @@ mod tests {
         vault_commands::vault_create(&st, secrecy::SecretString::from("a master password"), false)
             .unwrap();
         assert!(vault_is_unlocked(&st));
-        let t0 = Instant::now();
-        st.idle.note(t0);
+        let (t0, w0) = start();
+        st.idle.note(t0, w0);
         // off: nothing happens
-        assert!(tick(&st, t0 + 500 * MIN).is_none());
+        assert!(tick(&st, t0 + 500 * MIN, w0 + 500 * MIN).is_none());
         *st.vault_auto_lock_minutes.lock().unwrap() = Some(5);
-        assert!(tick(&st, t0 + 4 * MIN).is_none());
+        assert!(tick(&st, t0 + 4 * MIN, w0 + 4 * MIN).is_none());
         assert!(vault_is_unlocked(&st));
-        let status = tick(&st, t0 + 5 * MIN).expect("locks");
+        let status = tick(&st, t0 + 5 * MIN, w0 + 5 * MIN).expect("locks");
         assert_eq!(status.state, "locked");
         assert!(!vault_is_unlocked(&st));
         // already locked: nothing more to do
-        assert!(tick(&st, t0 + 6 * MIN).is_none());
+        assert!(tick(&st, t0 + 6 * MIN, w0 + 6 * MIN).is_none());
     }
 }
