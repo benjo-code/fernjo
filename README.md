@@ -16,6 +16,9 @@ Working now:
 - Encrypted credential vault (Argon2id + XChaCha20-Poly1305), optional unlock via the OS keychain
 - Import from mRemoteNG (`confCons.xml` 2.6, including saved passwords), export of the connections as JSON and an encrypted full backup with restore (formats in [Docs/backup-format.md](Docs/backup-format.md))
 - Data folder you can sync yourself (Syncthing, Nextcloud, iCloud) – the vault stays encrypted
+- Quick connect: type `user@host[:port]` (or `rdp://user@host`) under the filter and open a session without saving a connection
+- Tabs of the last run come back after a restart as disconnected tabs (Reconnect or "Reconnect all"; switch off in Settings)
+- Optional auto-lock of the vault after an idle time (Settings)
 - Light and dark theme, following the system or set by hand
 
 Design and scope: [Docs/superpowers/specs/2026-11-15-fernjo-design.md](Docs/superpowers/specs/2026-11-15-fernjo-design.md)
@@ -72,6 +75,7 @@ Plain Ctrl+letter and Alt+letter always go to the shell. App shortcuts are Ctrl+
 | Previous tab | Ctrl+Shift+Tab | Ctrl+Shift+Tab |
 | Close tab | Ctrl+Shift+W | Cmd+W |
 | Focus the connection filter | Ctrl+Shift+K | Cmd+K |
+| Quick connect | Ctrl+Shift+N | Cmd+N |
 | Search in the terminal | Ctrl+Shift+F | Cmd+F |
 | Copy selection (terminal) | Ctrl+Shift+C | Cmd+C |
 | Paste (terminal) | Ctrl+Shift+V | Cmd+V |

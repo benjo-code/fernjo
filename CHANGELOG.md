@@ -6,8 +6,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 
 ## [Unreleased]
 
+Daily-use features: milestone M10.
+
 ### Added
 
+- Quick connect (M10): type `user@host`, `user@host:port`, `ssh://user@host` or `rdp://[user@]host[:port]` into the field under the filter (Ctrl+Shift+N, Cmd+N on macOS) and press Enter to open a session without saving a connection. Nothing is written to `connections.json` or the vault; sign-in uses the agent and the prompts in the tab. A quick remote desktop has its clipboard switched off. Reconnect works for these tabs.
+- Reopen tabs on start (M10): the tabs of the last run (saved connections and quick targets, the order and the active tab) come back after a restart as disconnected tabs ("Restored from your last session. Not connected."); nothing connects until you press Reconnect on a tab or "Reconnect all" in the tab strip (three at a time; the vault is asked for once when a tab needs it). The list is kept per device in the device folder and holds only targets, never a credential. Switch it off in Settings, "Tabs".
+- Vault auto-lock (M10): Settings, "Vault", has an idle time in minutes (1 to 1440, empty is off, off by default). After that long without keyboard, mouse or wheel input in fernjo the vault locks, also while a terminal or remote desktop has the focus; connected sessions keep running.
+- Pageant on Windows (M10): when the OpenSSH agent is not running or holds no keys, fernjo uses Pageant. If both hold keys only the OpenSSH agent is used.
+- Quit confirmation with Cmd+Q on macOS (M10): quitting with a connected session now asks "Close fernjo?" like closing the window does.
+- Native paste (M10): the terminal's context-menu Paste reads the clipboard through the app instead of the web view, so it no longer waits for a permission prompt on Windows. The clipboard library's licence (BSL-1.0) is now allowed in `deny.toml` and listed in the third-party notices. Known exposure: the command can be called by any script in the web view, which only runs fernjo's own bundle (`Docs/DECISIONS.md`, "M10 native clipboard: BSL-1.0 allowed").
+- Restoring a backup now names what is replaced (connections and credentials; open sessions are closed) and what is kept (the vault password, known hosts, settings and sync setup). With sync on, a restore is still pushed to your other devices at the next run, and the dialog does not say so.
 - Multi-device sync (M9): your connection tree and your vault entries can follow you between devices without copying files and without a file-sync tool. You run one small program, `fernjo-hub`, on a machine that is always on (rootless Podman on an Ubuntu or Debian VM, behind the Caddy you already run with `tls internal`; the guide is `Docs/hub.md`), and every device talks to it over HTTPS. Reaching the hub from outside the home network is not built (the address is configurable, but only the LAN case was designed). Set it up in Settings, Sync: hub address, the hub secret that `fernjo-hub init` prints once, optionally Caddy's root certificate, and a device name. "Show pairing code" gives one string that you paste on the next device under "Join with a pairing code"; joining replaces that device's connections and vault with the shared ones, after a confirmation that counts what is lost.
   - The hub stores only encrypted snapshots: the snapshot is encrypted on the device with a key the hub never receives (XChaCha20-Poly1305, HKDF-SHA256), and the vault inside is still protected by your master password. The hub sees sizes, times and a counter, nothing readable, and cannot forge a head that devices accept. The hub secret and the sync key live in the OS keychain; sync cannot be set up without one. A device refuses a hub that shows an older state than it has seen (for example a restored VM) and offers "Re-seed hub from this device".
   - It works offline-first: saving never waits for the hub. A device syncs after start, every five minutes, when the window gets focus, a few seconds after you change something, with "Sync now", and tries one last push when you close the window. An unreachable hub is the quiet state "Offline, N changes waiting" in the sidebar footer, not an error.
@@ -19,6 +28,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
   - **Verified on real hardware, except Linux.** The owner ran a Windows 11 PC and a macOS laptop against a hub in rootless Podman 5.7.0 behind Caddy `tls internal` on a separate VM (create, edit, delete versus edit, conflict copy, vault entry, offline then online, hub and Caddy restart, hub restored from an older snapshot and re-seeded, hub secret rotation, the OS keychain items on both systems). That run found two defects, fixed before release: the Quadlet unit used `Init=` (the key is `RunInit=`), and the notice for an item deleted on one device and changed on another said "changed here" also on the device that had deleted it. Not run: the Linux Secret Service keychain item and a Linux device.
 - The Reload bar (M7) now also appears when a vault credential delete or a restore from a backup finds that `connections.json` changed on disk, in addition to the plain error text. The file in question can be `vault.fernjo` (a restore saves the vault first), while the bar still names `connections.json`.
 - Opening the vault now removes leftover `vault.fernjo.<hex>.tmp` files of an interrupted save that are more than a day old; younger ones, symbolic links and other names are left alone.
+
+### Fixed
+
+- Host keys are written to `known_hosts` only after the SSH handshake succeeded (before, the decision was written inside the key check; the library already verified the signature first, so this is defence in depth). A failed handshake leaves the file unchanged.
+- The input a session can have waiting is capped at 8 MiB; beyond it the call is refused with "too much input is waiting; try again" instead of growing memory.
+- App shortcuts (Ctrl+Shift+letter, Cmd+letter) work on non-Latin keyboard layouts, and Ctrl+Shift+W no longer closes a hidden tab while the vault view is open.
+- The splitter's keyboard focus is a 1 px centred line and its hit area no longer covers the tree's scrollbar.
+- The tree keeps 21 rows at the default window size instead of 23 (the quick connect field takes the room) so the properties panel stays reachable at 1280x800.
 
 ## [0.2.0] - 2026-11-22
 
