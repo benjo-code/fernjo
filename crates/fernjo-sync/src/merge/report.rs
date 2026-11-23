@@ -10,7 +10,8 @@ pub fn describe(finding: &Finding) -> String {
             format!("\"{name}\" was changed on two devices; your version was kept as a copy.")
         }
         Finding::KeptEdit { name, .. } => {
-            format!("\"{name}\" was deleted on another device but changed here, so it was kept.")
+            // The finding does not record which side deleted, so the text is true on both.
+            format!("\"{name}\" was deleted on one device but changed on another, so it was kept.")
         }
         Finding::PlacementKept { name, .. } => {
             format!(
@@ -27,7 +28,7 @@ pub fn describe(finding: &Finding) -> String {
         }
         Finding::EntryKeptEdit { name, .. } => {
             format!(
-                "Vault entry \"{name}\" was deleted on another device but changed here, so it was kept."
+                "Vault entry \"{name}\" was deleted on one device but changed on another, so it was kept."
             )
         }
         Finding::PasswordChangeDropped { .. } => {
@@ -75,6 +76,26 @@ mod tests {
         ];
         for finding in &all {
             assert!(describe(finding).contains("\"web\""));
+        }
+    }
+
+    #[test]
+    fn the_kept_notices_read_true_on_the_deleting_and_the_editing_device() {
+        let id = NodeId::nil();
+        let node = describe(&Finding::KeptEdit {
+            node: id,
+            name: "web".into(),
+        });
+        let entry = describe(&Finding::EntryKeptEdit {
+            entry: uuid::Uuid::nil(),
+            name: "web".into(),
+        });
+        for text in [node, entry] {
+            assert!(text.contains("deleted on one device but changed on another"));
+            assert!(
+                !text.contains("here"),
+                "names a side it cannot know: {text}"
+            );
         }
     }
 
