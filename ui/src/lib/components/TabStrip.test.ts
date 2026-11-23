@@ -285,4 +285,33 @@ describe("TabStrip", () => {
     expect(marks()).toEqual(["true", "false"]);
     expect(titles()).toEqual(["Name a", "Name b"]);
   });
+
+  test("reconnect_all_shows_only_while_a_restored_tab_is_disconnected", async () => {
+    const onreconnectall = vi.fn();
+    const mock = mockApi();
+    const sessions = new SessionStore(
+      mock.api,
+      (id) => `Name ${id}`,
+      () => true,
+    );
+    sessions.open("plain");
+    sessions.tabs[0]!.state = "disconnected";
+    mounted = mount(TabStrip, { target: document.body, props: { sessions, onreconnectall } });
+    flushSync();
+    const all = () =>
+      document.querySelector<HTMLButtonElement>('button[aria-label="Reconnect all restored tabs"]');
+    // a dropped tab that was not restored does not offer it
+    expect(all()).toBeNull();
+
+    sessions.restore([{ target: { node: "r" }, protocol: "ssh", title: "R", usesVault: false }], 0);
+    flushSync();
+    expect(all()).not.toBeNull();
+    expect(all()!.textContent).toContain("Reconnect all");
+    all()!.click();
+    expect(onreconnectall).toHaveBeenCalledTimes(1);
+
+    sessions.tabs.find((t) => t.restored)!.state = "connecting";
+    flushSync();
+    expect(all()).toBeNull();
+  });
 });

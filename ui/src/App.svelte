@@ -11,6 +11,7 @@
   import VaultManager from "./lib/components/VaultManager.svelte";
   import { startActivityHeartbeat } from "./lib/activity";
   import { ImportStore } from "./lib/import.svelte";
+  import { OpenTabsStore } from "./lib/open-tabs.svelte";
   import { LayoutStore, SIDEBAR_DEFAULT } from "./lib/layout.svelte";
   import { findNode } from "./lib/rows";
   import { SessionStore } from "./lib/sessions.svelte";
@@ -43,6 +44,9 @@
     () => (terminal.info ?? DEFAULT_TERMINAL).closeOnExit,
     protocolOf,
   );
+
+  // svelte-ignore state_referenced_locally
+  const openTabs = new OpenTabsStore(api, sessions);
 
   // svelte-ignore state_referenced_locally
   const theme = new ThemeStore(api);
@@ -94,6 +98,33 @@
     if (sessions.error !== null) {
       store.showError(sessions.error);
       sessions.error = null;
+    }
+  });
+
+  // "Reconnect all" asks for the vault at most once. The unlock form is the one in the sidebar;
+  // this waits until the vault is unlocked (answers true) or until the question is asked again
+  // or the vault turns out to be unusable (answers false).
+  let vaultWaiter: ((unlocked: boolean) => void) | null = null;
+
+  function ensureVault(): Promise<boolean> {
+    vaultWaiter?.(false);
+    vaultWaiter = null;
+    const state = vault.status?.state;
+    if (state === "unlocked") return Promise.resolve(true);
+    if (state !== "locked" && state !== "none") return Promise.resolve(false);
+    sidebar?.focusVaultForm();
+    return new Promise((resolve) => (vaultWaiter = resolve));
+  }
+
+  $effect(() => {
+    const state = vault.status?.state;
+    if (!vaultWaiter) return;
+    if (state === "unlocked") {
+      vaultWaiter(true);
+      vaultWaiter = null;
+    } else if (state === "unusable") {
+      vaultWaiter(false);
+      vaultWaiter = null;
     }
   });
 
@@ -220,7 +251,8 @@
   }
 
   onMount(() => {
-    void store.init();
+    // the saved tabs come back once the tree is there (their names and protocols follow it)
+    void store.init().finally(() => void openTabs.load());
     void vault.init();
     void vault.listen();
     void refreshRestart();
@@ -239,6 +271,7 @@
   );
 
   onDestroy(() => {
+    openTabs.dispose();
     sync.dispose();
     vault.dispose();
   });
@@ -282,7 +315,7 @@
   </Sidebar>
   <main class="main">
     {#if sessions.tabs.length > 0 && !sessions.remoteFullscreen}
-      <TabStrip {sessions} {protocolOf} />
+      <TabStrip {sessions} {protocolOf} onreconnectall={() => sessions.reconnectAll(ensureVault)} />
     {/if}
     <div class="content">
       {#if view === "vault"}
@@ -340,6 +373,7 @@
     {terminal}
     {theme}
     {sync}
+    {openTabs}
     scrollToSync={settingsAtSync}
     onexport={() => (importOpen = true)}
     onclose={() => (folderOpen = false)}

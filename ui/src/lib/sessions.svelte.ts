@@ -11,8 +11,10 @@ import type {
   Protocol,
   QuickTarget,
   RdpInputEvent,
+  RestorableTab,
   SessionEvent,
   SessionState,
+  TargetView,
 } from "./types";
 
 export interface Tab {
@@ -39,6 +41,13 @@ export interface Tab {
   state: SessionState;
   detail: string | null;
   prompt: { id: number; prompt: Prompt } | null;
+  /**
+   * Made from the saved tabs of the last run and not connected since. Its session is created with
+   * `restoreSession`; the first `reconnect` clears the flag.
+   */
+  restored: boolean;
+  /** Restored tab: connecting needs the vault (the connection has a stored credential). */
+  usesVault: boolean;
 }
 
 /** What the terminal component hands over: where output goes and how big the terminal is. */
@@ -76,6 +85,8 @@ interface Runtime {
   started: boolean;
   closed: boolean;
   sessionId: string | null;
+  /** Set for a restored tab: the session is created with `restoreSession`, not opened. */
+  restore: TargetView | null;
 }
 
 /** `instanceof ArrayBuffer` would fail across realms (jsdom in tests); the tag does not. */
@@ -101,6 +112,11 @@ export class SessionStore {
    * session, with any change of the active tab and with a toggle.
    */
   remoteFullscreen = $state(false);
+  /**
+   * Counts the calls of `closeAll` that closed something. The open-tabs store reads it to tell a
+   * bulk close (reload, unload, a sync join) from a close by the user: only the latter is saved.
+   */
+  bulkClosed = $state(0);
 
   #api: Api;
   #nameOf: (nodeId: string) => string;
@@ -110,6 +126,11 @@ export class SessionStore {
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   #runtime = new Map<string, Runtime>();
   #counter = 0;
+  /** Runs when a tab changed state or went away; `reconnectAll` waits on it. */
+  // plumbing, not view state
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
+  #waiters = new Set<() => void>();
+  #reconnectRun = 0;
 
   constructor(
     api: Api,
@@ -161,6 +182,7 @@ export class SessionStore {
     quick: QuickTarget | null,
     protocol: Protocol,
     name: string,
+    restore: { target: TargetView; usesVault: boolean } | null = null,
   ): void {
     const taken = this.tabs.filter((t) => t.nodeId === nodeId).map((t) => t.title);
     let title = name;
@@ -174,6 +196,7 @@ export class SessionStore {
       started: false,
       closed: false,
       sessionId: null,
+      restore: restore?.target ?? null,
     });
     this.tabs.push({
       id,
@@ -184,13 +207,68 @@ export class SessionStore {
       fixedSize: false,
       clipboard: false,
       title,
-      state: "connecting",
+      // a restored tab waits for the user; Rust sends the reason when its view attaches
+      state: restore ? "disconnected" : "connecting",
       detail: null,
       prompt: null,
+      restored: restore !== null,
+      usesVault: restore?.usesVault ?? false,
     });
     this.activeId = id;
     this.remoteFullscreen = false;
     this.revealed++;
+  }
+
+  /**
+   * Makes a tab for each saved target of the last run (titles, protocols and credential use come
+   * from Rust). Nothing connects: each tab asks Rust to `restoreSession` when its view attaches,
+   * and `active` (an index into `tabs`) comes to the front.
+   */
+  restore(tabs: RestorableTab[], active: number | null): void {
+    const ids: string[] = [];
+    for (const t of tabs) {
+      this.#create(t.target.node ?? null, t.target.quick ?? null, t.protocol, t.title, {
+        target: t.target,
+        usesVault: t.usesVault,
+      });
+      ids.push(this.activeId!);
+    }
+    const front = active === null ? undefined : ids[active];
+    this.activeId = front ?? ids[0] ?? this.activeId;
+  }
+
+  /**
+   * Connects the restored tabs that are still disconnected, in tab order, at most three connecting
+   * at a time (a tab that waits for an answer does not count). When one of them uses the vault,
+   * `ensureVault` is asked once; if it resolves false nothing connects.
+   */
+  async reconnectAll(ensureVault: () => Promise<boolean>): Promise<void> {
+    const run = ++this.#reconnectRun;
+    const pending = this.tabs.filter((t) => t.restored && t.state === "disconnected");
+    if (pending.length === 0) return;
+    if (pending.some((t) => t.usesVault) && !(await ensureVault())) return;
+    const started: Tab[] = [];
+    for (const tab of pending) {
+      while (started.filter((t) => t.state === "connecting" && t.prompt === null).length >= 3) {
+        await new Promise<void>((resolve) => this.#waiters.add(resolve));
+        if (run !== this.#reconnectRun) return;
+      }
+      if (run !== this.#reconnectRun) return;
+      if (!this.tabs.includes(tab) || !tab.restored || tab.state !== "disconnected") continue;
+      this.reconnect(tab.id);
+      started.push(tab);
+    }
+  }
+
+  /** Restored tabs that are disconnected (the "Reconnect all" button shows while it is above 0). */
+  get restoredDisconnected(): number {
+    return this.tabs.filter((t) => t.restored && t.state === "disconnected").length;
+  }
+
+  #wake(): void {
+    const waiters = [...this.#waiters];
+    this.#waiters.clear();
+    for (const w of waiters) w();
   }
 
   activate(id: string): void {
@@ -260,6 +338,7 @@ export class SessionStore {
     }
     this.#runtime.delete(id);
     this.tabs.splice(at, 1);
+    this.#wake();
     if (this.activeId === id) {
       this.activeId = (this.tabs[at] ?? this.tabs[at - 1])?.id ?? null;
       this.remoteFullscreen = false;
@@ -268,6 +347,9 @@ export class SessionStore {
 
   /** Ends every session (the window is going away or reloading). */
   closeAll(): void {
+    if (this.tabs.length > 0) this.bulkClosed++;
+    this.#reconnectRun++;
+    this.#wake();
     for (const t of [...this.tabs]) this.close(t.id);
   }
 
@@ -280,7 +362,8 @@ export class SessionStore {
       tab.protocol === "rdp"
         ? { cols: rt.remote?.size().width ?? 1280, rows: rt.remote?.size().height ?? 800 }
         : (rt.bridge?.size() ?? { cols: 80, rows: 24 });
-    const previous = { state: tab.state, detail: tab.detail };
+    const previous = { state: tab.state, detail: tab.detail, restored: tab.restored };
+    tab.restored = false;
     if (tab.protocol === "rdp") this.#loadMode(tab);
     tab.state = "connecting";
     tab.detail = null;
@@ -295,6 +378,7 @@ export class SessionStore {
         // The click raced the state: undo the optimistic change, the next event decides.
         tab.state = previous.state;
         tab.detail = previous.detail;
+        tab.restored = previous.restored;
       },
     );
   }
@@ -353,9 +437,11 @@ export class SessionStore {
   /** Asks Rust for the session; `cols` and `rows` are pixels for an RDP tab. */
   #open(tab: Tab, rt: Runtime, id: string, cols: number, rows: number): void {
     const onEvent = (e: SessionEvent | ArrayBuffer) => this.#onMessage(id, e);
-    const opened = tab.quick
-      ? this.#api.openQuickSession(tab.quick, onEvent, cols, rows)
-      : this.#api.openSession(tab.nodeId!, onEvent, cols, rows);
+    const opened = rt.restore
+      ? this.#api.restoreSession(rt.restore, onEvent, cols, rows)
+      : tab.quick
+        ? this.#api.openQuickSession(tab.quick, onEvent, cols, rows)
+        : this.#api.openSession(tab.nodeId!, onEvent, cols, rows);
     opened.then(
       (sessionId) => {
         if (rt.closed) {
@@ -477,6 +563,7 @@ export class SessionStore {
     } else {
       tab.prompt = { id: e.id, prompt: e.prompt };
     }
+    if (!isBuffer(e)) this.#wake();
   }
 
   /**

@@ -9,10 +9,13 @@
   let {
     sessions,
     protocolOf = () => "ssh",
+    onreconnectall = () => {},
   }: {
     sessions: SessionStore;
     /** The protocol of the connection behind a tab (decides the icon). */
     protocolOf?: (nodeId: string) => Protocol;
+    /** Connects the restored tabs; the app supplies the vault question. */
+    onreconnectall?: () => void | Promise<void>;
   } = $props();
 
   const DRAG_THRESHOLD = 4;
@@ -152,72 +155,88 @@
   onkeydown={onwindowkeydown}
 />
 
-<div
-  bind:this={strip}
-  class="strip"
-  class:dragging={dragView.dragId !== null}
-  role="tablist"
-  aria-label="Sessions"
-  tabindex="-1"
-  {onkeydown}
-  {onwheel}
->
-  {#each sessions.tabs as tab (tab.id)}
-    {@const active = tab.id === sessions.activeId}
-    {@const mark = markFor(tab)}
-    {@const text = caption(tab)}
-    <div
-      class="tab"
-      class:active
-      class:dragged={dragView.dragId === tab.id}
-      class:drop-before={dragView.dragId !== null && dragView.beforeId === tab.id}
-      class:drop-after={dragView.dragId !== null && dragView.beforeId === null && tab.id === last}
-      role="presentation"
-      data-tab-id={tab.id}
-    >
-      <button
-        type="button"
-        role="tab"
-        class="main"
-        aria-selected={active}
-        tabindex={active ? 0 : -1}
-        title={tab.detail ? `${tab.title}: ${tab.detail}` : tab.title}
-        onclick={() => onclick(tab)}
-        onpointerdown={(e) => onpointerdown(e, tab)}
+<div class="bar">
+  <div
+    bind:this={strip}
+    class="strip"
+    class:dragging={dragView.dragId !== null}
+    role="tablist"
+    aria-label="Sessions"
+    tabindex="-1"
+    {onkeydown}
+    {onwheel}
+  >
+    {#each sessions.tabs as tab (tab.id)}
+      {@const active = tab.id === sessions.activeId}
+      {@const mark = markFor(tab)}
+      {@const text = caption(tab)}
+      <div
+        class="tab"
+        class:active
+        class:dragged={dragView.dragId === tab.id}
+        class:drop-before={dragView.dragId !== null && dragView.beforeId === tab.id}
+        class:drop-after={dragView.dragId !== null && dragView.beforeId === null && tab.id === last}
+        role="presentation"
+        data-tab-id={tab.id}
       >
-        {#if mark}
-          <Lamp state={mark} size="tab" />
-        {:else}
-          <span class="mark"><Icon name="lock" size={12} /></span>
-        {/if}
-        <span class="protocol"
-          ><Icon name={tab.nodeId === null ? tab.protocol : protocolOf(tab.nodeId)} /></span
-        >
-        <span class="title">{tab.title}</span>
-        {#if text}<span class="caption">{text}</span>{/if}
-      </button>
-      {#if tab.state === "disconnected"}
         <button
           type="button"
-          class="reconnect"
-          aria-label={`Reconnect ${tab.title}`}
-          title="Reconnect"
-          onclick={() => sessions.reconnect(tab.id)}
+          role="tab"
+          class="main"
+          aria-selected={active}
+          tabindex={active ? 0 : -1}
+          title={tab.detail ? `${tab.title}: ${tab.detail}` : tab.title}
+          onclick={() => onclick(tab)}
+          onpointerdown={(e) => onpointerdown(e, tab)}
         >
-          <Icon name="reconnect" size={12} />
+          {#if mark}
+            <Lamp state={mark} size="tab" />
+          {:else}
+            <span class="mark"><Icon name="lock" size={12} /></span>
+          {/if}
+          <span class="protocol"
+            ><Icon name={tab.nodeId === null ? tab.protocol : protocolOf(tab.nodeId)} /></span
+          >
+          <span class="title">{tab.title}</span>
+          {#if text}<span class="caption">{text}</span>{/if}
         </button>
-      {/if}
+        {#if tab.state === "disconnected"}
+          <button
+            type="button"
+            class="reconnect"
+            aria-label={`Reconnect ${tab.title}`}
+            title="Reconnect"
+            onclick={() => sessions.reconnect(tab.id)}
+          >
+            <Icon name="reconnect" size={12} />
+          </button>
+        {/if}
+        <button
+          type="button"
+          class="close"
+          aria-label={`Close ${tab.title}`}
+          title="Close"
+          onclick={() => sessions.requestClose(tab.id)}
+        >
+          <Icon name="close" size={12} />
+        </button>
+      </div>
+    {/each}
+  </div>
+  {#if sessions.restoredDisconnected > 0}
+    <div class="all">
       <button
         type="button"
-        class="close"
-        aria-label={`Close ${tab.title}`}
-        title="Close"
-        onclick={() => sessions.requestClose(tab.id)}
+        class="reconnect-all"
+        aria-label="Reconnect all restored tabs"
+        title="Connect every restored tab"
+        onclick={() => void onreconnectall()}
       >
-        <Icon name="close" size={12} />
+        <Icon name="reconnect" size={12} />
+        Reconnect all
       </button>
     </div>
-  {/each}
+  {/if}
 </div>
 
 {#if sessions.closeRequest}
@@ -231,9 +250,49 @@
 {/if}
 
 <style>
-  .strip {
+  .bar {
     display: flex;
     flex: none;
+    min-width: 0;
+  }
+
+  .all {
+    display: flex;
+    flex: none;
+    align-items: center;
+    padding: 0 var(--space-3);
+    background: var(--color-sidebar);
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .reconnect-all {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    height: 22px;
+    padding: 0 var(--space-3) 0 var(--space-2);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text);
+    font: inherit;
+    font-size: var(--text-xs);
+    cursor: default;
+  }
+
+  .reconnect-all:hover {
+    background: var(--color-hover);
+  }
+
+  .reconnect-all:focus-visible {
+    outline: 1px solid var(--color-focus);
+    outline-offset: 2px;
+  }
+
+  .strip {
+    display: flex;
+    flex: 1 1 0;
+    min-width: 0;
     align-items: stretch;
     height: 36px;
     overflow-x: auto;

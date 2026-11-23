@@ -3,6 +3,7 @@
   import { SvelteSet } from "svelte/reactivity";
   import { toApiError } from "../api";
   import type { TerminalSettingsStore } from "../terminal-settings.svelte";
+  import type { OpenTabsStore } from "../open-tabs.svelte";
   import type { SyncStore } from "../sync.svelte";
   import type { ThemeStore } from "../theme.svelte";
   import type { Api, AutoLockInfo, DataFolderInfo, Theme } from "../types";
@@ -16,6 +17,7 @@
     terminal,
     theme,
     sync,
+    openTabs,
     onclose,
     onchange,
     onexport,
@@ -29,6 +31,8 @@
     theme: ThemeStore;
     /** Holds the sync status; the Sync section shows and drives it. */
     sync: SyncStore;
+    /** Holds the "Reopen tabs on start" setting. */
+    openTabs: OpenTabsStore;
     /** Opens the import, export & backup dialog (the join confirmation offers a backup first). */
     onexport?: () => void;
     /** Scroll the Sync section into view (the status line's "Details"). */
@@ -111,6 +115,18 @@
     const name = (e.target as HTMLElement).dataset.field;
     if (name) touched.add(name);
     saved = false;
+  }
+
+  let reopenError = $state<string | null>(null);
+
+  async function toggleReopen(e: Event) {
+    const box = e.currentTarget as HTMLInputElement;
+    reopenError = null;
+    const err = await openTabs.setReopen(box.checked);
+    if (err) {
+      reopenError = "Could not save the setting";
+      box.checked = openTabs.reopen;
+    }
   }
 
   let themeError = $state<string | null>(null);
@@ -319,6 +335,26 @@
     {/if}
     {#if themeError}
       <p class="error" role="alert">{themeError}</p>
+    {/if}
+
+    <h3 class="section">Tabs</h3>
+    <label class="choice">
+      <input
+        type="checkbox"
+        aria-label="Reopen tabs on start"
+        checked={openTabs.reopen}
+        onchange={(e) => void toggleReopen(e)}
+      />
+      <span>Reopen tabs on start</span>
+    </label>
+    <p class="note">
+      The tabs of the last run come back disconnected; nothing connects until you choose to.
+    </p>
+    {#if openTabs.info?.unsavedReason}
+      <p class="note">{unsavedNote(openTabs.info.unsavedReason)}</p>
+    {/if}
+    {#if reopenError}
+      <p class="error" role="alert">{reopenError}</p>
     {/if}
 
     <h3 class="section">Vault</h3>

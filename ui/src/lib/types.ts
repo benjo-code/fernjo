@@ -249,6 +249,20 @@ export interface Api {
     cols: number,
     rows: number,
   ): Promise<string>;
+  /**
+   * Creates the session of a tab that was restored from the last run; it starts disconnected
+   * (Rust sends the explaining state event) and connects with `reconnectSession`.
+   */
+  restoreSession(
+    target: TargetView,
+    onEvent: (e: SessionEvent | ArrayBuffer) => void,
+    cols: number,
+    rows: number,
+  ): Promise<string>;
+  getOpenTabs(): Promise<OpenTabsInfo>;
+  setReopenTabs(enabled: boolean): Promise<OpenTabsInfo>;
+  /** Saves the open tabs (targets only) and the index of the active one. */
+  saveOpenTabs(tabs: SavedTab[], active: number | null): Promise<void>;
   sessionInput(id: string, data: Uint8Array): Promise<void>;
   /** RDP: keyboard and mouse events (at most 256 per call; coordinates are desktop pixels). */
   rdpInput(id: string, events: RdpInputEvent[]): Promise<void>;
@@ -515,4 +529,37 @@ export interface TerminalSettings {
   persistent: boolean;
   /** Why they are not saved; `null` when they are. */
   unsavedReason: UnsavedReason | null;
+}
+
+/** A session target on the wire: exactly one of the two fields is present. */
+export interface TargetView {
+  node?: string;
+  quick?: QuickTarget;
+}
+
+/** One tab as it is saved: exactly one of the two fields is present. */
+export interface SavedTab {
+  node?: string;
+  quick?: QuickTarget;
+}
+
+/** A saved tab that still resolves; the title, protocol and credential use come from the tree. */
+export interface RestorableTab {
+  target: TargetView;
+  protocol: Protocol;
+  title: string;
+  /** The connection has an effective credential, so connecting needs the vault. */
+  usesVault: boolean;
+}
+
+/** `get_open_tabs` / `set_reopen_tabs`. */
+export interface OpenTabsInfo {
+  /** The "Reopen tabs on start" setting. */
+  reopen: boolean;
+  /** `false` when the setting only lives in memory. */
+  persistent: boolean;
+  unsavedReason: UnsavedReason | null;
+  /** Index into `tabs` of the tab that was active. */
+  active: number | null;
+  tabs: RestorableTab[];
 }

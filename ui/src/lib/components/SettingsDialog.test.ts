@@ -1,5 +1,7 @@
 import { flushSync, mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { OpenTabsStore } from "../open-tabs.svelte";
+import { SessionStore } from "../sessions.svelte";
 import { TerminalSettingsStore } from "../terminal-settings.svelte";
 import { SyncStore } from "../sync.svelte";
 import { ThemeStore } from "../theme.svelte";
@@ -9,6 +11,7 @@ import {
   dataFolder,
   deferred,
   mockApi,
+  openTabsInfo,
   terminalSettings,
   themeInfo,
 } from "../testing";
@@ -35,8 +38,20 @@ const settle = async () => {
   flushSync();
 };
 
+const newOpenTabs = (api: Api) =>
+  new OpenTabsStore(
+    api,
+    new SessionStore(
+      api,
+      (id) => id,
+      () => true,
+    ),
+  );
+
 async function setup(impl: Partial<Api> = {}, mac?: boolean) {
   const m = mockApi([], impl);
+  const openTabs = newOpenTabs(m.api);
+  await openTabs.load();
   const onclose = vi.fn();
   const onchange = vi.fn();
   mounted = mount(SettingsDialog, {
@@ -46,6 +61,7 @@ async function setup(impl: Partial<Api> = {}, mac?: boolean) {
       terminal: new TerminalSettingsStore(m.api),
       theme: new ThemeStore(m.api),
       sync: new SyncStore(m.api),
+      openTabs,
       onclose,
       onchange,
       ...(mac === undefined ? {} : { mac }),
@@ -153,6 +169,7 @@ describe("SettingsDialog", () => {
         terminal: new TerminalSettingsStore(m.api),
         theme: new ThemeStore(m.api),
         sync: new SyncStore(m.api),
+        openTabs: newOpenTabs(m.api),
         onclose: () => {},
         onchange: () => {},
       },
@@ -660,5 +677,37 @@ describe("vault auto-lock", () => {
       getVaultAutoLock: async () => autoLockInfo({ persistent: false, unsavedReason: "env" }),
     });
     expect(document.body.textContent).toContain("FERNJO_DATA_DIR");
+  });
+
+  test("the_reopen_tabs_checkbox_saves_and_shows_the_unsaved_note", async () => {
+    const { calls } = await setup({
+      getOpenTabs: async () => openTabsInfo({ persistent: false, unsavedReason: "env" }),
+      setReopenTabs: async (enabled) =>
+        openTabsInfo({ reopen: enabled, persistent: false, unsavedReason: "env" }),
+    });
+    const box = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Reopen tabs on start"]',
+    )!;
+    expect(box.checked).toBe(true);
+    expect(document.body.textContent).toContain("FERNJO_DATA_DIR");
+    box.click();
+    await settle();
+    expect(calls.setReopenTabs).toEqual([[false]]);
+    expect(box.checked).toBe(false);
+  });
+
+  test("a_refused_reopen_tabs_change_puts_the_tick_back", async () => {
+    await setup({
+      setReopenTabs: async () => {
+        throw apiError("settings_unusable", "no");
+      },
+    });
+    const box = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Reopen tabs on start"]',
+    )!;
+    box.click();
+    await settle();
+    expect(box.checked).toBe(true);
+    expect(alert()?.textContent).toContain("Could not save the setting");
   });
 });

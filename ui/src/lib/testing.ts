@@ -16,6 +16,7 @@ import type {
   SessionEvent,
   Snapshot,
   SyncStatus,
+  OpenTabsInfo,
   TerminalSettings,
   Theme,
   ThemeInfo,
@@ -112,6 +113,17 @@ export function themeInfo(partial: Partial<ThemeInfo> = {}): ThemeInfo {
   return { theme: "system", persistent: true, unsavedReason: null, ...partial };
 }
 
+export function openTabsInfo(partial: Partial<OpenTabsInfo> = {}): OpenTabsInfo {
+  return {
+    reopen: true,
+    persistent: true,
+    unsavedReason: null,
+    active: null,
+    tabs: [],
+    ...partial,
+  };
+}
+
 export function autoLockInfo(partial: Partial<AutoLockInfo> = {}): AutoLockInfo {
   return { minutes: null, persistent: true, unsavedReason: null, ...partial };
 }
@@ -202,6 +214,10 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     openSession: [],
     quickParse: [],
     openQuickSession: [],
+    restoreSession: [],
+    getOpenTabs: [],
+    setReopenTabs: [],
+    saveOpenTabs: [],
     sessionInput: [],
     rdpInput: [],
     rdpClipboard: [],
@@ -377,6 +393,22 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
         port: m[4] ? Number(m[4]) : protocol === "rdp" ? 3389 : 22,
         user: m[2] ?? null,
       };
+    },
+    restoreSession: async (...args) => {
+      calls.restoreSession.push(args);
+      return impl.restoreSession ? impl.restoreSession(...args) : "sid";
+    },
+    getOpenTabs: async () => {
+      calls.getOpenTabs.push([]);
+      return impl.getOpenTabs ? impl.getOpenTabs() : openTabsInfo();
+    },
+    setReopenTabs: async (...args) => {
+      calls.setReopenTabs.push(args);
+      return impl.setReopenTabs ? impl.setReopenTabs(...args) : openTabsInfo({ reopen: args[0] });
+    },
+    saveOpenTabs: async (...args) => {
+      calls.saveOpenTabs.push(args);
+      if (impl.saveOpenTabs) await impl.saveOpenTabs(...args);
     },
     openQuickSession: async (...args) => {
       calls.openQuickSession.push(args);

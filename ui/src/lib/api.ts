@@ -63,6 +63,14 @@ export const tauriApi: Api = {
     channel.onmessage = onEvent;
     return call("open_quick_session", { target, onEvent: channel, cols, rows });
   },
+  restoreSession: (target, onEvent, cols, rows) => {
+    const channel = new Channel<ArrayBuffer | SessionEvent>();
+    channel.onmessage = onEvent;
+    return call("restore_session", { target, onEvent: channel, cols, rows });
+  },
+  getOpenTabs: () => call("get_open_tabs"),
+  setReopenTabs: (enabled) => call("set_reopen_tabs", { enabled }),
+  saveOpenTabs: (tabs, active) => call("save_open_tabs", { tabs, active }),
   // the input is the raw request body, the session id travels in a header
   sessionInput: (id, data) => call("session_input", data, { headers: { "x-fernjo-session": id } }),
   rdpInput: (id, events) => call("rdp_input", { id, events }),

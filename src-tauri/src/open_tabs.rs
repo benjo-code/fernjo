@@ -11,7 +11,7 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::path::Path;
 
-use fernjo_core::{DEFAULT_RDP_PORT, DEFAULT_SSH_PORT, NodeId, Protocol, QuickTarget};
+use fernjo_core::{NodeId, Protocol, QuickTarget};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -177,19 +177,13 @@ pub struct OpenTabsInfo {
     pub tabs: Vec<RestorableTab>,
 }
 
+/// The title of a quick connect tab: the same as the UI gives a freshly opened one (`user@host`
+/// or `host`, never the port).
 fn quick_title(quick: &QuickTarget) -> String {
-    let default_port = match quick.protocol {
-        Protocol::Ssh => DEFAULT_SSH_PORT,
-        Protocol::Rdp => DEFAULT_RDP_PORT,
-    };
-    let mut title = match &quick.user {
+    match &quick.user {
         Some(user) => format!("{user}@{}", quick.host),
         None => quick.host.clone(),
-    };
-    if quick.port != default_port {
-        title = format!("{title}:{}", quick.port);
     }
-    title
 }
 
 /// Resolves a saved tab against the tree as it is now; `None` when the node is gone, a folder or
@@ -380,6 +374,15 @@ mod tests {
             node: None,
             quick: Some(quick(host)),
         }
+    }
+
+    #[test]
+    fn a_quick_title_never_carries_the_port() {
+        let mut target = quick("a.example");
+        target.port = 2222;
+        assert_eq!(quick_title(&target), "root@a.example");
+        target.user = None;
+        assert_eq!(quick_title(&target), "a.example");
     }
 
     /// A state with a data folder and a device folder (no `settings.json` folder).
