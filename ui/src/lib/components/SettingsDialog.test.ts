@@ -3,7 +3,15 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { TerminalSettingsStore } from "../terminal-settings.svelte";
 import { SyncStore } from "../sync.svelte";
 import { ThemeStore } from "../theme.svelte";
-import { apiError, dataFolder, deferred, mockApi, terminalSettings, themeInfo } from "../testing";
+import {
+  apiError,
+  autoLockInfo,
+  dataFolder,
+  deferred,
+  mockApi,
+  terminalSettings,
+  themeInfo,
+} from "../testing";
 import type { Api, DataFolderInfo } from "../types";
 import SettingsDialog from "./SettingsDialog.svelte";
 import dialogSource from "./SettingsDialog.svelte?raw";
@@ -611,5 +619,46 @@ describe("keyboard and mouse section", () => {
     expect(text).toContain("Select several Cmd+click");
     expect(text).toContain("Next tab Ctrl+Tab");
     expect(text.join(" ")).not.toContain("Ctrl+Shift+K");
+  });
+});
+
+describe("vault auto-lock", () => {
+  const field = () =>
+    document.querySelector<HTMLInputElement>("input[aria-label^='Lock the vault after']")!;
+  const enter = async (value: string) => {
+    field().value = value;
+    field().dispatchEvent(new Event("change", { bubbles: true }));
+    await settle();
+  };
+
+  test("the_auto_lock_field_saves_minutes_and_off", async () => {
+    const { calls } = await setup({
+      getVaultAutoLock: async () => autoLockInfo({ minutes: 15 }),
+    });
+    expect(field().value).toBe("15");
+    expect(document.body.textContent).toContain("minutes of inactivity");
+    await enter("30");
+    await enter("");
+    expect(calls.setVaultAutoLock).toEqual([[30], [null]]);
+    expect(field().value).toBe("");
+  });
+
+  test("an_out_of_range_value_shows_rusts_refusal_and_keeps_the_stored_one", async () => {
+    await setup({
+      getVaultAutoLock: async () => autoLockInfo({ minutes: 15 }),
+      setVaultAutoLock: async () => {
+        throw apiError("invalid_auto_lock", "rust text");
+      },
+    });
+    await enter("5000");
+    expect(alert()?.textContent).toContain("between 1 and 1440");
+    expect(field().value).toBe("15");
+  });
+
+  test("a_memory_only_auto_lock_says_it_is_not_remembered", async () => {
+    await setup({
+      getVaultAutoLock: async () => autoLockInfo({ persistent: false, unsavedReason: "env" }),
+    });
+    expect(document.body.textContent).toContain("FERNJO_DATA_DIR");
   });
 });

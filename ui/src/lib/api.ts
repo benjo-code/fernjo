@@ -1,6 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { Channel, invoke, type InvokeArgs, type InvokeOptions } from "@tauri-apps/api/core";
-import type { Api, ApiError, SessionEvent, SyncStatus } from "./types";
+import type { Api, ApiError, SessionEvent, SyncStatus, VaultStatus } from "./types";
 
 export type { Api } from "./types";
 
@@ -72,6 +72,9 @@ export const tauriApi: Api = {
   setTerminalSettings: (settings) => call("set_terminal_settings", { settings }),
   getTheme: () => call("get_theme"),
   setTheme: (theme) => call("set_theme", { theme }),
+  getVaultAutoLock: () => call("get_vault_auto_lock"),
+  setVaultAutoLock: (minutes) => call("set_vault_auto_lock", { minutes }),
+  noteActivity: () => call("note_activity"),
   importPick: (kind) => call("import_pick", { kind }),
   importInspect: (secret) => call("import_inspect", { secret }),
   importApply: (options) => call("import_apply", { options }),
@@ -90,4 +93,5 @@ export const tauriApi: Api = {
   syncLeave: () => call("sync_leave"),
   syncDismissFindings: () => call("sync_dismiss_findings"),
   onSyncStatus: (handler) => listen<SyncStatus>("sync-status", (e) => handler(e.payload)),
+  onVaultStatus: (handler) => listen<VaultStatus>("vault-status", (e) => handler(e.payload)),
 };

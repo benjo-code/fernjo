@@ -3,6 +3,7 @@ mod app_settings;
 mod commands;
 mod connect_plan;
 mod data_folder;
+mod idle_lock;
 mod import_commands;
 mod nav_guard;
 mod rdp_commands;
@@ -53,6 +54,7 @@ pub fn run() {
             // Background sync (a no-op while sync is off). `AppState` is built, and with it the
             // startup auto-unlock tried, before `setup` runs.
             sync_runner::spawn_triggers(app.handle());
+            idle_lock::spawn(app.handle().clone());
             Ok(())
         })
         // A reload or a crashed page leaves its sessions running without a UI (the page's
@@ -124,6 +126,9 @@ pub fn run() {
             data_folder::handlers::restart_app,
             app_settings::handlers::get_theme,
             app_settings::handlers::set_theme,
+            app_settings::handlers::get_vault_auto_lock,
+            app_settings::handlers::set_vault_auto_lock,
+            app_settings::handlers::note_activity,
             session_commands::handlers::get_terminal_settings,
             session_commands::handlers::set_terminal_settings,
             session_commands::handlers::open_session,

@@ -476,6 +476,7 @@ mod tests {
                 data_dir: Some(elsewhere.path().to_path_buf()),
                 terminal: None,
                 theme: None,
+                vault_auto_lock_minutes: None,
             },
         )
         .unwrap();

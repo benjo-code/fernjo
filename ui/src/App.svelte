@@ -9,6 +9,7 @@
   import Sidebar from "./lib/components/Sidebar.svelte";
   import TabStrip from "./lib/components/TabStrip.svelte";
   import VaultManager from "./lib/components/VaultManager.svelte";
+  import { startActivityHeartbeat } from "./lib/activity";
   import { ImportStore } from "./lib/import.svelte";
   import { LayoutStore, SIDEBAR_DEFAULT } from "./lib/layout.svelte";
   import { findNode } from "./lib/rows";
@@ -219,13 +220,26 @@
   onMount(() => {
     void store.init();
     void vault.init();
+    void vault.listen();
     void refreshRestart();
     void terminal.load();
     void theme.load();
     void sync.init();
   });
 
-  onDestroy(() => sync.dispose());
+  // Rust owns the idle clock for the vault auto-lock; this only reports that the user is there.
+  onMount(() =>
+    startActivityHeartbeat(
+      () => void api.noteActivity().catch(() => {}),
+      window,
+      () => Date.now(),
+    ),
+  );
+
+  onDestroy(() => {
+    sync.dispose();
+    vault.dispose();
+  });
 </script>
 
 <svelte:window

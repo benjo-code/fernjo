@@ -78,10 +78,65 @@ pub fn set_theme(state: &AppState, theme: Theme) -> Result<ThemeInfo, CommandErr
     })
 }
 
+/// The vault auto-lock setting and whether it is stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoLockInfo {
+    /// Idle minutes before the vault locks itself; `None` is off.
+    pub minutes: Option<u32>,
+    pub persistent: bool,
+    pub unsaved_reason: Option<UnsavedReason>,
+}
+
+fn auto_lock_info(state: &AppState, minutes: Option<u32>) -> AutoLockInfo {
+    AutoLockInfo {
+        minutes,
+        persistent: persistent(state),
+        unsaved_reason: unsaved_reason(state),
+    }
+}
+
+pub fn get_vault_auto_lock(state: &AppState) -> Result<AutoLockInfo, CommandError> {
+    let minutes = *state
+        .vault_auto_lock_minutes
+        .lock()
+        .map_err(|_| CommandError::internal())?;
+    Ok(auto_lock_info(state, minutes))
+}
+
+/// Applies the idle limit (at once, also while unlocked) and saves it to `settings.json`
+/// (keeping the other fields) unless that file must not be written. `None` turns it off.
+///
+/// # Errors
+/// `invalid_auto_lock` for a value outside 1 to 1440; nothing changes on any error.
+pub fn set_vault_auto_lock(
+    state: &AppState,
+    minutes: Option<u32>,
+) -> Result<AutoLockInfo, CommandError> {
+    settings::validate_auto_lock(minutes).map_err(|code| {
+        error(
+            code,
+            "the auto-lock time must be between 1 and 1440 minutes",
+        )
+    })?;
+    let mut slot = state
+        .vault_auto_lock_minutes
+        .lock()
+        .map_err(|_| CommandError::internal())?;
+    update_settings(state, |s| s.vault_auto_lock_minutes = minutes)?;
+    *slot = minutes;
+    Ok(auto_lock_info(state, minutes))
+}
+
+/// The UI saw user input (a throttled heartbeat): restarts the idle clock.
+pub fn note_activity(state: &AppState) {
+    state.idle.note(std::time::Instant::now());
+}
+
 pub mod handlers {
     use tauri::State;
 
-    use super::{CommandError, Theme, ThemeInfo};
+    use super::{AutoLockInfo, CommandError, Theme, ThemeInfo};
     use crate::state::AppState;
 
     #[tauri::command]
@@ -92,6 +147,24 @@ pub mod handlers {
     #[tauri::command]
     pub fn set_theme(state: State<'_, AppState>, theme: Theme) -> Result<ThemeInfo, CommandError> {
         super::set_theme(&state, theme)
+    }
+
+    #[tauri::command]
+    pub fn get_vault_auto_lock(state: State<'_, AppState>) -> Result<AutoLockInfo, CommandError> {
+        super::get_vault_auto_lock(&state)
+    }
+
+    #[tauri::command]
+    pub fn set_vault_auto_lock(
+        state: State<'_, AppState>,
+        minutes: Option<u32>,
+    ) -> Result<AutoLockInfo, CommandError> {
+        super::set_vault_auto_lock(&state, minutes)
+    }
+
+    #[tauri::command]
+    pub fn note_activity(state: State<'_, AppState>) {
+        super::note_activity(&state);
     }
 }
 
@@ -236,5 +309,85 @@ mod tests {
         let saved = settings::load(&settings_path(config.path())).unwrap();
         assert_eq!(saved.theme, Some(Theme::Dark));
         assert_eq!(saved.terminal.unwrap().font_size, Some(14));
+    }
+
+    #[test]
+    fn set_vault_auto_lock_persists_and_keeps_other_fields() {
+        let [data, config] = dirs();
+        let st = state(data.path(), config.path(), DataDirSource::Default);
+        set_theme(&st, Theme::Dark).unwrap();
+        let info = set_vault_auto_lock(&st, Some(15)).unwrap();
+        assert_eq!(
+            info,
+            AutoLockInfo {
+                minutes: Some(15),
+                persistent: true,
+                unsaved_reason: None
+            }
+        );
+        assert_eq!(get_vault_auto_lock(&st).unwrap().minutes, Some(15));
+        let saved = settings::load(&settings_path(config.path())).unwrap();
+        assert_eq!(saved.vault_auto_lock_minutes, Some(15));
+        assert_eq!(saved.theme, Some(Theme::Dark));
+        // a theme change keeps the limit, and off removes it
+        set_theme(&st, Theme::Light).unwrap();
+        assert_eq!(
+            settings::load(&settings_path(config.path()))
+                .unwrap()
+                .vault_auto_lock_minutes,
+            Some(15)
+        );
+        set_vault_auto_lock(&st, None).unwrap();
+        let saved = settings::load(&settings_path(config.path())).unwrap();
+        assert_eq!(saved.vault_auto_lock_minutes, None);
+        assert_eq!(saved.theme, Some(Theme::Light));
+    }
+
+    #[test]
+    fn get_vault_auto_lock_reports_unsaved_reason_under_the_env_override() {
+        let [data, config] = dirs();
+        let st = state(data.path(), config.path(), DataDirSource::Env);
+        let info = set_vault_auto_lock(&st, Some(30)).unwrap();
+        assert!(!info.persistent);
+        assert_eq!(info.unsaved_reason, Some(UnsavedReason::Env));
+        let got = get_vault_auto_lock(&st).unwrap();
+        assert_eq!(got.minutes, Some(30));
+        assert_eq!(got.unsaved_reason, Some(UnsavedReason::Env));
+        assert!(!settings_path(config.path()).exists());
+    }
+
+    #[test]
+    fn an_invalid_minutes_value_changes_nothing() {
+        let [data, config] = dirs();
+        let st = state(data.path(), config.path(), DataDirSource::Default);
+        set_vault_auto_lock(&st, Some(20)).unwrap();
+        for bad in [0, 1441] {
+            let err = set_vault_auto_lock(&st, Some(bad)).unwrap_err();
+            assert_eq!(err.code, "invalid_auto_lock");
+        }
+        assert_eq!(get_vault_auto_lock(&st).unwrap().minutes, Some(20));
+        let saved = settings::load(&settings_path(config.path())).unwrap();
+        assert_eq!(saved.vault_auto_lock_minutes, Some(20));
+    }
+
+    #[test]
+    fn the_saved_limit_is_read_at_startup() {
+        let [data, config] = dirs();
+        settings::save(
+            &settings_path(config.path()),
+            &AppSettings {
+                vault_auto_lock_minutes: Some(7),
+                ..AppSettings::default()
+            },
+        )
+        .unwrap();
+        let st = AppState::open_for_app(Some(Location {
+            data_dir: data.path().to_path_buf(),
+            config_dir: config.path().to_path_buf(),
+            source: DataDirSource::Default,
+            settings_error: None,
+            device_dir: None,
+        }));
+        assert_eq!(get_vault_auto_lock(&st).unwrap().minutes, Some(7));
     }
 }

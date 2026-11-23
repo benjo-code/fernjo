@@ -3,6 +3,7 @@ import type {
   Api,
   ApiError,
   ApplyResult,
+  AutoLockInfo,
   ConnectionNode,
   CredentialInfo,
   DataFolderInfo,
@@ -111,6 +112,10 @@ export function themeInfo(partial: Partial<ThemeInfo> = {}): ThemeInfo {
   return { theme: "system", persistent: true, unsavedReason: null, ...partial };
 }
 
+export function autoLockInfo(partial: Partial<AutoLockInfo> = {}): AutoLockInfo {
+  return { minutes: null, persistent: true, unsavedReason: null, ...partial };
+}
+
 export function syncStatus(partial: Partial<SyncStatus> = {}): SyncStatus {
   return {
     state: "off",
@@ -209,6 +214,9 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     setTerminalSettings: [],
     getTheme: [],
     setTheme: [],
+    getVaultAutoLock: [],
+    setVaultAutoLock: [],
+    noteActivity: [],
     importPick: [],
     importInspect: [],
     importApply: [],
@@ -225,8 +233,10 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     syncLeave: [],
     syncDismissFindings: [],
     onSyncStatus: [],
+    onVaultStatus: [],
   };
   const syncHandlers = new Set<(status: SyncStatus) => void>();
+  const vaultHandlers = new Set<(status: VaultStatus) => void>();
   let current = initial;
   const mutation = (id: string | null): Mutation => ({ id, snapshot: snapshot(current) });
   const api: Api = {
@@ -411,6 +421,20 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
       calls.setTheme.push(args);
       return impl.setTheme ? impl.setTheme(...args) : themeInfo({ theme: args[0] as Theme });
     },
+    getVaultAutoLock: async () => {
+      calls.getVaultAutoLock.push([]);
+      return impl.getVaultAutoLock ? impl.getVaultAutoLock() : autoLockInfo();
+    },
+    setVaultAutoLock: async (...args) => {
+      calls.setVaultAutoLock.push(args);
+      return impl.setVaultAutoLock
+        ? impl.setVaultAutoLock(...args)
+        : autoLockInfo({ minutes: args[0] });
+    },
+    noteActivity: async () => {
+      calls.noteActivity.push([]);
+      if (impl.noteActivity) await impl.noteActivity();
+    },
     importPick: async (...args) => {
       calls.importPick.push(args);
       return impl.importPick ? impl.importPick(...args) : { fileName: "confCons.xml" };
@@ -481,10 +505,20 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
       syncHandlers.add(handler);
       return () => void syncHandlers.delete(handler);
     },
+    onVaultStatus: async (handler) => {
+      calls.onVaultStatus.push([]);
+      if (impl.onVaultStatus) return impl.onVaultStatus(handler);
+      vaultHandlers.add(handler);
+      return () => void vaultHandlers.delete(handler);
+    },
   };
   return {
     api,
     calls,
+    /** Plays the part of Rust's `vault-status` event. */
+    emitVault(status: VaultStatus) {
+      for (const h of [...vaultHandlers]) h(status);
+    },
     /** Plays the part of Rust's `sync-status` event. */
     emitSync(status: SyncStatus) {
       for (const h of [...syncHandlers]) h(status);

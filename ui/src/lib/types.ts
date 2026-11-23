@@ -253,6 +253,11 @@ export interface Api {
   }): Promise<TerminalSettings>;
   getTheme(): Promise<ThemeInfo>;
   setTheme(theme: Theme): Promise<ThemeInfo>;
+  getVaultAutoLock(): Promise<AutoLockInfo>;
+  /** `null` turns it off; Rust refuses a value outside 1 to 1440 with `invalid_auto_lock`. */
+  setVaultAutoLock(minutes: number | null): Promise<AutoLockInfo>;
+  /** The throttled heartbeat of user input; restarts Rust's idle clock. */
+  noteActivity(): Promise<void>;
   /** Opens the native file picker; `null` when it was cancelled. */
   importPick(kind: ImportKind): Promise<PickedFile | null>;
   /** The secret is an mRemoteNG key or a backup password; the only secret that goes in. */
@@ -281,6 +286,8 @@ export interface Api {
   syncDismissFindings(): Promise<void>;
   /** Subscribes to the `sync-status` event; resolves with the function that unsubscribes. */
   onSyncStatus(handler: (status: SyncStatus) => void): Promise<() => void>;
+  /** Subscribes to the `vault-status` event (Rust locked the vault); resolves with the unsubscribe function. */
+  onVaultStatus(handler: (status: VaultStatus) => void): Promise<() => void>;
 }
 
 export type SyncState =
@@ -469,6 +476,14 @@ export interface ThemeInfo {
   /** `false` when the choice only lives in memory. */
   persistent: boolean;
   /** Why it is not saved; `null` when it is. */
+  unsavedReason: UnsavedReason | null;
+}
+
+/** The vault auto-lock setting (`get_vault_auto_lock`). */
+export interface AutoLockInfo {
+  /** Idle minutes before the vault locks itself; `null` is off. */
+  minutes: number | null;
+  persistent: boolean;
   unsavedReason: UnsavedReason | null;
 }
 

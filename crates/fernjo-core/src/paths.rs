@@ -170,6 +170,7 @@ mod tests {
                 data_dir: Some(target.clone()),
                 terminal: None,
                 theme: None,
+                vault_auto_lock_minutes: None,
             },
         )
         .unwrap();
@@ -285,6 +286,7 @@ mod tests {
                 data_dir: Some(target),
                 terminal: None,
                 theme: None,
+                vault_auto_lock_minutes: None,
             },
         )
         .unwrap();
