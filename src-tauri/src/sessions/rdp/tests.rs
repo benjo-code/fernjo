@@ -11,6 +11,7 @@ use tokio::sync::mpsc::{Sender, UnboundedReceiver, channel};
 use tokio::time::timeout;
 
 use super::super::{PromptHub, Sink};
+use crate::session_flow::InputBudget;
 
 const WAIT: Duration = Duration::from_secs(15);
 
@@ -74,6 +75,7 @@ fn shared_with(channel: Channel<InvokeResponseBody>, flow: FlowControl) -> Arc<S
         phase: Mutex::new(Phase::Connected),
         size: Mutex::new((1280, 800)),
         ops: Mutex::new(None),
+        input_budget: InputBudget::default(),
     })
 }
 

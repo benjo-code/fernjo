@@ -81,7 +81,7 @@ use tokio::time::Instant;
 
 use crate::commands::CommandError;
 use crate::connect_plan::{self, ConnectPlan, CredentialPlan, Plan};
-use crate::session_flow::FlowControl;
+use crate::session_flow::{FlowControl, InputBudget};
 use crate::state::AppState;
 
 /// Largest raw output message.
@@ -578,6 +578,19 @@ enum Op {
     Close,
 }
 
+impl Op {
+    /// Bytes this op counts against the session's `InputBudget` (0 for resize and close, which
+    /// are small and must never be refused).
+    fn weight(&self) -> usize {
+        match self {
+            Op::Data(data) => data.len(),
+            Op::Rdp(events) => events.len() * std::mem::size_of::<fernjo_rdp::InputEvent>(),
+            Op::Clipboard(text) => text.len(),
+            Op::Resize(..) | Op::Close => 0,
+        }
+    }
+}
+
 /// State shared by the manager, the connect task and the interaction.
 struct Shared {
     sink: Arc<Sink>,
@@ -590,9 +603,29 @@ struct Shared {
     /// Input, resizes and the close request, in order, towards the live `Session`. `None` while
     /// there is no shell.
     ops: Mutex<Option<UnboundedSender<Op>>>,
+    /// Input bytes queued in `ops` and not yet handled by the writer.
+    input_budget: InputBudget,
 }
 
 impl Shared {
+    /// Queues `op` for the writer. Input is reserved against the budget first and the reservation
+    /// goes back when the op was not queued; the writer releases it after handling the op.
+    fn queue(&self, op: Op, no_session: impl Fn() -> CommandError) -> Result<(), CommandError> {
+        let ops = lock(&self.ops)?;
+        let tx = ops.as_ref().ok_or_else(&no_session)?;
+        let weight = op.weight();
+        if !self.input_budget.try_reserve(weight) {
+            return Err(error(
+                "input_queue_full",
+                "too much input is waiting; try again",
+            ));
+        }
+        tx.send(op).map_err(|_| {
+            self.input_budget.release(weight);
+            no_session()
+        })
+    }
+
     fn set_phase(&self, phase: Phase) {
         if let Ok(mut p) = self.phase.lock() {
             *p = phase;
@@ -745,6 +778,7 @@ impl SessionManager {
             phase: Mutex::new(Phase::Connecting),
             size: Mutex::new((cols, rows)),
             ops: Mutex::new(None),
+            input_budget: InputBudget::default(),
         });
         let entry = Arc::new(Entry {
             node_id,
@@ -824,12 +858,9 @@ impl SessionManager {
     /// `not_found`; `session_not_connected` while there is no shell.
     pub fn input(&self, id: &str, data: Vec<u8>) -> Result<(), CommandError> {
         let entry = self.entry(id)?;
-        let ops = lock(&entry.shared.ops)?;
-        let no_shell = || error("session_not_connected", "the session has no running shell");
-        ops.as_ref()
-            .ok_or_else(no_shell)?
-            .send(Op::Data(data))
-            .map_err(|_| no_shell())
+        entry.shared.queue(Op::Data(data), || {
+            error("session_not_connected", "the session has no running shell")
+        })
     }
 
     /// Remembers the terminal size and tells the shell when there is one.
@@ -1013,7 +1044,7 @@ async fn run(shared: Arc<Shared>, params: ConnectParams) {
     if let Ok(mut slot) = shared.ops.lock() {
         *slot = Some(tx);
     }
-    tauri::async_runtime::spawn(write_ops(session, ops));
+    tauri::async_runtime::spawn(write_ops(session, ops, Arc::clone(&shared)));
     if let Ok(mut flow) = shared.flow.lock() {
         *flow = FlowControl::default();
     }
@@ -1029,24 +1060,36 @@ async fn run(shared: Arc<Shared>, params: ConnectParams) {
 }
 
 /// Applies input, resizes and the close request to the session, in the order they were queued.
-async fn write_ops(session: Session, mut ops: UnboundedReceiver<Op>) {
+async fn write_ops(session: Session, mut ops: UnboundedReceiver<Op>, shared: Arc<Shared>) {
     while let Some(op) = ops.recv().await {
-        match op {
-            Op::Data(data) => {
-                if session.write(data).await.is_err() {
-                    break;
-                }
-            }
+        let weight = op.weight();
+        let stop = match op {
+            Op::Data(data) => session.write(data).await.is_err(),
             Op::Resize(cols, rows) => {
                 let _ = session.resize(cols, rows).await;
+                false
             }
             // RDP only
-            Op::Rdp(_) | Op::Clipboard(_) => {}
+            Op::Rdp(_) | Op::Clipboard(_) => false,
             Op::Close => {
                 session.close();
-                break;
+                true
             }
+        };
+        shared.input_budget.release(weight);
+        if stop {
+            break;
         }
+    }
+    release_unhandled(&mut ops, &shared);
+}
+
+/// Gives back the budget of ops that were queued but never handled (the writer stopped), so a
+/// reconnect of the same tab starts with an empty budget.
+fn release_unhandled(ops: &mut UnboundedReceiver<Op>, shared: &Shared) {
+    ops.close();
+    while let Ok(op) = ops.try_recv() {
+        shared.input_budget.release(op.weight());
     }
 }
 

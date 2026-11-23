@@ -1263,6 +1263,7 @@ fn entry_in(phase: Phase) -> Arc<Entry> {
             phase: Mutex::new(phase),
             size: Mutex::new((80, 24)),
             ops: Mutex::new(None),
+            input_budget: InputBudget::default(),
         }),
         task: Mutex::new(None),
     })
@@ -1292,4 +1293,68 @@ fn a_confirmation_is_needed_only_with_a_connected_session() {
     assert!(!needs_close_confirmation(0));
     assert!(needs_close_confirmation(1));
     assert!(needs_close_confirmation(3));
+}
+
+// ---------- input queue cap ----------
+
+#[test]
+fn input_over_the_cap_is_refused_with_input_queue_full() {
+    let manager = SessionManager::default();
+    let entry = entry_in(Phase::Connected);
+    let (tx, mut ops) = unbounded_channel();
+    *entry.shared.ops.lock().unwrap() = Some(tx);
+    manager
+        .entries
+        .lock()
+        .unwrap()
+        .insert("a".to_string(), Arc::clone(&entry));
+    let budget = &entry.shared.input_budget;
+    assert!(budget.try_reserve(crate::session_flow::MAX_QUEUED_INPUT - 4));
+    manager.input("a", b"abcd".to_vec()).unwrap();
+    let refused = manager.input("a", b"e".to_vec()).unwrap_err();
+    assert_eq!(refused.code, "input_queue_full");
+    assert_eq!(refused.message, "too much input is waiting; try again");
+    // the session stays alive: the phase is unchanged and what was queued is still there
+    assert_eq!(entry.shared.phase().unwrap(), Phase::Connected);
+    assert!(matches!(ops.try_recv().unwrap(), Op::Data(d) if d == b"abcd"));
+    assert!(ops.try_recv().is_err(), "the refused input was not queued");
+    // once the writer released what it handled, input is accepted again
+    budget.release(4);
+    manager.input("a", b"e".to_vec()).unwrap();
+}
+
+#[test]
+fn a_closed_queue_gives_the_reservation_back() {
+    let manager = SessionManager::default();
+    let entry = entry_in(Phase::Connected);
+    let (tx, ops) = unbounded_channel();
+    *entry.shared.ops.lock().unwrap() = Some(tx);
+    manager
+        .entries
+        .lock()
+        .unwrap()
+        .insert("a".to_string(), Arc::clone(&entry));
+    drop(ops);
+    assert_eq!(
+        manager.input("a", b"abc".to_vec()).unwrap_err().code,
+        "session_not_connected"
+    );
+    assert_eq!(entry.shared.input_budget.queued(), 0);
+}
+
+#[test]
+fn unhandled_ops_release_their_budget_when_the_writer_stops() {
+    let shared = entry_in(Phase::Connected).shared.clone();
+    let (tx, mut ops) = unbounded_channel();
+    for op in [
+        Op::Data(vec![0; 10]),
+        Op::Clipboard("abc".into()),
+        Op::Close,
+    ] {
+        assert!(shared.input_budget.try_reserve(op.weight()));
+        tx.send(op).unwrap();
+    }
+    assert_eq!(shared.input_budget.queued(), 13);
+    release_unhandled(&mut ops, &shared);
+    assert_eq!(shared.input_budget.queued(), 0);
 }

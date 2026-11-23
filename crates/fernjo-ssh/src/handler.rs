@@ -17,6 +17,21 @@ use crate::known_hosts::{HostKeyStatus, KnownHosts, fingerprint};
 /// is parked here for `Session::connect` to turn into the matching `SshError`.
 pub(crate) type Rejection = Arc<Mutex<Option<SshError>>>;
 
+/// What the user decided to remember about the key. `check_server_key` runs before the server has
+/// proved with its key-exchange signature that it owns the key, so nothing is written there: the
+/// decision is parked here and `Session::connect` applies it once the handshake succeeded.
+pub(crate) type PendingTrust = Arc<Mutex<Option<TrustAction>>>;
+
+/// A key to remember once the handshake is verified.
+pub(crate) enum TrustAction {
+    /// Unknown host, "trust always": add to `known_hosts`, then confirm on this device.
+    Add(PublicKey),
+    /// Changed key, "replace": replace in `known_hosts`, then confirm on this device.
+    Replace(PublicKey),
+    /// The key is already in `known_hosts`; only this device confirms it.
+    Confirm(PublicKey),
+}
+
 pub(crate) struct ClientHandler<I: Interaction> {
     pub host: String,
     pub port: u16,
@@ -27,6 +42,23 @@ pub(crate) struct ClientHandler<I: Interaction> {
     pub rejection: Rejection,
     /// Set while a user decision is pending, so the handshake deadline does not count that time.
     pub prompting: Arc<AtomicBool>,
+    /// The decision to write once the handshake is verified (see [`PendingTrust`]).
+    pub pending_trust: PendingTrust,
+}
+
+impl<I: Interaction> Clone for ClientHandler<I> {
+    fn clone(&self) -> Self {
+        Self {
+            host: self.host.clone(),
+            port: self.port,
+            known_hosts: self.known_hosts.clone(),
+            confirmed: self.confirmed.clone(),
+            interaction: Arc::clone(&self.interaction),
+            rejection: Arc::clone(&self.rejection),
+            prompting: Arc::clone(&self.prompting),
+            pending_trust: Arc::clone(&self.pending_trust),
+        }
+    }
 }
 
 /// Raises the flag for the lifetime of the guard.
@@ -54,6 +86,9 @@ impl<I: Interaction> ClientHandler<I> {
     }
 
     async fn decide(&self, key: &PublicKey) -> bool {
+        if let Ok(mut slot) = self.pending_trust.lock() {
+            *slot = None;
+        }
         let status = match self.known_hosts.check(&self.host, self.port, key) {
             Ok(status) => status,
             Err(e) => return self.reject(e),
@@ -73,15 +108,7 @@ impl<I: Interaction> ClientHandler<I> {
                 };
                 match decision {
                     HostKeyDecision::TrustOnce => true,
-                    HostKeyDecision::TrustAlways => {
-                        match self.known_hosts.add(&self.host, self.port, key) {
-                            Ok(()) => {
-                                self.confirm(key);
-                                true
-                            }
-                            Err(e) => self.reject(e),
-                        }
-                    }
+                    HostKeyDecision::TrustAlways => self.park(TrustAction::Add(key.clone())),
                     HostKeyDecision::Reject => self.reject(SshError::HostKeyRejected),
                 }
             }
@@ -98,15 +125,7 @@ impl<I: Interaction> ClientHandler<I> {
                     self.interaction.host_key_changed(prompt).await
                 };
                 match decision {
-                    HostKeyChangedDecision::Replace => {
-                        match self.known_hosts.replace(&self.host, self.port, key) {
-                            Ok(()) => {
-                                self.confirm(key);
-                                true
-                            }
-                            Err(e) => self.reject(e),
-                        }
-                    }
+                    HostKeyChangedDecision::Replace => self.park(TrustAction::Replace(key.clone())),
                     HostKeyChangedDecision::Reject => self.reject(SshError::HostKeyChangedRejected),
                 }
             }
@@ -138,11 +157,42 @@ impl<I: Interaction> ClientHandler<I> {
         };
         match decision {
             HostKeyDecision::TrustOnce => true,
-            HostKeyDecision::TrustAlways => {
-                self.confirm(key);
-                true
-            }
+            HostKeyDecision::TrustAlways => self.park(TrustAction::Confirm(key.clone())),
             HostKeyDecision::Reject => self.reject(SshError::HostKeyRejected),
+        }
+    }
+
+    /// Remembers the decision for [`Self::apply_pending_trust`] and accepts the key for the
+    /// handshake.
+    fn park(&self, action: TrustAction) -> bool {
+        if let Ok(mut slot) = self.pending_trust.lock() {
+            *slot = Some(action);
+        }
+        true
+    }
+
+    /// Writes the parked decision. Called by `Session::connect` after the handshake succeeded,
+    /// i.e. after the server proved it holds the key; a failed handshake never calls it, so a
+    /// peer that merely offered a key cannot get it recorded. A failed write of `known_hosts` is
+    /// an error (the connect stops); the device-confirmed file is best effort.
+    pub(crate) fn apply_pending_trust(&self) -> Result<(), SshError> {
+        let action = self.pending_trust.lock().ok().and_then(|mut s| s.take());
+        match action {
+            None => Ok(()),
+            Some(TrustAction::Add(key)) => {
+                self.known_hosts.add(&self.host, self.port, &key)?;
+                self.confirm(&key);
+                Ok(())
+            }
+            Some(TrustAction::Replace(key)) => {
+                self.known_hosts.replace(&self.host, self.port, &key)?;
+                self.confirm(&key);
+                Ok(())
+            }
+            Some(TrustAction::Confirm(key)) => {
+                self.confirm(&key);
+                Ok(())
+            }
         }
     }
 
