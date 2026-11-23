@@ -186,12 +186,12 @@
     color: var(--color-text);
   }
 
-  /* 23 rows stay visible when the window allows it; the properties panel gives way first */
+  /* 21 rows stay visible when the window allows it; the properties panel gives way first */
   .tree-slot {
     display: flex;
     flex: 1 1 0;
     flex-direction: column;
-    min-height: min(calc(var(--row-height-tree) * 23), calc(100vh - 120px));
+    min-height: min(calc(var(--row-height-tree) * 21), calc(100vh - 156px));
     overflow-y: auto;
   }
 

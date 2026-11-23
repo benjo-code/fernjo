@@ -72,6 +72,7 @@
 
 <style>
   .quick {
+    position: relative;
     padding: 0 var(--space-3) var(--space-3);
   }
 
@@ -113,8 +114,19 @@
     outline-offset: -1px;
   }
 
+  /* overlays what is below, so an error never changes the sidebar's height (layout contract in
+     layout.svelte.ts) */
   .error {
-    margin: var(--space-2) 0 0;
+    position: absolute;
+    top: calc(100% - var(--space-3));
+    left: var(--space-3);
+    right: var(--space-3);
+    z-index: 2;
+    margin: 0;
+    padding: var(--space-2) var(--space-3);
+    background: var(--color-sidebar);
+    border: 1px solid var(--color-danger);
+    border-radius: var(--radius-sm);
     font-size: var(--text-sm);
     color: var(--color-danger);
   }

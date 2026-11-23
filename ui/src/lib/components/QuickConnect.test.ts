@@ -76,6 +76,21 @@ describe("QuickConnect", () => {
     expect(document.querySelector('[role="alert"]')).toBeNull();
   });
 
+  test("an_invalid_host_from_the_parser_is_shown_inline_and_the_input_is_kept", async () => {
+    const { input, type, press, sessions } = setup({
+      quickParse: async () => {
+        throw apiError("invalid_host", "the host name contains characters that are not allowed");
+      },
+    });
+    type("u@bad$host");
+    await press("Enter");
+    expect(sessions.tabs).toHaveLength(0);
+    expect(input.value).toBe("u@bad$host");
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe(
+      "the host name contains characters that are not allowed",
+    );
+  });
+
   test("escape_clears_and_leaves_the_field", async () => {
     const { input, type, press } = setup();
     input.focus();

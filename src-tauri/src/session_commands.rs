@@ -155,12 +155,18 @@ pub fn open_session(
     state.sessions.open(state, node_id, on_event, cols, rows)
 }
 
-/// Parses what was typed into quick connect. Pure syntax; nothing is opened or stored.
+/// Parses what was typed into quick connect and checks the host against the same allow-list a
+/// session uses, so the field can refuse a bad host before any tab exists. Nothing is opened or
+/// stored.
 ///
 /// # Errors
-/// `quick_empty`, `quick_user_required`, `quick_bad_scheme`, `quick_bad_port`, `quick_bad_target`.
+/// `quick_empty`, `quick_user_required`, `quick_bad_scheme`, `quick_bad_port`, `quick_bad_target`,
+/// `invalid_host`.
 pub fn quick_parse(input: &str) -> Result<QuickTarget, CommandError> {
-    fernjo_core::parse_quick(input).map_err(|e| error(e.code, e.message()))
+    let target = fernjo_core::parse_quick(input).map_err(|e| error(e.code, e.message()))?;
+    // the plan is dropped: only the host check (and the structure check) matter here
+    crate::connect_plan::resolve_quick(&target)?;
+    Ok(target)
 }
 
 /// Opens a session for a quick connect target. The target is validated again here: the webview
@@ -376,6 +382,14 @@ mod tests {
     use super::*;
     use fernjo_core::{AppSettings, settings};
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn quick_parse_refuses_a_host_outside_the_allow_list_with_invalid_host() {
+        let err = quick_parse("u@bad$host").unwrap_err();
+        assert_eq!(err.code, "invalid_host");
+        let target = quick_parse("root@srv.lab:2222").unwrap();
+        assert_eq!((target.host.as_str(), target.port), ("srv.lab", 2222));
+    }
 
     fn dirs<const N: usize>() -> [tempfile::TempDir; N] {
         std::array::from_fn(|_| tempfile::tempdir().unwrap())

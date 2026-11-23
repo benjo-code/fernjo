@@ -659,6 +659,9 @@ describe("SessionStore quick connect", () => {
     tab.state = "disconnected";
     s.store.reconnect(tab.id);
     expect(s.calls.reconnectSession).toEqual([["Q1", 100, 30]]);
+    // the same session is reused: no second open of any kind
+    expect(s.calls.openQuickSession).toHaveLength(1);
+    expect(s.calls.openSession).toHaveLength(0);
   });
 
   test("an_rdp_quick_tab_does_not_read_a_connection", async () => {
@@ -678,9 +681,23 @@ describe("SessionStore quick connect", () => {
 
   test("a_quick_tab_does_not_light_a_tree_lamp", async () => {
     const s = setup();
-    await s.store.openQuick("root@h.lab");
-    s.store.tabs[0]!.state = "connected";
-    expect(s.store.lampFor("root@h.lab")).toBeNull();
+    await s.store.openQuick("a");
+    s.store.open("a");
+    const [quick, tree] = s.store.tabs;
+    expect(quick!.nodeId).toBeNull();
+    // only the quick tab is connected: the tree node stays dark
+    quick!.state = "connected";
+    expect(s.store.lampFor("a")).toBe("connecting");
+    tree!.state = "disconnected";
+    expect(s.store.lampFor("a")).toBe("dropped");
+    // only the tree tab is connected: the lamp follows it alone
+    quick!.state = "disconnected";
+    tree!.state = "connected";
+    expect(s.store.lampFor("a")).toBe("live");
+    tree!.state = "disconnected";
+    quick!.state = "connected";
+    expect(s.store.lampFor("a")).toBe("dropped");
+    s.store.close(tree!.id);
     expect(s.store.lampFor("a")).toBeNull();
   });
 });
