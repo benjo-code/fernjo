@@ -3,14 +3,15 @@
 //! Like `commands.rs`: plain functions over `&AppState` (testable without Tauri) plus thin
 //! wrappers in [`handlers`].
 
-use fernjo_core::NodeId;
 use fernjo_core::{
     DEFAULT_CLOSE_ON_EXIT, DEFAULT_FONT_SIZE, DEFAULT_SCROLLBACK, DataDirSource, TerminalPrefs,
 };
+use fernjo_core::{NodeId, QuickTarget};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, InvokeResponseBody};
 
 use crate::commands::CommandError;
+use crate::connect_plan::Target;
 use crate::sessions::PromptAnswer;
 use crate::state::AppState;
 
@@ -154,6 +155,31 @@ pub fn open_session(
     state.sessions.open(state, node_id, on_event, cols, rows)
 }
 
+/// Parses what was typed into quick connect. Pure syntax; nothing is opened or stored.
+///
+/// # Errors
+/// `quick_empty`, `quick_user_required`, `quick_bad_scheme`, `quick_bad_port`, `quick_bad_target`.
+pub fn quick_parse(input: &str) -> Result<QuickTarget, CommandError> {
+    fernjo_core::parse_quick(input).map_err(|e| error(e.code, e.message()))
+}
+
+/// Opens a session for a quick connect target. The target is validated again here: the webview
+/// is not trusted to have parsed it. Nothing is written to the tree.
+///
+/// # Errors
+/// `invalid_host`, `no_data_dir`.
+pub fn open_quick_session(
+    state: &AppState,
+    target: QuickTarget,
+    on_event: Channel<InvokeResponseBody>,
+    cols: u32,
+    rows: u32,
+) -> Result<String, CommandError> {
+    state
+        .sessions
+        .open_target(state, Target::Quick(target), on_event, cols, rows)
+}
+
 /// Queues keystrokes. `not_found` for an unknown id, `session_not_connected` without a shell.
 pub fn session_input(state: &AppState, id: &str, data: Vec<u8>) -> Result<(), CommandError> {
     state.sessions.input(id, data)
@@ -221,6 +247,22 @@ pub mod handlers {
         rows: u32,
     ) -> Result<String, CommandError> {
         super::open_session(&state, node_id, on_event, cols, rows)
+    }
+
+    #[tauri::command]
+    pub fn quick_parse(input: String) -> Result<QuickTarget, CommandError> {
+        super::quick_parse(&input)
+    }
+
+    #[tauri::command]
+    pub fn open_quick_session(
+        state: State<'_, AppState>,
+        target: QuickTarget,
+        on_event: Channel<InvokeResponseBody>,
+        cols: u32,
+        rows: u32,
+    ) -> Result<String, CommandError> {
+        super::open_quick_session(&state, target, on_event, cols, rows)
     }
 
     /// The body is the raw bytes, the session id travels in the `x-fernjo-session` header.

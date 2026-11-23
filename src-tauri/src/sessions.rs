@@ -80,7 +80,7 @@ use tokio::sync::{Notify, oneshot};
 use tokio::time::Instant;
 
 use crate::commands::CommandError;
-use crate::connect_plan::{self, ConnectPlan, CredentialPlan, Plan};
+use crate::connect_plan::{self, ConnectPlan, CredentialPlan, Plan, Target};
 use crate::session_flow::{FlowControl, InputBudget};
 use crate::state::AppState;
 
@@ -653,7 +653,7 @@ impl Shared {
 }
 
 struct Entry {
-    node_id: NodeId,
+    target: Target,
     shared: Arc<Shared>,
     task: Mutex<Option<JoinHandle<()>>>,
 }
@@ -768,7 +768,23 @@ impl SessionManager {
         cols: u32,
         rows: u32,
     ) -> Result<String, CommandError> {
-        let plan = connect_plan::resolve_session(state, node_id, false)?;
+        self.open_target(state, Target::Node(node_id), channel, cols, rows)
+    }
+
+    /// Resolves the target (a tree node or a quick connect target) and starts its session.
+    ///
+    /// # Errors
+    /// What `connect_plan::resolve_target` reports, or `no_data_dir`. A quick target is checked
+    /// again here (`invalid_host`), whatever the webview parsed.
+    pub fn open_target(
+        &self,
+        state: &AppState,
+        target: Target,
+        channel: Channel<InvokeResponseBody>,
+        cols: u32,
+        rows: u32,
+    ) -> Result<String, CommandError> {
+        let plan = connect_plan::resolve_target(state, &target, false)?;
         let hosts = self.host_files(state)?;
         let shared = Arc::new(Shared {
             sink: Arc::new(Sink::new(channel)),
@@ -781,7 +797,7 @@ impl SessionManager {
             input_budget: InputBudget::default(),
         });
         let entry = Arc::new(Entry {
-            node_id,
+            target,
             shared,
             task: Mutex::new(None),
         });
@@ -837,11 +853,12 @@ impl SessionManager {
         entry: &Arc<Entry>,
         skip_vault: bool,
     ) -> Result<(), CommandError> {
-        let plan = connect_plan::resolve_session(state, entry.node_id, skip_vault);
+        let plan = connect_plan::resolve_target(state, &entry.target, skip_vault);
         match (plan, self.host_files(state)) {
             (Ok(plan), Ok(hosts)) => start(entry, plan, hosts),
             (Err(e), _) | (_, Err(e)) => {
-                let text = if e.code == "not_found" {
+                // only a tree node can be gone
+                let text = if e.code == "not_found" && matches!(entry.target, Target::Node(_)) {
                     GONE.to_string()
                 } else {
                     e.message

@@ -132,6 +132,8 @@ pub fn run() {
             session_commands::handlers::get_terminal_settings,
             session_commands::handlers::set_terminal_settings,
             session_commands::handlers::open_session,
+            session_commands::handlers::quick_parse,
+            session_commands::handlers::open_quick_session,
             session_commands::handlers::session_input,
             session_commands::handlers::session_resize,
             session_commands::handlers::session_ack,

@@ -1849,6 +1849,26 @@ mod tests {
                 let (id, events) = opened(w);
                 format!("{id}{}", dump(&events))
             }),
+            entry("quick_parse", |w| {
+                let _ = w;
+                j(crate::session_commands::quick_parse("user@127.0.0.1:1"))
+            }),
+            entry("open_quick_session", |w| {
+                use tauri::ipc::{Channel, InvokeResponseBody};
+                let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+                let sink = std::sync::Arc::clone(&events);
+                let channel = Channel::new(move |body: InvokeResponseBody| {
+                    if let InvokeResponseBody::Json(text) = body {
+                        sink.lock().unwrap().push(text);
+                    }
+                    Ok(())
+                });
+                let target = fernjo_core::parse_quick("user@127.0.0.1:1").unwrap();
+                let id =
+                    crate::session_commands::open_quick_session(&w.st, target, channel, 80, 24)
+                        .unwrap();
+                format!("{id}{}", dump(&events))
+            }),
             entry("session_input", |w| {
                 let (id, _) = opened(w);
                 j(crate::session_commands::session_input(

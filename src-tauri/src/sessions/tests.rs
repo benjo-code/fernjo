@@ -802,6 +802,66 @@ async fn resume_after_unlock_with_nothing_listening_ends_disconnected() {
     rec.wait_state("disconnected").await;
 }
 
+fn refusing_quick_target() -> fernjo_core::QuickTarget {
+    fernjo_core::parse_quick("u@127.0.0.1:1").unwrap()
+}
+
+#[tokio::test]
+async fn reconnect_of_a_quick_session_resolves_the_same_target_again() {
+    let r = rig("127.0.0.1", 1, "u", "p", false);
+    let (ch, mut rec) = recorder();
+    let id =
+        crate::session_commands::open_quick_session(&r.st, refusing_quick_target(), ch, 80, 24)
+            .unwrap();
+    assert_eq!(
+        rec.wait_state("disconnected").await.as_deref(),
+        Some("Could not connect to the host.")
+    );
+    reconnect_session(&r.st, &id, 80, 24).unwrap();
+    assert_eq!(rec.wait_state("connecting").await, None);
+    // the quick target is not "gone": the same attempt fails the same way
+    assert_eq!(
+        rec.wait_state("disconnected").await.as_deref(),
+        Some("Could not connect to the host.")
+    );
+}
+
+#[tokio::test]
+async fn a_quick_session_never_touches_the_tree() {
+    let r = rig("127.0.0.1", 1, "u", "p", false);
+    let file = r._dir.path().join("connections.json");
+    let before = std::fs::read(&file).unwrap();
+    let tree = serde_json::to_string(&commands::list_tree(&r.st).unwrap()).unwrap();
+    let (ch, mut rec) = recorder();
+    let id =
+        crate::session_commands::open_quick_session(&r.st, refusing_quick_target(), ch, 80, 24)
+            .unwrap();
+    rec.wait_state("disconnected").await;
+    reconnect_session(&r.st, &id, 80, 24).unwrap();
+    rec.wait_state("disconnected").await;
+    close_session(&r.st, &id).unwrap();
+    assert_eq!(std::fs::read(&file).unwrap(), before);
+    assert_eq!(
+        serde_json::to_string(&commands::list_tree(&r.st).unwrap()).unwrap(),
+        tree
+    );
+    assert!(!r.known_hosts.exists());
+}
+
+#[tokio::test]
+async fn an_invalid_quick_host_is_refused_before_a_session_exists() {
+    let r = rig("127.0.0.1", 1, "u", "p", false);
+    let (ch, _rec) = recorder();
+    let mut target = refusing_quick_target();
+    target.host = "bad host".into();
+    assert_eq!(
+        code(crate::session_commands::open_quick_session(
+            &r.st, target, ch, 80, 24
+        )),
+        "invalid_host"
+    );
+}
+
 #[tokio::test]
 async fn reconnect_reports_a_deleted_node() {
     let r = rig("127.0.0.1", 1, "u", "p", false);
@@ -1254,7 +1314,7 @@ fn the_confirmed_hosts_layer_is_the_device_file_or_memory_for_the_run() {
 fn entry_in(phase: Phase) -> Arc<Entry> {
     let (channel, _rec) = recorder();
     Arc::new(Entry {
-        node_id: uuid::Uuid::new_v4(),
+        target: crate::connect_plan::Target::Node(uuid::Uuid::new_v4()),
         shared: Arc::new(Shared {
             sink: Arc::new(Sink::new(channel)),
             hub: Arc::new(PromptHub::default()),

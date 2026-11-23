@@ -81,7 +81,7 @@ fn shared_with(channel: Channel<InvokeResponseBody>, flow: FlowControl) -> Arc<S
 
 fn entry_with(shared: Arc<Shared>) -> Arc<Entry> {
     Arc::new(Entry {
-        node_id: uuid::Uuid::new_v4(),
+        target: crate::connect_plan::Target::Node(uuid::Uuid::new_v4()),
         shared,
         task: Mutex::new(None),
     })
