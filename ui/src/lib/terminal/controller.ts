@@ -20,6 +20,8 @@ export interface TerminalDeps {
   onResize(cols: number, rows: number): void;
   onAck(bytes: number): void;
   openUrl(url: string): void;
+  /** The OS clipboard text through the native command (the menu Paste). */
+  readClipboard(): Promise<string>;
   /** Ctrl+Shift+F inside the terminal. */
   onSearchRequest?(): void;
 }
@@ -27,9 +29,6 @@ export interface TerminalDeps {
 const DEFAULT_CONTRAST = 4.5;
 /** DESIGN.md: 13px text on a 19px line. */
 const LINE_HEIGHT = 19 / 13;
-
-/** How long a menu paste waits for the clipboard before giving up. */
-const PASTE_TIMEOUT_MS = 2500;
 
 const encoder = new TextEncoder();
 
@@ -172,22 +171,19 @@ export class TerminalController {
   }
 
   /**
-   * Menu paste. WebView2 shows a permission prompt for `readText` (measured: it stays pending),
-   * so keyboard paste (Ctrl+V, Ctrl+Shift+V) is left to the browser's native paste event, which
-   * xterm handles without a prompt.
+   * Menu paste. The text comes from the native clipboard command: WebView2 shows a permission
+   * prompt for `navigator.clipboard.readText` that can stay pending. Keyboard paste (Ctrl+V,
+   * Ctrl+Shift+V) is left to the browser's native paste event, which xterm handles. A failed read
+   * pastes nothing.
    */
   async paste(): Promise<void> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<null>((resolve) => {
-      timer = setTimeout(() => resolve(null), PASTE_TIMEOUT_MS);
-    });
+    let text: string;
     try {
-      // A late answer after the timeout is dropped: it could land in whatever has focus by then.
-      const text = await Promise.race([navigator.clipboard.readText(), timeout]);
-      if (text) this.#term.paste(text);
-    } finally {
-      clearTimeout(timer);
+      text = await this.#deps.readClipboard();
+    } catch {
+      return;
     }
+    if (text) this.#term.paste(text);
   }
 
   refreshTheme(): void {

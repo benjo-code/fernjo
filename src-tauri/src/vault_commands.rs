@@ -1883,6 +1883,17 @@ mod tests {
                     .unwrap();
                 format!("{id}{}", dump(&events))
             }),
+            entry("clipboard_read_text", |_| {
+                // a fake clipboard that holds a sentinel: the command returns the clipboard text
+                // by design (see the branch in `no_response_contains_a_secret`)
+                struct Fake;
+                impl crate::clipboard::ClipboardText for Fake {
+                    fn read_text(&self) -> Result<String, String> {
+                        Ok(PW.to_string())
+                    }
+                }
+                j(crate::clipboard::clipboard_read_text(&Fake))
+            }),
             entry("quick_parse", |w| {
                 let _ = w;
                 j(crate::session_commands::quick_parse("user@127.0.0.1:1"))
@@ -2083,6 +2094,17 @@ mod tests {
                     // the one and only response that carries secrets
                     assert!(out.contains(KEY) && out.contains(PASS), "{out}");
                     assert!(!out.contains(PW) && !out.contains(MASTER), "{out}");
+                } else if name == "clipboard_read_text" {
+                    // returns the clipboard text by design, here the fake's sentinel; nothing
+                    // else may appear
+                    assert!(out.contains(PW), "{out}");
+                    for s in SENTINELS
+                        .iter()
+                        .chain(&IMPORT_SECRETS)
+                        .filter(|s| **s != PW)
+                    {
+                        assert!(!out.contains(s), "{label} leaked {s}: {out}");
+                    }
                 } else {
                     assert_no_sentinel(&label, &out);
                 }
@@ -2271,6 +2293,7 @@ mod tests {
             include_str!("app_settings.rs"),
             include_str!("sync_commands.rs"),
             include_str!("open_tabs.rs"),
+            include_str!("clipboard.rs"),
         ];
         // Only lines that start with the attribute count (not doc comments or strings), so
         // `#[tauri::command(async)]` and similar forms are counted too.

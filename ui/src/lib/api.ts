@@ -58,6 +58,7 @@ export const tauriApi: Api = {
     return call("open_session", { nodeId, onEvent: channel, cols, rows });
   },
   quickParse: (input) => call("quick_parse", { input }),
+  clipboardReadText: () => call("clipboard_read_text"),
   openQuickSession: (target, onEvent, cols, rows) => {
     const channel = new Channel<ArrayBuffer | SessionEvent>();
     channel.onmessage = onEvent;

@@ -1,5 +1,6 @@
 mod app_menu;
 mod app_settings;
+mod clipboard;
 mod commands;
 mod connect_plan;
 mod data_folder;
@@ -138,6 +139,7 @@ pub fn run() {
             open_tabs::handlers::set_reopen_tabs,
             open_tabs::handlers::save_open_tabs,
             session_commands::handlers::quick_parse,
+            clipboard::handlers::clipboard_read_text,
             session_commands::handlers::open_quick_session,
             session_commands::handlers::session_input,
             session_commands::handlers::session_resize,

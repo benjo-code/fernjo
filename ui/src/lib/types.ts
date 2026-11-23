@@ -242,6 +242,8 @@ export interface Api {
   ): Promise<string>;
   /** Parses `[ssh://|rdp://][user@]host[:port]`; rejects with a `quick_*` error. */
   quickParse(input: string): Promise<QuickTarget>;
+  /** The OS clipboard text for the terminal menu Paste; rejects with `clipboard_*` errors. */
+  clipboardReadText(): Promise<string>;
   /** Like `openSession` for a target that is not in the tree. */
   openQuickSession(
     target: QuickTarget,

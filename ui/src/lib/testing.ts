@@ -213,6 +213,7 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     restartApp: [],
     openSession: [],
     quickParse: [],
+    clipboardReadText: [],
     openQuickSession: [],
     restoreSession: [],
     getOpenTabs: [],
@@ -380,6 +381,10 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     openSession: async (...args) => {
       calls.openSession.push(args);
       return impl.openSession ? impl.openSession(...args) : "sid";
+    },
+    clipboardReadText: async () => {
+      calls.clipboardReadText.push([]);
+      return impl.clipboardReadText ? impl.clipboardReadText() : "";
     },
     quickParse: async (input) => {
       calls.quickParse.push([input]);
