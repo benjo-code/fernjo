@@ -15,6 +15,13 @@
 //!   [`MIN_AUTO_CLOSE_SESSION`]) are set on the `disconnected` event that ends a connected
 //!   session and are `null`/`false` on every other event; the UI decides what to do with them.
 //!
+//! **Restored tabs:** `restore_session` (same `on_event` channel, `cols` and `rows` as
+//! `open_session`) creates the session without connecting. Its only event is `{kind:"state",
+//! state:"disconnected", detail:RESTORED_TEXT, exitStatus:null, endedCleanly:false}`; the tab
+//! then behaves like any disconnected one, and `reconnect_session` resolves the plan from the
+//! tree as it is then. A restored session is never "ended cleanly" and does not count as
+//! connected for the close confirmation.
+//!
 //! The UI tells them apart with `message instanceof ArrayBuffer`. Input travels the other way as
 //! the raw request body of `session_input` (the session id in the `x-fernjo-session` header).
 //! The UI acknowledges output with `session_ack(id, bytes)` once xterm.js has written it; more
@@ -92,6 +99,8 @@ pub const BATCH_INTERVAL: Duration = Duration::from_millis(16);
 /// connected at least this long, so a shell that dies at once (a broken profile script) keeps its
 /// tab and its message.
 pub const MIN_AUTO_CLOSE_SESSION: Duration = Duration::from_secs(5);
+/// The reason text of a tab restored from the last run: it exists, but nothing is connected.
+pub const RESTORED_TEXT: &str = "Restored from your last session. Not connected.";
 
 fn error(code: &str, message: impl Into<String>) -> CommandError {
     CommandError {
@@ -804,6 +813,44 @@ impl SessionManager {
         let id = uuid::Uuid::new_v4().to_string();
         lock(&self.entries)?.insert(id.clone(), Arc::clone(&entry));
         start(&entry, plan, hosts);
+        Ok(id)
+    }
+
+    /// Creates a session entry in the disconnected state without connecting (a tab restored from
+    /// the last run): it sends the disconnected event with [`RESTORED_TEXT`] (not clean, no exit
+    /// status) and waits for `reconnect`, which resolves the plan then. It never counts as
+    /// connected.
+    ///
+    /// # Errors
+    /// `not_found` / `not_a_connection` for a node that is gone or a folder, a structure code for
+    /// a bad quick target.
+    pub fn restore(
+        &self,
+        state: &AppState,
+        target: Target,
+        channel: Channel<InvokeResponseBody>,
+        cols: u32,
+        rows: u32,
+    ) -> Result<String, CommandError> {
+        connect_plan::check_target(state, &target)?;
+        let shared = Arc::new(Shared {
+            sink: Arc::new(Sink::new(channel)),
+            hub: Arc::new(PromptHub::default()),
+            flow: Mutex::new(FlowControl::default()),
+            wake: Notify::new(),
+            phase: Mutex::new(Phase::Disconnected),
+            size: Mutex::new((cols, rows)),
+            ops: Mutex::new(None),
+            input_budget: InputBudget::default(),
+        });
+        let entry = Arc::new(Entry {
+            target,
+            shared,
+            task: Mutex::new(None),
+        });
+        let id = uuid::Uuid::new_v4().to_string();
+        lock(&self.entries)?.insert(id.clone(), Arc::clone(&entry));
+        entry.shared.failed(RESTORED_TEXT.to_string());
         Ok(id)
     }
 

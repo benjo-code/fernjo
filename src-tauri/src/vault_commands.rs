@@ -1849,6 +1849,40 @@ mod tests {
                 let (id, events) = opened(w);
                 format!("{id}{}", dump(&events))
             }),
+            entry("get_open_tabs", |w| {
+                j(crate::open_tabs::get_open_tabs(&w.st))
+            }),
+            entry("set_reopen_tabs", |w| {
+                j(crate::open_tabs::set_reopen_tabs(&w.st, true))
+            }),
+            entry("save_open_tabs", |w| {
+                j(crate::open_tabs::save_open_tabs(
+                    &w.st,
+                    vec![crate::open_tabs::SavedTab {
+                        node: Some(w.conn),
+                        quick: None,
+                    }],
+                    Some(0),
+                ))
+            }),
+            entry("restore_session", |w| {
+                use tauri::ipc::{Channel, InvokeResponseBody};
+                let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+                let sink = std::sync::Arc::clone(&events);
+                let channel = Channel::new(move |body: InvokeResponseBody| {
+                    if let InvokeResponseBody::Json(text) = body {
+                        sink.lock().unwrap().push(text);
+                    }
+                    Ok(())
+                });
+                let target = crate::open_tabs::TargetView {
+                    node: Some(w.conn),
+                    quick: None,
+                };
+                let id = crate::session_commands::restore_session(&w.st, target, channel, 80, 24)
+                    .unwrap();
+                format!("{id}{}", dump(&events))
+            }),
             entry("quick_parse", |w| {
                 let _ = w;
                 j(crate::session_commands::quick_parse("user@127.0.0.1:1"))
@@ -2236,6 +2270,7 @@ mod tests {
             include_str!("import_commands.rs"),
             include_str!("app_settings.rs"),
             include_str!("sync_commands.rs"),
+            include_str!("open_tabs.rs"),
         ];
         // Only lines that start with the attribute count (not doc comments or strings), so
         // `#[tauri::command(async)]` and similar forms are counted too.

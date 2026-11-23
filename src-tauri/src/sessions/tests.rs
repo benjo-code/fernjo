@@ -1469,3 +1469,107 @@ fn unhandled_ops_release_their_budget_when_the_writer_stops() {
     release_unhandled(&mut ops, &shared);
     assert_eq!(shared.input_budget.queued(), 0);
 }
+
+// ---------- restored tabs (no server needed) ----------
+
+fn restored(st: &AppState, node: fernjo_core::NodeId) -> (String, Rec) {
+    let (ch, rec) = recorder();
+    let view = crate::open_tabs::TargetView {
+        node: Some(node),
+        quick: None,
+    };
+    let id = crate::session_commands::restore_session(st, view, ch, 80, 24).unwrap();
+    (id, rec)
+}
+
+#[tokio::test]
+async fn a_restored_session_is_disconnected_and_does_not_count_as_connected() {
+    let r = rig("127.0.0.1", 1, "u", "p", false);
+    let (_id, mut rec) = restored(&r.st, r.node);
+    assert_eq!(r.st.sessions.len(), 1);
+    assert_eq!(r.st.sessions.connected_count(), 0);
+    assert_eq!(
+        rec.wait_state("disconnected").await.as_deref(),
+        Some(RESTORED_TEXT)
+    );
+    assert_eq!(rec.seen.len(), 1, "nothing else is sent: {:?}", rec.seen);
+}
+
+#[tokio::test]
+async fn a_restored_session_never_ends_cleanly() {
+    let r = rig("127.0.0.1", 1, "u", "p", false);
+    let (_id, mut rec) = restored(&r.st, r.node);
+    rec.wait_state("disconnected").await;
+    assert_eq!(rec.seen[0]["endedCleanly"], json!(false));
+    assert_eq!(rec.seen[0]["exitStatus"], Value::Null);
+}
+
+#[tokio::test]
+async fn restore_of_a_deleted_node_is_not_found() {
+    let r = rig("127.0.0.1", 1, "u", "p", false);
+    let folder = commands::create_folder(&r.st, None, None, "f".into())
+        .unwrap()
+        .id
+        .unwrap();
+    let try_restore = |node| {
+        let (ch, _rec) = recorder();
+        let view = crate::open_tabs::TargetView {
+            node: Some(node),
+            quick: None,
+        };
+        code(crate::session_commands::restore_session(
+            &r.st, view, ch, 80, 24,
+        ))
+    };
+    assert_eq!(try_restore(fernjo_core::NodeId::new_v4()), "not_found");
+    assert_eq!(try_restore(folder), "not_a_connection");
+    commands::delete_node(&r.st, r.node).unwrap();
+    assert_eq!(try_restore(r.node), "not_found");
+    assert_eq!(r.st.sessions.len(), 0);
+}
+
+#[tokio::test]
+async fn reconnect_of_a_restored_session_connects_with_the_current_plan() {
+    let r = rig("127.0.0.1", 1, "u", "p", false);
+    let (id, mut rec) = restored(&r.st, r.node);
+    rec.wait_state("disconnected").await;
+    // the plan is resolved now: with the vault locked the session waits for it
+    vault_lock(&r.st).unwrap();
+    reconnect_session(&r.st, &id, 80, 24).unwrap();
+    rec.wait_state("needsVault").await;
+    assert_eq!(r.st.sessions.connected_count(), 0);
+    // a quick target restores and connects too (nothing listens on port 1: it ends in an error)
+    let (ch, mut quick_rec) = recorder();
+    let view = crate::open_tabs::TargetView {
+        node: None,
+        quick: Some(fernjo_core::parse_quick("user@127.0.0.1:1").unwrap()),
+    };
+    let quick_id = crate::session_commands::restore_session(&r.st, view, ch, 80, 24).unwrap();
+    quick_rec.wait_state("disconnected").await;
+    reconnect_session(&r.st, &quick_id, 80, 24).unwrap();
+    quick_rec.wait_state("connecting").await;
+}
+
+#[tokio::test]
+async fn close_all_does_not_touch_the_open_tabs_file() {
+    let data = tempfile::tempdir().unwrap();
+    let device = tempfile::tempdir().unwrap();
+    let st = AppState::open_with_device_dir(data.path().to_path_buf(), device.path().to_path_buf());
+    let node = commands::create_connection(&st, None, None, "c".into(), Protocol::Ssh, "h".into())
+        .unwrap()
+        .id
+        .unwrap();
+    let tab = crate::open_tabs::SavedTab {
+        node: Some(node),
+        quick: None,
+    };
+    crate::open_tabs::save_open_tabs(&st, vec![tab.clone()], Some(0)).unwrap();
+    let path = device.path().join(crate::open_tabs::FILE_NAME);
+    let before = std::fs::read(&path).unwrap();
+    let (_id, mut rec) = restored(&st, node);
+    rec.wait_state("disconnected").await;
+    st.sessions.close_all();
+    assert_eq!(st.sessions.len(), 0);
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_eq!(crate::open_tabs::load(device.path()).tabs, vec![tab]);
+}

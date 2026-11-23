@@ -12,6 +12,7 @@ use tauri::ipc::{Channel, InvokeResponseBody};
 
 use crate::commands::CommandError;
 use crate::connect_plan::Target;
+use crate::open_tabs::TargetView;
 use crate::sessions::PromptAnswer;
 use crate::state::AppState;
 
@@ -155,6 +156,23 @@ pub fn open_session(
     state.sessions.open(state, node_id, on_event, cols, rows)
 }
 
+/// Creates a disconnected session for a tab of the last run and returns its id; nothing connects
+/// until the UI calls `reconnect_session`. The event channel and size are as for `open_session`.
+///
+/// # Errors
+/// `invalid_target`, `not_found`, `not_a_connection`, or a structure code for a quick target.
+pub fn restore_session(
+    state: &AppState,
+    target: TargetView,
+    on_event: Channel<InvokeResponseBody>,
+    cols: u32,
+    rows: u32,
+) -> Result<String, CommandError> {
+    state
+        .sessions
+        .restore(state, target.into_target()?, on_event, cols, rows)
+}
+
 /// Parses what was typed into quick connect and checks the host against the same allow-list a
 /// session uses, so the field can refuse a bad host before any tab exists. Nothing is opened or
 /// stored.
@@ -253,6 +271,17 @@ pub mod handlers {
         rows: u32,
     ) -> Result<String, CommandError> {
         super::open_session(&state, node_id, on_event, cols, rows)
+    }
+
+    #[tauri::command]
+    pub fn restore_session(
+        state: State<'_, AppState>,
+        target: TargetView,
+        on_event: Channel<InvokeResponseBody>,
+        cols: u32,
+        rows: u32,
+    ) -> Result<String, CommandError> {
+        super::restore_session(&state, target, on_event, cols, rows)
     }
 
     #[tauri::command]
@@ -533,6 +562,7 @@ mod tests {
                 terminal: None,
                 theme: None,
                 vault_auto_lock_minutes: None,
+                reopen_tabs: None,
             },
         )
         .unwrap();

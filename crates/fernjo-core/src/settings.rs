@@ -38,6 +38,9 @@ pub struct AppSettings {
     /// Lock the vault after this many idle minutes; unset means never.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vault_auto_lock_minutes: Option<u32>,
+    /// Reopen the tabs of the last session on start; unset means on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reopen_tabs: Option<bool>,
 }
 
 /// Allowed idle times for the vault auto-lock, in minutes.
@@ -242,6 +245,7 @@ mod tests {
             terminal: None,
             theme: None,
             vault_auto_lock_minutes: None,
+            reopen_tabs: None,
         }
     }
 
@@ -293,6 +297,7 @@ mod tests {
             }),
             theme: None,
             vault_auto_lock_minutes: None,
+            reopen_tabs: None,
         };
         save(&path(dir.path()), &settings).unwrap();
         assert_eq!(load(&path(dir.path())).unwrap(), settings);

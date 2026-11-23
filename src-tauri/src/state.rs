@@ -142,6 +142,9 @@ pub struct AppState {
     /// Idle minutes after which the vault locks itself (`None` = off): loaded from
     /// `settings.json` at startup, in memory only while `FERNJO_DATA_DIR` is set.
     pub vault_auto_lock_minutes: Mutex<Option<u32>>,
+    /// Whether the open tabs are saved and reopened (default on): loaded from `settings.json`
+    /// at startup (same rule as `terminal`). The lock also serialises writes of `open-tabs.json`.
+    pub reopen_tabs: Mutex<bool>,
     /// When the user last did something (fed by `note_activity`); see `idle_lock`.
     pub idle: IdleTracker,
     /// The open terminal sessions.
@@ -235,6 +238,7 @@ impl AppState {
                 };
                 let terminal = loaded.as_ref().and_then(|s| s.terminal.clone());
                 let auto_lock = loaded.as_ref().and_then(|s| s.vault_auto_lock_minutes);
+                let reopen_tabs = loaded.as_ref().and_then(|s| s.reopen_tabs);
                 let theme = loaded.and_then(|s| s.theme);
                 let mut state = Self::build(
                     Some(l.data_dir),
@@ -260,6 +264,9 @@ impl AppState {
                 }
                 if let Ok(mut slot) = state.vault_auto_lock_minutes.lock() {
                     *slot = auto_lock.filter(|m| settings::AUTO_LOCK_MINUTES_RANGE.contains(m));
+                }
+                if let (Some(on), Ok(mut slot)) = (reopen_tabs, state.reopen_tabs.lock()) {
+                    *slot = on;
                 }
                 state
             }
@@ -386,6 +393,7 @@ impl AppState {
             terminal: Mutex::new(TerminalPrefs::default()),
             theme: Mutex::new(Theme::default()),
             vault_auto_lock_minutes: Mutex::new(None),
+            reopen_tabs: Mutex::new(true),
             idle: IdleTracker::new(std::time::Instant::now()),
             sessions: SessionManager::default(),
             pending: Mutex::new(None),

@@ -6,6 +6,7 @@ mod data_folder;
 mod idle_lock;
 mod import_commands;
 mod nav_guard;
+mod open_tabs;
 mod rdp_commands;
 mod session_commands;
 mod session_flow;
@@ -132,6 +133,10 @@ pub fn run() {
             session_commands::handlers::get_terminal_settings,
             session_commands::handlers::set_terminal_settings,
             session_commands::handlers::open_session,
+            session_commands::handlers::restore_session,
+            open_tabs::handlers::get_open_tabs,
+            open_tabs::handlers::set_reopen_tabs,
+            open_tabs::handlers::save_open_tabs,
             session_commands::handlers::quick_parse,
             session_commands::handlers::open_quick_session,
             session_commands::handlers::session_input,

@@ -171,6 +171,7 @@ mod tests {
                 terminal: None,
                 theme: None,
                 vault_auto_lock_minutes: None,
+                reopen_tabs: None,
             },
         )
         .unwrap();
@@ -287,6 +288,7 @@ mod tests {
                 terminal: None,
                 theme: None,
                 vault_auto_lock_minutes: None,
+                reopen_tabs: None,
             },
         )
         .unwrap();

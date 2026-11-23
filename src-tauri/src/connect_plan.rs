@@ -338,6 +338,20 @@ pub fn resolve_quick(target: &QuickTarget) -> Result<Plan, CommandError> {
     })
 }
 
+/// Checks that a target exists and could be opened, without building a plan (no vault access,
+/// no host check: that happens when the session connects).
+///
+/// # Errors
+/// `not_found` or `not_a_connection` for a node, a structure code for a quick target.
+pub fn check_target(state: &AppState, target: &Target) -> Result<(), CommandError> {
+    match target {
+        Target::Node(id) => connection(state, *id).map(|_| ()),
+        Target::Quick(quick) => {
+            fernjo_core::validate_quick(quick).map_err(|e| error(e.code, e.message()))
+        }
+    }
+}
+
 /// Builds the plan for a session target.
 ///
 /// # Errors
