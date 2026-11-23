@@ -863,6 +863,35 @@ async fn an_invalid_quick_host_is_refused_before_a_session_exists() {
 }
 
 #[tokio::test]
+async fn a_malformed_hand_built_quick_target_opens_no_session() {
+    let r = rig("127.0.0.1", 1, "u", "p", false);
+    let bad_port = quick_target_with(|t| t.port = 0);
+    let bad_user = quick_target_with(|t| t.user = Some("u\nx".into()));
+    let long_user = quick_target_with(|t| t.user = Some("u".repeat(300)));
+    for (target, expected) in [
+        (bad_port, "quick_bad_port"),
+        (bad_user, "quick_bad_target"),
+        (long_user, "quick_bad_target"),
+    ] {
+        let (ch, _rec) = recorder();
+        assert_eq!(
+            code(crate::session_commands::open_quick_session(
+                &r.st, target, ch, 80, 24
+            )),
+            expected
+        );
+    }
+    assert_eq!(r.st.sessions.connected_count(), 0);
+    assert!(r.st.sessions.entries.lock().unwrap().is_empty());
+}
+
+fn quick_target_with(f: fn(&mut fernjo_core::QuickTarget)) -> fernjo_core::QuickTarget {
+    let mut t = refusing_quick_target();
+    f(&mut t);
+    t
+}
+
+#[tokio::test]
 async fn reconnect_reports_a_deleted_node() {
     let r = rig("127.0.0.1", 1, "u", "p", false);
     let (ch, mut rec) = recorder();

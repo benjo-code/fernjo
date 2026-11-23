@@ -50,6 +50,9 @@ pub fn parse_quick(input: &str) -> Result<QuickTarget, QuickError> {
     if input.is_empty() {
         return Err(err("quick_empty"));
     }
+    if input.chars().count() > MAX_INPUT_CHARS {
+        return Err(err("quick_bad_target"));
+    }
     let (protocol, rest) = match input.split_once("://") {
         Some((scheme, rest)) => {
             let protocol = match scheme.to_ascii_lowercase().as_str() {
@@ -65,12 +68,7 @@ pub fn parse_quick(input: &str) -> Result<QuickTarget, QuickError> {
         return Err(err("quick_bad_target"));
     }
     let (user, host_part) = match rest.split_once('@') {
-        Some((user, host_part)) => {
-            if user.is_empty() || user.chars().any(char::is_whitespace) {
-                return Err(err("quick_bad_target"));
-            }
-            (Some(user.to_string()), host_part)
-        }
+        Some((user, host_part)) => (Some(user.to_string()), host_part),
         None => (None, rest),
     };
     if user.is_none() && protocol == Protocol::Ssh {
@@ -81,29 +79,71 @@ pub fn parse_quick(input: &str) -> Result<QuickTarget, QuickError> {
         return Err(err("quick_user_required"));
     }
     let (host, port_text) = split_host_port(host_part)?;
-    if host.is_empty()
-        || host
-            .chars()
-            .any(|c| c.is_whitespace() || "/\\;@[]".contains(c))
-    {
-        return Err(err("quick_bad_target"));
-    }
     let port = match port_text {
         None => match protocol {
             Protocol::Ssh => DEFAULT_SSH_PORT,
             Protocol::Rdp => DEFAULT_RDP_PORT,
         },
-        Some(text) => match text.parse::<u32>() {
-            Ok(p) if (1..=65535).contains(&p) => p as u16,
-            _ => return Err(err("quick_bad_port")),
-        },
+        // digits only: `+22` and `-1` are not ports (`u32::from_str` would take a `+`)
+        Some(text) if !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()) => {
+            match text.parse::<u32>() {
+                Ok(p) if (1..=65535).contains(&p) => p as u16,
+                _ => return Err(err("quick_bad_port")),
+            }
+        }
+        Some(_) => return Err(err("quick_bad_port")),
     };
-    Ok(QuickTarget {
+    let target = QuickTarget {
         protocol,
         host: host.to_string(),
         port,
         user,
-    })
+    };
+    validate_quick(&target)?;
+    Ok(target)
+}
+
+/// Longest input `parse_quick` looks at.
+const MAX_INPUT_CHARS: usize = 512;
+/// Longest user name of a target.
+const MAX_USER_CHARS: usize = 256;
+/// Longest host of a target (the same bound as `fernjo_ssh::validate_host`).
+const MAX_HOST_CHARS: usize = 255;
+
+/// Checks the structure of a target, whether it came from [`parse_quick`] or from the webview
+/// (which is not trusted): a non-zero port, a user (when present) that is non-empty, bounded and
+/// free of whitespace, control characters and `@`, a user for SSH, and a bounded host without
+/// whitespace, control characters or `/ \ ; @ [ ]`. Which hosts may be connected to is decided
+/// separately by `fernjo_ssh::validate_host`.
+///
+/// # Errors
+/// `quick_bad_port`, `quick_bad_target`, `quick_user_required`.
+pub fn validate_quick(target: &QuickTarget) -> Result<(), QuickError> {
+    if target.port == 0 {
+        return Err(err("quick_bad_port"));
+    }
+    if let Some(user) = &target.user
+        && (user.is_empty()
+            || user.chars().count() > MAX_USER_CHARS
+            || user
+                .chars()
+                .any(|c| c.is_whitespace() || c.is_control() || c == '@'))
+    {
+        return Err(err("quick_bad_target"));
+    }
+    if target.protocol == Protocol::Ssh && target.user.is_none() {
+        return Err(err("quick_user_required"));
+    }
+    let host = &target.host;
+    if host.is_empty()
+        || host.chars().count() > MAX_HOST_CHARS
+        || host
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || "/\\;@[]".contains(c))
+    {
+        return Err(err("quick_bad_target"));
+    }
+    Ok(())
 }
 
 /// Splits `host`, `host:port`, `[v6]` and `[v6]:port`.
@@ -218,6 +258,54 @@ mod tests {
         assert_eq!(code("u@a/b"), "quick_bad_target");
         assert_eq!(code("u@a;b"), "quick_bad_target");
         assert_eq!(code("u@bad host"), "quick_bad_target");
+    }
+
+    #[test]
+    fn rejects_signed_and_empty_ports() {
+        assert_eq!(code("u@h:+22"), "quick_bad_port");
+        assert_eq!(code("u@h:-1"), "quick_bad_port");
+        assert_eq!(code("u@[::1]:"), "quick_bad_port");
+    }
+
+    #[test]
+    fn scheme_is_case_insensitive_and_alone_it_is_not_a_target() {
+        assert_eq!(ok("SSH://u@h").protocol, Protocol::Ssh);
+        assert_eq!(ok("Rdp://h").protocol, Protocol::Rdp);
+        assert_eq!(code("ssh://"), "quick_bad_target");
+    }
+
+    #[test]
+    fn rejects_control_characters_and_overlong_input() {
+        assert_eq!(code("u\u{7}x@h"), "quick_bad_target");
+        assert_eq!(code("u\0x@h"), "quick_bad_target");
+        assert_eq!(code("u@h\u{1b}x"), "quick_bad_target");
+        let long = format!("u@{}", "a".repeat(600));
+        assert_eq!(code(&long), "quick_bad_target");
+    }
+
+    #[test]
+    fn validate_quick_checks_a_hand_built_target() {
+        let good = ok("u@h");
+        assert_eq!(validate_quick(&good), Ok(()));
+        let with = |f: fn(&mut QuickTarget)| {
+            let mut t = good.clone();
+            f(&mut t);
+            validate_quick(&t).unwrap_err().code
+        };
+        assert_eq!(with(|t| t.port = 0), "quick_bad_port");
+        assert_eq!(with(|t| t.user = Some("u\nx".into())), "quick_bad_target");
+        assert_eq!(with(|t| t.user = Some("a b".into())), "quick_bad_target");
+        assert_eq!(with(|t| t.user = Some("a@b".into())), "quick_bad_target");
+        assert_eq!(with(|t| t.user = Some(String::new())), "quick_bad_target");
+        assert_eq!(with(|t| t.user = Some("u".repeat(257))), "quick_bad_target");
+        assert_eq!(with(|t| t.user = None), "quick_user_required");
+        assert_eq!(with(|t| t.host = "a/b".into()), "quick_bad_target");
+        assert_eq!(with(|t| t.host = "h\n".into()), "quick_bad_target");
+        assert_eq!(with(|t| t.host = "a".repeat(256)), "quick_bad_target");
+        let mut rdp = good;
+        rdp.protocol = Protocol::Rdp;
+        rdp.user = None;
+        assert_eq!(validate_quick(&rdp), Ok(()));
     }
 
     #[test]

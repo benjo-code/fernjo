@@ -314,6 +314,8 @@ pub fn resolve_quick(target: &QuickTarget) -> Result<Plan, CommandError> {
             "the host name contains characters that are not allowed (use a DNS name or an IP address)",
         ));
     }
+    // the rest of the structure (port, user) by the parser's own rules
+    fernjo_core::validate_quick(target).map_err(|e| error(e.code, e.message()))?;
     let username = target.user.as_deref().and_then(non_blank);
     Ok(match target.protocol {
         Protocol::Ssh => Plan::Ssh(ConnectPlan {
@@ -971,6 +973,41 @@ victim2",
                     "{host:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn a_hand_built_quick_target_is_checked_like_a_parsed_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = state(dir.path());
+        let cases = [
+            (quick(Protocol::Ssh, "h", 0, Some("u")), "quick_bad_port"),
+            (quick(Protocol::Rdp, "h", 0, None), "quick_bad_port"),
+            (
+                quick(Protocol::Ssh, "h", 22, Some("u\nx")),
+                "quick_bad_target",
+            ),
+            (
+                quick(Protocol::Ssh, "h", 22, Some("u\0")),
+                "quick_bad_target",
+            ),
+            (
+                quick(Protocol::Ssh, "h", 22, Some("a@b")),
+                "quick_bad_target",
+            ),
+            (
+                quick(Protocol::Ssh, "h", 22, Some("a b")),
+                "quick_bad_target",
+            ),
+            (
+                quick(Protocol::Ssh, "h", 22, Some(&"u".repeat(300))),
+                "quick_bad_target",
+            ),
+            (quick(Protocol::Ssh, "h", 22, None), "quick_user_required"),
+        ];
+        for (target, expected) in cases {
+            let t = Target::Quick(target.clone());
+            assert_eq!(code(resolve_target(&st, &t, false)), expected, "{target:?}");
         }
     }
 

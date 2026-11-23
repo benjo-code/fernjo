@@ -27,7 +27,7 @@ pub use persist::{
     CURRENT_VERSION, FILE_NAME, Loaded, MAX_DATA_FILE_LEN, Notice, document, load, migrate_with,
     parse_document, save, write_exact,
 };
-pub use quick::{QuickError, QuickTarget, parse_quick};
+pub use quick::{QuickError, QuickTarget, parse_quick, validate_quick};
 pub use resolve::resolve;
 pub use settings::{
     AppSettings, DEFAULT_CLOSE_ON_EXIT, DEFAULT_FONT_SIZE, DEFAULT_SCROLLBACK, FONT_SIZE_RANGE,
