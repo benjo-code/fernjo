@@ -92,7 +92,7 @@
       !credentialsKnown && vaultState !== "none"
         ? " The credentials in the vault are replaced too."
         : "";
-    return `This replaces your current ${current} with the backup from ${dateOf(b.createdAt)}, which has ${nodes(b.folders + b.connections)} and ${creds(b.credentials)}.${unknown} Open sessions are closed.`;
+    return `This replaces your current ${current} with the backup from ${dateOf(b.createdAt)}, which has ${nodes(b.folders + b.connections)} and ${creds(b.credentials)}.${unknown} Open sessions are closed. Kept: the vault password, known hosts, settings and sync setup.`;
   });
 
   /** The backup preview must unlock (or create) the vault before the confirmation can be exact. */
