@@ -57,6 +57,12 @@ export const tauriApi: Api = {
     channel.onmessage = onEvent;
     return call("open_session", { nodeId, onEvent: channel, cols, rows });
   },
+  quickParse: (input) => call("quick_parse", { input }),
+  openQuickSession: (target, onEvent, cols, rows) => {
+    const channel = new Channel<ArrayBuffer | SessionEvent>();
+    channel.onmessage = onEvent;
+    return call("open_quick_session", { target, onEvent: channel, cols, rows });
+  },
   // the input is the raw request body, the session id travels in a header
   sessionInput: (id, data) => call("session_input", data, { headers: { "x-fernjo-session": id } }),
   rdpInput: (id, events) => call("rdp_input", { id, events }),

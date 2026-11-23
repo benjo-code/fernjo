@@ -9,6 +9,7 @@ import type {
   Prompt,
   PromptAnswer,
   Protocol,
+  QuickTarget,
   RdpInputEvent,
   SessionEvent,
   SessionState,
@@ -18,7 +19,10 @@ export interface Tab {
   /** Local key, stable from the click on; the session id only exists once Rust answered. */
   id: string;
   sessionId: string | null;
-  nodeId: string;
+  /** The connection in the tree; `null` for a quick connect tab (exactly one of the two is set). */
+  nodeId: string | null;
+  /** The typed target of a quick connect tab; `null` for a tree connection. */
+  quick: QuickTarget | null;
   /** Which view the tab gets: a terminal or the remote desktop canvas. */
   protocol: Protocol;
   /**
@@ -129,7 +133,35 @@ export class SessionStore {
         return;
       }
     }
-    const name = this.#nameOf(nodeId);
+    this.#create(nodeId, null, this.#protocolOf(nodeId), this.#nameOf(nodeId));
+  }
+
+  /**
+   * Opens a tab for a typed target (`[ssh://|rdp://][user@]host[:port]`). Rust parses it; a
+   * rejected input comes back to the caller as an `ApiError` and no tab is made. The tab belongs
+   * to no tree node, so it never lights a lamp.
+   */
+  async openQuick(input: string): Promise<void> {
+    let target: QuickTarget;
+    try {
+      target = await this.#api.quickParse(input);
+    } catch (e) {
+      throw toApiError(e);
+    }
+    this.#create(
+      null,
+      target,
+      target.protocol,
+      target.user ? `${target.user}@${target.host}` : target.host,
+    );
+  }
+
+  #create(
+    nodeId: string | null,
+    quick: QuickTarget | null,
+    protocol: Protocol,
+    name: string,
+  ): void {
     const taken = this.tabs.filter((t) => t.nodeId === nodeId).map((t) => t.title);
     let title = name;
     for (let n = 2; taken.includes(title); n++) title = `${name} (${n})`;
@@ -147,7 +179,8 @@ export class SessionStore {
       id,
       sessionId: null,
       nodeId,
-      protocol: this.#protocolOf(nodeId),
+      quick,
+      protocol,
       fixedSize: false,
       clipboard: false,
       title,
@@ -319,23 +352,25 @@ export class SessionStore {
 
   /** Asks Rust for the session; `cols` and `rows` are pixels for an RDP tab. */
   #open(tab: Tab, rt: Runtime, id: string, cols: number, rows: number): void {
-    this.#api
-      .openSession(tab.nodeId, (e) => this.#onMessage(id, e), cols, rows)
-      .then(
-        (sessionId) => {
-          if (rt.closed) {
-            this.#fire(this.#api.closeSession(sessionId));
-            return;
-          }
-          rt.sessionId = sessionId;
-          tab.sessionId = sessionId;
-        },
-        (e: unknown) => {
-          if (rt.closed) return;
-          this.error = toApiError(e).message;
-          this.close(id);
-        },
-      );
+    const onEvent = (e: SessionEvent | ArrayBuffer) => this.#onMessage(id, e);
+    const opened = tab.quick
+      ? this.#api.openQuickSession(tab.quick, onEvent, cols, rows)
+      : this.#api.openSession(tab.nodeId!, onEvent, cols, rows);
+    opened.then(
+      (sessionId) => {
+        if (rt.closed) {
+          this.#fire(this.#api.closeSession(sessionId));
+          return;
+        }
+        rt.sessionId = sessionId;
+        tab.sessionId = sessionId;
+      },
+      (e: unknown) => {
+        if (rt.closed) return;
+        this.error = toApiError(e).message;
+        this.close(id);
+      },
+    );
   }
 
   /** Connects the RDP canvas; the first attach starts the session at the size of the canvas box. */
@@ -357,6 +392,8 @@ export class SessionStore {
    * fixed (on any failure the tab fits) and whether the clipboard is shared (on any failure not).
    */
   #loadMode(tab: Tab): void {
+    // a quick connect tab has no connection to read: fit, clipboard off
+    if (tab.nodeId === null) return;
     this.#api
       .getNode(tab.nodeId)
       .then((node) => {

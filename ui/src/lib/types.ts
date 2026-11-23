@@ -4,6 +4,14 @@
 
 export type Protocol = "ssh" | "rdp";
 
+/** A connection typed into the quick connect field; Rust parses it and never stores it. */
+export interface QuickTarget {
+  protocol: Protocol;
+  host: string;
+  port: number;
+  user: string | null;
+}
+
 /** How big an RDP desktop is: it follows the tab, or has a fixed size in pixels. */
 export type RdpResolution = { mode: "fit" } | { mode: "fixed"; width: number; height: number };
 
@@ -228,6 +236,15 @@ export interface Api {
    */
   openSession(
     nodeId: string,
+    onEvent: (e: SessionEvent | ArrayBuffer) => void,
+    cols: number,
+    rows: number,
+  ): Promise<string>;
+  /** Parses `[ssh://|rdp://][user@]host[:port]`; rejects with a `quick_*` error. */
+  quickParse(input: string): Promise<QuickTarget>;
+  /** Like `openSession` for a target that is not in the tree. */
+  openQuickSession(
+    target: QuickTarget,
     onEvent: (e: SessionEvent | ArrayBuffer) => void,
     cols: number,
     rows: number,

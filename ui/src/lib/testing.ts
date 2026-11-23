@@ -200,6 +200,8 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     chooseDataFolder: [],
     restartApp: [],
     openSession: [],
+    quickParse: [],
+    openQuickSession: [],
     sessionInput: [],
     rdpInput: [],
     rdpClipboard: [],
@@ -362,6 +364,23 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     openSession: async (...args) => {
       calls.openSession.push(args);
       return impl.openSession ? impl.openSession(...args) : "sid";
+    },
+    quickParse: async (input) => {
+      calls.quickParse.push([input]);
+      if (impl.quickParse) return impl.quickParse(input);
+      const m = /^(?:(ssh|rdp):\/\/)?(?:([^@]+)@)?([^:@]+)(?::(\d+))?$/.exec(input.trim());
+      if (!m) throw apiError("quick_bad_target", "Not a valid target");
+      const protocol = m[1] === "rdp" ? "rdp" : "ssh";
+      return {
+        protocol,
+        host: m[3]!,
+        port: m[4] ? Number(m[4]) : protocol === "rdp" ? 3389 : 22,
+        user: m[2] ?? null,
+      };
+    },
+    openQuickSession: async (...args) => {
+      calls.openQuickSession.push(args);
+      return impl.openQuickSession ? impl.openQuickSession(...args) : "sid";
     },
     sessionInput: async (...args) => {
       calls.sessionInput.push(args);

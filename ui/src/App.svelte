@@ -211,6 +211,8 @@
       sessions.requestClose(closing);
     } else if (action === "focusFilter") {
       sidebar?.focusFilter();
+    } else if (action === "quickConnect") {
+      sidebar?.focusQuickConnect();
     } else {
       return;
     }

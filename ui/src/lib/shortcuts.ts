@@ -3,6 +3,7 @@ export type AppAction =
   | "prevTab"
   | "closeTab"
   | "focusFilter"
+  | "quickConnect"
   | "terminalSearch"
   | "copy"
   | "paste"
@@ -31,6 +32,7 @@ function chordLetter(e: Key): string | null {
 const CHORDS: Record<string, AppAction> = {
   w: "closeTab",
   k: "focusFilter",
+  n: "quickConnect",
   f: "terminalSearch",
   c: "copy",
   v: "paste",
@@ -81,6 +83,7 @@ const TAB_KEY = "Tab";
 
 export const SHORTCUTS: readonly Shortcut[] = [
   { label: "Filter connections", action: "focusFilter", key: "K" },
+  { label: "Quick connect", action: "quickConnect", key: "N" },
   { label: "Next tab", action: "nextTab", key: TAB_KEY },
   { label: "Previous tab", action: "prevTab", key: TAB_KEY, shift: true },
   { label: "Close tab", action: "closeTab", key: "W" },

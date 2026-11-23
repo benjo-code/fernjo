@@ -162,6 +162,7 @@ describe("SHORTCUTS", () => {
         "nextTab",
         "paste",
         "prevTab",
+        "quickConnect",
         "terminalSearch",
       ].sort(),
     );
@@ -210,5 +211,17 @@ describe("SHORTCUTS", () => {
     ]);
     expect(shortcutKeys(plain[1], true)).toBe("Cmd+click");
     for (const s of plain) expect(shortcutEvent(s, false)).toBeNull();
+  });
+});
+
+describe("quick connect chord", () => {
+  test("ctrl_shift_n_is_quick_connect_and_plain_ctrl_n_is_not", () => {
+    expect(routeKey(k("N", { ctrl: true, shift: true }), false, "terminal")).toBe("quickConnect");
+    expect(routeKey(k("n", { meta: true }), true, "none")).toBe("quickConnect");
+    expect(routeKey(k("n", { ctrl: true }), false, "terminal")).toBeNull();
+    expect(routeKey(k("n", { ctrl: true }), true, "terminal")).toBeNull();
+    expect(routeKey(k("N", { ctrl: true, shift: true }), false, "remote")).toBeNull();
+    expect(shortcutKeys(shortcutFor("quickConnect")!, false)).toBe("Ctrl+Shift+N");
+    expect(shortcutKeys(shortcutFor("quickConnect")!, true)).toBe("Cmd+N");
   });
 });
