@@ -97,7 +97,8 @@
 
   .vertical {
     top: 0;
-    right: -3px;
+    /* the whole 6 px hit area hangs outside the sidebar, clear of the tree's scrollbar */
+    right: -6px;
     bottom: 0;
     width: 6px;
     cursor: col-resize;
@@ -118,8 +119,7 @@
   }
 
   .splitter:focus-visible {
-    background: var(--color-focus);
-    opacity: 1;
+    box-shadow: inset 0 0 0 1px var(--color-focus);
     outline: none;
   }
 </style>

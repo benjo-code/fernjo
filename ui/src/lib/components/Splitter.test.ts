@@ -90,3 +90,13 @@ test("pointer drag reports the new size", () => {
   expect(onchange.mock.calls.map((c) => c[0])).toEqual([350, 560]);
   unmount(app);
 });
+
+test("focus_style_is_a_one_pixel_inset_line_and_the_hit_area_clears_the_scrollbar", async () => {
+  const src = (await import("./Splitter.svelte?raw")).default;
+  const css = src.slice(src.indexOf("<style>"));
+  const focus = /\.splitter:focus-visible\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
+  expect(focus).toMatch(/box-shadow:\s*inset[^;]*1px[^;]*var\(--color-focus\)/);
+  expect(focus).not.toMatch(/background/);
+  const vertical = /\.vertical\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
+  expect(vertical).not.toMatch(/right:\s*-3px/);
+});
