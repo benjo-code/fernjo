@@ -130,7 +130,7 @@ Not run, because they need real devices, the real OS keychains or a Podman host;
 
 **Other owner checks:**
 
-- Podman and Quadlet: `podman build -f crates/fernjo-hub/Containerfile -t fernjo-hub .`, then run it per `Docs/hub.md` and the Quadlet unit (`Init=true`, `UserNS=keep-id:uid=10001,gid=10001`, volume with `:Z`), `systemctl --user stop` ends it within a second. The fixer built and ran the image with Docker (`init`, a `docker stop` test, a writable fresh volume as user 10001); that is not a Podman or Quadlet check.
+- Podman and Quadlet: `podman build -f crates/fernjo-hub/Containerfile -t fernjo-hub .`, then run it per `Docs/hub.md` and the Quadlet unit (`RunInit=true`, `UserNS=keep-id:uid=10001,gid=10001`, volume with `:Z`), `systemctl --user stop` ends it within a second. The fixer built and ran the image with Docker (`init`, a `docker stop` test, a writable fresh volume as user 10001); that is not a Podman or Quadlet check.
 - Real keychains: `OsSyncSecrets` (the hub secret and the sync key under `sync-<group id>`, service `fernjo`) on Windows Credential Manager, macOS Keychain and the Linux Secret Service: set up, restart, sync still works, then leave sync and check that the item is gone. Only a recording test double ran so far.
 - Caddy `tls internal` with the pinned CA PEM against the real hub: join with the CA PEM in the pairing code. The pinned-CA path is tested against a throwaway CA in `crates/fernjo-sync/tests/client_tls.rs` only.
 - The close push (up to 3 s) and the window-focus trigger in the real app: edit a connection and close the window at once, then check the other device; focus the window after an edit on the other device.

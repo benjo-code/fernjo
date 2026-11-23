@@ -41,7 +41,7 @@ Stopping the container (`podman stop`, `docker stop`, `systemctl --user stop fer
    loginctl enable-linger "$USER"   # keep it running without a login
    ```
 
-   The unit publishes `127.0.0.1:8787` only, mounts the root file system read-only, drops all capabilities, runs a tiny init as PID 1 (`Init=true`, belt and braces next to the hub's own signal handling) and keeps the data in the named volume.
+   The unit publishes `127.0.0.1:8787` only, mounts the root file system read-only, drops all capabilities, runs a tiny init as PID 1 (`RunInit=true`, belt and braces next to the hub's own signal handling) and keeps the data in the named volume.
 
    The supported rootless path is the one in these two steps: `--userns=keep-id:uid=10001,gid=10001` (and `UserNS=` in the unit) maps your user onto 10001, so the volume that the image's `/data` seeded stays writable for the hub. Whether that mapping works on your Podman version is an owner check (see the end of this page).
 
@@ -120,7 +120,7 @@ Wire formats, the envelope layout and the merge rules are in `Docs/sync-format.m
 
 Podman rootless and the Quadlet unit were **not run**; Docker is not a check of either. Still open, to be run by the owner:
 
-- `podman build -f crates/fernjo-hub/Containerfile -t fernjo-hub .` and the rootless Quadlet unit on the Ubuntu or Debian VM (the `keep-id` user mapping, `Init=true`, the `:Z` label on a named volume and the read-only root file system have not been run under Podman).
+- `podman build -f crates/fernjo-hub/Containerfile -t fernjo-hub .` and the rootless Quadlet unit on the Ubuntu or Debian VM (the `keep-id` user mapping, `RunInit=true`, the `:Z` label on a named volume and the read-only root file system have not been run under Podman).
 - Caddy with `tls internal` in front of the hub, including a Caddy restart and a hub restart that lose nothing, with the CA pasted into fernjo.
 - Two real devices syncing through that hub (create, edit, delete, conflict copy, vault entry, offline then online), and the OS keychain items on Windows, macOS and Linux.
 - The `host.containers.internal` address and a LAN `PublishPort` for a Caddy that runs in a container (named under "Caddy" as untried advice).
