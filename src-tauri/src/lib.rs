@@ -180,8 +180,9 @@ pub fn run() {
                     sessions::ExitAction::Allow => {}
                     sessions::ExitAction::Prevent => api.prevent_exit(),
                     sessions::ExitAction::Ask => {
-                        api.prevent_exit();
+                        // with no main window there is nothing to ask in: the exit goes ahead
                         if let Some(window) = app.get_webview_window("main") {
+                            api.prevent_exit();
                             ask_to_close(&window.as_ref().window(), connected);
                         }
                     }
