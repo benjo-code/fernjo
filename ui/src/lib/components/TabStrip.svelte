@@ -53,7 +53,8 @@
   function markFor(tab: Tab): "connecting" | "live" | "dropped" | null {
     if (tab.state === "connecting") return "connecting";
     if (tab.state === "connected") return "live";
-    if (tab.state === "disconnected") return "dropped";
+    // a restored tab never connected in this run: no lamp, it is not a lost connection
+    if (tab.state === "disconnected") return tab.restored ? null : "dropped";
     return null;
   }
 
@@ -191,6 +192,8 @@
         >
           {#if mark}
             <Lamp state={mark} size="tab" />
+          {:else if tab.state === "disconnected"}
+            <span class="mark"></span>
           {:else}
             <span class="mark"><Icon name="lock" size={12} /></span>
           {/if}

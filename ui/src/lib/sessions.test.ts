@@ -853,6 +853,23 @@ describe("SessionStore quick connect", () => {
       expect(s.calls.reconnectSession).toHaveLength(2);
     });
 
+    test("a_restored_disconnected_tab_has_no_lamp_until_it_is_reconnected", async () => {
+      const s = setup({ restoreSession: async () => "R" });
+      const [id] = await restored(s, [tab("a")]);
+      // nothing ever connected, so it is not a lost connection
+      expect(s.store.lampFor("a")).toBeNull();
+      s.store.reconnect(id!);
+      expect(s.store.lampFor("a")).toBe("connecting");
+    });
+
+    test("a_restored_tab_does_not_hide_the_lamp_of_another_tab_of_the_same_node", async () => {
+      const s = setup({ restoreSession: async () => "R" });
+      await restored(s, [tab("a")]);
+      s.store.open("a", { another: true });
+      s.store.tabs[1]!.state = "disconnected";
+      expect(s.store.lampFor("a")).toBe("dropped");
+    });
+
     test("a_restored_tab_loses_the_flag_when_it_connects", async () => {
       const s = setup({ restoreSession: async () => "R" });
       const [id] = await restored(s, [tab("a")]);

@@ -286,6 +286,26 @@ describe("TabStrip", () => {
     expect(titles()).toEqual(["Name a", "Name b"]);
   });
 
+  test("a_restored_disconnected_tab_shows_no_lamp_and_a_reconnected_one_is_dropped_again", () => {
+    const mock = mockApi();
+    const sessions = new SessionStore(
+      mock.api,
+      (id) => `Name ${id}`,
+      () => true,
+    );
+    sessions.restore([{ target: { node: "r" }, protocol: "ssh", title: "R", usesVault: false }], 0);
+    mounted = mount(TabStrip, { target: document.body, props: { sessions } });
+    flushSync();
+    const tab = () => document.querySelector<HTMLElement>("[data-tab-id]")!;
+    // nothing connected yet: neither a lamp nor the vault lock
+    expect(tab().querySelector(".lamp")).toBeNull();
+    expect(tab().querySelector(".mark svg")).toBeNull();
+    // the flag is cleared when the user connects; a later drop is a real drop
+    sessions.tabs[0]!.restored = false;
+    flushSync();
+    expect(tab().querySelector(".lamp")?.getAttribute("data-state")).toBe("dropped");
+  });
+
   test("reconnect_all_shows_only_while_a_restored_tab_is_disconnected", async () => {
     const onreconnectall = vi.fn();
     const mock = mockApi();

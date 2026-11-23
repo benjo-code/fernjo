@@ -411,8 +411,10 @@ export class SessionStore {
       if (t.nodeId !== nodeId) continue;
       // "needsVault" counts as connecting here (the tab shows a lock icon, the tree a pulsing ring).
       if (t.state === "connected") return "live";
-      if (t.state === "disconnected") lamp ??= "dropped";
-      else lamp = "connecting";
+      // a restored tab never connected in this run: no lamp, it is not a lost connection
+      if (t.state === "disconnected") {
+        if (!t.restored) lamp ??= "dropped";
+      } else lamp = "connecting";
     }
     return lamp;
   }
