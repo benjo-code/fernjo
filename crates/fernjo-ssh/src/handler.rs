@@ -17,9 +17,10 @@ use crate::known_hosts::{HostKeyStatus, KnownHosts, fingerprint};
 /// is parked here for `Session::connect` to turn into the matching `SshError`.
 pub(crate) type Rejection = Arc<Mutex<Option<SshError>>>;
 
-/// What the user decided to remember about the key. `check_server_key` runs before the server has
-/// proved with its key-exchange signature that it owns the key, so nothing is written there: the
-/// decision is parked here and `Session::connect` applies it once the handshake succeeded.
+/// What the user decided to remember about the key. Nothing is written inside `check_server_key`:
+/// the decision is parked here and `Session::connect` applies it once the handshake succeeded.
+/// (russh 0.65 already checks the key-exchange signature before it calls `check_server_key`, so
+/// this is defence in depth: a failed handshake, for whatever reason, leaves the files alone.)
 pub(crate) type PendingTrust = Arc<Mutex<Option<TrustAction>>>;
 
 /// A key to remember once the handshake is verified.
@@ -171,9 +172,9 @@ impl<I: Interaction> ClientHandler<I> {
         true
     }
 
-    /// Writes the parked decision. Called by `Session::connect` after the handshake succeeded,
-    /// i.e. after the server proved it holds the key; a failed handshake never calls it, so a
-    /// peer that merely offered a key cannot get it recorded. A failed write of `known_hosts` is
+    /// Writes the parked decision. Called by `Session::connect` after the handshake succeeded;
+    /// a failed handshake never calls it, so a peer that merely offered a key cannot get it
+    /// recorded. A failed write of `known_hosts` is
     /// an error (the connect stops); the device-confirmed file is best effort.
     pub(crate) fn apply_pending_trust(&self) -> Result<(), SshError> {
         let action = self.pending_trust.lock().ok().and_then(|mut s| s.take());
