@@ -71,10 +71,12 @@ impl IdleTracker {
 }
 
 fn vault_is_unlocked(state: &AppState) -> bool {
-    state
+    // a poisoned mutex is read through: a vault that may still hold its key must be locked
+    let guard = state
         .vault
         .lock()
-        .is_ok_and(|v| matches!(&*v, VaultState::Open(v) if v.is_unlocked()))
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    matches!(&*guard, VaultState::Open(v) if v.is_unlocked())
 }
 
 /// One look at the clock: locks the vault when it is unlocked and the idle time is over.
@@ -88,12 +90,14 @@ pub fn tick(state: &AppState, now: Instant, wall: SystemTime) -> Option<VaultSta
 }
 
 /// Runs `f` and turns a panic into `None`, so one bad tick cannot end the idle thread (a dead
-/// thread would silently stop the auto-lock for the rest of the run).
+/// thread would silently stop the auto-lock for the rest of the run). It covers a panic inside
+/// the tick; a vault mutex poisoned by a panic elsewhere is handled separately: the unlocked
+/// check and `vault_commands::vault_lock` read through the poison.
 fn guarded<T>(f: impl FnOnce() -> Option<T>) -> Option<T> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or(None)
 }
 
-/// [`tick`] behind a panic guard.
+/// [`tick`] behind a panic guard (see [`guarded`] for what it covers).
 pub fn run_tick(state: &AppState, now: Instant, wall: SystemTime) -> Option<VaultStatus> {
     guarded(|| tick(state, now, wall))
 }
@@ -223,6 +227,56 @@ mod tests {
         st.idle.note(t0, w0);
         let status = run_tick(&st, t0 + 5 * MIN, w0 + 5 * MIN).expect("locks");
         assert_eq!(status.state, "locked");
+    }
+
+    fn poison_vault(st: &AppState) {
+        std::thread::scope(|s| {
+            let _ = s
+                .spawn(|| {
+                    let _guard = st.vault.lock().unwrap();
+                    panic!("poison the vault mutex");
+                })
+                .join();
+        });
+        assert!(st.vault.is_poisoned());
+    }
+
+    #[test]
+    fn a_poisoned_vault_mutex_does_not_disable_the_auto_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = AppState::open(Some(dir.path().to_path_buf()));
+        vault_commands::vault_create(&st, secrecy::SecretString::from("a master password"), false)
+            .unwrap();
+        *st.vault_auto_lock_minutes.lock().unwrap() = Some(5);
+        let (t0, w0) = start();
+        st.idle.note(t0, w0);
+        let hushed = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        poison_vault(&st);
+        std::panic::set_hook(hushed);
+        assert!(vault_is_unlocked(&st));
+        let status = run_tick(&st, t0 + 5 * MIN, w0 + 5 * MIN).expect("locks");
+        assert_eq!(status.state, "locked");
+        assert!(!vault_is_unlocked(&st));
+    }
+
+    #[test]
+    fn vault_lock_on_a_poisoned_mutex_locks_instead_of_failing() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = AppState::open(Some(dir.path().to_path_buf()));
+        vault_commands::vault_create(&st, secrecy::SecretString::from("a master password"), false)
+            .unwrap();
+        let hushed = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        poison_vault(&st);
+        std::panic::set_hook(hushed);
+        let status = vault_commands::vault_lock(&st).expect("locks");
+        assert_eq!(status.state, "locked");
+        // the other commands keep failing with internal on poison
+        assert_eq!(
+            vault_commands::vault_status(&st).unwrap_err().code,
+            "internal"
+        );
     }
 
     #[test]

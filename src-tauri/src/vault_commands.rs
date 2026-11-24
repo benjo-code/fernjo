@@ -202,12 +202,25 @@ pub fn vault_unlock_older(
 }
 
 /// Forgets the key in memory. Never touches the keychain item.
+/// Locks the vault. Unlike every other vault command this recovers from a poisoned mutex (a
+/// panic elsewhere while the guard was held): locking only drops the key, so it is safe on a
+/// possibly inconsistent `Vault`, and it must stay possible (the idle auto-lock uses it).
 pub fn vault_lock(state: &AppState) -> Result<VaultStatus, CommandError> {
-    with_vault(state, |v| {
-        v.lock();
-        Ok(())
-    })?;
-    vault_status(state)
+    let mut guard = state
+        .vault
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    match &mut *guard {
+        VaultState::Open(v) => v.lock(),
+        VaultState::None => return Err(error("no_vault", "there is no vault yet")),
+        VaultState::Unusable { reason, path } => {
+            return Err(error(
+                "vault_unusable",
+                format!("the vault file {} cannot be used: {reason}", path.display()),
+            ));
+        }
+    }
+    Ok(view(state, &guard))
 }
 
 pub fn vault_change_password(
