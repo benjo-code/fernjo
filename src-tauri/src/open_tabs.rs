@@ -8,10 +8,11 @@
 //! save replaces it, so it can never keep the app from starting or saving.
 
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io;
 use std::path::Path;
 
 use fernjo_core::{NodeId, Protocol, QuickTarget};
+use fernjo_fs::{FileMode, Parent, WriteOptions};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -74,16 +75,8 @@ pub fn load(device_dir: &Path) -> OpenTabsFile {
 
 fn read(device_dir: &Path) -> Option<OpenTabsFile> {
     let path = device_dir.join(FILE_NAME);
-    let file = fs::File::open(path).ok()?;
-    if file.metadata().ok()?.len() > MAX_FILE_LEN {
-        return None;
-    }
-    let mut bytes = Vec::new();
-    // bounded in case the file grows while it is read
-    file.take(MAX_FILE_LEN + 1).read_to_end(&mut bytes).ok()?;
-    if bytes.len() as u64 > MAX_FILE_LEN {
-        return None;
-    }
+    // an oversized or unreadable file reads as empty
+    let bytes = fernjo_fs::read_capped(&path, MAX_FILE_LEN).ok()?;
     let value: Value = serde_json::from_slice(&bytes).ok()?;
     let schema = value.get("schema")?.as_u64()?;
     if schema != u64::from(CURRENT_SCHEMA) {
@@ -92,35 +85,23 @@ fn read(device_dir: &Path) -> Option<OpenTabsFile> {
     serde_json::from_value(value).ok()
 }
 
-/// Writes the file atomically: a random-named temp file (`create_new`, so a planted link is never
-/// followed), flushed, renamed over the old one. No `.bak`: the file is disposable.
+/// Writes the file atomically through `fernjo-fs`: a random-named temp file (`create_new`, so a
+/// planted link is never followed), flushed, renamed over the old one. No `.bak`: the file is
+/// disposable.
 ///
 /// # Errors
 /// Any I/O error; the temp file is removed.
 pub fn save(device_dir: &Path, file: &OpenTabsFile) -> io::Result<()> {
     let json = serde_json::to_vec_pretty(file).map_err(io::Error::other)?;
-    fs::create_dir_all(device_dir)?;
-    let path = device_dir.join(FILE_NAME);
-    let tmp = device_dir.join(format!("{FILE_NAME}.{}.tmp", uuid::Uuid::new_v4().simple()));
-    let result = (|| {
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut out = options.open(&tmp)?;
-        out.write_all(&json)?;
-        out.flush()?;
-        out.sync_all()?;
-        drop(out);
-        fs::rename(&tmp, &path)
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
-    result
+    fernjo_fs::write_atomic(
+        &device_dir.join(FILE_NAME),
+        &json,
+        WriteOptions {
+            parent: Parent::CreatePrivate,
+            backup: false,
+            file_mode: FileMode::OwnerOnly,
+        },
+    )
 }
 
 /// Deletes the file; a missing file or a failed delete is not an error (it is only a convenience).

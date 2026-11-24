@@ -1706,6 +1706,7 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "fernjo-core",
+ "fernjo-fs",
  "fernjo-hub",
  "fernjo-import",
  "fernjo-rdp",
@@ -1753,6 +1754,7 @@ version = "0.2.0"
 dependencies = [
  "axum",
  "base64 0.23.1",
+ "fernjo-fs",
  "getrandom 0.4.3",
  "http-body-util",
  "serde",
@@ -1834,6 +1836,7 @@ dependencies = [
  "base64 0.23.1",
  "chacha20poly1305",
  "fernjo-core",
+ "fernjo-fs",
  "fernjo-hub",
  "fernjo-vault",
  "getrandom 0.4.3",

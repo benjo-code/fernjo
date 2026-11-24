@@ -11,6 +11,7 @@ publish.workspace = true
 [dependencies]
 fernjo-core = { path = "../fernjo-core" }
 fernjo-vault = { path = "../fernjo-vault" }
+fernjo-fs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true

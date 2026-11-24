@@ -2,13 +2,14 @@
 //!
 //! Layout: `<dir>/head.env` is the newest envelope, `<dir>/history/<seq>.env` the replaced ones
 //! (only the newest [`HISTORY_KEEP`] stay). Every write goes to a random `*.tmp` name opened with
-//! `create_new`, is fsynced and renamed; one lock covers the compare-and-swap.
+//! `create_new` (`fernjo-fs`), is fsynced and renamed; one lock covers the compare-and-swap.
 
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use fernjo_fs::{FileMode, Parent, WriteOptions};
 use uuid::Uuid;
 
 pub type GroupId = Uuid;
@@ -148,23 +149,12 @@ impl HubStore {
             }
         }
 
-        let head = self.head_path();
-        let (tmp, mut file) = create_temp_file(&head)?;
-        let result = (|| -> io::Result<()> {
-            file.write_all(bytes)?;
-            file.flush()?;
-            file.sync_all()?;
-            drop(file);
-            if let Some((cur_seq, old)) = &current {
-                write_atomic(&self.history_dir().join(format!("{cur_seq}.env")), old)?;
-            }
-            fs::rename(&tmp, &head)
-        })();
-        if let Err(e) = result {
-            let _ = fs::remove_file(&tmp);
-            return Err(PutError::Io(e));
+        // the replaced head goes to the history first, then the new head replaces it atomically;
+        // a failure in between leaves the old head and an extra, identical history copy
+        if let Some((cur_seq, old)) = &current {
+            write_atomic(&self.history_dir().join(format!("{cur_seq}.env")), old)?;
         }
-        let _ = sync_dir(&self.dir);
+        write_atomic(&self.head_path(), bytes)?;
         // pruning is best effort: a leftover old file is harmless
         let _ = self.prune();
         Ok(())
@@ -211,65 +201,18 @@ fn create_private_dir_all(dir: &Path) -> io::Result<()> {
     }
 }
 
-/// A fresh `<file>.<hex>.tmp` opened with `create_new` (mode 0600 on Unix).
-pub(crate) fn create_temp_file(path: &Path) -> io::Result<(PathBuf, File)> {
-    let name = path
-        .file_name()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no file name"))?
-        .to_string_lossy()
-        .into_owned();
-    for _ in 0..8 {
-        let mut rnd = [0u8; 8];
-        getrandom::fill(&mut rnd).map_err(|e| io::Error::other(e.to_string()))?;
-        let hex: String = rnd.iter().map(|b| format!("{b:02x}")).collect();
-        let tmp = path.with_file_name(format!("{name}.{hex}.tmp"));
-        let mut opts = OpenOptions::new();
-        opts.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        match opts.open(&tmp) {
-            Ok(f) => return Ok((tmp, f)),
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(e),
-        }
-    }
-    Err(io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        "no free temp name",
-    ))
-}
-
-/// Temp file, fsync, rename, directory fsync (Unix, best effort).
+/// Temp file, fsync, rename, directory fsync (Unix, best effort), through `fernjo-fs`: a random
+/// `create_new` temp name, mode 0600, no `.bak`, and the folder must exist (the store creates it).
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let (tmp, mut file) = create_temp_file(path)?;
-    let result = (|| -> io::Result<()> {
-        file.write_all(bytes)?;
-        file.flush()?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&tmp, path)
-    })();
-    if let Err(e) = result {
-        let _ = fs::remove_file(&tmp);
-        return Err(e);
-    }
-    if let Some(dir) = path.parent() {
-        let _ = sync_dir(dir);
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn sync_dir(dir: &Path) -> io::Result<()> {
-    File::open(dir)?.sync_all()
-}
-
-#[cfg(not(unix))]
-fn sync_dir(_dir: &Path) -> io::Result<()> {
-    Ok(())
+    fernjo_fs::write_atomic(
+        path,
+        bytes,
+        WriteOptions {
+            parent: Parent::MustExist,
+            backup: false,
+            file_mode: FileMode::OwnerOnly,
+        },
+    )
 }
 
 #[cfg(test)]

@@ -12,8 +12,9 @@
 //! call in `lib.rs` is Linux-only.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
+
+use fernjo_fs::{FileMode, Parent, WriteOptions};
 
 /// The app id the window gets (the program name), so the entry must be called `fernjo.desktop`.
 const ENTRY_NAME: &str = "fernjo.desktop";
@@ -87,11 +88,13 @@ pub fn desktop_entry(appimage: &str) -> Option<String> {
     ))
 }
 
-/// Whether to show the dialog: only for an AppImage, never after "Never", and not when the entry
+/// Whether to show the dialog: only for an AppImage with an absolute path, never after "Never", and not when the entry
 /// already says exactly what it would say now (an entry that points to a moved file is asked
 /// about again).
 pub fn should_offer(appimage: Option<&str>, data_home: &Path, never: bool) -> bool {
-    let Some(appimage) = appimage.filter(|a| !a.is_empty()) else {
+    // a plain '/' test like `data_home`: a relative path would resolve against whatever the
+    // working directory is when the desktop starts the entry
+    let Some(appimage) = appimage.filter(|a| a.starts_with('/')) else {
         return false;
     };
     if never {
@@ -105,26 +108,17 @@ pub fn should_offer(appimage: Option<&str>, data_home: &Path, never: bool) -> bo
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let dir = path
-        .parent()
-        .ok_or_else(|| std::io::Error::other("no parent folder"))?;
-    std::fs::create_dir_all(dir)?;
-    let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
-    tmp_name.push(format!(".{}.tmp", std::process::id()));
-    let tmp = dir.join(tmp_name);
-    let result = (|| {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        std::fs::rename(&tmp, path)
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    result
+    // default folder and file modes (the menu entry is meant to be read by the desktop); the
+    // temp name is random and never reused, so nothing planted at a fixed name matters
+    fernjo_fs::write_atomic(
+        path,
+        bytes,
+        WriteOptions {
+            parent: Parent::CreateDefault,
+            backup: false,
+            file_mode: FileMode::Default,
+        },
+    )
 }
 
 /// Writes the icon and the entry (icon first, so the entry never names a missing icon).
@@ -322,6 +316,39 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_appimage_path_must_be_absolute() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!should_offer(Some("fernjo.AppImage"), dir.path(), false));
+        assert!(!should_offer(Some("./fernjo.AppImage"), dir.path(), false));
+        assert!(should_offer(
+            Some("/opt/fernjo.AppImage"),
+            dir.path(),
+            false
+        ));
+    }
+
+    #[test]
+    fn install_leaves_no_pid_named_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (entry, icon) = entry_paths(dir.path());
+        // a file at the old fixed `<name>.<pid>.tmp` name must neither block the install nor be
+        // touched by it
+        let mut planted = Vec::new();
+        for target in [&entry, &icon] {
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            let mut name = target.file_name().unwrap().to_os_string();
+            name.push(format!(".{}.tmp", std::process::id()));
+            let path = target.with_file_name(name);
+            std::fs::write(&path, b"planted").unwrap();
+            planted.push(path);
+        }
+        install(APP, dir.path()).unwrap();
+        for path in planted {
+            assert_eq!(std::fs::read(&path).unwrap(), b"planted");
+        }
+        assert!(entry.exists() && icon.exists());
+    }
     #[test]
     fn install_refuses_an_unwritable_path_and_writes_nothing() {
         let dir = tempfile::tempdir().unwrap();
