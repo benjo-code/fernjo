@@ -179,12 +179,12 @@
       Keep your connections and vault in step across your devices through a hub you run yourself.
     </p>
     <div class="actions start">
-      <button type="button" class="btn" onclick={() => void choose("setup")}
-        >Set up this device</button
-      >
-      <button type="button" class="btn" onclick={() => void choose("join")}
-        >Join with a pairing code</button
-      >
+      <button type="button" class="btn" onclick={() => void choose("setup")}>
+        Set up this device
+      </button>
+      <button type="button" class="btn" onclick={() => void choose("join")}>
+        Join with a pairing code
+      </button>
     </div>
   {:else if mode === "setup"}
     <form class="form" onsubmit={(e) => void submitSetup(e)}>
@@ -210,10 +210,10 @@
           spellcheck="false"
           placeholder="-----BEGIN CERTIFICATE-----"
           bind:value={caPem}></textarea>
-        <small class="hint"
-          >Only needed when the hub's certificate comes from your own CA, for example Caddy's local
-          CA.</small
-        >
+        <small class="hint">
+          Only needed when the hub's certificate comes from your own CA, for example Caddy's local
+          CA.
+        </small>
       </label>
       <label class="field">
         <span>Device name</span>
@@ -236,18 +236,20 @@
       <p class="warning-text">{replaceText(sync.confirmation)}</p>
       {@render failureNote()}
       <div class="actions">
-        <button type="button" class="btn" onclick={() => onexport?.()}
-          >Export a backup first…</button
-        >
-        <button bind:this={replaceCancel} type="button" class="btn" onclick={cancelJoin}
-          >Cancel</button
-        >
+        <button type="button" class="btn" onclick={() => onexport?.()}>
+          Export a backup first…
+        </button>
+        <button bind:this={replaceCancel} type="button" class="btn" onclick={cancelJoin}>
+          Cancel
+        </button>
         <button
           type="button"
           class="btn danger"
           aria-disabled={sync.busy}
-          onclick={() => void confirmJoin()}>Replace and join</button
+          onclick={() => void confirmJoin()}
         >
+          Replace and join
+        </button>
       </div>
     </div>
   {:else}
@@ -300,16 +302,17 @@
   {@render failureNote()}
 
   <div class="actions start">
-    <button type="button" class="btn" aria-disabled={sync.busy} onclick={() => void sync.syncNow()}
-      >Sync now</button
-    >
+    <button type="button" class="btn" aria-disabled={sync.busy} onclick={() => void sync.syncNow()}>
+      Sync now
+    </button>
     <button
       type="button"
       class="btn"
       aria-expanded={sync.pairingCode !== null}
       onclick={() => void togglePairingCode()}
-      >{sync.pairingCode !== null ? "Hide pairing code" : "Show pairing code"}</button
     >
+      {sync.pairingCode !== null ? "Hide pairing code" : "Show pairing code"}
+    </button>
     <button type="button" class="btn" onclick={() => void startEditing()}>Edit hub secret</button>
     {#if status.state === "rolled_back"}
       <button type="button" class="btn" onclick={() => (asking = "reseed")}>Re-seed hub…</button>
@@ -352,8 +355,10 @@
           onclick={() => {
             editing = false;
             newSecret = "";
-          }}>Cancel</button
+          }}
         >
+          Cancel
+        </button>
         <button type="submit" class="btn primary" aria-disabled={sync.busy}>Save secret</button>
       </div>
     </form>

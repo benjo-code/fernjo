@@ -197,9 +197,9 @@
           {:else}
             <span class="mark"><Icon name="lock" size={12} /></span>
           {/if}
-          <span class="protocol"
-            ><Icon name={tab.nodeId === null ? tab.protocol : protocolOf(tab.nodeId)} /></span
-          >
+          <span class="protocol">
+            <Icon name={tab.nodeId === null ? tab.protocol : protocolOf(tab.nodeId)} />
+          </span>
           <span class="title">{tab.title}</span>
           {#if text}<span class="caption">{text}</span>{/if}
         </button>

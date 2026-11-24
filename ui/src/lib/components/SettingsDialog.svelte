@@ -458,8 +458,10 @@
         type="button"
         class="btn"
         aria-disabled={saving || !terminal.info}
-        onclick={() => void saveTerminal()}>Save terminal settings</button
+        onclick={() => void saveTerminal()}
       >
+        Save terminal settings
+      </button>
     </div>
 
     <h3 class="section">Data folder</h3>
@@ -494,15 +496,19 @@
         class:primary={!info?.restartRequired}
         disabled={!info || !info.changeable}
         aria-disabled={busy}
-        onclick={() => void choose()}>Choose folder…</button
+        onclick={() => void choose()}
       >
+        Choose folder…
+      </button>
       {#if info?.restartRequired}
         <button
           type="button"
           class="btn primary"
           aria-disabled={restarting}
-          onclick={() => void restart()}>Restart now</button
+          onclick={() => void restart()}
         >
+          Restart now
+        </button>
       {/if}
     </div>
 

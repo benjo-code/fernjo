@@ -374,11 +374,11 @@
       <div class="list-head">
         <div class="list-title">
           <h3>Credentials</h3>
-          <span class="muted"
-            >{vault.credentials.length === 1
+          <span class="muted">
+            {vault.credentials.length === 1
               ? "1 credential"
-              : `${vault.credentials.length} credentials`}</span
-          >
+              : `${vault.credentials.length} credentials`}
+          </span>
         </div>
         <button type="button" class="btn small" onclick={startNew}>+ New</button>
       </div>
