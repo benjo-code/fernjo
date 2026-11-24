@@ -189,7 +189,7 @@ pub fn plan(
         partial.push(ReportLine::new(
             "",
             format!(
-                "{} name, description or host value{s} shortened or cleaned of control characters",
+                "{} name, user name, description or host value{s} shortened or cleaned of control characters",
                 cleaned.changed
             ),
         ));

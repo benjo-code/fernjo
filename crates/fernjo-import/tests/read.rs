@@ -741,6 +741,21 @@ fn values_over_their_caps_are_cut_and_flagged() {
 }
 
 #[test]
+fn control_characters_are_removed_from_a_username_and_an_empty_one_is_unset() {
+    let a = one_node(r#"Name="a" Hostname="h" Username="a&#10;b&#9;c""#);
+    assert_eq!(a.username, "abc");
+    let b = one_node(r#"Name="b" Hostname="h" Username="&#9;""#);
+    assert_eq!(b.username, "");
+    // through the mapper into the imported settings
+    let p = plan(&RawDocument { nodes: vec![a, b] }, "2026-11-18", &[]);
+    let fernjo_core::NodeKind::Folder { children } = &p.folder.kind else {
+        panic!("folder")
+    };
+    assert_eq!(children[0].settings.username.as_deref(), Some("abc"));
+    assert_eq!(children[1].settings.username, None);
+}
+
+#[test]
 fn an_overlong_protocol_is_flagged_and_an_overlong_password_is_not_decrypted() {
     let n = one_node(&format!(
         r#"Name="n" Password="{}""#,

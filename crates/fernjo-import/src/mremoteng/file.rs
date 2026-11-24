@@ -409,6 +409,8 @@ fn read_node(
     }
     let (protocol, protocol_cut) = attr(el, "Protocol", MAX_PROTOCOL_CHARS);
     let (username, username_cut) = attr(el, "Username", MAX_IDENTITY_CHARS);
+    // like a name: no control characters (a cleaned-empty user name is no user name)
+    let username = crate::limits::clean(&username, MAX_IDENTITY_CHARS, false);
     let (domain, domain_cut) = attr(el, "Domain", MAX_IDENTITY_CHARS);
     let (putty_session, _) = attr(el, "PuttySession", MAX_IDENTITY_CHARS);
     let (resolution, _) = attr(el, "Resolution", MAX_PROTOCOL_CHARS);
