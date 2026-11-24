@@ -233,6 +233,17 @@ assert_exit no_build_paths_accepts_a_clean_binary 0 "" bash "$nbp" "$d/clean.bin
 assert_exit no_build_paths_rejects_a_runner_home_path 1 "/home/runner" bash "$nbp" "$d/linux.bin"
 assert_exit no_build_paths_rejects_a_windows_registry_path 1 "runneradmin" bash "$nbp" "$d/windows.bin"
 assert_exit no_build_paths_fails_for_a_missing_file 2 "" bash "$nbp" "$d/nope.bin"
+# An unreadable file must not count as clean: grep exits 2 and prints nothing, which used to read as zero matches.
+printf '%s\n' 'panic at /home/runner/.cargo/registry/x.rs' >"$d/locked.bin"
+chmod 000 "$d/locked.bin" 2>/dev/null
+if [ "$(id -u)" -eq 0 ]; then
+  echo "skip no_build_paths_fails_when_grep_cannot_read_the_file: running as root, chmod 000 does not stop root"
+elif cat "$d/locked.bin" >/dev/null 2>&1; then
+  echo "skip no_build_paths_fails_when_grep_cannot_read_the_file: chmod 000 has no effect here (Git Bash on Windows)"
+else
+  assert_exit no_build_paths_fails_when_grep_cannot_read_the_file 2 "cannot read" bash "$nbp" "$d/locked.bin"
+fi
+chmod 600 "$d/locked.bin" 2>/dev/null
 
 echo
 echo "$((total - failures))/$total passed"
