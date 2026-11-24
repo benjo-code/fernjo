@@ -1,12 +1,12 @@
 //! `connections.json`: format, atomic write, backup and load fallback.
 
 use std::collections::HashSet;
-use std::ffi::OsString;
 use std::fs;
-use std::io::{self, Read as _, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use fernjo_fs::{FileMode, Parent, WriteOptions};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -60,12 +60,7 @@ struct FileIn {
     children: Vec<Node>,
 }
 
-/// `<path>.<suffix>` (for example `connections.json.bak`).
-pub(crate) fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
-    let mut name: OsString = path.as_os_str().to_owned();
-    name.push(suffix);
-    PathBuf::from(name)
-}
+pub(crate) use fernjo_fs::with_suffix;
 
 /// The JSON document `save` writes for `tree`: `schemaVersion` and `children`.
 fn file_out(tree: &Tree) -> FileOut<'_> {
@@ -108,78 +103,32 @@ pub fn fingerprint(path: &Path) -> io::Result<Option<Fingerprint>> {
     }
 }
 
-/// Shared by every file in the data and config folders: creates the parent folder, writes a
-/// temp file next to `path`, flushes it to disk, copies the current file to `.bak`, then
-/// renames the temp file over `path`. `contents` gets a trailing newline.
+/// Shared by every file in the data and config folders: creates the parent folder (private on
+/// Unix), writes a temp file next to `path` under a random name, flushes it to disk, keeps the
+/// current file as `.bak`, then renames the temp file over `path` (all in `fernjo_fs`).
+/// `contents` gets a trailing newline. Afterwards a fixed-name `<path>.tmp` left by an older
+/// build is removed (a regular file only; a failure never fails the save).
 pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), SaveError> {
-    let fail = |source: io::Error| SaveError {
-        path: path.to_path_buf(),
-        source,
-    };
-    let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
-    if let Some(dir) = dir {
-        create_private_dir_all(dir).map_err(fail)?;
-    }
-    let tmp = with_suffix(path, ".tmp");
-    let result = (|| -> io::Result<()> {
-        let mut file = create_private_file(&tmp)?;
-        file.write_all(contents)?;
-        file.write_all(b"\n")?;
-        file.flush()?;
-        file.sync_all()?;
-        drop(file);
-        if path.exists() {
-            let bak = with_suffix(path, ".bak");
-            fs::copy(path, &bak)?;
-            owner_only(&bak)?;
+    let mut bytes = Vec::with_capacity(contents.len() + 1);
+    bytes.extend_from_slice(contents);
+    bytes.push(b'\n');
+    fernjo_fs::write_atomic(path, &bytes, WriteOptions::data_file()).map_err(|source| {
+        SaveError {
+            path: path.to_path_buf(),
+            source,
         }
-        fs::rename(&tmp, path)
-    })();
-    if let Err(source) = result {
-        let _ = fs::remove_file(&tmp);
-        return Err(fail(source));
-    }
+    })?;
+    remove_legacy_temp(path);
     Ok(())
 }
 
-/// Creates (truncating) `path` readable and writable by its owner only on Unix (mode 0600, also
-/// when a stale file of that name already exists); elsewhere the folder's inherited ACL applies.
-fn create_private_file(path: &Path) -> io::Result<fs::File> {
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+/// Removes `<path>.tmp`, the fixed temp name older builds used, when it is a regular file.
+/// A symlink or a folder at that name is never followed or touched; errors are ignored.
+fn remove_legacy_temp(path: &Path) {
+    let legacy = with_suffix(path, ".tmp");
+    if fs::symlink_metadata(&legacy).is_ok_and(|m| m.file_type().is_file()) {
+        let _ = fs::remove_file(&legacy);
     }
-    let file = options.open(path)?;
-    owner_only(path)?;
-    Ok(file)
-}
-
-/// Creates `dir` and its missing parents; on Unix with mode 0700 (folders that already exist
-/// keep theirs).
-fn create_private_dir_all(dir: &Path) -> io::Result<()> {
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder.create(dir)
-}
-
-/// Unix: mode 0600. Other platforms: no change.
-fn owner_only(path: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-    }
-    #[cfg(not(unix))]
-    let _ = path;
-    Ok(())
 }
 
 /// Renames an unreadable `path` to `<path>.corrupt-<unix seconds>` so a later save cannot
@@ -233,30 +182,10 @@ enum Read {
 /// any real tree. A larger file is refused as unreadable and left untouched.
 pub const MAX_DATA_FILE_LEN: u64 = 64 * 1024 * 1024;
 
-/// Reads `path` unless it is longer than [`MAX_DATA_FILE_LEN`] (`InvalidData`). The length is
-/// checked before reading, and the read itself is bounded in case the file grows meanwhile.
+/// Reads `path` unless it is longer than [`MAX_DATA_FILE_LEN`] (`InvalidData`); see
+/// `fernjo_fs::read_capped`.
 pub(crate) fn read_capped(path: &Path) -> io::Result<Vec<u8>> {
-    let too_large = || {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "the file is larger than {} MiB",
-                MAX_DATA_FILE_LEN / (1024 * 1024)
-            ),
-        )
-    };
-    let file = fs::File::open(path)?;
-    let len = file.metadata()?.len();
-    if len > MAX_DATA_FILE_LEN {
-        return Err(too_large());
-    }
-    let mut bytes = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
-    file.take(MAX_DATA_FILE_LEN.saturating_add(1))
-        .read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_DATA_FILE_LEN {
-        return Err(too_large());
-    }
-    Ok(bytes)
+    fernjo_fs::read_capped(path, MAX_DATA_FILE_LEN)
 }
 
 fn read_file(path: &Path) -> Result<Read, LoadError> {
@@ -313,32 +242,19 @@ pub fn parse_document(value: Value) -> Result<Tree, DocumentError> {
     Ok(Tree::from_children(file.children))
 }
 
-/// Writes `bytes` to `path` exactly as given (no trailing newline, no `.bak`): temp file in
-/// the same folder, flushed to disk, renamed over the target. The temp file is removed on
-/// failure.
+/// Writes `bytes` to `path` exactly as given (no trailing newline, no `.bak`): random temp
+/// file in the same folder, flushed to disk, renamed over the target. The temp file is removed
+/// on failure. Missing folders and the file get the default mode (export files).
 pub fn write_exact(path: &Path, bytes: &[u8]) -> Result<(), SaveError> {
-    let fail = |source: io::Error| SaveError {
+    let options = WriteOptions {
+        parent: Parent::CreateDefault,
+        backup: false,
+        file_mode: FileMode::Default,
+    };
+    fernjo_fs::write_atomic(path, bytes, options).map_err(|source| SaveError {
         path: path.to_path_buf(),
         source,
-    };
-    let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
-    if let Some(dir) = dir {
-        fs::create_dir_all(dir).map_err(fail)?;
-    }
-    let tmp = with_suffix(path, ".tmp");
-    let result = (|| -> io::Result<()> {
-        let mut file = fs::File::create(&tmp)?;
-        file.write_all(bytes)?;
-        file.flush()?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&tmp, path)
-    })();
-    if let Err(source) = result {
-        let _ = fs::remove_file(&tmp);
-        return Err(fail(source));
-    }
-    Ok(())
+    })
 }
 
 /// Checks what hand-edited files can get wrong. A repeated id (a copied block) gets a fresh
@@ -482,7 +398,7 @@ mod tests {
         file.set_len(MAX_DATA_FILE_LEN + 1).unwrap();
         drop(file);
         match load(&main) {
-            Err(LoadError::Unreadable { reason, .. }) => assert!(reason.contains("larger than")),
+            Err(LoadError::Unreadable { reason, .. }) => assert!(reason.contains("too large")),
             other => panic!("expected Unreadable, got {other:?}"),
         }
         assert_eq!(fs::metadata(&main).unwrap().len(), MAX_DATA_FILE_LEN + 1);
@@ -1029,6 +945,58 @@ mod tests {
         ];
         let positions: Vec<_> = order.iter().map(|k| pos(k)).collect();
         assert!(positions.windows(2).all(|w| w[0] < w[1]), "{text}");
+    }
+
+    #[test]
+    fn a_leftover_fixed_name_temp_file_is_removed_after_a_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = main_path(dir.path());
+        let leftover = with_suffix(&main, ".tmp");
+        fs::write(&leftover, "old build leftover").unwrap();
+        save(&main, &sample_tree("dc01")).unwrap();
+        assert!(!leftover.exists());
+        let names: Vec<_> = files(dir.path()).into_iter().map(|(n, _)| n).collect();
+        assert_eq!(names, [FILE_NAME]);
+    }
+
+    #[test]
+    fn a_directory_at_the_fixed_temp_name_is_left_alone_by_a_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = main_path(dir.path());
+        let planted = with_suffix(&main, ".tmp");
+        fs::create_dir(&planted).unwrap();
+        save(&main, &sample_tree("dc01")).unwrap();
+        assert!(planted.is_dir());
+        assert!(main.is_file());
+    }
+
+    #[test]
+    fn write_exact_uses_a_random_temp_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.json");
+        // a directory at the old fixed temp name would have made the write fail
+        fs::create_dir(with_suffix(&path, ".tmp")).unwrap();
+        write_exact(&path, b"data").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"data");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_at_the_bak_name_is_not_followed_by_a_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = main_path(dir.path());
+        save(&main, &sample_tree("one")).unwrap();
+        let victim = dir.path().join("victim");
+        fs::write(&victim, "precious").unwrap();
+        std::os::unix::fs::symlink(&victim, bak_path(dir.path())).unwrap();
+        save(&main, &sample_tree("two")).unwrap();
+        assert_eq!(fs::read(&victim).unwrap(), b"precious");
+        assert!(
+            !fs::symlink_metadata(bak_path(dir.path()))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 
     #[test]

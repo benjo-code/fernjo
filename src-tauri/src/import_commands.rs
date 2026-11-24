@@ -1048,8 +1048,11 @@ mod tests {
     }
 
     fn block_store_save(dir: &Path) {
-        // the store writes `connections.json.tmp` first; a folder of that name fails the save
-        fs::create_dir(dir.join("connections.json.tmp")).unwrap();
+        // the store keeps the previous file as `connections.json.bak`; a folder of that name
+        // fails the save (the file must exist, so callers save once before)
+        assert!(dir.join("connections.json").is_file());
+        let _ = fs::remove_file(dir.join("connections.json.bak"));
+        fs::create_dir(dir.join("connections.json.bak")).unwrap();
     }
 
     #[test]
@@ -1336,6 +1339,9 @@ mod tests {
         let s = st(&data);
         unlocked(&s);
         let path = file(dir.path(), "c.xml", DEFAULT_KEY_XML);
+        // one save so connections.json exists (the block needs a file to back up)
+        let tmp = commands::create_folder(&s, None, None, "tmp".into()).unwrap();
+        commands::delete_node(&s, tmp.id.unwrap()).unwrap();
         inspect(&s, ImportKind::Mremoteng, &path, None).unwrap();
         block_store_save(&data);
         let e = apply(&s).unwrap_err();
