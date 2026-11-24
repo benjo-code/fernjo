@@ -36,7 +36,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 | 8 | RDP sessions | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-20-milestone-08-rdp-sessions.md) | 2026-11-21 |
 | – | **Release `v0.2.0`** – RDP (M8) | – | ✅ done | – | 2026-11-22 |
 | 9 | Multi-device sync | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-22-milestone-09-multi-device-sync.md) | 2026-11-23 |
-| 10 | Daily-use features | 1 – fernjo app | 🔵 in progress | [Plan](superpowers/plans/2026-11-23-milestone-10-daily-use-features.md) | – |
+| 10 | Daily-use features | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-23-milestone-10-daily-use-features.md) | 2026-11-24 |
 | 11 | Full hardening and security check | 1 – fernjo app | ⬜ open | – | – |
 | – | **Release `v0.3.0`** – Sync, daily-use features and security check (M9 to M11) | – | ⬜ open | – | – |
 
@@ -478,7 +478,7 @@ Tasks are ticked on this evidence (the roadmap schema has no evidence field on t
 - Guards: the tests named in the guards criterion above.
 
 ## Milestone 10 – Daily-use features
-**Status:** 🔵 in progress · **Plan:** [2026-11-23-milestone-10-daily-use-features.md](superpowers/plans/2026-11-23-milestone-10-daily-use-features.md) · **Spec:** [2026-11-23-m10-daily-use-features-design.md](superpowers/specs/2026-11-23-m10-daily-use-features-design.md) · **Prerequisites:** M8
+**Status:** ✅ done (2026-11-24) · **Plan:** [2026-11-23-milestone-10-daily-use-features.md](superpowers/plans/2026-11-23-milestone-10-daily-use-features.md) · **Spec:** [2026-11-23-m10-daily-use-features-design.md](superpowers/specs/2026-11-23-m10-daily-use-features-design.md) · **Prerequisites:** M8
 
 Goal: The small features the owner misses in daily use: connect without saving, reopen tabs after a restart, lock the vault when idle, use Pageant, and no surprises when quitting or pasting.
 
