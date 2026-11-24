@@ -1739,6 +1739,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fernjo-fs"
+version = "0.2.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "tempfile",
+]
+
+[[package]]
 name = "fernjo-hub"
 version = "0.2.0"
 dependencies = [

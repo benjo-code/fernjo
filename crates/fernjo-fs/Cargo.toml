@@ -1,0 +1,15 @@
+[package]
+name = "fernjo-fs"
+description = "Hardened atomic file writer and capped file reader shared by the fernjo crates"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+getrandom.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
