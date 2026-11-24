@@ -1,9 +1,8 @@
 //! The `Vault`: create, open, unlock, lock, and the encrypted atomic save.
 
-use std::ffi::OsString;
 use std::fmt;
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -87,12 +86,6 @@ impl fmt::Debug for Vault {
 /// NFC-normalises the password and does nothing else (no trimming, byte-exact).
 pub(crate) fn normalise(password: &SecretString) -> Zeroizing<String> {
     Zeroizing::new(password.expose_secret().nfc().collect::<String>())
-}
-
-fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
-    let mut name: OsString = path.as_os_str().to_owned();
-    name.push(suffix);
-    PathBuf::from(name)
 }
 
 /// AAD of the key wrap: everything before the wrapped key. The wrapped key is covered by
@@ -810,7 +803,7 @@ impl Vault {
     }
 
     /// Encrypts the body with a fresh nonce and writes the file atomically: temp file in
-    /// the same folder, `sync_all`, current file copied to `.bak`, rename. Refuses with
+    /// the same folder, `sync_all`, current file kept as `.bak`, rename. Refuses with
     /// `changed_on_disk` when the file was changed since this handle read or wrote it.
     pub(crate) fn save(&mut self) -> Result<(), VaultError> {
         let unlocked = self.unlocked.as_ref().ok_or(VaultError::VaultLocked)?;
@@ -1036,101 +1029,12 @@ fn sweep_stale_temp_files(path: &Path, age: Duration) {
     }
 }
 
-/// Creates `dir` and its missing parents; on Unix with mode 0700 (folders that already exist
-/// keep theirs).
-fn create_private_dir_all(dir: &Path) -> io::Result<()> {
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder.create(dir)
-}
-
-/// Unix: mode 0600. Other platforms: no change.
-fn owner_only(path: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-    }
-    #[cfg(not(unix))]
-    let _ = path;
-    Ok(())
-}
-
-/// Creates a new file (`create_new`: never an existing file, never through a symlink at that
-/// name) readable and writable by its owner only on Unix (mode 0600); elsewhere the folder's
-/// inherited ACL applies.
-fn create_new_private_file(path: &Path) -> io::Result<fs::File> {
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    options.open(path)
-}
-
-/// A temp file next to `path` under a random name, so nobody can plant the name beforehand;
-/// a name that is taken anyway is never reused.
-fn create_temp_file(path: &Path) -> io::Result<(PathBuf, fs::File)> {
-    let mut last = None;
-    for _ in 0..8 {
-        let mut random = [0u8; 8];
-        getrandom::fill(&mut random).map_err(|e| io::Error::other(e.to_string()))?;
-        let hex: String = random.iter().map(|b| format!("{b:02x}")).collect();
-        let tmp = with_suffix(path, &format!(".{hex}.tmp"));
-        match create_new_private_file(&tmp) {
-            Ok(file) => return Ok((tmp, file)),
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => last = Some(e),
-            Err(e) => return Err(e),
-        }
-    }
-    Err(last.unwrap_or_else(|| io::Error::other("no free temp file name")))
-}
-
-/// Unix: flushes the folder entry of the rename to disk. Elsewhere nothing to do.
-fn sync_dir(dir: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        fs::File::open(dir)?.sync_all()?;
-    }
-    #[cfg(not(unix))]
-    let _ = dir;
-    Ok(())
-}
-
+/// Writes `bytes` to `path` through `fernjo_fs::write_atomic` with the data-file options:
+/// missing folders created private, a random `<file>.<16 hex>.tmp` (the name
+/// [`sweep_stale_temp_files`] looks for), owner-only modes on Unix, the previous file kept as
+/// `.bak` (never written through a symlink at that name), rename, folder sync on Unix.
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
-    if let Some(dir) = dir {
-        create_private_dir_all(dir)?;
-    }
-    let (tmp, mut file) = create_temp_file(path)?;
-    let result = (|| -> io::Result<()> {
-        file.write_all(bytes)?;
-        file.flush()?;
-        file.sync_all()?;
-        drop(file);
-        if path.exists() {
-            let bak = with_suffix(path, ".bak");
-            fs::copy(path, &bak)?;
-            owner_only(&bak)?;
-        }
-        fs::rename(&tmp, path)
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&tmp);
-        return result;
-    }
-    // the file is in place; a failed folder sync must not report the save as failed
-    if let Some(dir) = dir {
-        let _ = sync_dir(dir);
-    }
-    result
+    fernjo_fs::write_atomic(path, bytes, fernjo_fs::WriteOptions::data_file())
 }
 
 #[cfg(test)]
@@ -1142,11 +1046,12 @@ mod tests {
     use secrecy::SecretString;
     use tempfile::TempDir;
 
+    use fernjo_fs::with_suffix;
+
     use crate::format::{
         HEADER_LEN, MAX_FILE_LEN, OFF_KDF_ITERATIONS, OFF_KDF_MEMORY, OFF_KDF_PARALLELISM,
         OFF_VERSION, read_capped,
     };
-    use crate::vault::{with_suffix, write_atomic};
     use crate::{DataKey, FILE_NAME, KdfParams, Vault, VaultError};
 
     const PW: &str = "correct horse battery";
@@ -1406,19 +1311,27 @@ mod tests {
         reopened.unlock(&secret(PW)).unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
-    fn write_atomic_uses_a_fresh_temp_name_and_leaves_none_behind() {
+    fn a_symlink_at_the_vault_bak_is_not_followed() {
         let dir = TempDir::new().unwrap();
-        let path = dir.path().join("file.bin");
-        write_atomic(&path, b"one").unwrap();
-        write_atomic(&path, b"two").unwrap();
-        assert_eq!(fs::read(&path).unwrap(), b"two");
-        let mut names: Vec<_> = fs::read_dir(dir.path())
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-        names.sort();
-        assert_eq!(names, ["file.bin", "file.bin.bak"]);
+        let (mut vault, path) = new_vault(&dir);
+        let victim = dir.path().join("victim");
+        fs::write(&victim, b"victim data").unwrap();
+        // a sync tool (or another local user) planted a link at the backup name
+        std::os::unix::fs::symlink(&victim, bak(&path)).unwrap();
+        let before = fs::read(&path).unwrap();
+        vault.save().unwrap();
+        assert_eq!(
+            fs::read(&victim).unwrap(),
+            b"victim data",
+            "target untouched"
+        );
+        let meta = fs::symlink_metadata(bak(&path)).unwrap();
+        assert!(meta.file_type().is_file(), "the link was replaced");
+        assert_eq!(fs::read(bak(&path)).unwrap(), before);
+        let mut reopened = Vault::open(&path).unwrap().unwrap();
+        reopened.unlock(&secret(PW)).unwrap();
     }
 
     #[test]
@@ -1513,7 +1426,8 @@ mod tests {
     }
 
     #[test]
-    fn read_capped_accepts_up_to_the_cap_and_refuses_one_byte_more() {
+    fn read_capped_names_the_cap_in_the_oversize_text_and_keeps_not_found() {
+        // the cap itself is tested in fernjo-fs; this guards the vault's visible text
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("f");
         fs::write(&path, [7u8; 10]).unwrap();

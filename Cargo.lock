@@ -1788,7 +1788,7 @@ dependencies = [
 name = "fernjo-rdp"
 version = "0.2.0"
 dependencies = [
- "getrandom 0.4.3",
+ "fernjo-fs",
  "ironrdp-cliprdr",
  "ironrdp-connector",
  "ironrdp-core",
@@ -1817,7 +1817,7 @@ name = "fernjo-ssh"
 version = "0.2.0"
 dependencies = [
  "data-encoding",
- "getrandom 0.4.3",
+ "fernjo-fs",
  "hmac 0.13.0",
  "russh",
  "secrecy",
@@ -1860,6 +1860,7 @@ version = "0.2.0"
 dependencies = [
  "argon2",
  "chacha20poly1305",
+ "fernjo-fs",
  "getrandom 0.4.3",
  "keyring",
  "keyring-core",

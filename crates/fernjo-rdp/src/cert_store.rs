@@ -1,8 +1,6 @@
 //! Server certificates this device has accepted, pinned per `host:port`.
 
-use std::ffi::OsString;
-use std::fs;
-use std::io::{self, Read, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -161,127 +159,15 @@ fn stored_fingerprint<'a>(text: &'a str, key: &str) -> Option<&'a str> {
 
 /// Reads `path`, refusing a file above [`MAX_FILE_LEN`] (checked before and while reading).
 fn read_capped(path: &Path) -> io::Result<Vec<u8>> {
-    let too_large = || io::Error::new(io::ErrorKind::InvalidData, "the file is too large");
-    let file = fs::File::open(path)?;
-    if file.metadata()?.len() > MAX_FILE_LEN {
-        return Err(too_large());
-    }
-    let mut bytes = Vec::new();
-    file.take(MAX_FILE_LEN + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_FILE_LEN {
-        return Err(too_large());
-    }
-    Ok(bytes)
+    fernjo_fs::read_capped(path, MAX_FILE_LEN)
 }
 
-fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
-    let mut name: OsString = path.as_os_str().to_owned();
-    name.push(suffix);
-    PathBuf::from(name)
-}
-
-/// Creates a new file (`create_new`: never an existing file, never through a symlink at that
-/// name) readable and writable by its owner only on Unix (mode 0600); elsewhere the folder's
-/// inherited ACL applies.
-fn create_new_private_file(path: &Path) -> io::Result<fs::File> {
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    options.open(path)
-}
-
-/// A temp file next to `path` under a random name, so nobody can plant the name beforehand; a
-/// name that is taken anyway is never reused. (Same approach as the SSH known hosts writer; this
-/// crate does not depend on `fernjo-vault` or `fernjo-ssh`, so the few lines are repeated.)
-fn create_temp_file(path: &Path) -> io::Result<(PathBuf, fs::File)> {
-    let mut last = None;
-    for _ in 0..8 {
-        let mut random = [0u8; 8];
-        getrandom::fill(&mut random).map_err(|e| io::Error::other(e.to_string()))?;
-        let hex: String = random.iter().map(|b| format!("{b:02x}")).collect();
-        let tmp = with_suffix(path, &format!(".{hex}.tmp"));
-        match create_new_private_file(&tmp) {
-            Ok(file) => return Ok((tmp, file)),
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => last = Some(e),
-            Err(e) => return Err(e),
-        }
-    }
-    Err(last.unwrap_or_else(|| io::Error::other("no free temp file name")))
-}
-
-/// Unix: flushes the folder entry of the rename to disk. Elsewhere nothing to do.
-fn sync_dir(dir: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        fs::File::open(dir)?.sync_all()?;
-    }
-    #[cfg(not(unix))]
-    let _ = dir;
-    Ok(())
-}
-
-/// Creates `dir` and its missing parents; on Unix with mode 0700 (folders that already exist
-/// keep theirs).
-fn create_private_dir_all(dir: &Path) -> io::Result<()> {
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder.create(dir)
-}
-
-/// Unix: mode 0600. Other platforms: no change.
-fn owner_only(path: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-    }
-    #[cfg(not(unix))]
-    let _ = path;
-    Ok(())
-}
-
-/// Random-named temp file next to `path`, `sync_all`, current file copied to `.bak`, rename over
-/// `path`, folder sync on Unix.
+/// Writes through `fernjo_fs::write_atomic` with the data-file options: missing folders created
+/// private, a random-named temp file, owner-only modes on Unix, the previous file kept as `.bak`
+/// (never written through a symlink at that name), rename, folder sync on Unix.
 fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), RdpError> {
-    let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
-    let mut tmp: Option<PathBuf> = None;
-    let result = (|| -> io::Result<()> {
-        if let Some(dir) = dir {
-            create_private_dir_all(dir)?;
-        }
-        let (name, mut file) = create_temp_file(path)?;
-        let name = tmp.insert(name);
-        file.write_all(contents)?;
-        file.flush()?;
-        file.sync_all()?;
-        drop(file);
-        if path.exists() {
-            let bak = with_suffix(path, ".bak");
-            fs::copy(path, &bak)?;
-            owner_only(&bak)?;
-        }
-        fs::rename(&*name, path)
-    })();
-    if result.is_err() {
-        if let Some(tmp) = &tmp {
-            let _ = fs::remove_file(tmp);
-        }
-        return Err(RdpError::Io);
-    }
-    // the file is in place; a failed folder sync must not report the write as failed
-    if let Some(dir) = dir {
-        let _ = sync_dir(dir);
-    }
-    Ok(())
+    fernjo_fs::write_atomic(path, contents, fernjo_fs::WriteOptions::data_file())
+        .map_err(|_| RdpError::Io)
 }
 
 #[cfg(test)]
