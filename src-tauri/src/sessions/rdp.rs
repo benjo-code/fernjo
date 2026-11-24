@@ -11,8 +11,8 @@ use std::sync::Arc;
 use fernjo_core::RdpResolution;
 use fernjo_rdp::{
     CertChangedDecision, CertChangedPrompt, CertDecision, CertPrompt, CertStore, CloseReason,
-    ConnectParams, Framebuffer, InputEvent, Interaction, MAX_DESKTOP_DIMENSION, MAX_INPUT_EVENTS,
-    Rect, Session, SessionEvent,
+    ConnectParams, Framebuffer, InputEvent, Interaction, MAX_DESKTOP_DIMENSION, MAX_DESKTOP_PIXELS,
+    MAX_INPUT_EVENTS, Rect, Session, SessionEvent,
 };
 use secrecy::SecretString;
 use tokio::sync::mpsc::{Receiver, UnboundedReceiver, unbounded_channel};
@@ -39,18 +39,34 @@ const MIN_DIMENSION: u32 = 200;
 /// Bytes of a region message header.
 pub(crate) const HEADER_LEN: usize = 8;
 
-/// A desktop size the server can be asked for: both sides clamped to 200..=8192 and rounded down
-/// to an even number (some servers refuse an odd width). `None` for a zero side, which a hidden or
+/// A desktop size the server can be asked for: both sides clamped to 200..=8192, the area scaled
+/// down (keeping the aspect) to at most [`MAX_DESKTOP_PIXELS`], and each side rounded down to an
+/// even number (some servers refuse an odd width). `None` for a zero side, which a hidden or
 /// collapsed tab reports and which is never sent.
 pub(crate) fn desktop_size(width: u32, height: u32) -> Option<(u16, u16)> {
     if width == 0 || height == 0 {
         return None;
     }
-    let side = |v: u32| {
-        let even = v.clamp(MIN_DIMENSION, u32::from(MAX_DESKTOP_DIMENSION)) & !1;
-        u16::try_from(even).unwrap_or(MAX_DESKTOP_DIMENSION)
-    };
-    Some((side(width), side(height)))
+    let clamp = |v: u32| v.clamp(MIN_DIMENSION, u32::from(MAX_DESKTOP_DIMENSION));
+    let (mut w, mut h) = (clamp(width), clamp(height));
+    let limit = u64::from(MAX_DESKTOP_PIXELS);
+    if u64::from(w) * u64::from(h) > limit {
+        // both sides are in 200..=8192 here, so the area is finite and the factor in (0, 1)
+        let scale = (limit as f64 / (f64::from(w) * f64::from(h))).sqrt();
+        w = clamp((f64::from(w) * scale) as u32);
+        h = clamp((f64::from(h) * scale) as u32);
+    }
+    let even = |v: u32| u16::try_from(v & !1).unwrap_or(MAX_DESKTOP_DIMENSION);
+    let (mut w, mut h) = (even(w), even(h));
+    // the float rounding must never leave the area above the limit
+    while u64::from(w) * u64::from(h) > limit {
+        if w >= h {
+            w -= 2;
+        } else {
+            h -= 2;
+        }
+    }
+    Some((w, h))
 }
 
 /// The credit for region messages of a desktop of this size: sending stops once more than

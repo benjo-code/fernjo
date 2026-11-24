@@ -699,6 +699,11 @@ mod tests {
     const PASS: &str = "SENTINEL-passphrase-4d2e8f";
     // the hub secret typed into the sync commands
     const SYNC_SECRET: &str = "SENTINEL-hubsecret-3e8d52";
+    // The RDP user and domain are connection fields (shown in the UI, saved in connections.json), so
+    // they are not in SENTINELS; they must still stay out of every RDP command response, session
+    // event and Debug output of the connect plan and the state.
+    const RDP_USER: &str = "SENTINEL-RDP-USER";
+    const RDP_DOMAIN: &str = "SENTINEL-RDP-DOMAIN";
     const SENTINELS: [&str; 6] = [MASTER, NEW_MASTER, PW, KEY, PASS, SYNC_SECRET];
     // Import and export: the passwords inside the mRemoteNG fixtures (stored encrypted in the
     // files), the custom file key and the backup password.
@@ -1706,7 +1711,7 @@ mod tests {
         commands::update_node(
             &w.st,
             node,
-            patch(json!({"port": 1, "credential": w.pw_id, "domain": "SENTINEL-domain"})),
+            patch(json!({"port": 1, "credential": w.pw_id, "domain": RDP_DOMAIN, "username": RDP_USER})),
         )
         .unwrap();
         let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -2107,6 +2112,15 @@ mod tests {
                     }
                 } else {
                     assert_no_sentinel(&label, &out);
+                }
+                if name.starts_with("rdp_") {
+                    for s in [RDP_USER, RDP_DOMAIN] {
+                        assert!(!out.contains(s), "{label} leaked {s}: {out}");
+                        assert!(
+                            !format!("{:?}", w.st).contains(s),
+                            "AppState Debug after {label} leaked {s}"
+                        );
+                    }
                 }
                 // the saved tree, the Debug output of state and status never hold a secret
                 let tree = fs::read_to_string(w._dir.path().join(fernjo_core::FILE_NAME)).unwrap();

@@ -165,10 +165,40 @@ fn sizes_are_even_clamped_and_never_zero() {
     assert_eq!(desktop_size(1281, 801), Some((1280, 800)));
     assert_eq!(desktop_size(1920, 1080), Some((1920, 1080)));
     assert_eq!(desktop_size(10, 5), Some((200, 200)));
-    assert_eq!(desktop_size(100_000, 9000), Some((8192, 8192)));
+    assert_eq!(desktop_size(100_000, 200), Some((8192, 200)));
     assert_eq!(desktop_size(0, 800), None);
     assert_eq!(desktop_size(800, 0), None);
-    assert_eq!(desktop_size(u32::MAX, u32::MAX), Some((8192, 8192)));
+}
+
+#[test]
+fn desktop_size_scales_a_too_large_area_down_keeping_the_aspect() {
+    let (w, h) = desktop_size(8192, 8192).unwrap();
+    assert!(w % 2 == 0 && h % 2 == 0, "{w}x{h}");
+    assert!(
+        u32::from(w) * u32::from(h) <= fernjo_rdp::MAX_DESKTOP_PIXELS,
+        "{w}x{h}"
+    );
+    assert!(w.abs_diff(h) <= 2, "{w}x{h}");
+    assert!(w > 5000, "scaled down, not collapsed: {w}x{h}");
+    assert_eq!(desktop_size(3840, 2160), Some((3840, 2160)));
+    // the extremes: no overflow, every result even, in range and within the area
+    for (a, b) in [
+        (u32::MAX, u32::MAX),
+        (u32::MAX, 1),
+        (1, u32::MAX),
+        (100_000, 9000),
+        (8192, 4400),
+        (8192, 4321),
+        (1, 1),
+        (200, 200),
+    ] {
+        let (w, h) = desktop_size(a, b).unwrap();
+        assert!(w % 2 == 0 && h % 2 == 0 && (200..=8192).contains(&w) && (200..=8192).contains(&h));
+        assert!(
+            u32::from(w) * u32::from(h) <= fernjo_rdp::MAX_DESKTOP_PIXELS,
+            "{a}x{b} gave {w}x{h}"
+        );
+    }
 }
 
 #[test]
