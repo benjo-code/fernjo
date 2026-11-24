@@ -617,3 +617,118 @@ A restored tab that is still flagged `restored` shows no lamp in the tab strip (
 **Done:** (1) *Host key write order* (`TrustAlways` and `Replace` wrote `known_hosts` inside `check_server_key`): the decision is parked (`PendingTrust`; `TrustAction` is `Add`, `Replace` or `Confirm`, the last for a key already in `known_hosts` that only this device confirms) and `Session::connect` writes it through `apply_pending_trust` after the handshake succeeded; a failed handshake leaves both files unchanged. **Correction to the original finding:** russh 0.65.2 verifies the key-exchange signature before it calls `check_server_key`, so the old order did not accept an unproved key; the change is defence in depth that no longer depends on that library detail, and the `handler.rs` doc comments that said otherwise were corrected. A failed `known_hosts` write is still an `SshError`; the confirmed file stays best effort. The real `TrustAlways` flow after the handshake is covered by unit tests, not by the Docker integration tests. (2) *Unbounded session input queue*: `InputBudget` (`session_flow.rs`, `MAX_QUEUED_INPUT` 8 MiB) is reserved before an input op is queued (`Op::weight`: data bytes, RDP events times the event size, clipboard bytes; resize and close weigh 0) and released by the writer task for every handled op, on the stop paths and for ops dropped with the queue; over the cap the call answers `input_queue_full` and the session is untouched. (3) *Chords on non-Latin layouts*: `routeKey` falls back to the letter of `e.code` when `e.key` is not a Latin letter, so Ctrl+Shift chords work on, for example, a Cyrillic layout; plain Ctrl+letter still belongs to the shell. (4) *Ctrl+Shift+W with the vault view open* no longer closes a hidden tab (`tabToClose`).
 **Stayed in the backlog (block "Source: M4 review follow-ups", reduced to these):** `SshError` carries no source and the error mapping is coarse; `known_hosts` BOM, duplicate host in an entry and test gaps; the russh task and descriptor leak on a pre-key-exchange timeout; the `tauri_plugin_opener` init script; the agent test name; terminal `ResizeObserver` coalescing, incremental `findNext` and the 13 px search bar; the tab and prompt accessibility items; the cosmetic items. New from the M10 reviews: `Op::weight` counts payload only (a flood of 1-byte writes costs more memory than the cap suggests; a minimum weight would fix it) and `Resize` is unbounded; IME and dead keys (`key` "Dead" or "Process") with a letter `code` count as chord letters; with sync on a restore is pushed to the other devices (`note_local_edit`) and the restore confirmation does not say so; the unparseable auto-lock number input.
 **Rationale:** the real bugs and the cheap robust fixes go in; cosmetic and speculative items cost review time in M11, which reviews the whole.
+
+## 2026-11-24 – M11 threat model
+
+**Context:** the model so far is spread over "Webview hardening from day one", the M6 security entries and the M9 and M10 entries, and no single entry covers sync and the M10 features (quick connect, open tabs, vault auto-lock, Pageant, native paste) next to SSH and RDP. M11 (`Docs/superpowers/specs/2026-11-24-m11-hardening-security-design.md`, step 1) reviews everything in 0.3.0, and this entry is the reviewers' frame. It describes the code as it stood when M11 started (branch `feature/m11-hardening-security` before the M11 fixes), checked against the source, not copied from earlier entries. **Weak** or **missing** marks a protection that is thin or absent today; "M11 step 2/3" means the spec already plans a fix. Nothing here is a fix.
+**Decision:** the assets, adversaries, cells and trust assumptions below are the model for M11 and for later reviews. A change that moves a cell is recorded in a new entry.
+
+**Assets.**
+- *Vault secrets:* passwords, private keys and passphrases in `vault.fernjo` (and `.bak`), the master password, the data key and the decrypted entries in memory while unlocked, the auto-unlock keychain item.
+- *Sync key and hub secret:* one keychain item (`fernjo` / `sync-<group id>`), both inside the pairing code.
+- *`connections.json`* (and `.bak`): hosts, user names, credential references (vault ids), RDP settings including the clipboard switch. No secret, but its integrity decides where a credential is sent.
+- *`known_hosts`* (data folder, so it travels with a synced folder) and *`known_hosts.confirmed`* (device folder).
+- *RDP pins:* `rdp_certs.confirmed` (device folder).
+- *Device folder files:* `vault-marks.json` (rollback floor), `sync.json` (`lastSeq`), `sync-base.json` (the base snapshot: the tree in plain text and the vault file bytes), the two confirmed files, `appmenu-never`.
+- *`open-tabs.json`* (device folder): targets only (node ids; protocol, host, port and user of quick targets).
+- *The webview:* the page, its IPC access to every command, and `localStorage` (layout, selected node ids, theme).
+
+**Trust assumptions (accepted, not defended):**
+1. The device and the OS account fernjo runs under are trusted. Any process of the same user can read the keychain items, the device folder and the data folder, write `settings.json` (which names the data folder), delete `vault-marks.json` or `sync.json` (which removes the vault and hub rollback floors), and read process memory. fernjo defends against *other* local users and against the network, not against malware running as the user.
+2. A peer device in the sync group holds the sync key and the hub secret and is **trusted with the data**: it can read and rewrite the whole tree, and it holds the vault file, which only the master password protects from it.
+3. The hub is **not trusted with content**: it sees only the 34-byte header (group id, `seq`), sizes, times and client addresses. It can withhold, refuse, lose data, roll back (detected against `lastSeq`) and show different devices different histories (not detected). It cannot read or forge a head.
+4. The webview runs only fernjo's own bundle. A script that does run there holds the whole command set (it can answer prompts, connect, delete, re-seed, leave sync); the CSP, the navigation guard, text-only rendering and Rust-side validation are the barrier, not per-command checks.
+5. Three responses carry a secret by design: vault reveal, `sync_pairing_code`, and `clipboard_read_text` (the clipboard text, read without a user gesture).
+6. The pairing code is a secret and its integrity is the user's job: its checksum catches typos, not tampering.
+7. Trust on first use: the first SSH host key and the first RDP certificate of a host are decided by the person, and a server the person accepted receives the password of a password, keyboard-interactive or CredSSP login by protocol.
+8. Import files, backups and the data folder are chosen by the person; a backup restored with its password is trusted content.
+
+**Cells.** One table per adversary; assets the adversary cannot reach are listed under the table.
+
+*1. Hostile SSH server (or a machine in the path before its key is trusted)*
+
+| Asset | What it can do | What stops it | Accepted, weak or missing |
+|---|---|---|---|
+| Vault secrets | Receive the password of a password or keyboard-interactive login; get a signature bound to its own session from a key or the agent; ask for up to 5 keyboard-interactive rounds. | Host key decided before any authentication (`check_server_key` in `crates/fernjo-ssh/src/handler.rs`: unknown asks, changed asks with the old fingerprints, a key found only in the synced `known_hosts` asks through `HostKeySynced`); russh verifies the key-exchange signature first; algorithm policy (M6); at most 6 authentication attempts (`auth_plan.rs`); `MAX_KI_ROUNDS` 5 and capped prompt text (`cap_ki_round` in `sessions.rs`); no agent, X11 or port forwarding is requested. | Accepted: trust on first use, and a password sent to an accepted server. **Weak, found while writing:** fernjo's `client::Handler` does not override russh 0.65.1's `server_channel_open_*` defaults, which *accept* server-opened `session`, `x11`, `agent_forward`, `forwarded_tcpip` and `direct_tcpip` channels; nothing is wired to them (the agent is not reachable through them), but whether they can hold memory or confuse the session is unchecked (reviewer 2). |
+| `known_hosts`, `known_hosts.confirmed` | Get its key written when the person picks "Trust always". | Written only after the handshake (`PendingTrust`, `apply_pending_trust`); host names pass `validate_host` inside `host_port`. | Accepted: a host trusted from quick connect lands in the synced `known_hosts` (its name travels with a synced folder). |
+| The webview | Send any byte stream to xterm.js; show links; end the session with any exit status. | xterm renders text only, OSC 52 clipboard writes are not enabled (no clipboard addon); a clicked link goes through `open_external_url`, which allows only `http`/`https` and opens the parsed URL; output flow control is ack-based (`session_flow.rs`); a session counts as ended cleanly only with exit status 0 after at least 5 s (`classify_end`), so a failed login never closes unread. | Accepted: any `http(s)` link in output opens on a plain click. **Weak (known leftover):** a russh session task and its descriptor leak on a pre-key-exchange timeout. |
+
+Not reachable: `connections.json`, RDP pins, sync key and hub secret, `open-tabs.json`, other device folder files.
+
+*2. Hostile RDP server (or a machine in the path before its certificate is pinned)*
+
+| Asset | What it can do | What stops it | Accepted, weak or missing |
+|---|---|---|---|
+| Vault secrets | Receive user, domain and password through CredSSP once its certificate is accepted. | Order in `crates/fernjo-rdp/src/connect.rs`: TLS with the handshake signature checked against the certificate's key (`upgrade_with_certificate_validation_callback_for_endpoint`; chain and name are not checked, the pin decides), then the certificate decision against `CertStore`, and only then the credential prompts and CredSSP. | Accepted: trust on first use. Accepted API limit: IronRDP keeps the password in a plain `String`. Today some legitimate hosts fail with the generic `tls_failed` (M11 step 3 replaces the verifier). |
+| Local clipboard (via the webview) | With clipboard sharing on, read the local clipboard (the UI sends it whenever the remote view gets focus or a paste chord is used) and write text into it. | Clipboard off for quick connect; text capped at `MAX_CLIPBOARD_BYTES` (1 MiB) after reassembly, both ways. | Accepted by the owner (2026-11-24): on by default for saved connections; M11 step 3 adds a visible marker. **Missing (M11 step 3):** no cap of fernjo's own on a static or dynamic channel message before it is reassembled (`stage.process` in `crates/fernjo-rdp/src/session.rs`), so a server can announce a huge clipboard message. |
+| The app process | Send bitmaps, desktop sizes and channel data; stop reading. | Desktop size checked (`desktop_too_large`); input queue capped by `InputBudget` (8 MiB). | **Missing (M11 step 3):** `writer.write_all` in the session loop has no timeout and the `ops` channel in `src-tauri/src/sessions/rdp.rs` is unbounded, so a server that stops reading keeps a closing session alive. **Weak (known leftover):** `Resize` ops weigh 0 and every op weighs only its payload. |
+| RDP pins | Get its certificate pinned on "Trust always". | Pin is per host and port in the device folder. | Accepted: trust on first use. |
+
+Not reachable: `connections.json`, `known_hosts`, sync key and hub secret, `open-tabs.json`.
+
+*3. Hostile hub, or the network path to it*
+
+| Asset | What it can do | What stops it | Accepted, weak or missing |
+|---|---|---|---|
+| Sync key and hub secret | Learn the hub secret (it is the bearer token of every request). | The sync key never leaves the device; the hub stores only the SHA-256 of the secret (`config.json`, constant-time compare in `crates/fernjo-hub/src/server.rs`). The path: HTTPS only (plain `http` only to literal loopback), no redirects, system roots or the one pinned CA from the pairing code (`crates/fernjo-sync/src/client.rs`). | Accepted: the hub secret only grants hub access. |
+| `connections.json`, vault file (content) | Nothing readable: the envelope is XChaCha20-Poly1305 under an HKDF key from the sync key, with magic, version, group and `seq` as associated data (`envelope.rs`). | `open_head` in `engine.rs` checks tag, group, `seq` against the ETag and the snapshot, at most 100 000 nodes, depth 60, and a vault part that parses within the KDF cap; responses read in bounded steps (64 MiB), 3 s connect and 20 s total timeout. | Accepted: metadata (sizes, times, addresses, group id, `seq`). |
+| Freshness | Withhold the newest head, show an old one, empty itself, show different devices different histories, answer `412` or garbage forever. | A head below `lastSeq` or an empty hub after a sync is refused (`hub_rolled_back`, nothing written); vault heads below the device's generation mark are refused (`rolled_back`); at most 5 attempts per run. | Accepted (M9): withholding and forked histories are not detected; a garbage head stops sync until re-seed. |
+| The hub host itself | — | Rootless Podman, read-only root file system, no capabilities, the unit publishes `127.0.0.1:8787` by default behind Caddy; auth is checked before a `PUT` body is read; 64 MiB cap per body. | **Weak:** the hub has no request timeout or connection limit of its own (it relies on Caddy and the home network); several authenticated 64 MiB uploads are buffered in memory at once. |
+
+Not reachable: `known_hosts`, RDP pins, `open-tabs.json`, the webview (sync status carries codes and counts, not hub text).
+
+*4. Hostile peer device in the sync group (a lost or compromised device; it holds the sync key and the hub secret)*
+
+| Asset | What it can do | What stops it | Accepted, weak or missing |
+|---|---|---|---|
+| `connections.json` | Push any valid tree: rewrite a saved connection's host while its credential reference stays, switch the RDP clipboard on for a folder, delete nodes (C5), re-seed the hub. | Snapshot validation (schema, depth 60, 100 000 nodes); an edit beats a delete (C6); a redirected host is a new host to this device, so the host key or certificate prompt comes before any credential is sent; ten history envelopes on the hub, the local `.bak`, encrypted backups. | Accepted (assumption 2). **Weak:** nothing ties a credential to a host, so a swap between two hosts this device already trusts sends one host's password to the other without a prompt; field lengths in a snapshot are bounded only by the 64 MiB envelope. |
+| Vault secrets | Hold the vault file (offline guessing against Argon2id); replace this device's vault with another vault's file when only one side changed it (V1, the replaced vault ends locked); change the master password (V3, notice `passwordChangeDropped`). | Master password and Argon2id; KDF cap; generation marks, `adopt_file` and `adopt_merged` never lower a mark; the vault `.bak`. | Accepted: a peer that knows the master password reads everything. **Weak:** the sync key is not rotated in version 1, so a lost device keeps the ability to decrypt any envelope it obtains later; `rotate-secret` only locks it out of the hub. |
+| Device folder files | Its snapshot becomes `sync-base.json`. | Same validation as above; the file holds no secret beyond the encrypted vault bytes. | — |
+
+Not reachable: `known_hosts`, `known_hosts.confirmed`, RDP pins, `open-tabs.json`, `settings.json`.
+
+*5. Writer of the synced data folder (a sync tool, or another device through it)*
+
+| Asset | What it can do | What stops it | Accepted, weak or missing |
+|---|---|---|---|
+| `connections.json` | Replace it with any valid tree (as a peer can); plant `connections.json.tmp` or `connections.json.bak` as a symlink. | Fingerprint check before every save (`changed_on_disk`); capped reads (64 MiB); depth 60; reload is a click. | **Weak (M11 step 2):** `persist::write_atomic` (`crates/fernjo-core/src/persist.rs`) opens a *fixed* `<file>.tmp` with create and truncate and copies the old file to `.bak` with `fs::copy`; both follow a planted symlink, so fernjo overwrites the link's target with the tree JSON (the same writer serves `settings.json`, which sits in the default data folder; `write_exact`, used for exports, keeps a fixed temp name too). |
+| Vault secrets | Replace `vault.fernjo` with an older, foreign or oversized file; plant `vault.fernjo.bak` as a symlink. | Header guard on save (`changed_on_disk`), rollback marks in the device folder (`rolled_back`), KDF cap, 64 MiB cap, an unreadable file makes the vault `Unusable` and untouched; random `create_new` temp names. | **Weak (M11 step 2):** the `.bak` is written with `fs::copy`, which follows a symlink at `vault.fernjo.bak` (same pattern in `known_hosts`, `CertStore` and the other writer copies). |
+| `known_hosts` | Add, remove or change keys. | A key only in `known_hosts` is trusted silently only when `known_hosts.confirmed` (device folder) has it; otherwise `HostKeySynced` asks and shows the earlier fingerprints. | Accepted: the person decides that prompt. Same `.bak` symlink weakness as above. |
+
+Not reachable: RDP pins, `open-tabs.json`, device folder files, sync key and hub secret (`choose_data_folder` refuses a data folder that contains the device folder or lies inside it, `folder_device_dir`; a scratch `FERNJO_DATA_DIR` run keeps its `.device` folder inside, by design for tests).
+
+*6. Hostile import or backup file*
+
+| Asset | What it can do | What stops it | Accepted, weak or missing |
+|---|---|---|---|
+| The app process | Make parsing or key derivation expensive. | mRemoteNG: byte scan before `roxmltree` (attributes, `xmlns` names), 59 container levels, PBKDF2 budget, string caps (`mremoteng/file.rs`); backups: `open_with_password` validates the KDF cost against the cap before Argon2. | — |
+| `connections.json` | Add nodes with any host and odd text. | JSON import drops credential references and gives fresh ids; depth 60; `sanitize_nodes` (JSON and backup imports) caps and cleans names, descriptions and hosts. | **Missing (M11 step 3):** `sanitize_nodes` does not cap or clean `settings.username`; `settings.domain` is not cleaned either (not in the M11 plan). |
+| Vault secrets | A restored backup replaces the vault and the tree. | The backup password, a confirmation, plan-then-apply (`restore_incomplete`). | Accepted (assumption 8). With sync on, the restore is pushed to every device and the confirmation does not say so (known leftover, wording fix in M11 step 3). |
+
+Not reachable: `known_hosts`, RDP pins, device folder files, sync key and hub secret.
+
+*7. Script in the webview (only if one ever runs: a bundle or dependency compromise, or an injection bug)*
+
+| Asset | What it can do | What stops it | Accepted, weak or missing |
+|---|---|---|---|
+| Vault secrets | Call vault reveal while the vault is unlocked; keep it unlocked forever by calling `note_activity`. | Secrets reach the webview only through reveal; reveal needs an unlocked vault. | Accepted (assumptions 4 and 5). **Weak (known leftover):** the idle-lock thread has no `catch_unwind`, so a panic there stops the auto-lock silently. |
+| Sync key and hub secret | Call `sync_pairing_code`. | Nothing beyond assumption 4. | **Weak:** `sync_pairing_code` needs no unlocked vault and no other proof, so it hands over the sync key whenever sync is set up. |
+| Local clipboard | Read it with `clipboard_read_text`, no gesture. | 1 MiB cap. | Accepted by design (M10). **Weak (known leftover):** the `arboard` read has no timeout. |
+| `connections.json`, `known_hosts`, RDP pins, `open-tabs.json` | Change or delete anything; answer host key and certificate prompts; open sessions to any valid host (quick connect, with the agent); leave or re-seed sync. | Rust validates every input (`validate_quick`, `validate_host`, `TargetView`, `MAX_TABS`, tree rules); no file path from the webview reaches a writer (paths come from native dialogs; `FERNJO_DIALOG_FILE` only in debug builds). | Accepted (assumption 4). |
+| Leaking what it read | Send it out. | CSP `default-src 'self'` with `connect-src` only for IPC, no `unsafe-eval`; nav guard; text-only rendering (no `{@html}` or `innerHTML` in `ui/src`); `localStorage` holds no secret. | **Weak:** `open_external_url` opens any `http(s)` URL in the default browser, and WebView2 sends one blind GET for a cancelled top-level navigation, so a script can put what it read into a URL. `tauri_plugin_opener::init()` injects an init script (known leftover). |
+
+Not reachable directly: device folder files (only through commands).
+
+*8. Another local user on the same machine (not an administrator)*
+
+| Asset | What it can do | What stops it | Accepted, weak or missing |
+|---|---|---|---|
+| Vault secrets, sync key and hub secret | — | Keychain items are per user (Windows item with `Local` persistence); the vault file is encrypted. | — |
+| Data folder files | Read or plant files where the folder lets it. | Unix: files 0600, folders created 0700; Windows: the inherited ACL of the folder (`%APPDATA%` is per user). | **Weak:** on Windows fernjo sets no ACL of its own, and on Unix an already existing folder keeps its mode, so a data folder chosen in a shared place is as open as that place. |
+| Device folder files, `open-tabs.json`, RDP pins | — | Per-user `%LOCALAPPDATA%` / XDG data dir; 0600 on Unix. | — |
+| SSH agent | Squat the OpenSSH pipe name (`\\.\pipe\openssh-ssh-agent`) or answer as Pageant while the real agent is not running. | Nothing in fernjo's `agent::connect` (`crates/fernjo-ssh/src/agent.rs` connects by name); whether russh's pipe and Pageant clients check who serves them is unchecked. Such an agent never gets the user's keys; it sees the sign requests (user name, server session) and can offer its own keys. | Open question for reviewer 2. |
+| The webview | Attach to the DevTools port. | The port exists only when `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` sets it (the debugging recipe); it listens on loopback, which other local users can reach. | Accepted for debugging runs only. |
+| The hub host | Read the volume. | Rootless Podman volume owned by the hub user; `config.json` holds a hash; envelopes are encrypted. | — |
+
+**Rationale:** one table per adversary keeps each reviewer's question ("what can this attacker reach, and what is in the way?") on one screen, and naming the weak cells avoids reviewers re-deriving them or assuming protections that do not exist.
+**Rejected alternatives:** one assets-by-adversaries grid (72 cells, too wide to read); describing only the M9 and M10 additions (the reviewers review all of 0.3.0).

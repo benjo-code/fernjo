@@ -37,7 +37,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 | – | **Release `v0.2.0`** – RDP (M8) | – | ✅ done | – | 2026-11-22 |
 | 9 | Multi-device sync | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-22-milestone-09-multi-device-sync.md) | 2026-11-23 |
 | 10 | Daily-use features | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-23-milestone-10-daily-use-features.md) | 2026-11-24 |
-| 11 | Full hardening and security check | 1 – fernjo app | 🟡 planned | [Plan](superpowers/plans/2026-11-24-milestone-11-hardening-security.md) | – |
+| 11 | Full hardening and security check | 1 – fernjo app | 🔵 in progress | [Plan](superpowers/plans/2026-11-24-milestone-11-hardening-security.md) | – |
 | – | **Release `v0.3.0`** – Sync, daily-use features and security check (M9 to M11) | – | ⬜ open | – | – |
 
 ## Scope changes
@@ -557,7 +557,7 @@ Not run: the owner has not tried the features yet. The manual criterion stays op
 Done in M10: host key write order (defence in depth, russh already verified the signature first), the session input queue cap, layout-independent chords and Ctrl+Shift+W with the vault view open. Stayed: the backlog items "M4 review follow-ups (remaining)" and "M10 review leftovers", and `Docs/DECISIONS.md`, "M10 M4 follow-ups: what was done, what stayed in the backlog".
 
 ## Milestone 11 – Full hardening and security check
-**Status:** 🟡 planned · **Plan:** [2026-11-24-milestone-11-hardening-security.md](superpowers/plans/2026-11-24-milestone-11-hardening-security.md) · **Prerequisites:** M9, M10
+**Status:** 🔵 in progress · **Plan:** [2026-11-24-milestone-11-hardening-security.md](superpowers/plans/2026-11-24-milestone-11-hardening-security.md) · **Prerequisites:** M9, M10
 
 Goal: Everything in 0.3.0, including the sync of M9 and the features of M10, gets an independent security review and a hardening pass, and every finding is fixed or consciously accepted by the owner before the release.
 
