@@ -5,7 +5,14 @@
 //! (like `reveal_credential`); nothing here ever puts clipboard content into an error, a log or
 //! a `Debug` output.
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use crate::commands::CommandError;
+
+/// How long a paste waits for the OS clipboard. A clipboard owner that never answers (a hung
+/// application, a stuck Wayland data source) must not hang the paste.
+pub const CLIPBOARD_READ_LIMIT: Duration = Duration::from_secs(2);
 
 /// Largest text a paste returns. A bigger clipboard is refused, not cut: half a paste into a
 /// shell is worse than none.
@@ -52,16 +59,33 @@ pub fn clipboard_read_text(clip: &dyn ClipboardText) -> Result<String, CommandEr
     Ok(text)
 }
 
+/// Runs the blocking read off the async executor and gives up after `limit`: the answer is the
+/// fixed `clipboard_unavailable` error, never content. A read that really hangs keeps its
+/// blocking thread until the OS call returns (bounded per paste, nothing waits for it).
+pub async fn read_with_limit(
+    clip: Arc<dyn ClipboardText + Send + Sync>,
+    limit: Duration,
+) -> Result<String, CommandError> {
+    let unavailable = || error("clipboard_unavailable", "The clipboard could not be read.");
+    let read = tokio::task::spawn_blocking(move || clipboard_read_text(&*clip));
+    match tokio::time::timeout(limit, read).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) | Err(_) => Err(unavailable()),
+    }
+}
+
 pub mod handlers {
     use crate::commands::CommandError;
 
-    /// A plain `async fn` command runs off the main thread; the read itself is a short blocking
-    /// call, so it goes through `spawn_blocking`.
+    /// A plain `async fn` command runs off the main thread; the read is a blocking call with a
+    /// time limit (`read_with_limit`).
     #[tauri::command]
     pub async fn clipboard_read_text() -> Result<String, CommandError> {
-        tauri::async_runtime::spawn_blocking(|| super::clipboard_read_text(&super::OsClipboard))
-            .await
-            .map_err(|_| CommandError::internal())?
+        super::read_with_limit(
+            std::sync::Arc::new(super::OsClipboard),
+            super::CLIPBOARD_READ_LIMIT,
+        )
+        .await
     }
 }
 
@@ -100,6 +124,32 @@ mod tests {
     fn an_unavailable_clipboard_is_clipboard_unavailable() {
         let err = clipboard_read_text(&Fake(Err("no display".into()))).unwrap_err();
         assert_eq!(err.code, "clipboard_unavailable");
+    }
+
+    struct Hanging;
+    impl ClipboardText for Hanging {
+        fn read_text(&self) -> Result<String, String> {
+            std::thread::sleep(Duration::from_millis(600));
+            Ok("SENTINEL-late".into())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_clipboard_read_that_hangs_ends_with_clipboard_unavailable() {
+        let err = read_with_limit(Arc::new(Hanging), Duration::from_millis(50))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, "clipboard_unavailable");
+        assert!(!err.message.contains("SENTINEL"));
+        assert!(!format!("{err:?}").contains("SENTINEL"));
+    }
+
+    #[tokio::test]
+    async fn a_prompt_read_passes_through_read_with_limit() {
+        let got = read_with_limit(Arc::new(Fake(Ok("hi".into()))), CLIPBOARD_READ_LIMIT)
+            .await
+            .unwrap();
+        assert_eq!(got, "hi");
     }
 
     #[test]

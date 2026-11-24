@@ -87,6 +87,17 @@ pub fn tick(state: &AppState, now: Instant, wall: SystemTime) -> Option<VaultSta
     vault_commands::vault_lock(state).ok()
 }
 
+/// Runs `f` and turns a panic into `None`, so one bad tick cannot end the idle thread (a dead
+/// thread would silently stop the auto-lock for the rest of the run).
+fn guarded<T>(f: impl FnOnce() -> Option<T>) -> Option<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or(None)
+}
+
+/// [`tick`] behind a panic guard.
+pub fn run_tick(state: &AppState, now: Instant, wall: SystemTime) -> Option<VaultStatus> {
+    guarded(|| tick(state, now, wall))
+}
+
 /// Starts the idle thread. It needs no secret and runs for the life of the app.
 pub fn spawn(app: AppHandle) {
     let _ = std::thread::Builder::new()
@@ -95,7 +106,7 @@ pub fn spawn(app: AppHandle) {
             loop {
                 std::thread::sleep(TICK);
                 let state = app.state::<AppState>();
-                if let Some(status) = tick(&state, Instant::now(), SystemTime::now()) {
+                if let Some(status) = run_tick(&state, Instant::now(), SystemTime::now()) {
                     let _ = app.emit("vault-status", status);
                 }
             }
@@ -192,6 +203,26 @@ mod tests {
         assert!(!tracker.is_due(now, wall, Some(15)));
         assert!(!tracker.is_due(now + 14 * MIN, wall + 14 * MIN, Some(15)));
         assert!(tracker.is_due(now + 15 * MIN, wall + 15 * MIN, Some(15)));
+    }
+
+    #[test]
+    fn a_panicking_tick_does_not_end_the_idle_loop() {
+        // the first tick panics: the guard turns it into None instead of unwinding the thread
+        let hushed = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let first = guarded::<VaultStatus>(|| panic!("tick failed"));
+        std::panic::set_hook(hushed);
+        assert!(first.is_none());
+        // the next tick runs and locks as usual
+        let dir = tempfile::tempdir().unwrap();
+        let st = AppState::open(Some(dir.path().to_path_buf()));
+        vault_commands::vault_create(&st, secrecy::SecretString::from("a master password"), false)
+            .unwrap();
+        *st.vault_auto_lock_minutes.lock().unwrap() = Some(5);
+        let (t0, w0) = start();
+        st.idle.note(t0, w0);
+        let status = run_tick(&st, t0 + 5 * MIN, w0 + 5 * MIN).expect("locks");
+        assert_eq!(status.state, "locked");
     }
 
     #[test]

@@ -45,7 +45,13 @@ pub fn run() {
         }))
         .plugin(nav_guard::plugin())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init())
+        .plugin(
+            // terminal links open through `open_external_url` in Rust; the plugin's JS
+            // click handler (opens any <a href> in the webview) is not wanted
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        )
         .manage(AppState::open_for_app(fernjo_core::locate()))
         // Linux AppImage: the compositor takes the title bar icon from an installed `.desktop`
         // entry, which an AppImage has none of; `app_menu` offers to write one (never without the
