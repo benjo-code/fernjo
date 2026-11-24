@@ -343,13 +343,38 @@ async fn an_unwritable_confirmed_file_does_not_stop_the_connect() {
     assert_eq!(status(&f.known, &key(ED_B)), HostKeyStatus::Known);
 }
 
+/// A `known_hosts` path that reads as "no file" (so the decision itself works) but cannot be
+/// written. Windows: a path below a regular file reads as not found. Unix: that is
+/// `NotADirectory` and would stop the decision, so the folder is read-only instead; `None`
+/// when the process can write there anyway (root).
+fn unwritable_known_hosts(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let ro = dir.join("readonly");
+        std::fs::create_dir(&ro).unwrap();
+        std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o555)).unwrap();
+        if std::fs::write(ro.join("probe"), b"x").is_ok() {
+            return None;
+        }
+        Some(ro.join("known_hosts"))
+    }
+    #[cfg(not(unix))]
+    {
+        let blocker = dir.join("blocker");
+        std::fs::write(&blocker, b"x").unwrap();
+        Some(blocker.join("known_hosts"))
+    }
+}
+
 #[tokio::test]
 async fn an_unwritable_known_hosts_fails_when_the_trust_is_applied() {
     let f = fixture();
-    let blocker = f.dir.path().join("blocker");
-    std::fs::write(&blocker, b"x").unwrap();
+    let Some(path) = unwritable_known_hosts(f.dir.path()) else {
+        return; // running as root: a read-only folder does not stop the write
+    };
     let (h, _) = handler(
-        &blocker.join("known_hosts"),
+        &path,
         Some(KnownHosts::new(&f.confirmed)),
         Script::default().unknown(HostKeyDecision::TrustAlways),
     );
