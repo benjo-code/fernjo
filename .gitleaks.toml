@@ -35,3 +35,11 @@ paths = [
 regexes = [
   '''(STORAGE_KEY|KEY) = "fernjo\.[A-Za-z0-9._-]+"''',
 ]
+
+# RDP TLS test certificates: private keys generated for the tests only (see the folder's README.md).
+[[allowlists]]
+description = "RDP TLS test-only private keys"
+targetRules = ["private-key"]
+paths = [
+  '''^crates/fernjo-rdp/tests/fixtures/[a-z0-9-]+\.key$''',
+]

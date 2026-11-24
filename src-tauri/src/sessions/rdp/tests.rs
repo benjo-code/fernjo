@@ -208,6 +208,21 @@ fn rdp_end_is_never_clean() {
     }
 }
 
+#[test]
+fn a_certificate_rustls_cannot_use_has_its_own_failure_text() {
+    // `run` reports a failed connect with the error's text; an unsupported certificate must not
+    // read like any other TLS failure
+    use fernjo_rdp::RdpError;
+    assert_eq!(
+        RdpError::CertificateUnsupported.to_string(),
+        "the server certificate is not supported"
+    );
+    assert_eq!(
+        RdpError::TlsFailed.to_string(),
+        "the secure connection to the server failed"
+    );
+}
+
 // ---------- the forwarder ----------
 
 fn spawn_forward(

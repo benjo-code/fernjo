@@ -17,7 +17,7 @@ use fernjo_rdp::{
     Session, SessionEvent,
 };
 use secrecy::SecretString;
-use support::{Behaviour, FakeServer, Script};
+use support::{Behaviour, FakeServer, Fixture, Script};
 
 type Connected = Result<(Session, tokio::sync::mpsc::Receiver<SessionEvent>), RdpError>;
 
@@ -89,6 +89,63 @@ async fn a_server_that_cannot_sign_for_its_certificate_fails_the_handshake_befor
     let script = Script::new(CertDecision::TrustAlways);
     let result = connect(params, &script).await;
     assert_eq!(code(&result), "tls_failed");
+    assert!(script.log().is_empty(), "{:?}", script.log());
+    assert_eq!(
+        certs
+            .check("127.0.0.1", server.addr.port(), &server.fingerprint)
+            .unwrap(),
+        CertCheck::Unknown
+    );
+}
+
+/// Connects to a server presenting `fixture`, rejects at the certificate decision and returns the
+/// result, the prompts and the server.
+async fn connect_with_fixture(fixture: Fixture) -> (&'static str, Vec<String>, FakeServer) {
+    let server = FakeServer::start(Behaviour::TlsWithCert(fixture)).await;
+    let script = Script::new(CertDecision::Reject);
+    let result = connect(server.params(), &script).await;
+    (code(&result), script.log(), server)
+}
+
+#[tokio::test]
+async fn a_windows_like_rsa_certificate_reaches_the_certificate_decision() {
+    // self-signed, no root store involved: the pin decides, as before
+    let (code, log, server) = connect_with_fixture(Fixture::Rsa2048Sha256).await;
+    assert_eq!(code, "certificate_rejected");
+    assert_eq!(
+        log,
+        vec![format!(
+            "certificate 127.0.0.1:{} {}",
+            server.addr.port(),
+            server.fingerprint
+        )]
+    );
+}
+
+#[tokio::test]
+async fn a_sha1_signed_certificate_reaches_the_certificate_decision() {
+    // the signature on the certificate is never checked (there is no chain to check it for); the
+    // handshake signature is made with the certificate's RSA key and is checked as always
+    let (code, log, server) = connect_with_fixture(Fixture::Rsa2048Sha1).await;
+    assert_eq!(code, "certificate_rejected");
+    assert_eq!(
+        log,
+        vec![format!(
+            "certificate 127.0.0.1:{} {}",
+            server.addr.port(),
+            server.fingerprint
+        )]
+    );
+}
+
+#[tokio::test]
+async fn a_certificate_webpki_cannot_parse_fails_with_certificate_unsupported_before_any_prompt() {
+    let server = FakeServer::start(Behaviour::TlsWithCert(Fixture::CriticalExtension)).await;
+    let params = server.params();
+    let certs = params.certs.clone();
+    let script = Script::new(CertDecision::TrustAlways);
+    let result = connect(params, &script).await;
+    assert_eq!(code(&result), "certificate_unsupported");
     assert!(script.log().is_empty(), "{:?}", script.log());
     assert_eq!(
         certs

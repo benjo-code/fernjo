@@ -14,6 +14,8 @@ src-tauri/gen/
 !.env.example
 *.pem
 *.key
+# the RDP TLS test certificates' keys are test data (crates/fernjo-rdp/tests/fixtures/README.md)
+!crates/fernjo-rdp/tests/fixtures/*.key
 id_rsa
 id_rsa.pub
 id_ed25519

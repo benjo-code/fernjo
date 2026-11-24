@@ -10,6 +10,7 @@ mod interaction;
 mod params;
 mod session;
 mod text_clipboard;
+mod tls;
 
 pub use cert_store::{CertCheck, CertStore};
 pub use clipboard::{MAX_CLIPBOARD_BYTES, from_remote, to_remote};

@@ -13,6 +13,8 @@ pub enum RdpError {
     AuthFailed,
     #[error("the secure connection to the server failed")]
     TlsFailed,
+    #[error("the server certificate is not supported")]
+    CertificateUnsupported,
     #[error("the server certificate was not accepted")]
     CertificateRejected,
     #[error("the remote desktop has a size that is not supported")]
@@ -40,6 +42,7 @@ impl RdpError {
             RdpError::Timeout => "timeout",
             RdpError::AuthFailed => "auth_failed",
             RdpError::TlsFailed => "tls_failed",
+            RdpError::CertificateUnsupported => "certificate_unsupported",
             RdpError::CertificateRejected => "certificate_rejected",
             RdpError::DesktopTooLarge => "desktop_too_large",
             RdpError::Protocol => "protocol",
@@ -61,6 +64,7 @@ mod tests {
             (RdpError::Timeout, "timeout"),
             (RdpError::AuthFailed, "auth_failed"),
             (RdpError::TlsFailed, "tls_failed"),
+            (RdpError::CertificateUnsupported, "certificate_unsupported"),
             (RdpError::CertificateRejected, "certificate_rejected"),
             (RdpError::DesktopTooLarge, "desktop_too_large"),
             (RdpError::Protocol, "protocol"),

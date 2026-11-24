@@ -18,6 +18,7 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
+use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio_rustls::rustls::{self, ServerConfig};
 
@@ -95,6 +96,45 @@ pub enum Behaviour {
     Silent,
     /// Answers with text that is not RDP and closes.
     Garbage,
+    /// As `TlsThenClose`, but with a certificate and key from `tests/fixtures`. The key signs the
+    /// handshake properly; the certificate is presented as is, without the consistency check
+    /// rustls's `with_single_cert` would run (it parses the certificate with webpki too).
+    TlsWithCert(Fixture),
+}
+
+/// A certificate and key from `tests/fixtures` (see the README there).
+#[derive(Clone, Copy, Debug)]
+pub enum Fixture {
+    /// RSA 2048, SHA-256, like the certificate Windows creates for RDP.
+    Rsa2048Sha256,
+    /// RSA 2048, the certificate itself signed with SHA-1.
+    Rsa2048Sha1,
+    /// RSA 2048, SHA-256, with an unknown extension marked critical (webpki refuses to parse it).
+    CriticalExtension,
+}
+
+impl Fixture {
+    /// The certificate (DER) and its private key.
+    pub fn load(self) -> (Vec<u8>, PrivateKeyDer<'static>) {
+        let (cert, key): (&[u8], &[u8]) = match self {
+            Fixture::Rsa2048Sha256 => (
+                include_bytes!("../fixtures/rsa2048-sha256.crt"),
+                include_bytes!("../fixtures/rsa2048-sha256.key"),
+            ),
+            Fixture::Rsa2048Sha1 => (
+                include_bytes!("../fixtures/rsa2048-sha1.crt"),
+                include_bytes!("../fixtures/rsa2048-sha1.key"),
+            ),
+            Fixture::CriticalExtension => (
+                include_bytes!("../fixtures/critical-ext.crt"),
+                include_bytes!("../fixtures/critical-ext.key"),
+            ),
+        };
+        (
+            CertificateDer::from_pem_slice(cert).unwrap().to_vec(),
+            PrivateKeyDer::from_pem_slice(key).unwrap(),
+        )
+    }
 }
 
 pub struct FakeServer {
@@ -108,16 +148,29 @@ impl FakeServer {
     pub async fn start(behaviour: Behaviour) -> FakeServer {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let cert = rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()]).unwrap();
-        let der = cert.cert.der().clone();
-        let fingerprint = format!("sha256:{}", hex(&Sha256::digest(der.as_ref())));
-        let key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der()));
+        let (der, key) = match behaviour {
+            Behaviour::TlsWithCert(fixture) => fixture.load(),
+            _ => {
+                let cert =
+                    rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()]).unwrap();
+                (
+                    cert.cert.der().to_vec(),
+                    PrivateKeyDer::from(PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der())),
+                )
+            }
+        };
+        let fingerprint = format!("sha256:{}", hex(&Sha256::digest(&der)));
         let builder =
             ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
                 .with_safe_default_protocol_versions()
                 .unwrap()
                 .with_no_client_auth();
-        let config = if matches!(behaviour, Behaviour::ImpersonatedTls) {
+        let config = if let Behaviour::TlsWithCert(_) = behaviour {
+            let signing = rustls::crypto::ring::sign::any_supported_type(&key).unwrap();
+            let certified =
+                rustls::sign::CertifiedKey::new(vec![CertificateDer::from(der)], signing);
+            builder.with_cert_resolver(Arc::new(rustls::sign::SingleCertAndKey::from(certified)))
+        } else if matches!(behaviour, Behaviour::ImpersonatedTls) {
             let other = rcgen::KeyPair::generate().unwrap();
             let other_key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(other.serialize_der()));
             let signing = rustls::crypto::ring::sign::any_supported_type(&other_key).unwrap();

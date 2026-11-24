@@ -31,6 +31,7 @@ Daily-use features: milestone M10.
 
 ### Fixed
 
+- RDP TLS (M11): fernjo checks the server certificate with its own verifier. It no longer needs the operating system's root certificates (a Linux machine without them got "the secure connection to the server failed" for every RDP host), and certificates signed with SHA-1, issued for another name or past their expiry date reach the certificate prompt as before (the pin decides trust). The TLS handshake signature is still always checked against the certificate's key. A host whose certificate the TLS library cannot use (for example an RSA key under 2048 bits, or an unknown extension marked critical) now fails with its own message, "the server certificate is not supported", before any prompt (see the known limit in the README).
 - Host keys are written to `known_hosts` only after the SSH handshake succeeded (before, the decision was written inside the key check; the library already verified the signature first, so this is defence in depth). A failed handshake leaves the file unchanged.
 - The input a session can have waiting is capped at 8 MiB; beyond it the call is refused with "too much input is waiting; try again" instead of growing memory.
 - App shortcuts (Ctrl+Shift+letter, Cmd+letter) work on non-Latin keyboard layouts, and Ctrl+Shift+W no longer closes a hidden tab while the vault view is open.

@@ -1800,9 +1800,10 @@ dependencies = [
  "ironrdp-input",
  "ironrdp-pdu",
  "ironrdp-session",
- "ironrdp-tls",
  "ironrdp-tokio",
+ "log",
  "rcgen",
+ "rustls",
  "secrecy",
  "serde",
  "serde_json",
@@ -3055,18 +3056,6 @@ dependencies = [
  "bitflags 2.13.2",
  "ironrdp-core",
  "ironrdp-pdu",
-]
-
-[[package]]
-name = "ironrdp-tls"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63dcf5982519d8bd18eb102ffbba1933d25744f3e0f2c59f794b4b7fe0ef0f84"
-dependencies = [
- "rustls-native-certs",
- "tokio",
- "tokio-rustls",
- "x509-cert",
 ]
 
 [[package]]

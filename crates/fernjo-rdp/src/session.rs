@@ -63,8 +63,8 @@ const REACTIVATION_STEP_LIMIT: Duration = Duration::from_secs(30);
 /// How long a final event may wait for a consumer that has stopped reading.
 const DELIVER_LIMIT: Duration = Duration::from_secs(5);
 
-type Reader = TokioFramed<ReadHalf<ironrdp_tls::TlsStream<TcpStream>>>;
-type Writer = TokioFramed<WriteHalf<ironrdp_tls::TlsStream<TcpStream>>>;
+type Reader = TokioFramed<ReadHalf<tokio_rustls::client::TlsStream<TcpStream>>>;
+type Writer = TokioFramed<WriteHalf<tokio_rustls::client::TlsStream<TcpStream>>>;
 
 /// Why a session ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

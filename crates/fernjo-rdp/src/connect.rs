@@ -3,7 +3,6 @@
 //! caller (`session.rs`) takes the framed stream and the connection result.
 
 use std::future::Future;
-use std::sync::Arc;
 use std::time::Duration;
 
 use ironrdp_connector::credssp::KerberosConfig;
@@ -18,15 +17,16 @@ use ironrdp_pdu::rdp::capability_sets::{
     MajorPlatformType, RailSupportLevel, client_codecs_capabilities,
 };
 use ironrdp_pdu::rdp::client_info::{PerformanceFlags, TimezoneInfo};
-use ironrdp_tls::TlsStream;
 use ironrdp_tokio::{NetworkClient, TokioFramed};
 use secrecy::{ExposeSecret, SecretString};
 use sha2::{Digest, Sha256};
 use tokio::net::TcpStream;
-use x509_cert::der::Encode as _;
+use tokio_rustls::client::TlsStream;
+use x509_cert::der::{Decode as _, Encode as _};
 
 use crate::cert_store::{CertCheck, valid_host};
 use crate::text_clipboard::{ClipEvent, LocalText, TextClipboard};
+use crate::tls;
 use crate::{
     CertChangedDecision, CertChangedPrompt, CertDecision, CertPrompt, ConnectParams, Interaction,
     RdpError,
@@ -228,18 +228,12 @@ pub(crate) async fn establish<I: Interaction>(
         if !leftover.is_empty() {
             return Err(RdpError::Protocol);
         }
-        // RDP servers present self-signed certificates, so a failed chain or name check is
-        // accepted here and the pin decides after the handshake. The handshake signature is
-        // still checked against the certificate's public key (`ironrdp_tls::upgrade` would turn
-        // that off too), so a server that only replays a public certificate cannot get through.
-        let (tls, cert) = ironrdp_tls::upgrade_with_certificate_validation_callback_for_endpoint(
-            stream,
-            &host,
-            &host,
-            Arc::new(|_cert: &[u8], _endpoint: &str, _failure: &str| true),
-        )
-        .await
-        .map_err(|_| RdpError::TlsFailed)?;
+        // RDP servers present self-signed certificates, so chain, name and expiry are not checked
+        // and the pin decides after the handshake. The handshake signature is still checked
+        // against the certificate's public key (`tls::PinVerifier`), so a server that only
+        // replays a public certificate cannot get through.
+        let (tls, leaf) = tls::upgrade(stream, &host).await?;
+        let cert = x509_cert::Certificate::from_der(&leaf).map_err(|_| RdpError::TlsFailed)?;
         let upgraded = ironrdp_tokio::mark_as_upgraded(should_upgrade, &mut connector);
         let der = cert
             .to_der()

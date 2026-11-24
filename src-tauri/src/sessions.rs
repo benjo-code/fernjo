@@ -61,6 +61,11 @@
 //!   decision}` and `certificateChanged {host, port, old, new}` with `{kind:"hostKeyChanged",
 //!   decision}`; `username` and `password` are the shared ones. Pins live in
 //!   `<device folder>/rdp_certs.confirmed` (memory for the run without a device folder).
+//! * A failed connect ends with the text of the `fernjo_rdp::RdpError`. A server whose
+//!   certificate rustls cannot use (webpki cannot parse it, or its key cannot verify the handshake
+//!   signature, for example RSA under 2048 bits) fails before any prompt with "the server
+//!   certificate is not supported" (`certificate_unsupported`); other TLS failures keep "the secure
+//!   connection to the server failed" (`tls_failed`).
 //! * An RDP session never ends "cleanly" (`endedCleanly` is always `false`): there is no shell exit
 //!   status and the tab stays until the user closes it. A server that announces a virtual channel
 //!   message above 4 MiB ends the session with the detail "The server sent a channel message that
