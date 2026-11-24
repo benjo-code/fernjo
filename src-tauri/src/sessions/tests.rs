@@ -994,6 +994,24 @@ async fn open_session_password_round_trip() {
 }
 
 #[tokio::test]
+async fn a_resize_burst_reaches_the_shell_with_the_last_size() {
+    let Some(s) = server() else { return };
+    let r = rig_for(&s, false);
+    let (ch, mut rec) = recorder();
+    let id = open_session(&r.st, r.node, ch, 80, 24).unwrap();
+    drive(&r, &mut rec, &id, &s, false).await;
+    // dragging the window edge: many sizes in a row, coalesced into few resize ops
+    for i in 0..300u32 {
+        session_resize(&r.st, &id, 60 + i % 90, 20 + i % 30).unwrap();
+    }
+    session_resize(&r.st, &id, 123, 45).unwrap();
+    session_input(&r.st, &id, b"echo sz$(stty size | tr ' ' x)\n".to_vec()).unwrap();
+    let out = rec.read_until(&r.st, &id, "sz45x123").await;
+    assert!(!out.is_empty());
+    close_session(&r.st, &id).unwrap();
+}
+
+#[tokio::test]
 async fn host_key_prompt_is_emitted_and_answer_continues() {
     let Some(s) = server() else { return };
     let r = rig_for(&s, false);
@@ -1353,6 +1371,7 @@ fn entry_in(phase: Phase) -> Arc<Entry> {
             size: Mutex::new((80, 24)),
             ops: Mutex::new(None),
             input_budget: InputBudget::default(),
+            resize_queued: std::sync::atomic::AtomicBool::new(false),
         }),
         task: Mutex::new(None),
     })
@@ -1420,7 +1439,9 @@ fn input_over_the_cap_is_refused_with_input_queue_full() {
         .unwrap()
         .insert("a".to_string(), Arc::clone(&entry));
     let budget = &entry.shared.input_budget;
-    assert!(budget.try_reserve(crate::session_flow::MAX_QUEUED_INPUT - 4));
+    let min = crate::session_flow::MIN_OP_WEIGHT;
+    assert!(budget.try_reserve(crate::session_flow::MAX_QUEUED_INPUT - min));
+    // a short input weighs the minimum
     manager.input("a", b"abcd".to_vec()).unwrap();
     let refused = manager.input("a", b"e".to_vec()).unwrap_err();
     assert_eq!(refused.code, "input_queue_full");
@@ -1430,7 +1451,7 @@ fn input_over_the_cap_is_refused_with_input_queue_full() {
     assert!(matches!(ops.try_recv().unwrap(), Op::Data(d) if d == b"abcd"));
     assert!(ops.try_recv().is_err(), "the refused input was not queued");
     // once the writer released what it handled, input is accepted again
-    budget.release(4);
+    budget.release(min);
     manager.input("a", b"e".to_vec()).unwrap();
 }
 
@@ -1458,16 +1479,106 @@ fn unhandled_ops_release_their_budget_when_the_writer_stops() {
     let shared = entry_in(Phase::Connected).shared.clone();
     let (tx, mut ops) = unbounded_channel();
     for op in [
-        Op::Data(vec![0; 10]),
+        Op::Data(vec![0; 100]),
         Op::Clipboard("abc".into()),
+        Op::Resize,
         Op::Close,
     ] {
         assert!(shared.input_budget.try_reserve(op.weight()));
         tx.send(op).unwrap();
     }
-    assert_eq!(shared.input_budget.queued(), 13);
+    // 100 bytes, a short text at the minimum weight, resize and close at 0
+    assert_eq!(
+        shared.input_budget.queued(),
+        100 + crate::session_flow::MIN_OP_WEIGHT
+    );
     release_unhandled(&mut ops, &shared);
     assert_eq!(shared.input_budget.queued(), 0);
+}
+
+#[test]
+fn a_flood_of_one_byte_writes_hits_the_cap_by_weight() {
+    use crate::session_flow::{MAX_QUEUED_INPUT, MIN_OP_WEIGHT};
+    let manager = SessionManager::default();
+    let entry = entry_in(Phase::Connected);
+    // no writer runs: nothing is ever released
+    let (tx, _ops) = unbounded_channel();
+    *entry.shared.ops.lock().unwrap() = Some(tx);
+    manager
+        .entries
+        .lock()
+        .unwrap()
+        .insert("a".to_string(), Arc::clone(&entry));
+    for _ in 0..MAX_QUEUED_INPUT / MIN_OP_WEIGHT {
+        manager.input("a", b"x".to_vec()).unwrap();
+    }
+    let refused = manager.input("a", b"x".to_vec()).unwrap_err();
+    assert_eq!(refused.code, "input_queue_full");
+    assert_eq!(entry.shared.input_budget.queued(), MAX_QUEUED_INPUT);
+}
+
+#[test]
+fn a_resize_burst_queues_one_op_and_applies_the_last_size() {
+    let manager = SessionManager::default();
+    let entry = entry_in(Phase::Connected);
+    let (tx, mut ops) = unbounded_channel();
+    *entry.shared.ops.lock().unwrap() = Some(tx);
+    manager
+        .entries
+        .lock()
+        .unwrap()
+        .insert("a".to_string(), Arc::clone(&entry));
+    // the writer is paused: nothing is taken from the queue
+    for i in 0..1_000u32 {
+        manager.resize("a", 80 + i, 24 + i).unwrap();
+    }
+    assert!(matches!(ops.try_recv().unwrap(), Op::Resize));
+    assert!(ops.try_recv().is_err(), "a burst queues a single resize");
+    // the writer applies the latest size, not the one of the first call
+    assert_eq!(take_resize(&entry.shared), (80 + 999, 24 + 999));
+    // a resize that arrives while the writer applies the previous one queues a new op, so the
+    // final size always reaches the session
+    manager.resize("a", 100, 30).unwrap();
+    assert!(matches!(ops.try_recv().unwrap(), Op::Resize));
+    assert!(ops.try_recv().is_err());
+    assert_eq!(take_resize(&entry.shared), (100, 30));
+    // resizes never touch the input budget
+    assert_eq!(entry.shared.input_budget.queued(), 0);
+}
+
+#[test]
+fn a_resize_without_a_shell_queues_nothing_and_does_not_block_later_resizes() {
+    let manager = SessionManager::default();
+    let entry = entry_in(Phase::Disconnected);
+    manager
+        .entries
+        .lock()
+        .unwrap()
+        .insert("a".to_string(), Arc::clone(&entry));
+    manager.resize("a", 90, 30).unwrap();
+    assert_eq!(*entry.shared.size.lock().unwrap(), (90, 30));
+    // a shell appears (what `install_ops` does at connect)
+    let (tx, mut ops) = unbounded_channel();
+    install_ops(&entry.shared, tx, |size| size != (90, 30));
+    assert!(
+        ops.try_recv().is_err(),
+        "the size the connect used needs no resize"
+    );
+    manager.resize("a", 91, 31).unwrap();
+    assert!(matches!(ops.try_recv().unwrap(), Op::Resize));
+    assert_eq!(take_resize(&entry.shared), (91, 31));
+}
+
+#[test]
+fn a_resize_during_the_connect_is_queued_when_the_shell_starts() {
+    let entry = entry_in(Phase::Connecting);
+    // a stale flag from a writer that stopped with a resize still queued
+    entry.shared.resize_queued.store(true, Ordering::SeqCst);
+    *entry.shared.size.lock().unwrap() = (120, 40);
+    let (tx, mut ops) = unbounded_channel();
+    install_ops(&entry.shared, tx, |size| size != (80, 24));
+    assert!(matches!(ops.try_recv().unwrap(), Op::Resize));
+    assert_eq!(take_resize(&entry.shared), (120, 40));
 }
 
 // ---------- restored tabs (no server needed) ----------

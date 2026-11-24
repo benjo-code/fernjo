@@ -529,6 +529,42 @@ async fn with_handshake_deadline<T>(
     }
 }
 
+/// Shuts the TCP socket down when the handshake is left before the key exchange finished.
+///
+/// russh's `client::connect_stream` spawns the session task, which takes the stream, as soon as
+/// it has read the server's identification line, and hands out the task's `JoinHandle` only after
+/// the key exchange. A handshake that is dropped in between (our deadline, or the connect task
+/// aborted because the tab was closed) drops that future but not the task: while a key exchange
+/// is active the task does not look at its (now closed) command channel, so against a server that
+/// goes silent it would wait on the socket forever. A clone of the socket, taken before the
+/// handshake, lets this guard shut the connection down so the task's read ends and the task with
+/// it. Once the handshake returned, the task belongs to the `Handle` and the guard is disarmed.
+struct HandshakeSocketGuard(Option<std::net::TcpStream>);
+
+impl HandshakeSocketGuard {
+    fn new(stream: TcpStream) -> Result<(TcpStream, Self), SshError> {
+        let std_stream = stream.into_std().map_err(|_| SshError::ConnectFailed)?;
+        let clone = std_stream
+            .try_clone()
+            .map_err(|_| SshError::ConnectFailed)?;
+        let stream = TcpStream::from_std(std_stream).map_err(|_| SshError::ConnectFailed)?;
+        Ok((stream, Self(Some(clone))))
+    }
+
+    fn disarm(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for HandshakeSocketGuard {
+    fn drop(&mut self) {
+        if let Some(socket) = self.0.take() {
+            // A socket the task already closed reports an error; there is nothing left to do.
+            let _ = socket.shutdown(std::net::Shutdown::Both);
+        }
+    }
+}
+
 impl Session {
     /// Connects, checks the host key, authenticates and starts a shell on a PTY.
     pub async fn connect<I: Interaction>(
@@ -560,6 +596,7 @@ impl Session {
             Ok(Ok(stream)) => stream,
         };
         let _ = stream.set_nodelay(true);
+        let (stream, socket_guard) = HandshakeSocketGuard::new(stream)?;
 
         let rejection: Rejection = Rejection::default();
         let prompting = Arc::new(AtomicBool::new(false));
@@ -589,6 +626,8 @@ impl Session {
                     }));
                 }
             };
+        // The key exchange finished: the session task is owned by `handle` from here on.
+        socket_guard.disarm();
 
         // The key exchange is verified: only now is the user's decision about the key written.
         trust.apply_pending_trust()?;

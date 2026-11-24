@@ -19,7 +19,8 @@ use tokio::sync::mpsc::{Receiver, UnboundedReceiver, unbounded_channel};
 
 use super::{
     ConnState, Ended, Entry, HostKeyAnswer, HostKeyChangedAnswer, Op, Phase, PromptAnswer,
-    PromptView, SessionManager, Shared, TauriInteraction, UiEvent, error, release_unhandled,
+    PromptView, SessionManager, Shared, TauriInteraction, UiEvent, error, install_ops,
+    release_unhandled, take_resize,
 };
 use crate::commands::CommandError;
 use crate::connect_plan::{RdpCredentialPlan, RdpPlan};
@@ -256,16 +257,9 @@ async fn run(shared: Arc<Shared>, params: ConnectParams) {
     let framebuffer = session.framebuffer();
     let (tx, ops) = unbounded_channel();
     // A resize that arrived while connecting is applied now.
-    if dynamic
-        && let Ok(size) = shared.size.lock()
-        && let Some(wanted) = desktop_size(size.0, size.1)
-        && wanted != started
-    {
-        let _ = tx.send(Op::Resize(size.0, size.1));
-    }
-    if let Ok(mut slot) = shared.ops.lock() {
-        *slot = Some(tx);
-    }
+    install_ops(&shared, tx, |size| {
+        dynamic && desktop_size(size.0, size.1).is_some_and(|wanted| wanted != started)
+    });
     tauri::async_runtime::spawn(write_ops(session, ops, Arc::clone(&shared)));
     let (width, height) = framebuffer.size();
     if let Ok(mut flow) = shared.flow.lock() {
@@ -289,7 +283,8 @@ async fn write_ops(session: Session, mut ops: UnboundedReceiver<Op>, shared: Arc
         let stop = match op {
             Op::Rdp(events) => session.input(events).await.is_err(),
             Op::Clipboard(text) => session.set_clipboard_text(text).await.is_err(),
-            Op::Resize(width, height) => {
+            Op::Resize => {
+                let (width, height) = take_resize(&shared);
                 if let Some((width, height)) = desktop_size(width, height) {
                     let _ = session.resize(width, height).await;
                 }

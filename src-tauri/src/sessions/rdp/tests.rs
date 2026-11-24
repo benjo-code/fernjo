@@ -76,6 +76,7 @@ fn shared_with(channel: Channel<InvokeResponseBody>, flow: FlowControl) -> Arc<S
         size: Mutex::new((1280, 800)),
         ops: Mutex::new(None),
         input_budget: InputBudget::default(),
+        resize_queued: std::sync::atomic::AtomicBool::new(false),
     })
 }
 
@@ -802,4 +803,26 @@ async fn open_session_for_an_rdp_node_starts_an_rdp_session() {
         code(st.sessions.rdp_input(&id, vec![key(30)])),
         "session_not_connected"
     );
+}
+
+#[test]
+fn rdp_ops_weigh_at_least_the_minimum_and_resizes_are_coalesced() {
+    use crate::session_flow::MIN_OP_WEIGHT;
+    let (channel, _rec) = recorder();
+    let shared = shared_with(channel, credit_for(8, 8));
+    let (tx, mut ops) = tokio::sync::mpsc::unbounded_channel();
+    *shared.ops.lock().unwrap() = Some(tx);
+    let manager = manager_with("a", entry_with(Arc::clone(&shared)));
+    manager.rdp_input("a", vec![key(30)]).unwrap();
+    manager.rdp_clipboard("a", "x".into()).unwrap();
+    assert_eq!(shared.input_budget.queued(), 2 * MIN_OP_WEIGHT);
+    for i in 0..500u32 {
+        manager.resize("a", 1000 + i, 700 + i).unwrap();
+    }
+    assert!(matches!(ops.try_recv().unwrap(), Op::Rdp(_)));
+    assert!(matches!(ops.try_recv().unwrap(), Op::Clipboard(_)));
+    assert!(matches!(ops.try_recv().unwrap(), Op::Resize));
+    assert!(ops.try_recv().is_err(), "a burst queues a single resize");
+    assert_eq!(super::super::take_resize(&shared), (1499, 1199));
+    assert_eq!(shared.input_budget.queued(), 2 * MIN_OP_WEIGHT);
 }
