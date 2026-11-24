@@ -207,3 +207,42 @@ fn a_channel_message_below_the_cap_reaches_the_stage() {
         "{outputs:?}"
     );
 }
+
+mod write_bounded {
+    use super::super::{WRITE_LIMIT, write_bounded};
+    use ironrdp_tokio::TokioFramed;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt as _, duplex};
+
+    #[tokio::test(start_paused = true)]
+    async fn a_peer_that_stops_reading_ends_the_write_after_the_limit() {
+        let (near, _far) = duplex(1024);
+        let mut writer = TokioFramed::new(near);
+        let started = tokio::time::Instant::now();
+        let result = write_bounded(&mut writer, &[7u8; 24 * 1024]).await;
+        assert!(result.is_err());
+        assert_eq!(started.elapsed(), WRITE_LIMIT);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_peer_that_reads_slowly_never_trips_the_limit() {
+        let (near, mut far) = duplex(1024);
+        let mut writer = TokioFramed::new(near);
+        let reader = tokio::spawn(async move {
+            let mut total = 0;
+            let mut buf = [0u8; 1024];
+            while total < 24 * 1024 {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                total += far.read(&mut buf).await.unwrap();
+            }
+            total
+        });
+        let started = tokio::time::Instant::now();
+        let result = write_bounded(&mut writer, &[7u8; 24 * 1024]).await;
+        assert!(result.is_ok());
+        // longer than the limit in total, yet every step made progress
+        assert!(started.elapsed() > WRITE_LIMIT);
+        assert!(started.elapsed() <= Duration::from_secs(30));
+        assert_eq!(reader.await.unwrap(), 24 * 1024);
+    }
+}

@@ -17,7 +17,7 @@ use ironrdp_pdu::geometry::InclusiveRectangle;
 use ironrdp_pdu::input::fast_path::FastPathInputEvent;
 use ironrdp_session::image::DecodedImage;
 use ironrdp_session::{ActiveStage, ActiveStageBuilder, ActiveStageOutput, fast_path};
-use ironrdp_tokio::{FramedWrite as _, TokioFramed, single_sequence_step_read, split_tokio_framed};
+use ironrdp_tokio::{TokioFramed, single_sequence_step_read, split_tokio_framed};
 use tokio::io::{ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::{Notify, mpsc};
@@ -34,6 +34,31 @@ const COMMAND_QUEUE: usize = 64;
 /// How long a resize waits for the display channel to become ready.
 const RESIZE_RETRY_LIMIT: Duration = Duration::from_secs(60);
 /// How long one step of a reactivation may wait for the server.
+/// How long one step of a write to the server may make no progress before the session is treated as
+/// lost. A server that stops reading must not keep a closing session alive.
+pub(crate) const WRITE_LIMIT: Duration = Duration::from_secs(15);
+
+/// A frame goes out in pieces of this size, each bounded by `WRITE_LIMIT`.
+const WRITE_STEP: usize = 4096;
+
+/// Writes `frame`, failing when the peer accepts nothing for `WRITE_LIMIT`. The limit is a progress
+/// limit: a peer that keeps reading, however slowly, never trips it, because every piece is
+/// bounded on its own. `FramedWrite::write_all` hides how far a write got, so the frame is cut
+/// into pieces and each piece gets the timer. Not cancel-safe, like `write_all` itself: after an
+/// error the connection is dropped.
+async fn write_bounded<W: ironrdp_tokio::FramedWrite>(
+    writer: &mut W,
+    frame: &[u8],
+) -> Result<(), ()> {
+    for piece in frame.chunks(WRITE_STEP) {
+        match tokio::time::timeout(WRITE_LIMIT, writer.write_all(piece)).await {
+            Ok(Ok(())) => {}
+            _ => return Err(()),
+        }
+    }
+    Ok(())
+}
+
 const REACTIVATION_STEP_LIMIT: Duration = Duration::from_secs(30);
 /// How long a final event may wait for a consumer that has stopped reading.
 const DELIVER_LIMIT: Duration = Duration::from_secs(5);
@@ -342,7 +367,7 @@ async fn drive(
                 if let Ok(outputs) = stage.graceful_shutdown() {
                     for output in outputs {
                         if let ActiveStageOutput::ResponseFrame(frame) = output {
-                            let _ = writer.write_all(&frame).await;
+                            let _ = write_bounded(&mut writer, &frame).await;
                         }
                     }
                 }
@@ -370,7 +395,7 @@ async fn drive(
                     if frame.is_empty() {
                         continue;
                     }
-                    if writer.write_all(&frame).await.is_err() {
+                    if write_bounded(&mut writer, &frame).await.is_err() {
                         return CloseReason::ConnectionLost;
                     }
                 }
@@ -396,7 +421,9 @@ async fn drive(
                             },
                             () = closing.notified() => return CloseReason::ClosedByUser,
                         };
-                        if step.size().is_some() && writer.write_all(buf.filled()).await.is_err() {
+                        if step.size().is_some()
+                            && write_bounded(&mut writer, buf.filled()).await.is_err()
+                        {
                             return CloseReason::ConnectionLost;
                         }
                         if let ConnectionActivationState::Finalized {
