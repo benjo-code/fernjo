@@ -142,3 +142,68 @@ fn copy_region_clips_to_the_image_and_refuses_an_inverted_rectangle() {
     };
     assert_eq!(copy_region(&image, &outside, &fb), None);
 }
+
+// ---- the channel cap in the read path ---------------------------------------------------------
+
+/// An active stage with only the dynamic channel host, on static channel `id`.
+fn stage_with_drdynvc(id: u16) -> (ActiveStage, ChannelIds) {
+    let mut builder = ActiveStageBuilder {
+        static_channels: Default::default(),
+        user_channel_id: 1002,
+        io_channel_id: 1003,
+        message_channel_id: None,
+        share_id: 0,
+        compression_type: None,
+        enable_server_pointer: false,
+        pointer_software_rendering: false,
+    };
+    builder.static_channels.insert(DrdynvcClient::new());
+    builder
+        .static_channels
+        .attach_channel_id(std::any::TypeId::of::<DrdynvcClient>(), id);
+    build_stage(builder)
+}
+
+fn first_chunk(channel_id: u16, length: u32) -> Vec<u8> {
+    use super::channel_cap::tests::{chunk, indication};
+    use ironrdp_pdu::rdp::vc::ChannelControlFlags;
+    indication(
+        channel_id,
+        chunk(length, ChannelControlFlags::FLAG_FIRST, &[0u8; 1600]),
+    )
+}
+
+#[test]
+fn the_stage_knows_its_static_channels() {
+    let (_, channels) = stage_with_drdynvc(1005);
+    assert_eq!(channels.statics, vec![1005]);
+    assert_eq!(channels.drdynvc, Some(1005));
+}
+
+#[test]
+fn a_channel_message_announced_above_the_cap_ends_the_session_before_the_stage_buffers_it() {
+    let (mut stage, channels) = stage_with_drdynvc(1005);
+    let mut image = DecodedImage::new(PixelFormat::RgbA32, 64, 64);
+    let frame = first_chunk(1005, channel_cap::MAX_CHANNEL_MESSAGE + 1);
+    assert_eq!(
+        process_frame(&mut stage, &mut image, &channels, Action::X224, &frame).err(),
+        Some(CloseReason::ChannelTooLarge)
+    );
+}
+
+#[test]
+fn a_channel_message_below_the_cap_reaches_the_stage() {
+    // IronRDP takes the first chunk and waits for the rest: no error
+    let (mut stage, channels) = stage_with_drdynvc(1005);
+    let mut image = DecodedImage::new(PixelFormat::RgbA32, 64, 64);
+    let frame = first_chunk(1005, 2 * 1024 * 1024 + 64);
+    let outputs = process_frame(&mut stage, &mut image, &channels, Action::X224, &frame)
+        .expect("a message below the cap is processed");
+    // nothing goes back to the server (the stage reports an empty response frame)
+    assert!(
+        outputs
+            .iter()
+            .all(|o| matches!(o, ActiveStageOutput::ResponseFrame(f) if f.is_empty())),
+        "{outputs:?}"
+    );
+}

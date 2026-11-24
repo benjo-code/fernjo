@@ -25,6 +25,12 @@ pub enum RdpError {
     Io,
 }
 
+/// A server announced a virtual channel message above the session's cap; the session ends with
+/// `CloseReason::ChannelTooLarge`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the server announced a channel message that is too large")]
+pub(crate) struct ChannelTooLarge;
+
 impl RdpError {
     /// Stable code shown to the UI and used in tests.
     pub fn code(&self) -> &'static str {

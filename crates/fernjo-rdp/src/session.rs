@@ -9,8 +9,10 @@ use ironrdp_cliprdr::backend::ClipboardMessage;
 use ironrdp_cliprdr::pdu::{ClipboardFormat, ClipboardFormatId};
 use ironrdp_connector::connection_activation::ConnectionActivationState;
 use ironrdp_displaycontrol::pdu::MonitorLayoutEntry;
+use ironrdp_dvc::DrdynvcClient;
 use ironrdp_graphics::image_processing::PixelFormat;
 use ironrdp_input::{Database, MousePosition, Operation, Scancode, WheelRotations};
+use ironrdp_pdu::Action;
 use ironrdp_pdu::geometry::InclusiveRectangle;
 use ironrdp_pdu::input::fast_path::FastPathInputEvent;
 use ironrdp_session::image::DecodedImage;
@@ -20,6 +22,7 @@ use tokio::io::{ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::{Notify, mpsc};
 
+use self::channel_cap::ChannelIds;
 use crate::connect::{ClipboardWiring, Established, establish};
 use crate::text_clipboard::{ClipEvent, LocalText};
 use crate::{ConnectParams, Framebuffer, InputEvent, Interaction, MouseButton, RdpError, Rect};
@@ -47,6 +50,9 @@ pub enum CloseReason {
     ConnectionLost,
     /// [`Session::close`] was called or the session was dropped.
     ClosedByUser,
+    /// The server announced a virtual channel message above the cap (4 MiB); the session ended
+    /// before the client buffered it.
+    ChannelTooLarge,
 }
 
 /// What a session reports. The queue is bounded; `Damage` events are merged while it is full.
@@ -226,7 +232,7 @@ async fn drive(
     let size = result.desktop_size;
     let mut image = DecodedImage::new(PixelFormat::RgbA32, size.width, size.height);
     let activation_factory = result.activation_factory;
-    let mut stage = ActiveStageBuilder {
+    let (mut stage, channels) = build_stage(ActiveStageBuilder {
         static_channels: result.static_channels,
         user_channel_id: result.user_channel_id,
         io_channel_id: result.io_channel_id,
@@ -235,8 +241,7 @@ async fn drive(
         compression_type: result.compression_type,
         enable_server_pointer: result.enable_server_pointer,
         pointer_software_rendering: result.pointer_software_rendering,
-    }
-    .build();
+    });
     let (mut clip_rx, local_text): (
         Option<mpsc::UnboundedReceiver<ClipEvent>>,
         Option<LocalText>,
@@ -255,9 +260,9 @@ async fn drive(
         let outputs: Vec<ActiveStageOutput> = tokio::select! {
             frame = reader.read_pdu() => {
                 let Ok((action, payload)) = frame else { return CloseReason::ConnectionLost };
-                match stage.process(&mut image, action, &payload, None) {
+                match process_frame(&mut stage, &mut image, &channels, action, &payload) {
                     Ok(outputs) => outputs,
-                    Err(_) => return CloseReason::ConnectionLost,
+                    Err(reason) => return reason,
                 }
             }
             command = commands.recv() => {
@@ -443,6 +448,33 @@ async fn drive(
     }
 }
 
+/// Builds the active stage and notes the ids of its static channels for the channel cap.
+fn build_stage(builder: ActiveStageBuilder) -> (ActiveStage, ChannelIds) {
+    let channels = ChannelIds {
+        statics: builder.static_channels.channel_ids().collect(),
+        drdynvc: builder
+            .static_channels
+            .get_channel_id_by_type::<DrdynvcClient>(),
+    };
+    (builder.build(), channels)
+}
+
+/// Hands a frame from the server to the active stage, unless it announces a channel message above
+/// the cap: that one is refused before IronRDP sizes a reassembly buffer from it.
+fn process_frame(
+    stage: &mut ActiveStage,
+    image: &mut DecodedImage,
+    channels: &ChannelIds,
+    action: Action,
+    payload: &[u8],
+) -> Result<Vec<ActiveStageOutput>, CloseReason> {
+    channel_cap::check_frame(action, payload, channels)
+        .map_err(|_| CloseReason::ChannelTooLarge)?;
+    stage
+        .process(image, action, payload, None)
+        .map_err(|_| CloseReason::ConnectionLost)
+}
+
 /// Encodes a CLIPRDR message as a frame for the wire, or `None` when it is not one we handle.
 fn clipboard_frame(
     stage: &mut ActiveStage,
@@ -539,5 +571,6 @@ fn to_fast_path(
     out
 }
 
+mod channel_cap;
 #[cfg(test)]
 mod tests;

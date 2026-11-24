@@ -197,6 +197,10 @@ fn rdp_end_is_never_clean() {
         ),
         (CloseReason::ConnectionLost, "The connection was lost."),
         (CloseReason::ClosedByUser, "The session was closed."),
+        (
+            CloseReason::ChannelTooLarge,
+            "The server sent a channel message that is too large.",
+        ),
     ] {
         let ended = classify_rdp_end(reason);
         assert_eq!(ended.text, text);

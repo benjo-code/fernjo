@@ -113,6 +113,7 @@ pub(crate) fn classify_rdp_end(reason: CloseReason) -> Ended {
         CloseReason::ServerClosed => "The remote desktop session ended.",
         CloseReason::ConnectionLost => "The connection was lost.",
         CloseReason::ClosedByUser => "The session was closed.",
+        CloseReason::ChannelTooLarge => "The server sent a channel message that is too large.",
     };
     Ended {
         text: text.to_string(),

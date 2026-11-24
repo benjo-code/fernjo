@@ -62,7 +62,9 @@
 //!   decision}`; `username` and `password` are the shared ones. Pins live in
 //!   `<device folder>/rdp_certs.confirmed` (memory for the run without a device folder).
 //! * An RDP session never ends "cleanly" (`endedCleanly` is always `false`): there is no shell exit
-//!   status and the tab stays until the user closes it.
+//!   status and the tab stays until the user closes it. A server that announces a virtual channel
+//!   message above 4 MiB ends the session with the detail "The server sent a channel message that
+//!   is too large." (`fernjo_rdp::CloseReason::ChannelTooLarge`).
 //!
 //! No event carries a secret: prompts describe what is asked, answers travel UI to Rust only.
 
