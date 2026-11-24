@@ -802,6 +802,95 @@ async fn resume_after_unlock_with_nothing_listening_ends_disconnected() {
     rec.wait_state("disconnected").await;
 }
 
+fn refusing_quick_target() -> fernjo_core::QuickTarget {
+    fernjo_core::parse_quick("u@127.0.0.1:1").unwrap()
+}
+
+#[tokio::test]
+async fn reconnect_of_a_quick_session_resolves_the_same_target_again() {
+    let r = rig("127.0.0.1", 1, "u", "p", false);
+    let (ch, mut rec) = recorder();
+    let id =
+        crate::session_commands::open_quick_session(&r.st, refusing_quick_target(), ch, 80, 24)
+            .unwrap();
+    assert_eq!(
+        rec.wait_state("disconnected").await.as_deref(),
+        Some("Could not connect to the host.")
+    );
+    reconnect_session(&r.st, &id, 80, 24).unwrap();
+    assert_eq!(rec.wait_state("connecting").await, None);
+    // the quick target is not "gone": the same attempt fails the same way
+    assert_eq!(
+        rec.wait_state("disconnected").await.as_deref(),
+        Some("Could not connect to the host.")
+    );
+}
+
+#[tokio::test]
+async fn a_quick_session_never_touches_the_tree() {
+    let r = rig("127.0.0.1", 1, "u", "p", false);
+    let file = r._dir.path().join("connections.json");
+    let before = std::fs::read(&file).unwrap();
+    let tree = serde_json::to_string(&commands::list_tree(&r.st).unwrap()).unwrap();
+    let (ch, mut rec) = recorder();
+    let id =
+        crate::session_commands::open_quick_session(&r.st, refusing_quick_target(), ch, 80, 24)
+            .unwrap();
+    rec.wait_state("disconnected").await;
+    reconnect_session(&r.st, &id, 80, 24).unwrap();
+    rec.wait_state("disconnected").await;
+    close_session(&r.st, &id).unwrap();
+    assert_eq!(std::fs::read(&file).unwrap(), before);
+    assert_eq!(
+        serde_json::to_string(&commands::list_tree(&r.st).unwrap()).unwrap(),
+        tree
+    );
+    assert!(!r.known_hosts.exists());
+}
+
+#[tokio::test]
+async fn an_invalid_quick_host_is_refused_before_a_session_exists() {
+    let r = rig("127.0.0.1", 1, "u", "p", false);
+    let (ch, _rec) = recorder();
+    let mut target = refusing_quick_target();
+    target.host = "bad host".into();
+    assert_eq!(
+        code(crate::session_commands::open_quick_session(
+            &r.st, target, ch, 80, 24
+        )),
+        "invalid_host"
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_hand_built_quick_target_opens_no_session() {
+    let r = rig("127.0.0.1", 1, "u", "p", false);
+    let bad_port = quick_target_with(|t| t.port = 0);
+    let bad_user = quick_target_with(|t| t.user = Some("u\nx".into()));
+    let long_user = quick_target_with(|t| t.user = Some("u".repeat(300)));
+    for (target, expected) in [
+        (bad_port, "quick_bad_port"),
+        (bad_user, "quick_bad_target"),
+        (long_user, "quick_bad_target"),
+    ] {
+        let (ch, _rec) = recorder();
+        assert_eq!(
+            code(crate::session_commands::open_quick_session(
+                &r.st, target, ch, 80, 24
+            )),
+            expected
+        );
+    }
+    assert_eq!(r.st.sessions.connected_count(), 0);
+    assert!(r.st.sessions.entries.lock().unwrap().is_empty());
+}
+
+fn quick_target_with(f: fn(&mut fernjo_core::QuickTarget)) -> fernjo_core::QuickTarget {
+    let mut t = refusing_quick_target();
+    f(&mut t);
+    t
+}
+
 #[tokio::test]
 async fn reconnect_reports_a_deleted_node() {
     let r = rig("127.0.0.1", 1, "u", "p", false);
@@ -1254,7 +1343,7 @@ fn the_confirmed_hosts_layer_is_the_device_file_or_memory_for_the_run() {
 fn entry_in(phase: Phase) -> Arc<Entry> {
     let (channel, _rec) = recorder();
     Arc::new(Entry {
-        node_id: uuid::Uuid::new_v4(),
+        target: crate::connect_plan::Target::Node(uuid::Uuid::new_v4()),
         shared: Arc::new(Shared {
             sink: Arc::new(Sink::new(channel)),
             hub: Arc::new(PromptHub::default()),
@@ -1263,6 +1352,7 @@ fn entry_in(phase: Phase) -> Arc<Entry> {
             phase: Mutex::new(phase),
             size: Mutex::new((80, 24)),
             ops: Mutex::new(None),
+            input_budget: InputBudget::default(),
         }),
         task: Mutex::new(None),
     })
@@ -1292,4 +1382,194 @@ fn a_confirmation_is_needed_only_with_a_connected_session() {
     assert!(!needs_close_confirmation(0));
     assert!(needs_close_confirmation(1));
     assert!(needs_close_confirmation(3));
+}
+
+#[test]
+fn an_explicit_exit_code_is_never_intercepted() {
+    assert_eq!(exit_action(Some(0), 3, false), ExitAction::Allow);
+    assert_eq!(exit_action(Some(1), 3, true), ExitAction::Allow);
+}
+
+#[test]
+fn no_connected_session_allows_the_exit() {
+    assert_eq!(exit_action(None, 0, false), ExitAction::Allow);
+    assert_eq!(exit_action(None, 0, true), ExitAction::Allow);
+}
+
+#[test]
+fn a_connected_session_asks() {
+    assert_eq!(exit_action(None, 1, false), ExitAction::Ask);
+}
+
+#[test]
+fn a_second_request_while_the_dialog_is_open_prevents_without_a_second_dialog() {
+    assert_eq!(exit_action(None, 2, true), ExitAction::Prevent);
+}
+
+// ---------- input queue cap ----------
+
+#[test]
+fn input_over_the_cap_is_refused_with_input_queue_full() {
+    let manager = SessionManager::default();
+    let entry = entry_in(Phase::Connected);
+    let (tx, mut ops) = unbounded_channel();
+    *entry.shared.ops.lock().unwrap() = Some(tx);
+    manager
+        .entries
+        .lock()
+        .unwrap()
+        .insert("a".to_string(), Arc::clone(&entry));
+    let budget = &entry.shared.input_budget;
+    assert!(budget.try_reserve(crate::session_flow::MAX_QUEUED_INPUT - 4));
+    manager.input("a", b"abcd".to_vec()).unwrap();
+    let refused = manager.input("a", b"e".to_vec()).unwrap_err();
+    assert_eq!(refused.code, "input_queue_full");
+    assert_eq!(refused.message, "too much input is waiting; try again");
+    // the session stays alive: the phase is unchanged and what was queued is still there
+    assert_eq!(entry.shared.phase().unwrap(), Phase::Connected);
+    assert!(matches!(ops.try_recv().unwrap(), Op::Data(d) if d == b"abcd"));
+    assert!(ops.try_recv().is_err(), "the refused input was not queued");
+    // once the writer released what it handled, input is accepted again
+    budget.release(4);
+    manager.input("a", b"e".to_vec()).unwrap();
+}
+
+#[test]
+fn a_closed_queue_gives_the_reservation_back() {
+    let manager = SessionManager::default();
+    let entry = entry_in(Phase::Connected);
+    let (tx, ops) = unbounded_channel();
+    *entry.shared.ops.lock().unwrap() = Some(tx);
+    manager
+        .entries
+        .lock()
+        .unwrap()
+        .insert("a".to_string(), Arc::clone(&entry));
+    drop(ops);
+    assert_eq!(
+        manager.input("a", b"abc".to_vec()).unwrap_err().code,
+        "session_not_connected"
+    );
+    assert_eq!(entry.shared.input_budget.queued(), 0);
+}
+
+#[test]
+fn unhandled_ops_release_their_budget_when_the_writer_stops() {
+    let shared = entry_in(Phase::Connected).shared.clone();
+    let (tx, mut ops) = unbounded_channel();
+    for op in [
+        Op::Data(vec![0; 10]),
+        Op::Clipboard("abc".into()),
+        Op::Close,
+    ] {
+        assert!(shared.input_budget.try_reserve(op.weight()));
+        tx.send(op).unwrap();
+    }
+    assert_eq!(shared.input_budget.queued(), 13);
+    release_unhandled(&mut ops, &shared);
+    assert_eq!(shared.input_budget.queued(), 0);
+}
+
+// ---------- restored tabs (no server needed) ----------
+
+fn restored(st: &AppState, node: fernjo_core::NodeId) -> (String, Rec) {
+    let (ch, rec) = recorder();
+    let view = crate::open_tabs::TargetView {
+        node: Some(node),
+        quick: None,
+    };
+    let id = crate::session_commands::restore_session(st, view, ch, 80, 24).unwrap();
+    (id, rec)
+}
+
+#[tokio::test]
+async fn a_restored_session_is_disconnected_and_does_not_count_as_connected() {
+    let r = rig("127.0.0.1", 1, "u", "p", false);
+    let (_id, mut rec) = restored(&r.st, r.node);
+    assert_eq!(r.st.sessions.len(), 1);
+    assert_eq!(r.st.sessions.connected_count(), 0);
+    assert_eq!(
+        rec.wait_state("disconnected").await.as_deref(),
+        Some(RESTORED_TEXT)
+    );
+    assert_eq!(rec.seen.len(), 1, "nothing else is sent: {:?}", rec.seen);
+}
+
+#[tokio::test]
+async fn a_restored_session_never_ends_cleanly() {
+    let r = rig("127.0.0.1", 1, "u", "p", false);
+    let (_id, mut rec) = restored(&r.st, r.node);
+    rec.wait_state("disconnected").await;
+    assert_eq!(rec.seen[0]["endedCleanly"], json!(false));
+    assert_eq!(rec.seen[0]["exitStatus"], Value::Null);
+}
+
+#[tokio::test]
+async fn restore_of_a_deleted_node_is_not_found() {
+    let r = rig("127.0.0.1", 1, "u", "p", false);
+    let folder = commands::create_folder(&r.st, None, None, "f".into())
+        .unwrap()
+        .id
+        .unwrap();
+    let try_restore = |node| {
+        let (ch, _rec) = recorder();
+        let view = crate::open_tabs::TargetView {
+            node: Some(node),
+            quick: None,
+        };
+        code(crate::session_commands::restore_session(
+            &r.st, view, ch, 80, 24,
+        ))
+    };
+    assert_eq!(try_restore(fernjo_core::NodeId::new_v4()), "not_found");
+    assert_eq!(try_restore(folder), "not_a_connection");
+    commands::delete_node(&r.st, r.node).unwrap();
+    assert_eq!(try_restore(r.node), "not_found");
+    assert_eq!(r.st.sessions.len(), 0);
+}
+
+#[tokio::test]
+async fn reconnect_of_a_restored_session_connects_with_the_current_plan() {
+    let r = rig("127.0.0.1", 1, "u", "p", false);
+    let (id, mut rec) = restored(&r.st, r.node);
+    rec.wait_state("disconnected").await;
+    // the plan is resolved now: with the vault locked the session waits for it
+    vault_lock(&r.st).unwrap();
+    reconnect_session(&r.st, &id, 80, 24).unwrap();
+    rec.wait_state("needsVault").await;
+    assert_eq!(r.st.sessions.connected_count(), 0);
+    // a quick target restores and connects too (nothing listens on port 1: it ends in an error)
+    let (ch, mut quick_rec) = recorder();
+    let view = crate::open_tabs::TargetView {
+        node: None,
+        quick: Some(fernjo_core::parse_quick("user@127.0.0.1:1").unwrap()),
+    };
+    let quick_id = crate::session_commands::restore_session(&r.st, view, ch, 80, 24).unwrap();
+    quick_rec.wait_state("disconnected").await;
+    reconnect_session(&r.st, &quick_id, 80, 24).unwrap();
+    quick_rec.wait_state("connecting").await;
+}
+
+#[tokio::test]
+async fn close_all_does_not_touch_the_open_tabs_file() {
+    let data = tempfile::tempdir().unwrap();
+    let device = tempfile::tempdir().unwrap();
+    let st = AppState::open_with_device_dir(data.path().to_path_buf(), device.path().to_path_buf());
+    let node = commands::create_connection(&st, None, None, "c".into(), Protocol::Ssh, "h".into())
+        .unwrap()
+        .id
+        .unwrap();
+    let tab = crate::open_tabs::SavedTab {
+        node: Some(node),
+        quick: None,
+    };
+    crate::open_tabs::save_open_tabs(&st, vec![tab.clone()], Some(0)).unwrap();
+    let path = device.path().join(crate::open_tabs::FILE_NAME);
+    let before = std::fs::read(&path).unwrap();
+    let (_id, mut rec) = restored(&st, node);
+    rec.wait_state("disconnected").await;
+    st.sessions.close_all();
+    assert_eq!(st.sessions.len(), 0);
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_eq!(crate::open_tabs::load(device.path()).tabs, vec![tab]);
 }

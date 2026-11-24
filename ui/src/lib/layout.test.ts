@@ -2,15 +2,19 @@ import { afterEach, expect, test, vi } from "vitest";
 import {
   LAYOUT_KEY,
   LayoutStore,
+  PANEL_MIN,
+  SIDEBAR_CHROME,
   SIDEBAR_DEFAULT,
   SIDEBAR_MAX,
   SIDEBAR_MIN,
+  TREE_RESERVE,
   TREE_ROWS_DEFAULT,
   TREE_ROWS_SIZED,
   clampPanelHeight,
   clampSidebarWidth,
   treeMinHeight,
 } from "./layout.svelte";
+import sidebarSource from "./components/Sidebar.svelte?raw";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -25,19 +29,19 @@ test("clampSidebarWidth keeps the width between the minimum and half the window"
   expect(clampSidebarWidth(NaN, 1280)).toBe(SIDEBAR_DEFAULT);
 });
 
-test("clampPanelHeight leaves the tree its minimum rows (23 rows at 1280x800)", () => {
-  const treeMin = Math.min(24 * 23, 800 - 120);
-  expect(treeMin).toBe(552);
-  const available = 800 - 90; // sidebar height minus filter, notices and footer
+test("clampPanelHeight leaves the tree its minimum rows (21 rows at 1280x800)", () => {
+  const treeMin = Math.min(24 * 21, 800 - TREE_RESERVE);
+  expect(treeMin).toBe(504);
+  const available = 800 - 117; // sidebar height minus filter, notices and footer
   const tallest = clampPanelHeight(5000, available, treeMin);
   expect(tallest).toBe(available - treeMin);
-  expect(treeMin / 24).toBeGreaterThanOrEqual(23);
+  expect(treeMin / 24).toBeGreaterThanOrEqual(21);
   expect(clampPanelHeight(5, available, treeMin)).toBe(26);
   expect(clampPanelHeight(5000, 100, treeMin)).toBe(26);
 });
 
-test("a panel the user sized may grow past the 23-row default and leaves the tree 6 rows", () => {
-  const available = 800 - 90;
+test("a panel the user sized may grow past the 21-row default and leaves the tree 6 rows", () => {
+  const available = 800 - 117;
   const row = 24;
   const byDefault = clampPanelHeight(5000, available, treeMinHeight(false, row, 800));
   const sized = clampPanelHeight(5000, available, treeMinHeight(true, row, 800));
@@ -46,7 +50,7 @@ test("a panel the user sized may grow past the 23-row default and leaves the tre
   expect(sized).toBeGreaterThan(byDefault);
   expect(sized).toBe(available - row * 6);
   // a very short window never asks for more rows than fit
-  expect(treeMinHeight(false, row, 400)).toBe(280);
+  expect(treeMinHeight(false, row, 400)).toBe(400 - TREE_RESERVE);
 });
 
 test("a corrupt stored value falls back to the defaults", () => {
@@ -97,4 +101,20 @@ test("blocked storage does not throw", () => {
   expect(layout.sidebarWidth).toBe(SIDEBAR_DEFAULT);
   expect(() => layout.setSidebarWidth(400)).not.toThrow();
   expect(layout.sidebarWidth).toBe(400);
+});
+
+test("the tree reserve covers the fixed sidebar chrome plus the panel header", () => {
+  const chrome = Object.values(SIDEBAR_CHROME).reduce((a, b) => a + b, 0);
+  // a new fixed row in the sidebar must raise SIDEBAR_CHROME and TREE_RESERVE together
+  expect(TREE_RESERVE).toBeGreaterThanOrEqual(chrome + PANEL_MIN);
+  // the panel keeps at least the room it had before quick connect (81 px chrome, 23 rows) at 1280x800
+  const room = 800 - chrome - treeMinHeight(false, 24, 800);
+  expect(room).toBeGreaterThanOrEqual(800 - 81 - 24 * 23);
+});
+
+test("Sidebar.svelte's tree-slot minimum uses the same rows and reserve", () => {
+  expect(sidebarSource).toContain(
+    `min(calc(var(--row-height-tree) * ${TREE_ROWS_DEFAULT}), calc(100vh - ${TREE_RESERVE}px))`,
+  );
+  expect(sidebarSource).toContain(`min-height: calc(var(--row-height-tree) * ${TREE_ROWS_SIZED})`);
 });

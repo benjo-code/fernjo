@@ -1,6 +1,9 @@
 //! Access to the user's SSH agent (Unix socket from `SSH_AUTH_SOCK`, the OpenSSH named pipe on
 //! Windows) and the order in which its identities are tried.
 
+use std::future::Future;
+use std::pin::Pin;
+
 use russh::keys::PublicKey;
 use russh::keys::agent::client::{AgentClient, AgentStream};
 
@@ -17,17 +20,60 @@ pub(crate) async fn connect() -> Option<Agent> {
         .map(AgentClient::dynamic)
 }
 
+/// Windows: the OpenSSH pipe first, Pageant when the pipe is unavailable or holds no keys. If both
+/// hold keys only the OpenSSH agent is used.
 #[cfg(windows)]
 pub(crate) async fn connect() -> Option<Agent> {
-    AgentClient::connect_named_pipe(r"\\.\pipe\openssh-ssh-agent")
-        .await
-        .ok()
-        .map(AgentClient::dynamic)
+    async fn counted(agent: Option<Agent>) -> Option<(Agent, usize)> {
+        let mut agent = agent?;
+        let count = agent.request_identities().await.ok()?.len();
+        Some((agent, count))
+    }
+    let pipe: Source<Agent> = Box::new(|| {
+        Box::pin(async {
+            let agent = AgentClient::connect_named_pipe(r"\\.\pipe\openssh-ssh-agent")
+                .await
+                .ok()
+                .map(AgentClient::dynamic);
+            counted(agent).await
+        })
+    });
+    let pageant: Source<Agent> = Box::new(|| {
+        Box::pin(async {
+            let agent = AgentClient::connect_pageant()
+                .await
+                .ok()
+                .map(AgentClient::dynamic);
+            counted(agent).await
+        })
+    });
+    first_with_identities(vec![pipe, pageant]).await
 }
 
 #[cfg(not(any(unix, windows)))]
 pub(crate) async fn connect() -> Option<Agent> {
     None
+}
+
+/// A lazily started agent source: yields the agent and the number of identities it holds.
+pub(crate) type Source<T> =
+    Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = Option<(T, usize)>> + Send>> + Send>;
+
+/// Runs the sources in order and stops at the first one with identities. When none has any, the
+/// first one that connected is returned; `None` when none connected.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+pub(crate) async fn first_with_identities<T>(sources: Vec<Source<T>>) -> Option<T> {
+    let mut empty = None;
+    for source in sources {
+        match source().await {
+            Some((agent, n)) if n > 0 => return Some(agent),
+            Some((agent, _)) => {
+                empty.get_or_insert(agent);
+            }
+            None => {}
+        }
+    }
+    empty
 }
 
 /// The identity equal to `preferred` first, the others in their original order. Keys are compared
@@ -77,5 +123,51 @@ mod tests {
             order_identities(vec![a.clone(), b.clone()], Some(&key(3))),
             [a, b]
         );
+    }
+
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn source(label: &'static str, count: Option<usize>) -> Source<&'static str> {
+        Box::new(move || Box::pin(async move { count.map(|n| (label, n)) }))
+    }
+
+    #[tokio::test]
+    async fn first_source_with_identities_wins() {
+        let got = first_with_identities(vec![source("pipe", Some(1)), source("pageant", Some(2))]);
+        assert_eq!(got.await, Some("pipe"));
+    }
+
+    #[tokio::test]
+    async fn pageant_is_used_when_the_pipe_is_empty() {
+        let got = first_with_identities(vec![source("pipe", Some(0)), source("pageant", Some(2))]);
+        assert_eq!(got.await, Some("pageant"));
+    }
+
+    #[tokio::test]
+    async fn pageant_is_used_when_the_pipe_is_unavailable() {
+        let got = first_with_identities(vec![source("pipe", None), source("pageant", Some(1))]);
+        assert_eq!(got.await, Some("pageant"));
+    }
+
+    #[tokio::test]
+    async fn an_empty_agent_is_still_returned_when_nothing_has_identities() {
+        let got = first_with_identities(vec![source("pipe", Some(0)), source("pageant", Some(0))]);
+        assert_eq!(got.await, Some("pipe"));
+        let none = first_with_identities(vec![source("pipe", None), source("pageant", None)]);
+        assert_eq!(none.await, None);
+    }
+
+    #[tokio::test]
+    async fn a_later_source_is_not_started_when_an_earlier_one_has_identities() {
+        let started = Arc::new(AtomicUsize::new(0));
+        let counter = started.clone();
+        let later: Source<&'static str> = Box::new(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Some(("pageant", 3)) })
+        });
+        let got = first_with_identities(vec![source("pipe", Some(1)), later]).await;
+        assert_eq!(got, Some("pipe"));
+        assert_eq!(started.load(Ordering::SeqCst), 0);
     }
 }

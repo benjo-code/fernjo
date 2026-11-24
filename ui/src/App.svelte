@@ -9,11 +9,14 @@
   import Sidebar from "./lib/components/Sidebar.svelte";
   import TabStrip from "./lib/components/TabStrip.svelte";
   import VaultManager from "./lib/components/VaultManager.svelte";
+  import { startActivityHeartbeat } from "./lib/activity";
   import { ImportStore } from "./lib/import.svelte";
+  import { OpenTabsStore } from "./lib/open-tabs.svelte";
   import { LayoutStore, SIDEBAR_DEFAULT } from "./lib/layout.svelte";
   import { findNode } from "./lib/rows";
   import { SessionStore } from "./lib/sessions.svelte";
   import { isMac, routeKey } from "./lib/shortcuts";
+  import { tabToClose } from "./lib/tabs";
   import { TreeStore } from "./lib/store.svelte";
   import { SyncStore } from "./lib/sync.svelte";
   import { syncErrorText } from "./lib/sync-errors";
@@ -41,6 +44,9 @@
     () => (terminal.info ?? DEFAULT_TERMINAL).closeOnExit,
     protocolOf,
   );
+
+  // svelte-ignore state_referenced_locally
+  const openTabs = new OpenTabsStore(api, sessions);
 
   // svelte-ignore state_referenced_locally
   const theme = new ThemeStore(api);
@@ -92,6 +98,33 @@
     if (sessions.error !== null) {
       store.showError(sessions.error);
       sessions.error = null;
+    }
+  });
+
+  // "Reconnect all" asks for the vault at most once. The unlock form is the one in the sidebar;
+  // this waits until the vault is unlocked (answers true) or until the question is asked again
+  // or the vault turns out to be unusable (answers false).
+  let vaultWaiter: ((unlocked: boolean) => void) | null = null;
+
+  function ensureVault(): Promise<boolean> {
+    vaultWaiter?.(false);
+    vaultWaiter = null;
+    const state = vault.status?.state;
+    if (state === "unlocked") return Promise.resolve(true);
+    if (state !== "locked" && state !== "none") return Promise.resolve(false);
+    sidebar?.focusVaultForm();
+    return new Promise((resolve) => (vaultWaiter = resolve));
+  }
+
+  $effect(() => {
+    const state = vault.status?.state;
+    if (!vaultWaiter) return;
+    if (state === "unlocked") {
+      vaultWaiter(true);
+      vaultWaiter = null;
+    } else if (state === "unusable") {
+      vaultWaiter(false);
+      vaultWaiter = null;
     }
   });
 
@@ -199,15 +232,18 @@
       if (action === "nextTab") sessions.next();
       else sessions.previous();
     } else if (action === "closeTab") {
-      if (sessions.activeId === null) return;
+      const closing = tabToClose(view, sessions.activeId);
+      if (closing === null) return;
       // a held key must not close one tab after the other
       if (e.repeat) {
         e.preventDefault();
         return;
       }
-      sessions.requestClose(sessions.activeId);
+      sessions.requestClose(closing);
     } else if (action === "focusFilter") {
       sidebar?.focusFilter();
+    } else if (action === "quickConnect") {
+      sidebar?.focusQuickConnect();
     } else {
       return;
     }
@@ -215,15 +251,30 @@
   }
 
   onMount(() => {
-    void store.init();
+    // the saved tabs come back once the tree is there (their names and protocols follow it)
+    void store.init().finally(() => void openTabs.load());
     void vault.init();
+    void vault.listen();
     void refreshRestart();
     void terminal.load();
     void theme.load();
     void sync.init();
   });
 
-  onDestroy(() => sync.dispose());
+  // Rust owns the idle clock for the vault auto-lock; this only reports that the user is there.
+  onMount(() =>
+    startActivityHeartbeat(
+      () => void api.noteActivity().catch(() => {}),
+      window,
+      () => Date.now(),
+    ),
+  );
+
+  onDestroy(() => {
+    openTabs.dispose();
+    sync.dispose();
+    vault.dispose();
+  });
 </script>
 
 <svelte:window
@@ -264,7 +315,7 @@
   </Sidebar>
   <main class="main">
     {#if sessions.tabs.length > 0 && !sessions.remoteFullscreen}
-      <TabStrip {sessions} {protocolOf} />
+      <TabStrip {sessions} {protocolOf} onreconnectall={() => sessions.reconnectAll(ensureVault)} />
     {/if}
     <div class="content">
       {#if view === "vault"}
@@ -322,6 +373,7 @@
     {terminal}
     {theme}
     {sync}
+    {openTabs}
     scrollToSync={settingsAtSync}
     onexport={() => (importOpen = true)}
     onclose={() => (folderOpen = false)}

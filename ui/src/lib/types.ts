@@ -4,6 +4,14 @@
 
 export type Protocol = "ssh" | "rdp";
 
+/** A connection typed into the quick connect field; Rust parses it and never stores it. */
+export interface QuickTarget {
+  protocol: Protocol;
+  host: string;
+  port: number;
+  user: string | null;
+}
+
 /** How big an RDP desktop is: it follows the tab, or has a fixed size in pixels. */
 export type RdpResolution = { mode: "fit" } | { mode: "fixed"; width: number; height: number };
 
@@ -232,6 +240,31 @@ export interface Api {
     cols: number,
     rows: number,
   ): Promise<string>;
+  /** Parses `[ssh://|rdp://][user@]host[:port]`; rejects with a `quick_*` error. */
+  quickParse(input: string): Promise<QuickTarget>;
+  /** The OS clipboard text for the terminal menu Paste; rejects with `clipboard_*` errors. */
+  clipboardReadText(): Promise<string>;
+  /** Like `openSession` for a target that is not in the tree. */
+  openQuickSession(
+    target: QuickTarget,
+    onEvent: (e: SessionEvent | ArrayBuffer) => void,
+    cols: number,
+    rows: number,
+  ): Promise<string>;
+  /**
+   * Creates the session of a tab that was restored from the last run; it starts disconnected
+   * (Rust sends the explaining state event) and connects with `reconnectSession`.
+   */
+  restoreSession(
+    target: TargetView,
+    onEvent: (e: SessionEvent | ArrayBuffer) => void,
+    cols: number,
+    rows: number,
+  ): Promise<string>;
+  getOpenTabs(): Promise<OpenTabsInfo>;
+  setReopenTabs(enabled: boolean): Promise<OpenTabsInfo>;
+  /** Saves the open tabs (targets only) and the index of the active one. */
+  saveOpenTabs(tabs: SavedTab[], active: number | null): Promise<void>;
   sessionInput(id: string, data: Uint8Array): Promise<void>;
   /** RDP: keyboard and mouse events (at most 256 per call; coordinates are desktop pixels). */
   rdpInput(id: string, events: RdpInputEvent[]): Promise<void>;
@@ -253,6 +286,11 @@ export interface Api {
   }): Promise<TerminalSettings>;
   getTheme(): Promise<ThemeInfo>;
   setTheme(theme: Theme): Promise<ThemeInfo>;
+  getVaultAutoLock(): Promise<AutoLockInfo>;
+  /** `null` turns it off; Rust refuses a value outside 1 to 1440 with `invalid_auto_lock`. */
+  setVaultAutoLock(minutes: number | null): Promise<AutoLockInfo>;
+  /** The throttled heartbeat of user input; restarts Rust's idle clock. */
+  noteActivity(): Promise<void>;
   /** Opens the native file picker; `null` when it was cancelled. */
   importPick(kind: ImportKind): Promise<PickedFile | null>;
   /** The secret is an mRemoteNG key or a backup password; the only secret that goes in. */
@@ -281,6 +319,8 @@ export interface Api {
   syncDismissFindings(): Promise<void>;
   /** Subscribes to the `sync-status` event; resolves with the function that unsubscribes. */
   onSyncStatus(handler: (status: SyncStatus) => void): Promise<() => void>;
+  /** Subscribes to the `vault-status` event (Rust locked the vault); resolves with the unsubscribe function. */
+  onVaultStatus(handler: (status: VaultStatus) => void): Promise<() => void>;
 }
 
 export type SyncState =
@@ -472,6 +512,14 @@ export interface ThemeInfo {
   unsavedReason: UnsavedReason | null;
 }
 
+/** The vault auto-lock setting (`get_vault_auto_lock`). */
+export interface AutoLockInfo {
+  /** Idle minutes before the vault locks itself; `null` is off. */
+  minutes: number | null;
+  persistent: boolean;
+  unsavedReason: UnsavedReason | null;
+}
+
 export interface TerminalSettings {
   /** `null` means the default monospace stack. */
   fontFamily: string | null;
@@ -483,4 +531,37 @@ export interface TerminalSettings {
   persistent: boolean;
   /** Why they are not saved; `null` when they are. */
   unsavedReason: UnsavedReason | null;
+}
+
+/** A session target on the wire: exactly one of the two fields is present. */
+export interface TargetView {
+  node?: string;
+  quick?: QuickTarget;
+}
+
+/** One tab as it is saved: exactly one of the two fields is present. */
+export interface SavedTab {
+  node?: string;
+  quick?: QuickTarget;
+}
+
+/** A saved tab that still resolves; the title, protocol and credential use come from the tree. */
+export interface RestorableTab {
+  target: TargetView;
+  protocol: Protocol;
+  title: string;
+  /** The connection has an effective credential, so connecting needs the vault. */
+  usesVault: boolean;
+}
+
+/** `get_open_tabs` / `set_reopen_tabs`. */
+export interface OpenTabsInfo {
+  /** The "Reopen tabs on start" setting. */
+  reopen: boolean;
+  /** `false` when the setting only lives in memory. */
+  persistent: boolean;
+  unsavedReason: UnsavedReason | null;
+  /** Index into `tabs` of the tab that was active. */
+  active: number | null;
+  tabs: RestorableTab[];
 }

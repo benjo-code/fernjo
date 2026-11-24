@@ -97,7 +97,8 @@
 
   .vertical {
     top: 0;
-    right: -3px;
+    /* the whole 6 px hit area hangs outside the sidebar, clear of the tree's scrollbar */
+    right: -6px;
     bottom: 0;
     width: 6px;
     cursor: col-resize;
@@ -117,9 +118,31 @@
     opacity: 0.35;
   }
 
+  /* keyboard focus: a 1 px line centred in the 6 px hit area, drawn on a pseudo-element
+     so the hover fade of the hit area never dims it */
   .splitter:focus-visible {
-    background: var(--color-focus);
+    background: transparent;
     opacity: 1;
     outline: none;
+  }
+
+  .splitter:focus-visible::after {
+    content: "";
+    position: absolute;
+    background: var(--color-focus);
+  }
+
+  .vertical:focus-visible::after {
+    top: 0;
+    bottom: 0;
+    left: calc(50% - 0.5px);
+    width: 1px;
+  }
+
+  .horizontal:focus-visible::after {
+    left: 0;
+    right: 0;
+    top: calc(50% - 0.5px);
+    height: 1px;
   }
 </style>

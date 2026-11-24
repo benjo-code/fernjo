@@ -328,6 +328,21 @@ describe("ImportDialog", () => {
     );
   });
 
+  test("restore_confirmation_names_what_is_replaced_and_what_is_kept", async () => {
+    await setup({
+      vaultStatus: async () => vaultStatus({ state: "unlocked" }),
+      listCredentials: async () => [credential({ id: "c1" })],
+      importPick: async () => ({ fileName: "b.fernjo" }),
+      importInspect: async () => backupPreview(true, "unlocked"),
+    });
+    await click("Backup file…");
+    await click("Restore…");
+    const text = document.querySelector("[role=alertdialog]")!.textContent!;
+    expect(text).toContain("0 folders and connections and 1 credential");
+    expect(text).toContain("Open sessions are closed.");
+    expect(text).toContain("Kept: the vault password, known hosts, settings and sync setup.");
+  });
+
   test("restore_confirmation_does_not_claim_zero_credentials_for_a_locked_vault", async () => {
     await setup({
       vaultStatus: async () => vaultStatus({ state: "locked" }),

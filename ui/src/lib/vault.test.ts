@@ -305,3 +305,27 @@ describe("VaultStore", () => {
     expect(calls.vaultSetAutoUnlock).toHaveLength(0);
   });
 });
+
+describe("VaultStore events", () => {
+  test("a_vault_status_event_updates_the_chip", async () => {
+    const m = mockApi([], {
+      vaultStatus: async () => unlocked(),
+      listCredentials: async () => [credential({ id: "c1", name: "deploy key" })],
+    });
+    const store = new VaultStore(m.api);
+    await store.init();
+    await store.listen();
+    expect(store.status?.state).toBe("unlocked");
+    expect(store.credentials).toHaveLength(1);
+
+    m.emitVault(locked());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(store.status?.state).toBe("locked");
+    expect(store.credentials).toEqual([]);
+
+    store.dispose();
+    m.emitVault(unlocked());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(store.status?.state).toBe("locked");
+  });
+});

@@ -18,7 +18,7 @@ use tokio::sync::{Notify, mpsc};
 use crate::SshError;
 use crate::agent::{self, Agent};
 use crate::auth_plan::{Attempt, AuthPlanner, Available, Offered};
-use crate::handler::{ClientHandler, Rejection};
+use crate::handler::{ClientHandler, PendingTrust, Rejection};
 use crate::interaction::{Interaction, KiPrompt, KiRound};
 use crate::known_hosts::KnownHosts;
 use crate::params::{ConnectParams, Credential};
@@ -571,7 +571,10 @@ impl Session {
             interaction: Arc::clone(&interaction),
             rejection: Arc::clone(&rejection),
             prompting: Arc::clone(&prompting),
+            pending_trust: PendingTrust::default(),
         };
+        // The handler moves into the connection; this copy shares its parked trust decision.
+        let trust = handler.clone();
         let handshake = client::connect_stream(Arc::new(config), stream, handler);
         let mut handle =
             match with_handshake_deadline(handshake, &prompting, params.connect_timeout).await? {
@@ -586,6 +589,9 @@ impl Session {
                     }));
                 }
             };
+
+        // The key exchange is verified: only now is the user's decision about the key written.
+        trust.apply_pending_trust()?;
 
         authenticate(&mut handle, &params, interaction.as_ref()).await?;
 

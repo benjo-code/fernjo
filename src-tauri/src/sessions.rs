@@ -15,6 +15,13 @@
 //!   [`MIN_AUTO_CLOSE_SESSION`]) are set on the `disconnected` event that ends a connected
 //!   session and are `null`/`false` on every other event; the UI decides what to do with them.
 //!
+//! **Restored tabs:** `restore_session` (same `on_event` channel, `cols` and `rows` as
+//! `open_session`) creates the session without connecting. Its only event is `{kind:"state",
+//! state:"disconnected", detail:RESTORED_TEXT, exitStatus:null, endedCleanly:false}`; the tab
+//! then behaves like any disconnected one, and `reconnect_session` resolves the plan from the
+//! tree as it is then. A restored session is never "ended cleanly" and does not count as
+//! connected for the close confirmation.
+//!
 //! The UI tells them apart with `message instanceof ArrayBuffer`. Input travels the other way as
 //! the raw request body of `session_input` (the session id in the `x-fernjo-session` header).
 //! The UI acknowledges output with `session_ack(id, bytes)` once xterm.js has written it; more
@@ -80,8 +87,8 @@ use tokio::sync::{Notify, oneshot};
 use tokio::time::Instant;
 
 use crate::commands::CommandError;
-use crate::connect_plan::{self, ConnectPlan, CredentialPlan, Plan};
-use crate::session_flow::FlowControl;
+use crate::connect_plan::{self, ConnectPlan, CredentialPlan, Plan, Target};
+use crate::session_flow::{FlowControl, InputBudget};
 use crate::state::AppState;
 
 /// Largest raw output message.
@@ -92,6 +99,8 @@ pub const BATCH_INTERVAL: Duration = Duration::from_millis(16);
 /// connected at least this long, so a shell that dies at once (a broken profile script) keeps its
 /// tab and its message.
 pub const MIN_AUTO_CLOSE_SESSION: Duration = Duration::from_secs(5);
+/// The reason text of a tab restored from the last run: it exists, but nothing is connected.
+pub const RESTORED_TEXT: &str = "Restored from your last session. Not connected.";
 
 fn error(code: &str, message: impl Into<String>) -> CommandError {
     CommandError {
@@ -578,6 +587,19 @@ enum Op {
     Close,
 }
 
+impl Op {
+    /// Bytes this op counts against the session's `InputBudget` (0 for resize and close, which
+    /// are small and must never be refused).
+    fn weight(&self) -> usize {
+        match self {
+            Op::Data(data) => data.len(),
+            Op::Rdp(events) => events.len() * std::mem::size_of::<fernjo_rdp::InputEvent>(),
+            Op::Clipboard(text) => text.len(),
+            Op::Resize(..) | Op::Close => 0,
+        }
+    }
+}
+
 /// State shared by the manager, the connect task and the interaction.
 struct Shared {
     sink: Arc<Sink>,
@@ -590,9 +612,29 @@ struct Shared {
     /// Input, resizes and the close request, in order, towards the live `Session`. `None` while
     /// there is no shell.
     ops: Mutex<Option<UnboundedSender<Op>>>,
+    /// Input bytes queued in `ops` and not yet handled by the writer.
+    input_budget: InputBudget,
 }
 
 impl Shared {
+    /// Queues `op` for the writer. Input is reserved against the budget first and the reservation
+    /// goes back when the op was not queued; the writer releases it after handling the op.
+    fn queue(&self, op: Op, no_session: impl Fn() -> CommandError) -> Result<(), CommandError> {
+        let ops = lock(&self.ops)?;
+        let tx = ops.as_ref().ok_or_else(&no_session)?;
+        let weight = op.weight();
+        if !self.input_budget.try_reserve(weight) {
+            return Err(error(
+                "input_queue_full",
+                "too much input is waiting; try again",
+            ));
+        }
+        tx.send(op).map_err(|_| {
+            self.input_budget.release(weight);
+            no_session()
+        })
+    }
+
     fn set_phase(&self, phase: Phase) {
         if let Ok(mut p) = self.phase.lock() {
             *p = phase;
@@ -620,7 +662,7 @@ impl Shared {
 }
 
 struct Entry {
-    node_id: NodeId,
+    target: Target,
     shared: Arc<Shared>,
     task: Mutex<Option<JoinHandle<()>>>,
 }
@@ -735,7 +777,23 @@ impl SessionManager {
         cols: u32,
         rows: u32,
     ) -> Result<String, CommandError> {
-        let plan = connect_plan::resolve_session(state, node_id, false)?;
+        self.open_target(state, Target::Node(node_id), channel, cols, rows)
+    }
+
+    /// Resolves the target (a tree node or a quick connect target) and starts its session.
+    ///
+    /// # Errors
+    /// What `connect_plan::resolve_target` reports, or `no_data_dir`. A quick target is checked
+    /// again here (`invalid_host`), whatever the webview parsed.
+    pub fn open_target(
+        &self,
+        state: &AppState,
+        target: Target,
+        channel: Channel<InvokeResponseBody>,
+        cols: u32,
+        rows: u32,
+    ) -> Result<String, CommandError> {
+        let plan = connect_plan::resolve_target(state, &target, false)?;
         let hosts = self.host_files(state)?;
         let shared = Arc::new(Shared {
             sink: Arc::new(Sink::new(channel)),
@@ -745,15 +803,54 @@ impl SessionManager {
             phase: Mutex::new(Phase::Connecting),
             size: Mutex::new((cols, rows)),
             ops: Mutex::new(None),
+            input_budget: InputBudget::default(),
         });
         let entry = Arc::new(Entry {
-            node_id,
+            target,
             shared,
             task: Mutex::new(None),
         });
         let id = uuid::Uuid::new_v4().to_string();
         lock(&self.entries)?.insert(id.clone(), Arc::clone(&entry));
         start(&entry, plan, hosts);
+        Ok(id)
+    }
+
+    /// Creates a session entry in the disconnected state without connecting (a tab restored from
+    /// the last run): it sends the disconnected event with [`RESTORED_TEXT`] (not clean, no exit
+    /// status) and waits for `reconnect`, which resolves the plan then. It never counts as
+    /// connected.
+    ///
+    /// # Errors
+    /// `not_found` / `not_a_connection` for a node that is gone or a folder, a structure code for
+    /// a bad quick target.
+    pub fn restore(
+        &self,
+        state: &AppState,
+        target: Target,
+        channel: Channel<InvokeResponseBody>,
+        cols: u32,
+        rows: u32,
+    ) -> Result<String, CommandError> {
+        connect_plan::check_target(state, &target)?;
+        let shared = Arc::new(Shared {
+            sink: Arc::new(Sink::new(channel)),
+            hub: Arc::new(PromptHub::default()),
+            flow: Mutex::new(FlowControl::default()),
+            wake: Notify::new(),
+            phase: Mutex::new(Phase::Disconnected),
+            size: Mutex::new((cols, rows)),
+            ops: Mutex::new(None),
+            input_budget: InputBudget::default(),
+        });
+        let entry = Arc::new(Entry {
+            target,
+            shared,
+            task: Mutex::new(None),
+        });
+        let id = uuid::Uuid::new_v4().to_string();
+        lock(&self.entries)?.insert(id.clone(), Arc::clone(&entry));
+        entry.shared.failed(RESTORED_TEXT.to_string());
         Ok(id)
     }
 
@@ -803,11 +900,12 @@ impl SessionManager {
         entry: &Arc<Entry>,
         skip_vault: bool,
     ) -> Result<(), CommandError> {
-        let plan = connect_plan::resolve_session(state, entry.node_id, skip_vault);
+        let plan = connect_plan::resolve_target(state, &entry.target, skip_vault);
         match (plan, self.host_files(state)) {
             (Ok(plan), Ok(hosts)) => start(entry, plan, hosts),
             (Err(e), _) | (_, Err(e)) => {
-                let text = if e.code == "not_found" {
+                // only a tree node can be gone
+                let text = if e.code == "not_found" && matches!(entry.target, Target::Node(_)) {
                     GONE.to_string()
                 } else {
                     e.message
@@ -824,12 +922,9 @@ impl SessionManager {
     /// `not_found`; `session_not_connected` while there is no shell.
     pub fn input(&self, id: &str, data: Vec<u8>) -> Result<(), CommandError> {
         let entry = self.entry(id)?;
-        let ops = lock(&entry.shared.ops)?;
-        let no_shell = || error("session_not_connected", "the session has no running shell");
-        ops.as_ref()
-            .ok_or_else(no_shell)?
-            .send(Op::Data(data))
-            .map_err(|_| no_shell())
+        entry.shared.queue(Op::Data(data), || {
+            error("session_not_connected", "the session has no running shell")
+        })
     }
 
     /// Remembers the terminal size and tells the shell when there is one.
@@ -924,6 +1019,29 @@ pub(crate) fn needs_close_confirmation(connected: usize) -> bool {
     connected > 0
 }
 
+/// What an app exit request (`RunEvent::ExitRequested`, e.g. Cmd+Q on macOS) should do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExitAction {
+    /// Let the exit proceed.
+    Allow,
+    /// Stop the exit and show the confirmation dialog.
+    Ask,
+    /// Stop the exit; a dialog is already open.
+    Prevent,
+}
+
+/// An explicit exit code (restart, update, `app.exit(n)`) and an exit without a connected
+/// session are never intercepted; otherwise the exit waits for the dialog.
+pub(crate) fn exit_action(code: Option<i32>, connected: usize, prompt_open: bool) -> ExitAction {
+    if code.is_some() || !needs_close_confirmation(connected) {
+        ExitAction::Allow
+    } else if prompt_open {
+        ExitAction::Prevent
+    } else {
+        ExitAction::Ask
+    }
+}
+
 /// Mutes the channel, answers every prompt with the safe answer, tells the writer task to close
 /// and aborts the connect task.
 fn shut_down(entry: &Entry) {
@@ -1013,7 +1131,7 @@ async fn run(shared: Arc<Shared>, params: ConnectParams) {
     if let Ok(mut slot) = shared.ops.lock() {
         *slot = Some(tx);
     }
-    tauri::async_runtime::spawn(write_ops(session, ops));
+    tauri::async_runtime::spawn(write_ops(session, ops, Arc::clone(&shared)));
     if let Ok(mut flow) = shared.flow.lock() {
         *flow = FlowControl::default();
     }
@@ -1029,24 +1147,36 @@ async fn run(shared: Arc<Shared>, params: ConnectParams) {
 }
 
 /// Applies input, resizes and the close request to the session, in the order they were queued.
-async fn write_ops(session: Session, mut ops: UnboundedReceiver<Op>) {
+async fn write_ops(session: Session, mut ops: UnboundedReceiver<Op>, shared: Arc<Shared>) {
     while let Some(op) = ops.recv().await {
-        match op {
-            Op::Data(data) => {
-                if session.write(data).await.is_err() {
-                    break;
-                }
-            }
+        let weight = op.weight();
+        let stop = match op {
+            Op::Data(data) => session.write(data).await.is_err(),
             Op::Resize(cols, rows) => {
                 let _ = session.resize(cols, rows).await;
+                false
             }
             // RDP only
-            Op::Rdp(_) | Op::Clipboard(_) => {}
+            Op::Rdp(_) | Op::Clipboard(_) => false,
             Op::Close => {
                 session.close();
-                break;
+                true
             }
+        };
+        shared.input_budget.release(weight);
+        if stop {
+            break;
         }
+    }
+    release_unhandled(&mut ops, &shared);
+}
+
+/// Gives back the budget of ops that were queued but never handled (the writer stopped), so a
+/// reconnect of the same tab starts with an empty budget.
+fn release_unhandled(ops: &mut UnboundedReceiver<Op>, shared: &Shared) {
+    ops.close();
+    while let Ok(op) = ops.try_recv() {
+        shared.input_budget.release(op.weight());
     }
 }
 

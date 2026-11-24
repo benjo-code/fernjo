@@ -3,9 +3,10 @@
   import { SvelteSet } from "svelte/reactivity";
   import { toApiError } from "../api";
   import type { TerminalSettingsStore } from "../terminal-settings.svelte";
+  import type { OpenTabsStore } from "../open-tabs.svelte";
   import type { SyncStore } from "../sync.svelte";
   import type { ThemeStore } from "../theme.svelte";
-  import type { Api, DataFolderInfo, Theme } from "../types";
+  import type { Api, AutoLockInfo, DataFolderInfo, Theme } from "../types";
   import { isMac, SHORTCUTS, shortcutKeys } from "../shortcuts";
   import { unsavedNote } from "../unsaved";
   import Icon from "./Icon.svelte";
@@ -16,6 +17,7 @@
     terminal,
     theme,
     sync,
+    openTabs,
     onclose,
     onchange,
     onexport,
@@ -29,6 +31,8 @@
     theme: ThemeStore;
     /** Holds the sync status; the Sync section shows and drives it. */
     sync: SyncStore;
+    /** Holds the "Reopen tabs on start" setting. */
+    openTabs: OpenTabsStore;
     /** Opens the import, export & backup dialog (the join confirmation offers a backup first). */
     onexport?: () => void;
     /** Scroll the Sync section into view (the status line's "Details"). */
@@ -69,6 +73,39 @@
   let saving = $state(false);
   let saved = $state(false);
 
+  // Vault auto-lock: empty means off. It saves through its own command, never with the terminal record.
+  let autoLock = $state<AutoLockInfo | null>(null);
+  let autoLockText = $state("");
+  let autoLockError = $state<string | null>(null);
+
+  async function saveAutoLock(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const text = input.value.trim();
+    autoLockError = null;
+    // text that does not parse (for example "1e") reads as "" and must not turn the lock off
+    if (input.validity.badInput) {
+      autoLockError = "The time must be between 1 and 1440 minutes, or empty for off.";
+      autoLockText = autoLock?.minutes == null ? "" : String(autoLock.minutes);
+      input.value = autoLockText;
+      return;
+    }
+    // anything that is not a whole number is sent as 0 so that Rust answers with its coded error
+    const n = Number(text);
+    const minutes = text === "" ? null : Number.isInteger(n) && n >= 0 && n <= 100_000 ? n : 0;
+    try {
+      autoLock = await api.setVaultAutoLock(minutes);
+      autoLockText = autoLock.minutes === null ? "" : String(autoLock.minutes);
+    } catch (err) {
+      autoLockError =
+        toApiError(err).code === "invalid_auto_lock"
+          ? "The time must be between 1 and 1440 minutes, or empty for off."
+          : "Could not save the auto-lock time";
+      autoLockText = autoLock?.minutes == null ? "" : String(autoLock.minutes);
+      // the state may not have changed, so the field itself is put back
+      input.value = autoLockText;
+    }
+  }
+
   let terminalLoadError = $state(false);
   // fields the user already edited are never overwritten by a load that arrives later
   const touched = new SvelteSet<string>();
@@ -85,6 +122,18 @@
     const name = (e.target as HTMLElement).dataset.field;
     if (name) touched.add(name);
     saved = false;
+  }
+
+  let reopenError = $state<string | null>(null);
+
+  async function toggleReopen(e: Event) {
+    const box = e.currentTarget as HTMLInputElement;
+    reopenError = null;
+    const err = await openTabs.setReopen(box.checked);
+    if (err) {
+      reopenError = "Could not save the setting";
+      box.checked = openTabs.reopen;
+    }
   }
 
   let themeError = $state<string | null>(null);
@@ -174,6 +223,13 @@
       fillTerminal();
     });
     void theme.load();
+    void api
+      .getVaultAutoLock()
+      .then((v) => {
+        autoLock = v;
+        autoLockText = v.minutes === null ? "" : String(v.minutes);
+      })
+      .catch(() => {});
     void sync.refresh();
     if (scrollToSync) {
       dialog?.querySelector("[data-section='sync']")?.scrollIntoView?.({ block: "start" });
@@ -286,6 +342,53 @@
     {/if}
     {#if themeError}
       <p class="error" role="alert">{themeError}</p>
+    {/if}
+
+    <h3 class="section">Tabs</h3>
+    <label class="choice">
+      <input
+        type="checkbox"
+        aria-label="Reopen tabs on start"
+        checked={openTabs.reopen}
+        onchange={(e) => void toggleReopen(e)}
+      />
+      <span>Reopen tabs on start</span>
+    </label>
+    <p class="note">
+      The tabs of the last run come back disconnected; nothing connects until you choose to.
+    </p>
+    {#if openTabs.info?.unsavedReason}
+      <p class="note">{unsavedNote(openTabs.info.unsavedReason)}</p>
+    {/if}
+    {#if reopenError}
+      <p class="error" role="alert">{reopenError}</p>
+    {/if}
+
+    <h3 class="section">Vault</h3>
+    <label class="auto-lock">
+      <span>Lock the vault after</span>
+      <input
+        type="number"
+        aria-label="Lock the vault after (minutes of inactivity)"
+        min="1"
+        max="1440"
+        step="1"
+        placeholder="Off"
+        disabled={!autoLock}
+        value={autoLockText}
+        onchange={(e) => void saveAutoLock(e)}
+      />
+      <span>minutes of inactivity</span>
+    </label>
+    <p class="note">
+      Leave it empty to never lock the vault by itself. Open sessions keep running; the next
+      connection that needs a stored credential asks for the master password.
+    </p>
+    {#if autoLock?.unsavedReason}
+      <p class="note">{unsavedNote(autoLock.unsavedReason)}</p>
+    {/if}
+    {#if autoLockError}
+      <p class="error" role="alert">{autoLockError}</p>
     {/if}
 
     <h3 class="section">Terminal</h3>
@@ -493,6 +596,32 @@
   }
 
   .field input:focus {
+    outline: 1px solid var(--color-focus);
+    outline-offset: -1px;
+  }
+
+  .auto-lock {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+    margin-top: var(--space-3);
+    color: var(--color-text);
+    font-size: var(--text-sm);
+  }
+
+  .auto-lock input {
+    width: 88px;
+    height: 28px;
+    padding: 0 var(--space-3);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-input);
+    border-radius: var(--radius-sm);
+    color: var(--color-text);
+    font: inherit;
+  }
+
+  .auto-lock input:focus {
     outline: 1px solid var(--color-focus);
     outline-offset: -1px;
   }

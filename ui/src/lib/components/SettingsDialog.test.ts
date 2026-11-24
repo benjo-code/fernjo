@@ -1,9 +1,20 @@
 import { flushSync, mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { OpenTabsStore } from "../open-tabs.svelte";
+import { SessionStore } from "../sessions.svelte";
 import { TerminalSettingsStore } from "../terminal-settings.svelte";
 import { SyncStore } from "../sync.svelte";
 import { ThemeStore } from "../theme.svelte";
-import { apiError, dataFolder, deferred, mockApi, terminalSettings, themeInfo } from "../testing";
+import {
+  apiError,
+  autoLockInfo,
+  dataFolder,
+  deferred,
+  mockApi,
+  openTabsInfo,
+  terminalSettings,
+  themeInfo,
+} from "../testing";
 import type { Api, DataFolderInfo } from "../types";
 import SettingsDialog from "./SettingsDialog.svelte";
 import dialogSource from "./SettingsDialog.svelte?raw";
@@ -27,8 +38,20 @@ const settle = async () => {
   flushSync();
 };
 
+const newOpenTabs = (api: Api) =>
+  new OpenTabsStore(
+    api,
+    new SessionStore(
+      api,
+      (id) => id,
+      () => true,
+    ),
+  );
+
 async function setup(impl: Partial<Api> = {}, mac?: boolean) {
   const m = mockApi([], impl);
+  const openTabs = newOpenTabs(m.api);
+  await openTabs.load();
   const onclose = vi.fn();
   const onchange = vi.fn();
   mounted = mount(SettingsDialog, {
@@ -38,6 +61,7 @@ async function setup(impl: Partial<Api> = {}, mac?: boolean) {
       terminal: new TerminalSettingsStore(m.api),
       theme: new ThemeStore(m.api),
       sync: new SyncStore(m.api),
+      openTabs,
       onclose,
       onchange,
       ...(mac === undefined ? {} : { mac }),
@@ -145,6 +169,7 @@ describe("SettingsDialog", () => {
         terminal: new TerminalSettingsStore(m.api),
         theme: new ThemeStore(m.api),
         sync: new SyncStore(m.api),
+        openTabs: newOpenTabs(m.api),
         onclose: () => {},
         onchange: () => {},
       },
@@ -611,5 +636,90 @@ describe("keyboard and mouse section", () => {
     expect(text).toContain("Select several Cmd+click");
     expect(text).toContain("Next tab Ctrl+Tab");
     expect(text.join(" ")).not.toContain("Ctrl+Shift+K");
+  });
+});
+
+describe("vault auto-lock", () => {
+  const field = () =>
+    document.querySelector<HTMLInputElement>("input[aria-label^='Lock the vault after']")!;
+  const enter = async (value: string) => {
+    field().value = value;
+    field().dispatchEvent(new Event("change", { bubbles: true }));
+    await settle();
+  };
+
+  test("the_auto_lock_field_saves_minutes_and_off", async () => {
+    const { calls } = await setup({
+      getVaultAutoLock: async () => autoLockInfo({ minutes: 15 }),
+    });
+    expect(field().value).toBe("15");
+    expect(document.body.textContent).toContain("minutes of inactivity");
+    await enter("30");
+    await enter("");
+    expect(calls.setVaultAutoLock).toEqual([[30], [null]]);
+    expect(field().value).toBe("");
+  });
+
+  test("an_out_of_range_value_shows_rusts_refusal_and_keeps_the_stored_one", async () => {
+    await setup({
+      getVaultAutoLock: async () => autoLockInfo({ minutes: 15 }),
+      setVaultAutoLock: async () => {
+        throw apiError("invalid_auto_lock", "rust text");
+      },
+    });
+    await enter("5000");
+    expect(alert()?.textContent).toContain("between 1 and 1440");
+    expect(field().value).toBe("15");
+  });
+
+  test("unparsable_text_in_the_field_is_refused_and_does_not_turn_the_lock_off", async () => {
+    const { calls } = await setup({
+      getVaultAutoLock: async () => autoLockInfo({ minutes: 15 }),
+    });
+    // a browser reads text like "1e" as an empty value and reports badInput
+    Object.defineProperty(field(), "validity", { value: { badInput: true }, configurable: true });
+    await enter("");
+    expect(calls.setVaultAutoLock ?? []).toEqual([]);
+    expect(alert()?.textContent).toContain("between 1 and 1440");
+    expect(field().value).toBe("15");
+  });
+
+  test("a_memory_only_auto_lock_says_it_is_not_remembered", async () => {
+    await setup({
+      getVaultAutoLock: async () => autoLockInfo({ persistent: false, unsavedReason: "env" }),
+    });
+    expect(document.body.textContent).toContain("FERNJO_DATA_DIR");
+  });
+
+  test("the_reopen_tabs_checkbox_saves_and_shows_the_unsaved_note", async () => {
+    const { calls } = await setup({
+      getOpenTabs: async () => openTabsInfo({ persistent: false, unsavedReason: "env" }),
+      setReopenTabs: async (enabled) =>
+        openTabsInfo({ reopen: enabled, persistent: false, unsavedReason: "env" }),
+    });
+    const box = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Reopen tabs on start"]',
+    )!;
+    expect(box.checked).toBe(true);
+    expect(document.body.textContent).toContain("FERNJO_DATA_DIR");
+    box.click();
+    await settle();
+    expect(calls.setReopenTabs).toEqual([[false]]);
+    expect(box.checked).toBe(false);
+  });
+
+  test("a_refused_reopen_tabs_change_puts_the_tick_back", async () => {
+    await setup({
+      setReopenTabs: async () => {
+        throw apiError("settings_unusable", "no");
+      },
+    });
+    const box = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Reopen tabs on start"]',
+    )!;
+    box.click();
+    await settle();
+    expect(box.checked).toBe(true);
+    expect(alert()?.textContent).toContain("Could not save the setting");
   });
 });

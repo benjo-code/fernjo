@@ -1,10 +1,13 @@
 mod app_menu;
 mod app_settings;
+mod clipboard;
 mod commands;
 mod connect_plan;
 mod data_folder;
+mod idle_lock;
 mod import_commands;
 mod nav_guard;
+mod open_tabs;
 mod rdp_commands;
 mod session_commands;
 mod session_flow;
@@ -53,6 +56,7 @@ pub fn run() {
             // Background sync (a no-op while sync is off). `AppState` is built, and with it the
             // startup auto-unlock tried, before `setup` runs.
             sync_runner::spawn_triggers(app.handle());
+            idle_lock::spawn(app.handle().clone());
             Ok(())
         })
         // A reload or a crashed page leaves its sessions running without a UI (the page's
@@ -91,39 +95,7 @@ pub fn run() {
                     return;
                 }
                 api.prevent_close();
-                if state.close_prompt_open.swap(true, Ordering::SeqCst) {
-                    return;
-                }
-                let noun = if connected == 1 {
-                    "session is"
-                } else {
-                    "sessions are"
-                };
-                let window = window.clone();
-                window
-                    .dialog()
-                    .message(format!(
-                        "{connected} {noun} still connected. Closing fernjo ends them."
-                    ))
-                    .title("Close fernjo?")
-                    .kind(MessageDialogKind::Warning)
-                    .buttons(MessageDialogButtons::OkCancelCustom(
-                        "Close".into(),
-                        "Keep open".into(),
-                    ))
-                    .show({
-                        let window = window.clone();
-                        move |confirmed| {
-                            window
-                                .state::<AppState>()
-                                .close_prompt_open
-                                .store(false, Ordering::SeqCst);
-                            if confirmed {
-                                window.state::<AppState>().sessions.close_all();
-                                sync_runner::destroy_after_push(window.clone());
-                            }
-                        }
-                    });
+                ask_to_close(window, connected);
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -156,9 +128,19 @@ pub fn run() {
             data_folder::handlers::restart_app,
             app_settings::handlers::get_theme,
             app_settings::handlers::set_theme,
+            app_settings::handlers::get_vault_auto_lock,
+            app_settings::handlers::set_vault_auto_lock,
+            app_settings::handlers::note_activity,
             session_commands::handlers::get_terminal_settings,
             session_commands::handlers::set_terminal_settings,
             session_commands::handlers::open_session,
+            session_commands::handlers::restore_session,
+            open_tabs::handlers::get_open_tabs,
+            open_tabs::handlers::set_reopen_tabs,
+            open_tabs::handlers::save_open_tabs,
+            session_commands::handlers::quick_parse,
+            clipboard::handlers::clipboard_read_text,
+            session_commands::handlers::open_quick_session,
             session_commands::handlers::session_input,
             session_commands::handlers::session_resize,
             session_commands::handlers::session_ack,
@@ -185,6 +167,67 @@ pub fn run() {
             sync_commands::handlers::sync_leave,
             sync_commands::handlers::sync_dismiss_findings,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running fernjo");
+        .build(tauri::generate_context!())
+        .expect("error while building fernjo")
+        .run(|app, event| {
+            // Cmd+Q on macOS (and any other quit that is not a window close) asks like the
+            // window close does. An explicit exit code is never intercepted.
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+                let state = app.state::<AppState>();
+                let connected = state.sessions.connected_count();
+                let prompt_open = state.close_prompt_open.load(Ordering::SeqCst);
+                match sessions::exit_action(code, connected, prompt_open) {
+                    sessions::ExitAction::Allow => {}
+                    sessions::ExitAction::Prevent => api.prevent_exit(),
+                    sessions::ExitAction::Ask => {
+                        // with no main window there is nothing to ask in: the exit goes ahead
+                        if let Some(window) = app.get_webview_window("main") {
+                            api.prevent_exit();
+                            ask_to_close(&window.as_ref().window(), connected);
+                        }
+                    }
+                }
+            }
+        });
+}
+
+/// Asks whether to end `connected` sessions by closing fernjo; one dialog at a time
+/// (`close_prompt_open`). The dialog is non-blocking; on "Close" its callback ends the sessions
+/// and destroys the window (after a last sync push), which raises no `CloseRequested`; with no
+/// session left the following `ExitRequested` is allowed.
+fn ask_to_close(window: &tauri::Window, connected: usize) {
+    let state = window.state::<AppState>();
+    if state.close_prompt_open.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let noun = if connected == 1 {
+        "session is"
+    } else {
+        "sessions are"
+    };
+    let window = window.clone();
+    window
+        .dialog()
+        .message(format!(
+            "{connected} {noun} still connected. Closing fernjo ends them."
+        ))
+        .title("Close fernjo?")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Close".into(),
+            "Keep open".into(),
+        ))
+        .show({
+            let window = window.clone();
+            move |confirmed| {
+                window
+                    .state::<AppState>()
+                    .close_prompt_open
+                    .store(false, Ordering::SeqCst);
+                if confirmed {
+                    window.state::<AppState>().sessions.close_all();
+                    sync_runner::destroy_after_push(window.clone());
+                }
+            }
+        });
 }

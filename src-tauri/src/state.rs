@@ -13,6 +13,7 @@ use fernjo_vault::{
 };
 
 use crate::commands::CommandError;
+use crate::idle_lock::IdleTracker;
 use crate::import_commands::Pending;
 use crate::sessions::SessionManager;
 use crate::sync_commands::SyncRuntime;
@@ -138,6 +139,14 @@ pub struct AppState {
     pub terminal: Mutex<TerminalPrefs>,
     /// Colour theme: loaded from `settings.json` at startup (same rule as `terminal`).
     pub theme: Mutex<Theme>,
+    /// Idle minutes after which the vault locks itself (`None` = off): loaded from
+    /// `settings.json` at startup, in memory only while `FERNJO_DATA_DIR` is set.
+    pub vault_auto_lock_minutes: Mutex<Option<u32>>,
+    /// Whether the open tabs are saved and reopened (default on): loaded from `settings.json`
+    /// at startup (same rule as `terminal`). The lock also serialises writes of `open-tabs.json`.
+    pub reopen_tabs: Mutex<bool>,
+    /// When the user last did something (fed by `note_activity`); see `idle_lock`.
+    pub idle: IdleTracker,
     /// The open terminal sessions.
     pub sessions: SessionManager,
     /// The import or restore that waits for inspect/apply (one at a time).
@@ -228,6 +237,8 @@ impl AppState {
                     settings::load(&l.config_dir.join(settings::FILE_NAME)).ok()
                 };
                 let terminal = loaded.as_ref().and_then(|s| s.terminal.clone());
+                let auto_lock = loaded.as_ref().and_then(|s| s.vault_auto_lock_minutes);
+                let reopen_tabs = loaded.as_ref().and_then(|s| s.reopen_tabs);
                 let theme = loaded.and_then(|s| s.theme);
                 let mut state = Self::build(
                     Some(l.data_dir),
@@ -250,6 +261,12 @@ impl AppState {
                 }
                 if let (Some(theme), Ok(mut slot)) = (theme, state.theme.lock()) {
                     *slot = theme;
+                }
+                if let Ok(mut slot) = state.vault_auto_lock_minutes.lock() {
+                    *slot = auto_lock.filter(|m| settings::AUTO_LOCK_MINUTES_RANGE.contains(m));
+                }
+                if let (Some(on), Ok(mut slot)) = (reopen_tabs, state.reopen_tabs.lock()) {
+                    *slot = on;
                 }
                 state
             }
@@ -375,6 +392,9 @@ impl AppState {
             pending_data_dir: Mutex::new(None),
             terminal: Mutex::new(TerminalPrefs::default()),
             theme: Mutex::new(Theme::default()),
+            vault_auto_lock_minutes: Mutex::new(None),
+            reopen_tabs: Mutex::new(true),
+            idle: IdleTracker::new(std::time::Instant::now(), std::time::SystemTime::now()),
             sessions: SessionManager::default(),
             pending: Mutex::new(None),
             sync: Mutex::new(SyncRuntime::default()),

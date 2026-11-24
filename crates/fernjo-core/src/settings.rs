@@ -35,6 +35,26 @@ pub struct AppSettings {
         deserialize_with = "lenient_theme"
     )]
     pub theme: Option<Theme>,
+    /// Lock the vault after this many idle minutes; unset means never.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault_auto_lock_minutes: Option<u32>,
+    /// Reopen the tabs of the last session on start; unset means on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reopen_tabs: Option<bool>,
+}
+
+/// Allowed idle times for the vault auto-lock, in minutes.
+pub const AUTO_LOCK_MINUTES_RANGE: std::ops::RangeInclusive<u32> = 1..=1440;
+
+/// Checks the auto-lock minutes (`None` means off).
+///
+/// # Errors
+/// `invalid_auto_lock` when a value is outside [`AUTO_LOCK_MINUTES_RANGE`].
+pub fn validate_auto_lock(minutes: Option<u32>) -> Result<(), &'static str> {
+    match minutes {
+        Some(m) if !AUTO_LOCK_MINUTES_RANGE.contains(&m) => Err("invalid_auto_lock"),
+        _ => Ok(()),
+    }
 }
 
 /// The colour theme choice.
@@ -224,6 +244,8 @@ mod tests {
             data_dir: Some(PathBuf::from(p)),
             terminal: None,
             theme: None,
+            vault_auto_lock_minutes: None,
+            reopen_tabs: None,
         }
     }
 
@@ -274,6 +296,8 @@ mod tests {
                 close_on_exit: Some(false),
             }),
             theme: None,
+            vault_auto_lock_minutes: None,
+            reopen_tabs: None,
         };
         save(&path(dir.path()), &settings).unwrap();
         assert_eq!(load(&path(dir.path())).unwrap(), settings);
@@ -432,5 +456,37 @@ mod tests {
             .unwrap();
             assert_eq!(load(&path(dir.path())).unwrap().theme, None, "{bad}");
         }
+    }
+
+    #[test]
+    fn auto_lock_defaults_to_off_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        // an old file without the field still loads, as off
+        fs::write(path(dir.path()), r#"{"schemaVersion":1,"dataDir":"/x"}"#).unwrap();
+        assert_eq!(
+            load(&path(dir.path())).unwrap().vault_auto_lock_minutes,
+            None
+        );
+        save(&path(dir.path()), &AppSettings::default()).unwrap();
+        assert_eq!(read_json(dir.path()), json!({"schemaVersion": 1}));
+        let settings = AppSettings {
+            vault_auto_lock_minutes: Some(15),
+            ..AppSettings::default()
+        };
+        save(&path(dir.path()), &settings).unwrap();
+        assert_eq!(load(&path(dir.path())).unwrap(), settings);
+        assert_eq!(
+            read_json(dir.path()),
+            json!({"schemaVersion": 1, "vaultAutoLockMinutes": 15})
+        );
+    }
+
+    #[test]
+    fn auto_lock_range_is_1_to_1440() {
+        assert_eq!(validate_auto_lock(Some(0)), Err("invalid_auto_lock"));
+        assert_eq!(validate_auto_lock(Some(1441)), Err("invalid_auto_lock"));
+        assert_eq!(validate_auto_lock(Some(1)), Ok(()));
+        assert_eq!(validate_auto_lock(Some(1440)), Ok(()));
+        assert_eq!(validate_auto_lock(None), Ok(()));
     }
 }

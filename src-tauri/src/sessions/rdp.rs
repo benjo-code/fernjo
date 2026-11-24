@@ -19,7 +19,7 @@ use tokio::sync::mpsc::{Receiver, UnboundedReceiver, unbounded_channel};
 
 use super::{
     ConnState, Ended, Entry, HostKeyAnswer, HostKeyChangedAnswer, Op, Phase, PromptAnswer,
-    PromptView, SessionManager, Shared, TauriInteraction, UiEvent, error, lock,
+    PromptView, SessionManager, Shared, TauriInteraction, UiEvent, error, release_unhandled,
 };
 use crate::commands::CommandError;
 use crate::connect_plan::{RdpCredentialPlan, RdpPlan};
@@ -249,7 +249,7 @@ async fn run(shared: Arc<Shared>, params: ConnectParams) {
     if let Ok(mut slot) = shared.ops.lock() {
         *slot = Some(tx);
     }
-    tauri::async_runtime::spawn(write_ops(session, ops));
+    tauri::async_runtime::spawn(write_ops(session, ops, Arc::clone(&shared)));
     let (width, height) = framebuffer.size();
     if let Ok(mut flow) = shared.flow.lock() {
         *flow = credit_for(width, height);
@@ -266,32 +266,31 @@ async fn run(shared: Arc<Shared>, params: ConnectParams) {
 
 /// Applies input, resizes, clipboard text and the close request to the session, in the order they
 /// were queued.
-async fn write_ops(session: Session, mut ops: UnboundedReceiver<Op>) {
+async fn write_ops(session: Session, mut ops: UnboundedReceiver<Op>, shared: Arc<Shared>) {
     while let Some(op) = ops.recv().await {
-        match op {
-            Op::Rdp(events) => {
-                if session.input(events).await.is_err() {
-                    break;
-                }
-            }
-            Op::Clipboard(text) => {
-                if session.set_clipboard_text(text).await.is_err() {
-                    break;
-                }
-            }
+        let weight = op.weight();
+        let stop = match op {
+            Op::Rdp(events) => session.input(events).await.is_err(),
+            Op::Clipboard(text) => session.set_clipboard_text(text).await.is_err(),
             Op::Resize(width, height) => {
                 if let Some((width, height)) = desktop_size(width, height) {
                     let _ = session.resize(width, height).await;
                 }
+                false
             }
             // SSH only
-            Op::Data(_) => {}
+            Op::Data(_) => false,
             Op::Close => {
                 session.close();
-                break;
+                true
             }
+        };
+        shared.input_budget.release(weight);
+        if stop {
+            break;
         }
     }
+    release_unhandled(&mut ops, &shared);
 }
 
 /// Sends the pending damage as one region message once the flow control has credit; until then
@@ -377,12 +376,9 @@ impl SessionManager {
 
     fn send_op(&self, id: &str, op: Op) -> Result<(), CommandError> {
         let entry = self.entry(id)?;
-        let ops = lock(&entry.shared.ops)?;
-        let no_session = || error("session_not_connected", "the session is not connected");
-        ops.as_ref()
-            .ok_or_else(no_session)?
-            .send(op)
-            .map_err(|_| no_session())
+        entry.shared.queue(op, || {
+            error("session_not_connected", "the session is not connected")
+        })
     }
 }
 

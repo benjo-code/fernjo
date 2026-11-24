@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { reorder } from "./tabs";
+import { reorder, tabToClose } from "./tabs";
 
 const t = (...ids: string[]) => ids.map((id) => ({ id }));
 const ids = (tabs: { id: string }[]) => tabs.map((x) => x.id);
@@ -18,5 +18,13 @@ describe("reorder", () => {
     const tabs = t("a", "b");
     expect(reorder(tabs, "x", "a")).toBe(tabs);
     expect(reorder(tabs, "a", "x")).toBe(tabs);
+  });
+});
+
+describe("tabToClose", () => {
+  test("no_tab_is_closed_while_the_vault_view_is_open", () => {
+    expect(tabToClose("vault", "t1")).toBeNull();
+    expect(tabToClose("empty", "t1")).toBe("t1");
+    expect(tabToClose("empty", null)).toBeNull();
   });
 });

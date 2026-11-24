@@ -760,6 +760,43 @@ fn both_sides_changing_a_locked_vault_waits_for_the_unlock_and_then_merges() {
 }
 
 #[test]
+fn an_idle_lock_between_read_and_apply_ends_the_run_untouched_and_the_next_run_succeeds() {
+    let hub = start_hub();
+    let (a, b) = (dev(), dev());
+    vault_create(&a.st, sec(MASTER), false).unwrap();
+    setup(&a, &hub, "a");
+    join(&b, &a, "b");
+    vault_unlock(&b.st, sec(MASTER), false).unwrap();
+    // both sides changed the vault, so the merge needs the key at apply time
+    credential(&a, "from-a");
+    credential(&b, "from-b");
+    now(&a);
+
+    // the idle lock fires while B's run is between read (unlocked) and apply; locking does not
+    // change the vault file bytes, so the engine's "did anything change" check cannot see it
+    let before = vault_file(&b);
+    let tree_before = names(&b);
+    let port = HookPort::new(&b.st, || {
+        vault_lock(&b.st).unwrap();
+    });
+    assert!(run_background_with(&b.st, &port));
+    assert_eq!(port.applies.get(), 1);
+    let s = sync_status(&b.st).unwrap();
+    assert_eq!(s.state, "error");
+    assert_eq!(s.error.as_ref().unwrap().code, "vault_locked");
+    // rolled back: no header, generation floor or entry changed on disk, the tree is as it was
+    assert_eq!(vault_file(&b), before);
+    assert_eq!(names(&b), tree_before);
+    assert_eq!(vault_state(&b), "locked");
+
+    // after the unlock the next run merges both credentials
+    vault_unlock(&b.st, sec(MASTER), false).unwrap();
+    let s = now(&b);
+    assert_eq!(s.state, "ok", "{:?}", s.error);
+    assert_eq!(credential_names(&b), ["from-a", "from-b"]);
+}
+
+#[test]
 fn findings_stay_until_dismissed_and_are_not_repeated() {
     let hub = start_hub();
     let (a, b) = (dev(), dev());

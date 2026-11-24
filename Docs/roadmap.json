@@ -52,6 +52,11 @@
       "date": "2026-11-22",
       "context": "M9 implementation",
       "text": "Differences between the written scope of M9 and what was built, all inside the approved spec: the hub client is a blocking `ureq` client with rustls (the spec left the HTTP client open; no OpenSSL); V4 (two vaults created independently) stops the run with the error `vault_conflict_different_vaults` on every trigger until the owner resolves it, tree sync pauses meanwhile; a local master password change that loses to the head's vault in a both-sides-changed merge (V3) raises a notice (`passwordChangeDropped`), added after the final review; there are nine sync commands where the spec listed eight; the hub stops cleanly on SIGTERM and SIGINT (PID 1 in a container) and the image has a `.dockerignore`. Known limit that stays: switching to a different, existing data folder while sync is on makes its tree look like deletions, so leave sync before changing the data folder and join again (`Docs/DECISIONS.md`, \"M9 final review: what changed and the known limits\")."
+    },
+    {
+      "date": "2026-11-23",
+      "context": "M10 implementation",
+      "text": "Differences between the written scope of M10 and what was built, inside the approved spec: a quick RDP session has its clipboard switched off (a host typed ad hoc is not trusted) and a quick target is validated again in Rust (`validate_quick`, `invalid_host`), also in `quick_parse`; the 36 px quick connect field made the default tree show 21 rows instead of 23 and the layout reserve 156 px instead of 120 so the properties panel keeps its room at 1280x800 (not measured in the real app); the host key write fix needed a third action, `TrustAction::Confirm`, and turned out to be defence in depth because russh 0.65.2 verifies the key-exchange signature before `check_server_key`; the session input cap weighs payload bytes only; the open-tabs file is read by a private 1 MiB bounded reader because core's `read_capped` is crate-private; `clipboard_read_text` is callable by any webview script without a gesture (documented as a by-design exposure next to reveal and `sync_pairing_code`); ten new commands (`quick_parse`, `open_quick_session`, `restore_session`, `get_open_tabs`, `set_reopen_tabs`, `save_open_tabs`, `get_vault_auto_lock`, `set_vault_auto_lock`, `note_activity`, `clipboard_read_text`). The M4 follow-ups that stayed are the backlog items \"M4 review follow-ups (remaining)\" and \"M10 review leftovers\"; M11 reviews all of it."
     }
   ],
   "subprojects": [
@@ -346,37 +351,116 @@
         {
           "id": "10",
           "title": "Daily-use features",
-          "status": "open",
+          "status": "in-progress",
+          "plan": "superpowers/plans/2026-11-23-milestone-10-daily-use-features.md",
           "prerequisites": ["8"],
           "goal": "The small features the owner misses in daily use: connect without saving, reopen tabs after a restart, lock the vault when idle, use Pageant, and no surprises when quitting or pasting.",
           "tasks": [
-            { "text": "Quick connect: type `user@host` (optionally with a port and protocol) and connect without saving a connection", "done": false },
-            { "text": "Restore tabs after restart: reopen the tabs that were open (node ids only, never secrets); decide in the plan whether reconnecting asks first", "done": false },
-            { "text": "Vault auto-lock after a configurable idle time", "done": false },
-            { "text": "Pageant support as SSH agent on Windows", "done": false },
-            { "text": "Quit confirmation on macOS Cmd+Q (intercept `RunEvent::ExitRequested`, same dialog and `close_prompt_open` flag)", "done": false },
-            { "text": "Native clipboard commands: the owner first decides whether the BSL-1.0 licence of `clipboard-win` may go into `deny.toml`; if yes implement them and drop the paste timeout, if no record the decision and keep the keyboard paste path", "done": false },
-            { "text": "Restore confirmation names what is replaced and what is kept", "done": false },
-            { "text": "Splitter focus style as a 1 px inset line and a hit area that does not overlap the tree scrollbar", "done": false },
-            { "text": "M4 review follow-ups (lowest priority; the plan may split off or drop the items that are not worth it)", "done": false }
+            {
+              "text": "Quick connect: type `user@host` (optionally with a port and protocol) and connect without saving a connection",
+              "done": true
+            },
+            {
+              "text": "Restore tabs after restart: reopen the tabs that were open (node ids only, never secrets); decide in the plan whether reconnecting asks first. Built: disconnected restore, nothing connects without a click; Reconnect per tab and \"Reconnect all\" (`Docs/DECISIONS.md`, \"M10 restore tabs\")",
+              "done": true
+            },
+            {
+              "text": "Vault auto-lock after a configurable idle time",
+              "done": true
+            },
+            {
+              "text": "Pageant support as SSH agent on Windows",
+              "done": true
+            },
+            {
+              "text": "Quit confirmation on macOS Cmd+Q (intercept `RunEvent::ExitRequested`, same dialog and `close_prompt_open` flag)",
+              "done": true
+            },
+            {
+              "text": "Native clipboard commands: the owner first decides whether the BSL-1.0 licence of `clipboard-win` may go into `deny.toml`; if yes implement them and drop the paste timeout, if no record the decision and keep the keyboard paste path. Decided by the owner on 2026-11-23: BSL-1.0 is allowed (`deny.toml`, `about.toml`); `clipboard_read_text` is implemented and the paste timeout is gone",
+              "done": true
+            },
+            {
+              "text": "Restore confirmation names what is replaced and what is kept",
+              "done": true
+            },
+            {
+              "text": "Splitter focus style as a 1 px inset line and a hit area that does not overlap the tree scrollbar",
+              "done": true
+            },
+            {
+              "text": "M4 review follow-ups (lowest priority; the plan may split off or drop the items that are not worth it). Done: host key write order, session input queue cap, layout-independent chords, Ctrl+Shift+W with the vault view open; the rest stays in the backlog (`Docs/DECISIONS.md`, \"M10 M4 follow-ups\")",
+              "done": true
+            }
           ],
           "acceptance": [
-            { "text": "Each feature has automated tests for its logic (Rust for logic, TypeScript only for presentation); the test names are listed as evidence", "done": false },
-            { "text": "Manual, owner: quick connect, restore tabs and vault auto-lock each used once on a real machine; Pageant on Windows with a key loaded in Pageant; Cmd+Q on macOS with a connected session", "done": false },
-            { "text": "No secret is written to `connections.json`, `settings.json`, logs or webview storage by the new features (the no-secret guard test covers every new command)", "done": false },
-            { "text": "Build, test and lint are green (commands in `CLAUDE.md`, \"Quality & proof\")", "done": false }
+            {
+              "text": "Each feature has automated tests for its logic (Rust for logic, TypeScript only for presentation); the test names are listed as evidence",
+              "done": true,
+              "evidence": "2026-11-23, tests from the milestone's tasks, all green in the gate below. Quick connect: `rejects_signed_and_empty_ports`, `validate_quick_checks_a_hand_built_target` (`crates/fernjo-core/src/quick.rs`), `quick_ssh_plan_has_no_credential_and_the_typed_user`, `quick_rdp_plan_has_the_clipboard_off_and_no_credential`, `a_hand_built_quick_target_is_checked_like_a_parsed_one` (`src-tauri/src/connect_plan.rs`), `a_malformed_hand_built_quick_target_opens_no_session` (`src-tauri/src/sessions/tests.rs`), `quick_parse_refuses_a_host_outside_the_allow_list_with_invalid_host` (`session_commands.rs`), `an_invalid_host_from_the_parser_is_shown_inline_and_the_input_is_kept` (`QuickConnect.test.ts`). Restore tabs: `save_then_load_round_trips_nodes_and_quick_targets`, `the_file_lives_in_the_device_folder_never_the_data_folder`, `a_damaged_file_loads_empty_and_the_next_save_rewrites_it`, `a_file_over_the_cap_loads_empty`, `get_open_tabs_drops_deleted_nodes_and_folders` (`src-tauri/src/open_tabs.rs`), `closeAll_on_unload_is_not_saved` (`ui/src/lib/open-tabs.test.ts`). Auto-lock: `tick_locks_an_unlocked_vault_only_when_due` (`idle_lock.rs`), `set_vault_auto_lock_persists_and_keeps_other_fields`, `the_saved_limit_is_read_at_startup` (`app_settings.rs`). Pageant: `pageant_is_used_when_the_pipe_is_empty`, `pageant_is_used_when_the_pipe_is_unavailable` (`crates/fernjo-ssh/src/agent.rs`). Cmd+Q: `an_explicit_exit_code_is_never_intercepted`, `no_connected_session_allows_the_exit`, `a_connected_session_asks`, `a_second_request_while_the_dialog_is_open_prevents_without_a_second_dialog` (`src-tauri/src/sessions/tests.rs`; the real Cmd+Q is an owner check). Paste: `menu_paste_reads_through_the_native_command_and_writes_the_text`, `menu_paste_failure_shows_nothing_and_does_not_hang` (`controller.test.ts`) and the `clipboard_read_text` entry of the guard table. Restore wording: `restore_confirmation_names_what_is_replaced_and_what_is_kept` (`ImportDialog.test.ts`). Splitter: `focus_style_is_a_one_pixel_inset_line_and_the_hit_area_clears_the_scrollbar` (`Splitter.test.ts`). M4 follow-ups: `trust_always_writes_known_hosts_only_after_the_handshake`, `a_failed_handshake_leaves_known_hosts_unchanged` (`crates/fernjo-ssh/src/handler/tests.rs`), `input_budget_refuses_above_the_cap_and_recovers_after_release` (`session_flow.rs`), `input_over_the_cap_is_refused_with_input_queue_full` (`sessions/tests.rs`), `ctrl_shift_w_on_a_non_latin_layout_closes_the_tab` (`shortcuts.test.ts`), `no_tab_is_closed_while_the_vault_view_is_open` (`tabs.test.ts`). Not every test was run red before its code existed (several were written together with the code). Not covered by an automated test: the real Pageant, a real Cmd+Q, a real WebView2 paste, the layout at 1280x800 (all owner checks, see the block \"Open manual checks (owner): M10\")."
+            },
+            {
+              "text": "Manual, owner: quick connect, restore tabs and vault auto-lock each used once on a real machine; Pageant on Windows with a key loaded in Pageant; Cmd+Q on macOS with a connected session",
+              "done": false
+            },
+            {
+              "text": "No secret is written to `connections.json`, `settings.json`, logs or webview storage by the new features (the no-secret guard test covers every new command)",
+              "done": true,
+              "evidence": "2026-11-23, `cargo test --workspace`: `no_response_contains_a_secret` and `command_table_covers_every_tauri_command` (`src-tauri/src/vault_commands.rs`) pass with the ten new commands in `table()` (`quick_parse`, `open_quick_session`, `restore_session`, `get_open_tabs`, `set_reopen_tabs`, `save_open_tabs`, `get_vault_auto_lock`, `set_vault_auto_lock`, `note_activity`, `clipboard_read_text`); `the_file_contains_no_secret_field_names` (`open_tabs.rs`) pins that `open-tabs.json` has no credential fields; `nothing_is_written_to_connections_json_by_resolving_a_quick_target` (`connect_plan.rs`). The auto-lock and reopen settings hold a number and a flag. By design, `clipboard_read_text` returns the clipboard text (a secret the user may have copied) and is callable by any webview script; the guard has a narrow branch for it, recorded in `Docs/DECISIONS.md`, \"M10 native clipboard: BSL-1.0 allowed\"."
+            },
+            {
+              "text": "Build, test and lint are green (commands in `CLAUDE.md`, \"Quality & proof\")",
+              "done": true,
+              "evidence": "2026-11-23 on Windows 11, branch `feature/m10-daily-use-features`, all exit code 0: `cargo build --workspace`; `cargo test --workspace` (fernjo-app 344 passed plus 11 in `tauri_conf`, fernjo-core 192, fernjo-ssh 56 plus its integration tests, fernjo-sync 86 plus 37 engine tests, fernjo-vault 118, 0 failed); `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo deny check` (advisories ok, bans ok, licenses ok, sources ok; BSL-1.0 allowed); `pnpm test` (58 files, 787 tests passed); `pnpm lint` (eslint, prettier, svelte-check: 0 errors, 0 warnings); `bash tools/test-release-scripts.sh` (48/48 passed); `dotnet run tools/roadmap.cs -- check` (ok). The SSH integration tests ran against the throwaway container (`eval \"$(tools/ssh-test-server.sh start)\"`, `env -u CI cargo test -p fernjo-ssh --no-fail-fast`, `tools/ssh-test-server.sh stop`): 56 unit tests, `auth` 7, `connect` 17, `connection_lost` 1, `timeout` 2 passed; the agent test skips on Windows. The CI run of the pull request (Linux and macOS compile of `arboard` with `wayland-data-control` and of the changed agent and handler code) is not yet seen."
+            }
           ],
           "blocks": [
-            { "title": "Source: Quick connect", "text": "Type `user@host` and connect without saving a connection." },
-            { "title": "Source: Restore tabs after restart", "text": "Reopen the tabs (and reconnect them) that were open when the app was closed. Needs a decision on what is stored (node ids only, never secrets) and on whether reconnecting asks first." },
-            { "title": "Source: Vault auto-lock", "text": "Lock the vault after a configurable idle time." },
-            { "title": "Source: Pageant support", "text": "Use PuTTY's Pageant as SSH agent on Windows." },
-            { "title": "Source: Native clipboard commands (needs a BSL-1.0 licence decision)", "text": "The terminal's context-menu Paste uses `navigator.clipboard.readText`, which hangs on WebView2's permission prompt (a 2.5 s timeout gives up, keyboard paste uses the native paste event and works). Rust clipboard commands would fix it, but `arboard` pulls `clipboard-win`, which is BSL-1.0 and not in `deny.toml`'s allow list: allowing the licence is the owner's decision. See `Docs/DECISIONS.md`, \"M4 clipboard path\"." },
-            { "title": "Source: Quit confirmation on macOS Cmd+Q", "text": "The close confirmation intercepts `CloseRequested` of the main window only. Cmd+Q on macOS leaves through `RunEvent::ExitRequested`, which is not intercepted, so connected sessions end without a question there. Intercept the event in the run callback and reuse the same dialog and `close_prompt_open` flag; see `Docs/DECISIONS.md`, \"M7: close confirmation, batch move and panel layout\"." },
-            { "title": "Source: Restore confirmation wording", "text": "A restored backup replaces the tree and the vault entries by design; the confirmation dialog could name more than counts (for example what is replaced and what is kept). UI wording only, no safety effect (moved back from the M7 triage of the import Low findings)." },
-            { "title": "Source: Splitter focus style and scrollbar overlap", "text": "A keyboard-focused splitter is an opaque 6 px bar in `--color-focus`, while `DESIGN.md` defines keyboard focus as a 1 px inset outline. The vertical splitter sits at `right: -3px`, so it also covers 3 px of the tree's scrollbar edge. Draw the focus state as a 1 px line inside the 6 px hit area and move the hit area so it does not overlap the scrollbar." },
-            { "title": "Source: M4 review follow-ups", "text": "Deferred from the whole-branch review of M4, none of them blocks the milestone:\n\n- `SshError` carries no source (thin diagnostics); the error mapping is coarse and `io_to_lost` is misnamed.\n- `known_hosts`: the BOM is lost when the first line is replaced; a duplicate host inside one entry's host list leaves a stale entry; test gaps (hashed non-22 and IPv6 hosts, tab separators, add on a CRLF file).\n- `TrustAlways` and `Replace` write `known_hosts` before the key-exchange signature is verified; park the decision and write after `connect_stream` succeeds.\n- A russh session task and its file descriptor leak on a pre-key-exchange timeout.\n- The session input queue is unbounded; cap it (about 8 MiB).\n- `tauri_plugin_opener::init()` injects an init script; use `Builder::new().open_js_links_on_click(false).build()`.\n- The agent test is named \"in order\" but asserts only that the login works.\n- Chords use `e.key` instead of `e.code`, so Ctrl+Shift chords fail on non-Latin layouts.\n- Terminal: the `ResizeObserver` is not coalesced per frame, `findNext` is not incremental, the search bar hardcodes 13 px.\n- Tabs: an Escape-cancelled drag still fires a click; arrow keys fire from the Close and Reconnect buttons and there is no Home, End or Delete; the tab ARIA is loose; `.reconnect` uses weight 500 where `DESIGN.md` says 400; the lock icon is 12 px inside a 10 px mark; `protocolOf` could be `Tab.protocol`.\n- Ctrl+Shift+W with the vault view open closes an invisible tab.\n- Prompts: a keyboard-interactive round with zero prompts has no focus target; the needs-vault busy flag resets before the resume (double click); `PasswordField` `shown` is not reset after a wrong password; the `FOCUSABLE` selector omits `textarea` and `select`." }
-          ]
+            {
+              "title": "Source: Quick connect",
+              "text": "Type `user@host` and connect without saving a connection."
+            },
+            {
+              "title": "Source: Restore tabs after restart",
+              "text": "Reopen the tabs (and reconnect them) that were open when the app was closed. Needs a decision on what is stored (node ids only, never secrets) and on whether reconnecting asks first."
+            },
+            {
+              "title": "Source: Vault auto-lock",
+              "text": "Lock the vault after a configurable idle time."
+            },
+            {
+              "title": "Source: Pageant support",
+              "text": "Use PuTTY's Pageant as SSH agent on Windows."
+            },
+            {
+              "title": "Source: Native clipboard commands (needs a BSL-1.0 licence decision)",
+              "text": "The terminal's context-menu Paste uses `navigator.clipboard.readText`, which hangs on WebView2's permission prompt (a 2.5 s timeout gives up, keyboard paste uses the native paste event and works). Rust clipboard commands would fix it, but `arboard` pulls `clipboard-win`, which is BSL-1.0 and not in `deny.toml`'s allow list: allowing the licence is the owner's decision. See `Docs/DECISIONS.md`, \"M4 clipboard path\"."
+            },
+            {
+              "title": "Source: Quit confirmation on macOS Cmd+Q",
+              "text": "The close confirmation intercepts `CloseRequested` of the main window only. Cmd+Q on macOS leaves through `RunEvent::ExitRequested`, which is not intercepted, so connected sessions end without a question there. Intercept the event in the run callback and reuse the same dialog and `close_prompt_open` flag; see `Docs/DECISIONS.md`, \"M7: close confirmation, batch move and panel layout\"."
+            },
+            {
+              "title": "Source: Restore confirmation wording",
+              "text": "A restored backup replaces the tree and the vault entries by design; the confirmation dialog could name more than counts (for example what is replaced and what is kept). UI wording only, no safety effect (moved back from the M7 triage of the import Low findings)."
+            },
+            {
+              "title": "Source: Splitter focus style and scrollbar overlap",
+              "text": "A keyboard-focused splitter is an opaque 6 px bar in `--color-focus`, while `DESIGN.md` defines keyboard focus as a 1 px inset outline. The vertical splitter sits at `right: -3px`, so it also covers 3 px of the tree's scrollbar edge. Draw the focus state as a 1 px line inside the 6 px hit area and move the hit area so it does not overlap the scrollbar."
+            },
+            {
+              "title": "Source: M4 review follow-ups",
+              "text": "Deferred from the whole-branch review of M4, none of them blocks the milestone:\n\n- `SshError` carries no source (thin diagnostics); the error mapping is coarse and `io_to_lost` is misnamed.\n- `known_hosts`: the BOM is lost when the first line is replaced; a duplicate host inside one entry's host list leaves a stale entry; test gaps (hashed non-22 and IPv6 hosts, tab separators, add on a CRLF file).\n- `TrustAlways` and `Replace` write `known_hosts` before the key-exchange signature is verified; park the decision and write after `connect_stream` succeeds.\n- A russh session task and its file descriptor leak on a pre-key-exchange timeout.\n- The session input queue is unbounded; cap it (about 8 MiB).\n- `tauri_plugin_opener::init()` injects an init script; use `Builder::new().open_js_links_on_click(false).build()`.\n- The agent test is named \"in order\" but asserts only that the login works.\n- Chords use `e.key` instead of `e.code`, so Ctrl+Shift chords fail on non-Latin layouts.\n- Terminal: the `ResizeObserver` is not coalesced per frame, `findNext` is not incremental, the search bar hardcodes 13 px.\n- Tabs: an Escape-cancelled drag still fires a click; arrow keys fire from the Close and Reconnect buttons and there is no Home, End or Delete; the tab ARIA is loose; `.reconnect` uses weight 500 where `DESIGN.md` says 400; the lock icon is 12 px inside a 10 px mark; `protocolOf` could be `Tab.protocol`.\n- Ctrl+Shift+W with the vault view open closes an invisible tab.\n- Prompts: a keyboard-interactive round with zero prompts has no focus target; the needs-vault busy flag resets before the resume (double click); `PasswordField` `shown` is not reset after a wrong password; the `FOCUSABLE` selector omits `textarea` and `select`."
+            },
+            {
+              "title": "Open manual checks (owner): M10",
+              "text": "Not run: the owner has not tried the features yet. The manual criterion stays open until each item below was run; add the result as evidence on that criterion. Use a scratch `FERNJO_DATA_DIR` for each run.\n\n- Quick connect: `user@host` of a real SSH host, then `rdp://user@host` against a Windows host (password and certificate prompts; the remote clipboard stays off); a bad host or a missing user shows the error under the field and opens no tab; `connections.json` is unchanged.\n- Restore tabs: open two saved connections and one quick connect, make the second active, close and start again: three disconnected tabs, the second active, \"Restored from your last session. Not connected.\"; Reconnect on one, then \"Reconnect all\" (at most three at once, the vault asked for once); switch \"Reopen tabs on start\" off in Settings and restart: no tabs. Check the size of a restored tab that was hidden when it connected.\n- Vault auto-lock: set 1 minute in Settings, \"Vault\", leave it for about 70 s with a terminal focused: the chip shows \"Vault: locked\" and the session stays connected; typing in the terminal during the minute prevents the lock.\n- Pageant (Windows): with the OpenSSH agent service stopped or empty and a key loaded in Pageant, connect to a host that accepts it with no stored credential; with a key in the OpenSSH agent too, that agent is used.\n- Cmd+Q (macOS): with a connected session \"Close fernjo?\" appears and \"Keep open\" keeps the app; \"Close\" ends the sessions and quits without a second dialog; with no connected session the app quits at once.\n- Native paste: the terminal's context-menu Paste on Windows (WebView2) pastes at once with no permission prompt; over 1 MiB pastes nothing and does not hang; also on macOS and on Linux under Wayland (CachyOS laptop).\n- Layout at 1280x800 with the quick connect field: select a connection and see the Credential row of the properties panel without scrolling and 21 tree rows; drag the panel taller (the tree keeps at least 6 rows).\n- Wording and look: the restore confirmation names what is replaced and what is kept; the sidebar splitter's keyboard focus is a thin centred line that does not cover the scrollbar.\n- CI: the pull request is green on Linux and macOS (compiles `arboard` with `wayland-data-control`, the changed `agent.rs` and `handler.rs`)."
+            },
+            {
+              "title": "M4 follow-ups that stayed in the backlog",
+              "text": "Done in M10: host key write order (defence in depth, russh already verified the signature first), the session input queue cap, layout-independent chords and Ctrl+Shift+W with the vault view open. Stayed: the backlog items \"M4 review follow-ups (remaining)\" and \"M10 review leftovers\", and `Docs/DECISIONS.md`, \"M10 M4 follow-ups: what was done, what stayed in the backlog\"."
+            }
+          ],
+          "spec": "superpowers/specs/2026-11-23-m10-daily-use-features-design.md"
         },
         {
           "id": "11",
@@ -468,6 +552,8 @@
     { "title": "More protocols", "text": "VNC, Telnet, serial." },
     { "title": "Code signing, notarisation and auto-update", "text": "Signed installers for Windows and macOS, update channel." },
     { "title": "Dev-dependency alert: minimatch", "text": "From M6 security review finding 7. Dependabot alert for `minimatch` 10.2.6 (GHSA-g3hv-75wg-m249), a development dependency of typescript-eslint; `pnpm audit --prod` is clean. Take the update when typescript-eslint moves. The `glib` 0.18.5 alert (Tauri's GTK3 stack) is a known gap recorded in `Docs/DECISIONS.md` since M0; revisit when Tauri leaves GTK3." },
-    {"title":"Consolidate the hardened file helpers","text":"Five copies of the hardened atomic write (random `create_new` temp name, `.bak`, rename, directory fsync) and of the capped read exist, in `fernjo-vault`, `fernjo-ssh`, `fernjo-rdp`, `fernjo-sync` and `fernjo-hub`, because the protocol crates must not depend on each other. A fix to one has to be repeated in the others. Candidate: expose one hardened writer and `read_capped` from `fernjo_core::persist` (or a tiny shared crate) and use them everywhere. Recorded in `Docs/DECISIONS.md`, \"M9 follow-up candidate: one set of hardened file helpers\"; no change in M9."}
+    {"title":"Consolidate the hardened file helpers","text":"Five copies of the hardened atomic write (random `create_new` temp name, `.bak`, rename, directory fsync) and of the capped read exist, in `fernjo-vault`, `fernjo-ssh`, `fernjo-rdp`, `fernjo-sync` and `fernjo-hub`, because the protocol crates must not depend on each other. A fix to one has to be repeated in the others. Candidate: expose one hardened writer and `read_capped` from `fernjo_core::persist` (or a tiny shared crate) and use them everywhere. Recorded in `Docs/DECISIONS.md`, \"M9 follow-up candidate: one set of hardened file helpers\"; no change in M9."},
+    { "title":"M4 review follow-ups (remaining)", "text":"Left from the M4 whole-branch review after M10 took the real bugs: `SshError` carries no source (thin diagnostics), the error mapping is coarse and `io_to_lost` is misnamed; `known_hosts`: the BOM is lost when the first line is replaced, a duplicate host inside one entry's host list leaves a stale entry, test gaps (hashed non-22 and IPv6 hosts, tab separators, add on a CRLF file); a russh session task and its file descriptor leak on a pre-key-exchange timeout; `tauri_plugin_opener::init()` injects an init script (use `Builder::new().open_js_links_on_click(false).build()`); the agent test is named \"in order\" but asserts only that the login works; terminal: the `ResizeObserver` is not coalesced per frame, `findNext` is not incremental, the search bar hardcodes 13 px; tabs: an Escape-cancelled drag still fires a click, arrow keys fire from the Close and Reconnect buttons and there is no Home, End or Delete, the tab ARIA is loose, `.reconnect` uses weight 500 where `DESIGN.md` says 400, the lock icon is 12 px inside a 10 px mark, `protocolOf` could be `Tab.protocol`; prompts: a keyboard-interactive round with zero prompts has no focus target, the needs-vault busy flag resets before the resume (double click), `PasswordField` `shown` is not reset after a wrong password, the `FOCUSABLE` selector omits `textarea` and `select`." },
+    { "title":"M10 review leftovers", "text":"Minor findings of the M10 task reviews that were not fixed (details in `Docs/DECISIONS.md`, the M10 entries): the session input cap weighs payload bytes only (a flood of 1-byte writes costs more memory than the cap suggests, a minimum weight would fix it) and `Resize` is unbounded; IME and dead keys (`key` \"Dead\" or \"Process\") with a letter `code` count as chord letters, and there is no macOS non-Latin test; the auto-lock field turns the lock off silently for text that does not parse (use `input.validity.badInput`), stays disabled without a message when the stored value cannot be read, and the idle thread has no `catch_unwind`; a successful unlock does not count as activity; with sync on a restore from a backup is pushed to the other devices and the confirmation does not say so; `ensureVault` of \"Reconnect all\" waits until the vault is unlocked or the button is pressed again, and \"Reconnect all\" does nothing visible when the vault status is unloaded or unusable; after a sync join or an import restore the open-tabs file keeps the earlier list until the next user change; the `arboard` read has no timeout of its own; the Cmd+Q path with no main window prevents the exit and shows nothing; the quick connect error overlay covers rows below while it is visible." }
   ]
 }

@@ -1835,8 +1835,83 @@ mod tests {
                     fernjo_core::Theme::Dark,
                 ))
             }),
+            entry("get_vault_auto_lock", |w| {
+                j(crate::app_settings::get_vault_auto_lock(&w.st))
+            }),
+            entry("set_vault_auto_lock", |w| {
+                j(crate::app_settings::set_vault_auto_lock(&w.st, Some(15)))
+            }),
+            entry("note_activity", |w| {
+                crate::app_settings::note_activity(&w.st);
+                String::new()
+            }),
             entry("open_session", |w| {
                 let (id, events) = opened(w);
+                format!("{id}{}", dump(&events))
+            }),
+            entry("get_open_tabs", |w| {
+                j(crate::open_tabs::get_open_tabs(&w.st))
+            }),
+            entry("set_reopen_tabs", |w| {
+                j(crate::open_tabs::set_reopen_tabs(&w.st, true))
+            }),
+            entry("save_open_tabs", |w| {
+                j(crate::open_tabs::save_open_tabs(
+                    &w.st,
+                    vec![crate::open_tabs::SavedTab {
+                        node: Some(w.conn),
+                        quick: None,
+                    }],
+                    Some(0),
+                ))
+            }),
+            entry("restore_session", |w| {
+                use tauri::ipc::{Channel, InvokeResponseBody};
+                let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+                let sink = std::sync::Arc::clone(&events);
+                let channel = Channel::new(move |body: InvokeResponseBody| {
+                    if let InvokeResponseBody::Json(text) = body {
+                        sink.lock().unwrap().push(text);
+                    }
+                    Ok(())
+                });
+                let target = crate::open_tabs::TargetView {
+                    node: Some(w.conn),
+                    quick: None,
+                };
+                let id = crate::session_commands::restore_session(&w.st, target, channel, 80, 24)
+                    .unwrap();
+                format!("{id}{}", dump(&events))
+            }),
+            entry("clipboard_read_text", |_| {
+                // a fake clipboard that holds a sentinel: the command returns the clipboard text
+                // by design (see the branch in `no_response_contains_a_secret`)
+                struct Fake;
+                impl crate::clipboard::ClipboardText for Fake {
+                    fn read_text(&self) -> Result<String, String> {
+                        Ok(PW.to_string())
+                    }
+                }
+                j(crate::clipboard::clipboard_read_text(&Fake))
+            }),
+            entry("quick_parse", |w| {
+                let _ = w;
+                j(crate::session_commands::quick_parse("user@127.0.0.1:1"))
+            }),
+            entry("open_quick_session", |w| {
+                use tauri::ipc::{Channel, InvokeResponseBody};
+                let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+                let sink = std::sync::Arc::clone(&events);
+                let channel = Channel::new(move |body: InvokeResponseBody| {
+                    if let InvokeResponseBody::Json(text) = body {
+                        sink.lock().unwrap().push(text);
+                    }
+                    Ok(())
+                });
+                let target = fernjo_core::parse_quick("user@127.0.0.1:1").unwrap();
+                let id =
+                    crate::session_commands::open_quick_session(&w.st, target, channel, 80, 24)
+                        .unwrap();
                 format!("{id}{}", dump(&events))
             }),
             entry("session_input", |w| {
@@ -2019,6 +2094,17 @@ mod tests {
                     // the one and only response that carries secrets
                     assert!(out.contains(KEY) && out.contains(PASS), "{out}");
                     assert!(!out.contains(PW) && !out.contains(MASTER), "{out}");
+                } else if name == "clipboard_read_text" {
+                    // returns the clipboard text by design, here the fake's sentinel; nothing
+                    // else may appear
+                    assert!(out.contains(PW), "{out}");
+                    for s in SENTINELS
+                        .iter()
+                        .chain(&IMPORT_SECRETS)
+                        .filter(|s| **s != PW)
+                    {
+                        assert!(!out.contains(s), "{label} leaked {s}: {out}");
+                    }
                 } else {
                     assert_no_sentinel(&label, &out);
                 }
@@ -2206,6 +2292,8 @@ mod tests {
             include_str!("import_commands.rs"),
             include_str!("app_settings.rs"),
             include_str!("sync_commands.rs"),
+            include_str!("open_tabs.rs"),
+            include_str!("clipboard.rs"),
         ];
         // Only lines that start with the attribute count (not doc comments or strings), so
         // `#[tauri::command(async)]` and similar forms are counted too.

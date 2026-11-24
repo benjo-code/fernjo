@@ -139,6 +139,7 @@ function setup(opts = { fontFamily: null as string | null, fontSize: 14, scrollb
     onResize: vi.fn<(c: number, r: number) => void>(),
     onAck: vi.fn<(n: number) => void>(),
     openUrl: vi.fn<(u: string) => void>(),
+    readClipboard: vi.fn<() => Promise<string>>(async () => "pasted"),
   };
   const c = new TerminalController(opts, deps);
   const el = document.createElement("div");
@@ -253,34 +254,29 @@ describe("TerminalController", () => {
     expect(c.search("", "next")).toBe(false);
   });
 
-  test("copy_and_paste_use_the_browser_clipboard", async () => {
+  test("copy_uses_the_browser_clipboard", async () => {
     const { c } = setup();
     const writeText = vi.fn(async () => {});
-    const readText = vi.fn(async () => "pasted");
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: { writeText, readText },
-    });
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     term().selection = "sel";
     await c.copySelection();
     expect(writeText).toHaveBeenCalledWith("sel");
+  });
+
+  test("menu_paste_reads_through_the_native_command_and_writes_the_text", async () => {
+    const { c, deps } = setup();
+    const readText = vi.fn(async () => "browser");
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { readText } });
     await c.paste();
+    expect(deps.readClipboard).toHaveBeenCalledOnce();
+    expect(readText).not.toHaveBeenCalled();
     expect(term().pasted).toEqual(["pasted"]);
   });
 
-  test("paste_gives_up_after_the_timeout_and_ignores_a_late_clipboard_answer", async () => {
-    vi.useFakeTimers();
+  test("menu_paste_failure_shows_nothing_and_does_not_hang", async () => {
     const { c, deps } = setup();
-    let late: (t: string) => void = () => {};
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: { readText: () => new Promise<string>((r) => (late = r)) },
-    });
-    const done = c.paste();
-    await vi.advanceTimersByTimeAsync(3000);
-    await done;
-    late("too late");
-    await vi.advanceTimersByTimeAsync(10);
+    deps.readClipboard.mockRejectedValueOnce({ code: "clipboard_unavailable", message: "x" });
+    await expect(c.paste()).resolves.toBeUndefined();
     expect(term().pasted).toEqual([]);
     expect(deps.onData).not.toHaveBeenCalled();
   });

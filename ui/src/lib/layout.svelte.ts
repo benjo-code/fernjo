@@ -10,10 +10,23 @@ export const PANEL_MIN = 26;
 /** Upper bound for a stored panel height before the window clamps it further. */
 const PANEL_STORE_MAX = 4000;
 
-/** Tree rows kept visible while the panel is content-sized: the panel gives way first. */
-export const TREE_ROWS_DEFAULT = 23;
+/**
+ * Tree rows kept visible while the panel is content-sized: the panel gives way first. 21 (not 23)
+ * since the quick connect field took 36 px of fixed chrome: two rows (48 px) give that back, so
+ * the panel has at least as much room at 1280x800 as before.
+ */
+export const TREE_ROWS_DEFAULT = 21;
 /** Tree rows kept visible once the user has set a panel height: they chose the trade. */
 export const TREE_ROWS_SIZED = 6;
+
+/** Heights (px) of the sidebar's fixed rows around the tree; Sidebar.svelte's CSS produces them. */
+export const SIDEBAR_CHROME = { head: 44, quickConnect: 36, foot: 37 } as const;
+/**
+ * What the tree slot's minimum leaves out of the window height: the fixed chrome, the panel's
+ * header row (`PANEL_MIN`) and 13 px of slack. `.tree-slot` in Sidebar.svelte uses the same
+ * number (`100vh - 156px`); a new fixed row in the sidebar means raising both.
+ */
+export const TREE_RESERVE = 156;
 
 /**
  * The tree slot's minimum height. Sidebar.svelte mirrors it in CSS: `.tree-slot` is the default
@@ -26,7 +39,7 @@ export function treeMinHeight(
   viewportHeight: number,
 ): number {
   const rows = panelSized ? TREE_ROWS_SIZED : TREE_ROWS_DEFAULT;
-  return Math.min(rowHeight * rows, viewportHeight - 120);
+  return Math.min(rowHeight * rows, viewportHeight - TREE_RESERVE);
 }
 
 /** The widest the sidebar may be in a window of this width. */

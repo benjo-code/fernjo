@@ -3,6 +3,7 @@ export type AppAction =
   | "prevTab"
   | "closeTab"
   | "focusFilter"
+  | "quickConnect"
   | "terminalSearch"
   | "copy"
   | "paste"
@@ -11,11 +12,27 @@ export type AppAction =
 /** Where the keyboard focus is: a terminal, a remote desktop, or anything else. */
 export type FocusKind = "none" | "terminal" | "remote";
 
-type Key = Pick<KeyboardEvent, "key" | "ctrlKey" | "shiftKey" | "altKey" | "metaKey">;
+type Key = Pick<KeyboardEvent, "key" | "ctrlKey" | "shiftKey" | "altKey" | "metaKey"> & {
+  /** The physical key (`KeyW`); used for a chord only when `key` is not a Latin letter. */
+  code?: string;
+};
+
+/**
+ * The letter a chord is bound to: `key` when it is a Latin letter (so Dvorak and AZERTY follow
+ * what the user types), else the physical key from `code` (a Cyrillic or Greek layout still
+ * reaches Ctrl+Shift+W). `null` for everything else.
+ */
+function chordLetter(e: Key): string | null {
+  const key = e.key.toLowerCase();
+  if (/^[a-z]$/.test(key)) return key;
+  const m = /^Key([A-Z])$/.exec(e.code ?? "");
+  return m ? m[1].toLowerCase() : null;
+}
 
 const CHORDS: Record<string, AppAction> = {
   w: "closeTab",
   k: "focusFilter",
+  n: "quickConnect",
   f: "terminalSearch",
   c: "copy",
   v: "paste",
@@ -37,7 +54,8 @@ export function routeKey(e: Key, mac: boolean, focus: FocusKind): AppAction | nu
   if (e.key === FULLSCREEN_KEY && e.ctrlKey && e.shiftKey && !e.metaKey) return "fullscreen";
   if (e.key === "Tab" && e.ctrlKey && !e.metaKey) return e.shiftKey ? "prevTab" : "nextTab";
   if (focus === "remote") return null;
-  const action = CHORDS[e.key.toLowerCase()];
+  const letter = chordLetter(e);
+  const action = letter ? CHORDS[letter] : undefined;
   if (!action) return null;
   const isChord = mac
     ? e.metaKey && !e.ctrlKey && !e.shiftKey
@@ -65,6 +83,7 @@ const TAB_KEY = "Tab";
 
 export const SHORTCUTS: readonly Shortcut[] = [
   { label: "Filter connections", action: "focusFilter", key: "K" },
+  { label: "Quick connect", action: "quickConnect", key: "N" },
   { label: "Next tab", action: "nextTab", key: TAB_KEY },
   { label: "Previous tab", action: "prevTab", key: TAB_KEY, shift: true },
   { label: "Close tab", action: "closeTab", key: "W" },
@@ -99,6 +118,7 @@ export function shortcutEvent(s: Shortcut, mac: boolean): Key | null {
   const same = s.key === TAB_KEY || s.key === FULLSCREEN_KEY;
   return {
     key: s.key,
+    code: same ? undefined : `Key${s.key}`,
     ctrlKey: same || !mac,
     shiftKey: same ? !!s.shift : !mac,
     altKey: false,

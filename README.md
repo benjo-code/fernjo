@@ -16,6 +16,9 @@ Working now:
 - Encrypted credential vault (Argon2id + XChaCha20-Poly1305), optional unlock via the OS keychain
 - Import from mRemoteNG (`confCons.xml` 2.6, including saved passwords), export of the connections as JSON and an encrypted full backup with restore (formats in [Docs/backup-format.md](Docs/backup-format.md))
 - Data folder you can sync yourself (Syncthing, Nextcloud, iCloud) – the vault stays encrypted
+- Quick connect: type `user@host[:port]` (or `rdp://user@host`) under the filter and open a session without saving a connection
+- Tabs of the last run come back after a restart as disconnected tabs (Reconnect or "Reconnect all"; switch off in Settings)
+- Optional auto-lock of the vault after an idle time (Settings)
 - Light and dark theme, following the system or set by hand
 
 Design and scope: [Docs/superpowers/specs/2026-11-15-fernjo-design.md](Docs/superpowers/specs/2026-11-15-fernjo-design.md)
@@ -58,7 +61,7 @@ The gear in the sidebar opens Settings: the colour theme (System, Light or Dark;
 Double-click a connection (or press Enter on it) to open it as a tab; the context menu has "Open another session" for a second tab. Sign-in follows OpenSSH's order: SSH agent, then the key or password of the credential the connection references in the vault, then keyboard-interactive, then a prompt in the tab. Everything the server asks (host key, password, passphrase, one-time code) is asked inside that tab, never in a popup.
 
 - **Host keys:** fernjo keeps its own `known_hosts` file in the data folder (OpenSSH format, hashed entries are read). A new host asks for confirmation once ("Trust and connect" remembers it, "Trust once" does not); a key that differs from the stored one is blocked with a warning and only replaced after an explicit "Replace key and connect". Because a synced data folder can be written by others, a host that is already in `known_hosts` but that this device has not confirmed itself also asks once per device ("Confirm and connect"); these confirmations are kept outside the synced folder.
-- **Agent:** `SSH_AUTH_SOCK` on Linux and macOS, the OpenSSH named pipe (`\\.\pipe\openssh-ssh-agent`) on Windows. Pageant is not supported yet.
+- **Agent:** `SSH_AUTH_SOCK` on Linux and macOS, the OpenSSH named pipe (`\\.\pipe\openssh-ssh-agent`) on Windows. Pageant is supported on Windows too and is tried after the OpenSSH pipe (when the pipe is unavailable or holds no keys); if both hold keys, only the OpenSSH agent is used.
 - **Terminal:** xterm.js with search and clickable links; font family, size and scrollback are set in Settings (gear in the sidebar). A dropped connection keeps the screen, shows a struck lamp and a Reconnect button.
 - Secrets never leave the Rust side except for the explicit "reveal" in the vault.
 
@@ -72,6 +75,7 @@ Plain Ctrl+letter and Alt+letter always go to the shell. App shortcuts are Ctrl+
 | Previous tab | Ctrl+Shift+Tab | Ctrl+Shift+Tab |
 | Close tab | Ctrl+Shift+W | Cmd+W |
 | Focus the connection filter | Ctrl+Shift+K | Cmd+K |
+| Quick connect | Ctrl+Shift+N | Cmd+N |
 | Search in the terminal | Ctrl+Shift+F | Cmd+F |
 | Copy selection (terminal) | Ctrl+Shift+C | Cmd+C |
 | Paste (terminal) | Ctrl+Shift+V | Cmd+V |

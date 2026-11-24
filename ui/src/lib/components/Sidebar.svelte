@@ -8,6 +8,7 @@
   import { syncLine } from "../sync-line";
   import FilterBox from "./FilterBox.svelte";
   import Icon from "./Icon.svelte";
+  import QuickConnect from "./QuickConnect.svelte";
   import NoticeBar from "./NoticeBar.svelte";
   import Splitter from "./Splitter.svelte";
   import SyncStatusLine from "./SyncStatus.svelte";
@@ -52,6 +53,12 @@
   } = $props();
 
   let filterBox: FilterBox | undefined = $state();
+  let quickConnect: QuickConnect | undefined = $state();
+
+  /** Focuses the quick connect field (the Ctrl+Shift+N shortcut). */
+  export function focusQuickConnect() {
+    quickConnect?.focus();
+  }
 
   /** Focuses the tree filter (the Ctrl+Shift+K shortcut). */
   export function focusFilter() {
@@ -90,6 +97,7 @@
     <div class="filter"><FilterBox bind:this={filterBox} {store} /></div>
     <VaultChip {vault} onOpenManager={onOpenVault} onFocusUnlock={() => void note?.focusForm()} />
   </div>
+  <QuickConnect bind:this={quickConnect} {sessions} />
   <VaultNote bind:this={note} bind:open={noteOpen} {vault} />
   <NoticeBar {store} {sync} {restartPending} {onRestart} />
   <div class="tree-slot"><TreeView {store} {sessions} {onimport} /></div>
@@ -178,12 +186,12 @@
     color: var(--color-text);
   }
 
-  /* 23 rows stay visible when the window allows it; the properties panel gives way first */
+  /* 21 rows stay visible when the window allows it; the properties panel gives way first */
   .tree-slot {
     display: flex;
     flex: 1 1 0;
     flex-direction: column;
-    min-height: min(calc(var(--row-height-tree) * 23), calc(100vh - 120px));
+    min-height: min(calc(var(--row-height-tree) * 21), calc(100vh - 156px));
     overflow-y: auto;
   }
 

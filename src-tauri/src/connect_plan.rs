@@ -8,8 +8,8 @@
 
 use fernjo_core::{
     CredentialId, DEFAULT_KEEPALIVE_SECS, DEFAULT_RDP_CLIPBOARD, DEFAULT_RDP_COLOR_DEPTH,
-    DEFAULT_RDP_PORT, DEFAULT_SSH_PORT, NodeId, NodeType, Protocol, RdpResolution, ResolvedNode,
-    is_valid_domain,
+    DEFAULT_RDP_PORT, DEFAULT_SSH_PORT, NodeId, NodeType, Protocol, QuickTarget, RdpResolution,
+    ResolvedNode, is_valid_domain,
 };
 use fernjo_ssh::Credential;
 use fernjo_vault::{Secret, SecretKind, VaultError};
@@ -289,6 +289,81 @@ pub fn resolve_session(
         Some(Protocol::Ssh) => ssh_plan(state, &node, skip_vault).map(Plan::Ssh),
         Some(Protocol::Rdp) => rdp_plan(state, &node, skip_vault).map(Plan::Rdp),
         None => Err(error("not_a_connection", "only connections can be opened")),
+    }
+}
+
+/// What a session connects to: a node of the tree, or a target typed into quick connect (never
+/// stored in the tree).
+#[derive(Debug, Clone)]
+pub enum Target {
+    Node(NodeId),
+    Quick(QuickTarget),
+}
+
+/// Builds the plan for a quick target. Nothing is read from or written to the tree or the vault;
+/// the password (and an RDP user name) come through the session prompts. The host is checked
+/// here again because the webview is not trusted.
+///
+/// # Errors
+/// `invalid_host`.
+pub fn resolve_quick(target: &QuickTarget) -> Result<Plan, CommandError> {
+    let host = target.host.trim().to_string();
+    if host.is_empty() || fernjo_ssh::validate_host(&host).is_err() {
+        return Err(error(
+            "invalid_host",
+            "the host name contains characters that are not allowed (use a DNS name or an IP address)",
+        ));
+    }
+    // the rest of the structure (port, user) by the parser's own rules
+    fernjo_core::validate_quick(target).map_err(|e| error(e.code, e.message()))?;
+    let username = target.user.as_deref().and_then(non_blank);
+    Ok(match target.protocol {
+        Protocol::Ssh => Plan::Ssh(ConnectPlan {
+            host,
+            port: target.port,
+            username,
+            keepalive_secs: DEFAULT_KEEPALIVE_SECS,
+            credential: CredentialPlan::None,
+        }),
+        Protocol::Rdp => Plan::Rdp(RdpPlan {
+            host,
+            port: target.port,
+            username,
+            domain: None,
+            resolution: RdpResolution::Fit,
+            color_depth: DEFAULT_RDP_COLOR_DEPTH,
+            clipboard: false,
+            credential: RdpCredentialPlan::None,
+        }),
+    })
+}
+
+/// Checks that a target exists and could be opened, without building a plan (no vault access,
+/// no host check: that happens when the session connects).
+///
+/// # Errors
+/// `not_found` or `not_a_connection` for a node, a structure code for a quick target.
+pub fn check_target(state: &AppState, target: &Target) -> Result<(), CommandError> {
+    match target {
+        Target::Node(id) => connection(state, *id).map(|_| ()),
+        Target::Quick(quick) => {
+            fernjo_core::validate_quick(quick).map_err(|e| error(e.code, e.message()))
+        }
+    }
+}
+
+/// Builds the plan for a session target.
+///
+/// # Errors
+/// What `resolve_session` or `resolve_quick` report.
+pub fn resolve_target(
+    state: &AppState,
+    target: &Target,
+    skip_vault: bool,
+) -> Result<Plan, CommandError> {
+    match target {
+        Target::Node(id) => resolve_session(state, *id, skip_vault),
+        Target::Quick(quick) => resolve_quick(quick),
     }
 }
 
@@ -856,5 +931,113 @@ victim2",
                 assert!(!text.contains(s), "{text}");
             }
         }
+    }
+
+    fn quick(protocol: Protocol, host: &str, port: u16, user: Option<&str>) -> QuickTarget {
+        QuickTarget {
+            protocol,
+            host: host.to_string(),
+            port,
+            user: user.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn quick_ssh_plan_has_no_credential_and_the_typed_user() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = state(dir.path());
+        let target = Target::Quick(quick(Protocol::Ssh, "example.com", 2222, Some("root")));
+        let Plan::Ssh(plan) = resolve_target(&st, &target, false).unwrap() else {
+            panic!("expected an SSH plan");
+        };
+        assert_eq!(plan.host, "example.com");
+        assert_eq!(plan.port, 2222);
+        assert_eq!(plan.username.as_deref(), Some("root"));
+        assert_eq!(plan.keepalive_secs, DEFAULT_KEEPALIVE_SECS);
+        assert!(matches!(plan.credential, CredentialPlan::None));
+    }
+
+    #[test]
+    fn quick_rdp_plan_has_the_clipboard_off_and_no_credential() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = state(dir.path());
+        let target = Target::Quick(quick(Protocol::Rdp, "10.0.0.5", 3389, None));
+        let Plan::Rdp(plan) = resolve_target(&st, &target, false).unwrap() else {
+            panic!("expected an RDP plan");
+        };
+        assert_eq!((plan.host.as_str(), plan.port), ("10.0.0.5", 3389));
+        assert_eq!(plan.username, None);
+        assert_eq!(plan.domain, None);
+        assert_eq!(plan.resolution, RdpResolution::Fit);
+        assert_eq!(plan.color_depth, DEFAULT_RDP_COLOR_DEPTH);
+        assert!(!plan.clipboard);
+        assert!(matches!(plan.credential, RdpCredentialPlan::None));
+    }
+
+    #[test]
+    fn a_quick_host_outside_the_allow_list_is_invalid_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = state(dir.path());
+        for host in ["bad host", "a/b", "", "a;b"] {
+            for protocol in [Protocol::Ssh, Protocol::Rdp] {
+                let target = Target::Quick(quick(protocol, host, 22, Some("u")));
+                assert_eq!(
+                    code(resolve_target(&st, &target, false)),
+                    "invalid_host",
+                    "{host:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_hand_built_quick_target_is_checked_like_a_parsed_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = state(dir.path());
+        let cases = [
+            (quick(Protocol::Ssh, "h", 0, Some("u")), "quick_bad_port"),
+            (quick(Protocol::Rdp, "h", 0, None), "quick_bad_port"),
+            (
+                quick(Protocol::Ssh, "h", 22, Some("u\nx")),
+                "quick_bad_target",
+            ),
+            (
+                quick(Protocol::Ssh, "h", 22, Some("u\0")),
+                "quick_bad_target",
+            ),
+            (
+                quick(Protocol::Ssh, "h", 22, Some("a@b")),
+                "quick_bad_target",
+            ),
+            (
+                quick(Protocol::Ssh, "h", 22, Some("a b")),
+                "quick_bad_target",
+            ),
+            (
+                quick(Protocol::Ssh, "h", 22, Some(&"u".repeat(300))),
+                "quick_bad_target",
+            ),
+            (quick(Protocol::Ssh, "h", 22, None), "quick_user_required"),
+        ];
+        for (target, expected) in cases {
+            let t = Target::Quick(target.clone());
+            assert_eq!(code(resolve_target(&st, &t, false)), expected, "{target:?}");
+        }
+    }
+
+    #[test]
+    fn nothing_is_written_to_connections_json_by_resolving_a_quick_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = state(dir.path());
+        commands::create_connection(&st, None, None, "c".into(), Protocol::Ssh, "h".into())
+            .unwrap();
+        let file = dir.path().join("connections.json");
+        let before = std::fs::read(&file).unwrap();
+        for protocol in [Protocol::Ssh, Protocol::Rdp] {
+            let target = Target::Quick(quick(protocol, "example.com", 22, Some("u")));
+            resolve_target(&st, &target, false).unwrap();
+        }
+        assert_eq!(std::fs::read(&file).unwrap(), before);
+        assert!(!dir.path().join("known_hosts").exists());
     }
 }
