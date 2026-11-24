@@ -15,6 +15,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::{MutexGuard, PoisonError};
 
 use fernjo_core::{Node, NodeKind, write_exact};
@@ -329,7 +330,11 @@ fn pending_slot(state: &AppState) -> MutexGuard<'_, Option<Pending>> {
 /// Remembers the picked file and drops whatever was pending.
 pub fn import_begin(state: &AppState, kind: ImportKind, path: PathBuf) -> PickedFile {
     let file_name = file_name_of(&path);
-    *pending_slot(state) = Some(Pending::Picked { kind, path });
+    let mut slot = pending_slot(state);
+    *slot = Some(Pending::Picked { kind, path });
+    // a new pick comes from the page that is showing now; an earlier skipped page load is spent
+    state.page_reloaded.store(false, Ordering::SeqCst);
+    drop(slot);
     PickedFile { file_name }
 }
 
@@ -461,11 +466,15 @@ pub fn import_apply(state: &AppState, options: ApplyOptions) -> Result<ApplyResu
             Err(e) => {
                 // never applicable: drop it
                 *slot = None;
+                state.page_reloaded.store(false, Ordering::SeqCst);
                 return Err(e);
             }
         },
     };
-    if result.is_ok() {
+    // A page load that had to skip while this apply held the lock (`clear_pending`) could not
+    // drop the value, so a failed apply does it now; the flag is spent either way.
+    let reloaded = state.page_reloaded.swap(false, Ordering::SeqCst);
+    if result.is_ok() || reloaded {
         *slot = None;
     }
     // also a failed apply may have written part of it
@@ -2164,6 +2173,65 @@ mod tests {
         assert_eq!(pending_kind(&s), "mremoteng");
         s.clear_pending();
         assert_eq!(pending_kind(&s), "none");
+    }
+
+    /// Holds the pending lock on another thread while `clear_pending` runs (a page load during
+    /// an apply), then lets go.
+    fn page_load_while_locked(s: &AppState) {
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                let _g = s.pending.lock().unwrap();
+                held_tx.send(()).unwrap();
+                let _ = release_rx.recv();
+            });
+            held_rx.recv().unwrap();
+            s.clear_pending();
+            release_tx.send(()).unwrap();
+        });
+    }
+
+    #[test]
+    fn a_failed_apply_after_a_skipped_page_load_drops_the_pending_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = st(&dir.path().join("d"));
+        let path = file(dir.path(), "c.xml", DEFAULT_KEY_XML);
+        inspect(&s, ImportKind::Mremoteng, &path, None).unwrap();
+        page_load_while_locked(&s);
+        assert_eq!(pending_kind(&s), "mremoteng");
+        assert_eq!(apply(&s).unwrap_err().code, "vault_needed");
+        assert_eq!(pending_kind(&s), "none");
+        // the flag is spent: a later import that fails keeps its value
+        inspect(&s, ImportKind::Mremoteng, &path, None).unwrap();
+        assert_eq!(apply(&s).unwrap_err().code, "vault_needed");
+        assert_eq!(pending_kind(&s), "mremoteng");
+    }
+
+    #[test]
+    fn a_failed_apply_without_a_page_load_keeps_the_pending_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = st(&dir.path().join("d"));
+        let path = file(dir.path(), "c.xml", DEFAULT_KEY_XML);
+        inspect(&s, ImportKind::Mremoteng, &path, None).unwrap();
+        assert_eq!(apply(&s).unwrap_err().code, "vault_needed");
+        assert_eq!(pending_kind(&s), "mremoteng");
+    }
+
+    #[test]
+    fn a_skipped_page_load_before_a_successful_apply_leaves_no_stale_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = st(&dir.path().join("d"));
+        let xml = file(dir.path(), "c.xml", DEFAULT_KEY_XML);
+        inspect(&s, ImportKind::Mremoteng, &xml, None).unwrap();
+        unlocked(&s);
+        page_load_while_locked(&s);
+        apply(&s).unwrap();
+        assert_eq!(pending_kind(&s), "none");
+        inspect(&s, ImportKind::Mremoteng, &xml, None).unwrap();
+        vault_commands::vault_lock(&s).unwrap();
+        assert_eq!(apply(&s).unwrap_err().code, "vault_needed");
+        assert_eq!(pending_kind(&s), "mremoteng");
     }
 
     #[test]

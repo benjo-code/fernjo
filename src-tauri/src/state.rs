@@ -151,6 +151,9 @@ pub struct AppState {
     pub sessions: SessionManager,
     /// The import or restore that waits for inspect/apply (one at a time).
     pub pending: Mutex<Option<Pending>>,
+    /// Set by `clear_pending` when it had to skip because an apply held the `pending` lock;
+    /// `import_apply` then drops the pending value if it fails, and resets the flag.
+    pub page_reloaded: AtomicBool,
     /// Multi-device sync (M9): what the last run reported, the findings still to show and the
     /// running flag. Holds no secret. A leaf lock: never held while taking another one.
     pub sync: Mutex<SyncRuntime>,
@@ -397,6 +400,7 @@ impl AppState {
             idle: IdleTracker::new(std::time::Instant::now(), std::time::SystemTime::now()),
             sessions: SessionManager::default(),
             pending: Mutex::new(None),
+            page_reloaded: AtomicBool::new(false),
             sync: Mutex::new(SyncRuntime::default()),
             sync_secrets: Box::new(MemorySyncSecrets::default()),
             edit_seq: AtomicU64::new(0),
@@ -438,13 +442,16 @@ impl AppState {
     /// Drops the pending import or restore (every page load does this, next to closing the
     /// sessions); a poisoned lock is recovered. It never waits: while an apply holds the lock
     /// (disk work on another thread) the call is skipped, which is safe because the apply
-    /// takes the pending value itself and so clears it. A pick or inspect holds the lock only
+    /// clears the value itself on success, and on failure when `page_reloaded` is set. A pick or inspect holds the lock only
     /// to swap the value, never across I/O.
     pub fn clear_pending(&self) {
         match self.pending.try_lock() {
             Ok(mut guard) => *guard = None,
             Err(std::sync::TryLockError::Poisoned(p)) => *p.into_inner() = None,
-            Err(std::sync::TryLockError::WouldBlock) => {}
+            Err(std::sync::TryLockError::WouldBlock) => {
+                // the apply drops the value itself on failure when it sees this flag
+                self.page_reloaded.store(true, Ordering::SeqCst);
+            }
         }
     }
 

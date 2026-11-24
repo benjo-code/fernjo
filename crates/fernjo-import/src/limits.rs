@@ -30,13 +30,13 @@ pub fn clean(s: &str, max: usize, keep_newlines: bool) -> String {
 /// What `sanitize_nodes` changed, for one aggregate report line.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Cleaned {
-    /// Names, descriptions and hosts that were shortened or had control characters removed.
+    /// Names, user names, descriptions and hosts that were shortened or had control characters removed.
     pub changed: usize,
     /// Hosts longer than the cap, imported with an empty host.
     pub hosts_dropped: usize,
 }
 
-/// Applies the caps to the names, descriptions and hosts of `nodes` and everything below
+/// Applies the caps to the names, user names, descriptions and hosts of `nodes` and everything below
 /// them. Iterative (no recursion on attacker-chosen depth).
 pub fn sanitize_nodes(nodes: &mut [Node]) -> Cleaned {
     let mut out = Cleaned::default();
@@ -52,6 +52,14 @@ pub fn sanitize_nodes(nodes: &mut [Node]) -> Cleaned {
             if name != node.name {
                 node.name = name;
                 out.changed += 1;
+            }
+            if let Some(user) = &node.settings.username {
+                let cleaned = clean(user, MAX_NAME_CHARS, false);
+                let cleaned = (!cleaned.is_empty()).then_some(cleaned);
+                if cleaned.as_deref() != Some(user.as_str()) {
+                    node.settings.username = cleaned;
+                    out.changed += 1;
+                }
             }
             let description = clean(&node.description, MAX_DESCRIPTION_CHARS, true);
             if description != node.description {
@@ -82,6 +90,39 @@ pub fn sanitize_nodes(nodes: &mut [Node]) -> Cleaned {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn user_node(name: &str, user: &str) -> Node {
+        Node {
+            id: fernjo_core::NodeId::new_v4(),
+            name: name.to_owned(),
+            description: String::new(),
+            settings: fernjo_core::Settings {
+                username: Some(user.to_owned()),
+                ..Default::default()
+            },
+            kind: NodeKind::Connection {
+                protocol: fernjo_core::Protocol::Ssh,
+                host: "h".to_owned(),
+            },
+        }
+    }
+
+    #[test]
+    fn sanitize_nodes_cleans_and_caps_the_username() {
+        let long = format!("root{}", "x".repeat(400));
+        let mut nodes = vec![
+            user_node("a", &long),
+            user_node("b", ""),
+            user_node("c", "alice"),
+        ];
+        let out = sanitize_nodes(&mut nodes);
+        let first = nodes[0].settings.username.clone().unwrap();
+        assert!(first.starts_with("rootx") && !first.contains(''));
+        assert_eq!(first.chars().count(), MAX_NAME_CHARS);
+        assert_eq!(nodes[1].settings.username, None);
+        assert_eq!(nodes[2].settings.username.as_deref(), Some("alice"));
+        assert_eq!(out.changed, 2);
+    }
 
     #[test]
     fn cut_chars_never_splits_a_character() {
