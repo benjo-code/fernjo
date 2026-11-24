@@ -88,9 +88,9 @@ pub fn desktop_entry(appimage: &str) -> Option<String> {
     ))
 }
 
-/// Whether to show the dialog: only for an AppImage with an absolute path, never after "Never", and not when the entry
-/// already says exactly what it would say now (an entry that points to a moved file is asked
-/// about again).
+/// Whether to show the dialog: only for an AppImage with an absolute path, never after "Never",
+/// and not when the entry already says exactly what it would say now (an entry that points to a
+/// moved file is asked about again).
 pub fn should_offer(appimage: Option<&str>, data_home: &Path, never: bool) -> bool {
     // a plain '/' test like `data_home`: a relative path would resolve against whatever the
     // working directory is when the desktop starts the entry
@@ -344,11 +344,22 @@ mod tests {
             planted.push(path);
         }
         install(APP, dir.path()).unwrap();
-        for path in planted {
-            assert_eq!(std::fs::read(&path).unwrap(), b"planted");
+        for path in &planted {
+            assert_eq!(std::fs::read(path).unwrap(), b"planted");
         }
+        let planted_paths = planted;
         assert!(entry.exists() && icon.exists());
+        // nothing else is left: the random temp names of the writer are renamed away
+        for d in [entry.parent().unwrap(), icon.parent().unwrap()] {
+            for e in std::fs::read_dir(d).unwrap() {
+                let name = e.unwrap().path();
+                if name.extension().is_some_and(|x| x == "tmp") {
+                    assert!(planted_paths.contains(&name), "left over: {name:?}");
+                }
+            }
+        }
     }
+
     #[test]
     fn install_refuses_an_unwritable_path_and_writes_nothing() {
         let dir = tempfile::tempdir().unwrap();
