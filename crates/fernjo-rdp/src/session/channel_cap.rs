@@ -8,9 +8,14 @@
 //! before it reaches the active stage and refuses an announcement above
 //! [`MAX_CHANNEL_MESSAGE`]; the session then ends with `CloseReason::ChannelTooLarge`.
 //!
-//! The check is conservative: anything it cannot decode passes, and IronRDP reports its own error
-//! for it. Fast-path frames, the I/O and message channels and every chunk that does not start a
-//! message pass untouched. The largest legitimate message is clipboard text: 1 MiB of text is
+//! Two more refusals close ways around the cap: any static channel chunk flagged
+//! `PACKET_COMPRESSED` (IronRDP skips its length checks for those, and fernjo negotiates no
+//! compression), and a drdynvc message start too short to hold a whole DVC "data first" header
+//! while more of the message follows (the header could be split so its total stays hidden).
+//!
+//! The check is conservative otherwise: anything it cannot decode passes, and IronRDP reports its
+//! own error for it. Fast-path frames, the I/O and message channels and every uncompressed chunk
+//! that does not start a message pass untouched. The largest legitimate message is clipboard text: 1 MiB of text is
 //! about 2 MiB of UTF-16, well below the cap.
 
 use ironrdp_core::{ReadCursor, decode_cursor};
@@ -26,6 +31,8 @@ pub(crate) const MAX_CHANNEL_MESSAGE: u32 = 4 * 1024 * 1024;
 const DVC_DATA_FIRST: u8 = 0x02;
 /// DVC command "data first compressed" (MS-RDPEDYC 2.2.3.3); its length is the uncompressed one.
 const DVC_DATA_FIRST_COMPRESSED: u8 = 0x06;
+/// The longest DVC "data first" header: command byte, 4-byte channel id, 4-byte length.
+const DVC_DATA_FIRST_MAX_HEADER: usize = 1 + 4 + 4;
 
 /// The MCS channel ids of the session's static channels.
 #[derive(Debug, Clone, Default)]
@@ -60,19 +67,31 @@ pub(crate) fn check_frame(
     if first && header.length > MAX_CHANNEL_MESSAGE {
         return Err(ChannelTooLarge);
     }
-
-    if channels.drdynvc == Some(data.channel_id)
-        && !header
-            .flags
-            .contains(ChannelControlFlags::PACKET_COMPRESSED)
+    // fernjo negotiates no compression, so a compliant server never compresses channel data, and
+    // IronRDP skips every length check of its reassembly for a compressed chunk: a sequence of
+    // them would grow without bound whatever the first chunk announced
+    if header
+        .flags
+        .contains(ChannelControlFlags::PACKET_COMPRESSED)
     {
+        return Err(ChannelTooLarge);
+    }
+
+    if channels.drdynvc == Some(data.channel_id) {
         let chunk = cursor.remaining();
-        // A DVC PDU starts a static channel message: a chunk with the first flag, or one without
-        // either flag that holds the whole message (IronRDP takes that as unfragmented).
-        let starts =
-            first || (!last && u32::try_from(chunk.len()).is_ok_and(|len| len == header.length));
-        if starts && dvc_data_first_length(chunk).is_some_and(|len| len > MAX_CHANNEL_MESSAGE) {
-            return Err(ChannelTooLarge);
+        let whole = u32::try_from(chunk.len()).is_ok_and(|len| len == header.length);
+        // The two branches of IronRDP's `ChunkProcessor::dechunkify` that start a message: the
+        // first flag opens a sequence, and a chunk without either flag outside a sequence is a
+        // whole message (seen here, without state, as "holds exactly the announced length").
+        let starts = first || (!last && whole);
+        if starts {
+            // a DVC header split over chunks could hide its total from this check
+            if chunk.len() < DVC_DATA_FIRST_MAX_HEADER && !whole {
+                return Err(ChannelTooLarge);
+            }
+            if dvc_data_first_length(chunk).is_some_and(|len| len > MAX_CHANNEL_MESSAGE) {
+                return Err(ChannelTooLarge);
+            }
         }
     }
     Ok(())
@@ -255,6 +274,70 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn compressed_static_channel_chunks_are_refused() {
+        // a small first chunk passes ...
+        let first = indication(
+            CLIPRDR,
+            chunk(1, ChannelControlFlags::FLAG_FIRST, &[0u8; 1]),
+        );
+        assert_eq!(check_frame(Action::X224, &first, &channels()), Ok(()));
+        // ... but the compressed middle chunks IronRDP would append without a length check do not
+        let middle = indication(
+            CLIPRDR,
+            chunk(1, ChannelControlFlags::PACKET_COMPRESSED, &[0u8; 1600]),
+        );
+        assert_eq!(
+            check_frame(Action::X224, &middle, &channels()),
+            Err(ChannelTooLarge)
+        );
+        // a compressed first chunk is refused too, on every static channel including drdynvc
+        for channel_id in [CLIPRDR, DRDYNVC] {
+            let first = indication(
+                channel_id,
+                chunk(
+                    1,
+                    ChannelControlFlags::FLAG_FIRST | ChannelControlFlags::PACKET_COMPRESSED,
+                    &[0u8; 1],
+                ),
+            );
+            assert_eq!(
+                check_frame(Action::X224, &first, &channels()),
+                Err(ChannelTooLarge),
+                "channel {channel_id}"
+            );
+        }
+        // the I/O channel is not a static channel and is left alone
+        let io = indication(
+            IO_CHANNEL,
+            chunk(1, ChannelControlFlags::PACKET_COMPRESSED, &[0u8; 16]),
+        );
+        assert_eq!(check_frame(Action::X224, &io, &channels()), Ok(()));
+    }
+
+    #[test]
+    fn a_dvc_header_split_over_static_chunks_is_refused() {
+        // first chunk: only the DVC command byte (data first, 4-byte id and length), 20 announced;
+        // the id and a 0xFFFFFFFF total would follow in the next chunk
+        let split = indication(DRDYNVC, chunk(20, ChannelControlFlags::FLAG_FIRST, &[0x2a]));
+        assert_eq!(
+            check_frame(Action::X224, &split, &channels()),
+            Err(ChannelTooLarge)
+        );
+        // a first chunk that holds a whole header passes and is judged by its total
+        let mut whole_header = vec![0x2a];
+        whole_header.extend_from_slice(&7u32.to_le_bytes());
+        whole_header.extend_from_slice(&64u32.to_le_bytes());
+        let frame = indication(
+            DRDYNVC,
+            chunk(64, ChannelControlFlags::FLAG_FIRST, &whole_header),
+        );
+        assert_eq!(check_frame(Action::X224, &frame, &channels()), Ok(()));
+        // a short chunk on another static channel is not a DVC PDU
+        let frame = indication(CLIPRDR, chunk(20, ChannelControlFlags::FLAG_FIRST, &[0x2a]));
+        assert_eq!(check_frame(Action::X224, &frame, &channels()), Ok(()));
+    }
+
+    #[test]
     fn a_truncated_frame_is_left_to_ironrdp() {
         let full = first_chunk_on(CLIPRDR, MAX_CHANNEL_MESSAGE + 1);
         // cut inside the TPKT, X.224, MCS or channel headers: nothing decodes, nothing is refused
@@ -269,7 +352,7 @@ pub(super) mod tests {
             check_frame(Action::X224, &[0xde, 0xad, 0xbe, 0xef], &channels()),
             Ok(())
         );
-        // a DVC "data first" cut before its length field passes too
+        // a whole 2-byte message holding a "data first" cut before its length field passes too
         let frame = indication(
             DRDYNVC,
             chunk(2, ChannelControlFlags::FLAG_FIRST, &[0x2a, 0x07]),
