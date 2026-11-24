@@ -53,9 +53,9 @@
 {#if store.changedOnDisk}
   <div class="bar error" role="alert">
     <Icon name="alert" size={14} />
-    <span class="text"
-      >connections.json was changed by another program or device. Your last edit was not saved.</span
-    >
+    <span class="text">
+      connections.json was changed by another program or device. Your last edit was not saved.
+    </span>
     <button type="button" class="dismiss" onclick={() => void store.reload()}>Reload</button>
   </div>
 {/if}
@@ -79,16 +79,19 @@
       type="button"
       class="dismiss"
       data-dismiss-findings
-      onclick={() => void sync.dismissFindings()}>Dismiss</button
+      onclick={() => void sync.dismissFindings()}
     >
+      Dismiss
+    </button>
   </div>
 {/if}
 
 {#each store.notices as notice, index (index)}
   <div class="bar" role="status">
     <span class="text">{noticeText(notice)}</span>
-    <button type="button" class="dismiss" onclick={() => store.dismissNotice(index)}>Dismiss</button
-    >
+    <button type="button" class="dismiss" onclick={() => store.dismissNotice(index)}>
+      Dismiss
+    </button>
   </div>
 {/each}
 

@@ -281,17 +281,17 @@
     <div class="actions">
       <button type="button" class="btn" onclick={cancelPending}>Cancel</button>
       {#if withoutOption}
-        <button type="button" class="btn" aria-disabled={locked} onclick={() => void apply(true)}
-          >Import without passwords</button
-        >
+        <button type="button" class="btn" aria-disabled={locked} onclick={() => void apply(true)}>
+          Import without passwords
+        </button>
       {/if}
-      <button type="submit" class="btn primary" aria-disabled={vaultBusy || locked}
-        >{none ? "Create vault" : "Unlock"}{resume
+      <button type="submit" class="btn primary" aria-disabled={vaultBusy || locked}>
+        {none ? "Create vault" : "Unlock"}{resume
           ? store.kind === "backup"
             ? " and restore"
             : " and import"
-          : ""}</button
-      >
+          : ""}
+      </button>
     </div>
   </form>
 {/snippet}
@@ -336,15 +336,19 @@
               type="button"
               class="btn"
               aria-disabled={locked}
-              onclick={() => void apply(true)}>Import without passwords</button
+              onclick={() => void apply(true)}
             >
+              Import without passwords
+            </button>
           {/if}
           <button
             type="button"
             class="btn primary"
             aria-disabled={locked}
-            onclick={() => void apply(false)}>Import</button
+            onclick={() => void apply(false)}
           >
+            Import
+          </button>
         </div>
       {:else if store.preview.backup}
         {@const b = store.preview.backup}
@@ -368,8 +372,10 @@
               type="button"
               class="btn danger"
               aria-disabled={locked}
-              onclick={() => (confirming = true)}>Restore…</button
+              onclick={() => (confirming = true)}
             >
+              Restore…
+            </button>
           </div>
         {/if}
       {/if}
@@ -434,14 +440,18 @@
           type="button"
           class="btn"
           aria-disabled={locked}
-          onclick={() => void pick("mremoteng")}>mRemoteNG file…</button
+          onclick={() => void pick("mremoteng")}
         >
+          mRemoteNG file…
+        </button>
         <button
           type="button"
           class="btn"
           aria-disabled={locked}
-          onclick={() => void pick("connections")}>fernjo connections file…</button
+          onclick={() => void pick("connections")}
         >
+          fernjo connections file…
+        </button>
       </div>
 
       <h3 class="section">Export</h3>
@@ -450,15 +460,19 @@
           type="button"
           class="btn"
           aria-disabled={locked}
-          onclick={() => void exportConnections()}>Connections (JSON)</button
+          onclick={() => void exportConnections()}
         >
+          Connections (JSON)
+        </button>
         <button
           type="button"
           class="btn"
           aria-expanded={backupOpen}
           aria-disabled={locked}
-          onclick={() => (backupOpen = !backupOpen)}>Full backup…</button
+          onclick={() => (backupOpen = !backupOpen)}
         >
+          Full backup…
+        </button>
       </div>
       <p class="note">
         Connections (JSON) leaves credentials out. A full backup includes the vault and is encrypted
@@ -481,18 +495,23 @@
           />
           <p class="note">At least {MIN_PASSWORD} characters. There is no way to recover it.</p>
           <div class="actions">
-            <button type="submit" class="btn primary" aria-disabled={locked || !backupOk}
-              >Save backup…</button
-            >
+            <button type="submit" class="btn primary" aria-disabled={locked || !backupOk}>
+              Save backup…
+            </button>
           </div>
         </form>
       {/if}
 
       <h3 class="section">Restore</h3>
       <div class="actions start">
-        <button type="button" class="btn" aria-disabled={locked} onclick={() => void pick("backup")}
-          >Backup file…</button
+        <button
+          type="button"
+          class="btn"
+          aria-disabled={locked}
+          onclick={() => void pick("backup")}
         >
+          Backup file…
+        </button>
       </div>
       <p class="note">Replaces everything in fernjo with the contents of a backup.</p>
 

@@ -327,9 +327,9 @@
           {#snippet children(id)}
             <div class="cred">
               {#if !unlocked}
-                <span {id} class="static"
-                  >{vaultState === "locked" ? "Vault locked" : "No vault"}</span
-                >
+                <span {id} class="static">
+                  {vaultState === "locked" ? "Vault locked" : "No vault"}
+                </span>
               {:else if vault.credentialsState === "loading"}
                 <span {id} class="static">Loading…</span>
               {:else if vault.credentialsState === "failed"}

@@ -45,8 +45,9 @@
 </script>
 
 {#if phase === null && vault.unavailable}
-  <span class="chip unavailable"><Icon name="alert" size={14} /><span>Vault unavailable</span></span
-  >
+  <span class="chip unavailable">
+    <Icon name="alert" size={14} /><span>Vault unavailable</span>
+  </span>
 {:else if phase !== null}
   <button type="button" class="chip" aria-label={label} {title} {onclick}>
     <Icon
