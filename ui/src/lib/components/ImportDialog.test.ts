@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { ImportStore } from "../import.svelte";
 import { SessionStore } from "../sessions.svelte";
 import { TreeStore } from "../store.svelte";
+import { SyncStore } from "../sync.svelte";
 import {
   apiError,
   conn,
@@ -11,6 +12,7 @@ import {
   mockApi,
   preview,
   report,
+  syncStatus,
   vaultStatus,
 } from "../testing";
 import type { Api, ApplyResult, ImportPreview, PickedFile, TreeNode } from "../types";
@@ -32,7 +34,11 @@ const settle = async () => {
   flushSync();
 };
 
-async function setup(impl: Partial<Api> = {}, children: TreeNode[] = []) {
+async function setup(
+  impl: Partial<Api> = {},
+  children: TreeNode[] = [],
+  syncState: "off" | "ok" | null = null,
+) {
   const m = mockApi(children, impl);
   const tree = new TreeStore(m.api);
   await tree.init();
@@ -40,9 +46,14 @@ async function setup(impl: Partial<Api> = {}, children: TreeNode[] = []) {
   await vault.init();
   const store = new ImportStore(m.api, (s) => void tree.applySnapshot(s));
   const onclose = vi.fn();
-  mounted = mount(ImportDialog, { target: document.body, props: { store, vault, tree, onclose } });
+  const sync = new SyncStore(m.api);
+  if (syncState) sync.status = syncStatus({ state: syncState });
+  mounted = mount(ImportDialog, {
+    target: document.body,
+    props: { store, vault, tree, sync, onclose },
+  });
   await settle();
-  return { ...m, store, tree, vault, onclose };
+  return { ...m, store, tree, vault, sync, onclose };
 }
 
 const button = (label: string) =>
@@ -243,6 +254,49 @@ describe("ImportDialog", () => {
     await settle();
     expect(calls.importApply).toEqual([[{ withoutPasswords: false }]]);
     expect(document.body.textContent).toContain("Restored");
+  });
+
+  const SYNC_SENTENCE =
+    "With sync on, the restore also replaces the data on every device in the sync group.";
+
+  async function restoreConfirmation(syncState: "off" | "ok" | null) {
+    const p: ImportPreview = preview({
+      kind: "backup",
+      fileName: "fernjo-backup.fernjo",
+      report: null,
+      backup: {
+        createdAt: "2026-11-01T10:00:00Z",
+        app: "fernjo 0.5.0",
+        folders: 1,
+        connections: 4,
+        credentials: 2,
+      },
+    });
+    await setup(
+      {
+        importInspect: async (secret) => {
+          if (secret === null) throw apiError("password_needed", "Needs a password.");
+          return p;
+        },
+      },
+      [conn("a")],
+      syncState,
+    );
+    await click("Backup file…");
+    type(input("import-secret"), "correct horse");
+    await click("Continue");
+    await click("Restore…");
+    return document.querySelector("[role=alertdialog]")!.textContent!;
+  }
+
+  test("with_sync_on_the_restore_confirmation_says_it_reaches_every_device", async () => {
+    expect(await restoreConfirmation("ok")).toContain(SYNC_SENTENCE);
+  });
+
+  test("without_sync_the_restore_confirmation_is_unchanged", async () => {
+    expect(await restoreConfirmation("off")).not.toContain("every device");
+    document.body.innerHTML = "";
+    expect(await restoreConfirmation(null)).not.toContain("every device");
   });
 
   test("a_changed_on_disk_from_apply_backup_shows_the_reload_bar", async () => {

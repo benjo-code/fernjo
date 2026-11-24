@@ -37,6 +37,8 @@ export interface Tab {
    * tab never touches the local clipboard on a guess.
    */
   clipboard: boolean;
+  /** RDP: the connection's host, read together with `clipboard` (for the tab's clipboard marker). */
+  host: string | null;
   title: string;
   state: SessionState;
   detail: string | null;
@@ -206,6 +208,7 @@ export class SessionStore {
       protocol,
       fixedSize: false,
       clipboard: false,
+      host: null,
       title,
       // a restored tab waits for the user; Rust sends the reason when its view attaches
       state: restore ? "disconnected" : "connecting",
@@ -487,6 +490,7 @@ export class SessionStore {
       .then((node) => {
         tab.fixedSize = node.rdpResolution?.effective?.mode === "fixed";
         tab.clipboard = node.rdpClipboard?.effective ?? true;
+        tab.host = node.host;
       })
       // a failed read or an unexpected answer leaves the safe defaults
       .catch(() => {});
