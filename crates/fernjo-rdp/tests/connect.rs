@@ -98,6 +98,26 @@ async fn a_server_that_cannot_sign_for_its_certificate_fails_the_handshake_befor
     );
 }
 
+#[tokio::test]
+async fn an_impostor_signing_with_another_key_type_fails_with_tls_failed_before_any_prompt() {
+    // the replayed certificate is RSA, the impostor's key ECDSA: webpki calls the scheme
+    // unsupported for the key, but the certificate is fine, so this must not read as
+    // `certificate_unsupported`
+    let server = FakeServer::start(Behaviour::ImpersonatedWithCert(Fixture::Rsa2048Sha256)).await;
+    let params = server.params();
+    let certs = params.certs.clone();
+    let script = Script::new(CertDecision::TrustAlways);
+    let result = connect(params, &script).await;
+    assert_eq!(code(&result), "tls_failed");
+    assert!(script.log().is_empty(), "{:?}", script.log());
+    assert_eq!(
+        certs
+            .check("127.0.0.1", server.addr.port(), &server.fingerprint)
+            .unwrap(),
+        CertCheck::Unknown
+    );
+}
+
 /// Connects to a server presenting `fixture`, rejects at the certificate decision and returns the
 /// result, the prompts and the server.
 async fn connect_with_fixture(fixture: Fixture) -> (&'static str, Vec<String>, FakeServer) {

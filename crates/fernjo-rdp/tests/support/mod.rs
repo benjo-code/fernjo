@@ -100,6 +100,9 @@ pub enum Behaviour {
     /// handshake properly; the certificate is presented as is, without the consistency check
     /// rustls's `with_single_cert` would run (it parses the certificate with webpki too).
     TlsWithCert(Fixture),
+    /// As `ImpersonatedTls` with another key type: the server presents the fixture's (RSA)
+    /// certificate and signs the handshake with its own ECDSA P-256 key.
+    ImpersonatedWithCert(Fixture),
 }
 
 /// A certificate and key from `tests/fixtures` (see the README there).
@@ -149,7 +152,9 @@ impl FakeServer {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let (der, key) = match behaviour {
-            Behaviour::TlsWithCert(fixture) => fixture.load(),
+            Behaviour::TlsWithCert(fixture) | Behaviour::ImpersonatedWithCert(fixture) => {
+                fixture.load()
+            }
             _ => {
                 let cert =
                     rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()]).unwrap();
@@ -170,7 +175,11 @@ impl FakeServer {
             let certified =
                 rustls::sign::CertifiedKey::new(vec![CertificateDer::from(der)], signing);
             builder.with_cert_resolver(Arc::new(rustls::sign::SingleCertAndKey::from(certified)))
-        } else if matches!(behaviour, Behaviour::ImpersonatedTls) {
+        } else if matches!(
+            behaviour,
+            Behaviour::ImpersonatedTls | Behaviour::ImpersonatedWithCert(_)
+        ) {
+            // rcgen's default key type is ECDSA P-256
             let other = rcgen::KeyPair::generate().unwrap();
             let other_key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(other.serialize_der()));
             let signing = rustls::crypto::ring::sign::any_supported_type(&other_key).unwrap();

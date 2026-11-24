@@ -17,7 +17,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::crypto::{CryptoProvider, verify_tls12_signature, verify_tls13_signature};
+use rustls::crypto::{
+    CryptoProvider, WebPkiSupportedAlgorithms, verify_tls12_signature, verify_tls13_signature,
+};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::server::ParsedCertificate;
 use rustls::{CertificateError, ClientConfig, DigitallySignedStruct, SignatureScheme};
@@ -25,7 +27,8 @@ use tokio::io::AsyncWriteExt as _;
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
-use x509_cert::der::{Decode as _, Reader as _, SliceReader, asn1::UintRef};
+use x509_cert::der::asn1::{AnyRef, UintRef};
+use x509_cert::der::{Decode as _, Reader as _, SliceReader};
 
 use crate::RdpError;
 
@@ -52,7 +55,11 @@ impl PinVerifier {
         result: Result<HandshakeSignatureValid, rustls::Error>,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
         if let Err(error) = &result
-            && is_unsupported(error, cert)
+            && is_unsupported(
+                error,
+                cert,
+                &self.provider.signature_verification_algorithms,
+            )
         {
             self.unsupported.store(true, Ordering::SeqCst);
         }
@@ -112,22 +119,59 @@ impl ServerCertVerifier for PinVerifier {
 
 /// Whether a failed signature check is down to the certificate rather than the signature: webpki
 /// cannot parse it (`rustls::server::ParsedCertificate`, the same parse the verify functions run),
-/// the provider has no algorithm for its key, or it is an RSA key outside the sizes ring verifies
-/// (ring reports that as a bad signature).
-fn is_unsupported(error: &rustls::Error, cert: &CertificateDer<'_>) -> bool {
-    if ParsedCertificate::try_from(cert).is_err() {
+/// the provider has no algorithm at all for its key type, or it is an RSA key outside the sizes
+/// ring verifies (ring reports that as a bad signature).
+///
+/// A scheme that does not fit a key type the provider does support (an RSA certificate with an
+/// ECDSA signature) is what an impostor produces when it replays a public certificate and signs
+/// with its own key, so it stays a plain TLS failure.
+fn is_unsupported(
+    error: &rustls::Error,
+    cert: &CertificateDer<'_>,
+    algorithms: &WebPkiSupportedAlgorithms,
+) -> bool {
+    let Ok(parsed) = ParsedCertificate::try_from(cert) else {
         return true;
-    }
+    };
     match error {
         rustls::Error::InvalidCertificate(
-            CertificateError::UnsupportedSignatureAlgorithmContext { .. }
-            | CertificateError::UnsupportedSignatureAlgorithmForPublicKeyContext { .. },
-        ) => true,
+            CertificateError::UnsupportedSignatureAlgorithmForPublicKeyContext { .. },
+        ) => !key_type_supported(&parsed, algorithms),
         rustls::Error::InvalidCertificate(CertificateError::BadSignature) => {
             rsa_key_out_of_range(cert)
         }
         _ => false,
     }
+}
+
+/// Whether the certificate's public key algorithm (the `AlgorithmIdentifier` of its SPKI, curve
+/// included) is one some algorithm of the provider verifies with; the same comparison webpki's
+/// `signed_data::verify_signature` makes against `public_key_alg_id`. A key that cannot be read
+/// counts as supported, so the error stays `tls_failed`.
+fn key_type_supported(
+    cert: &ParsedCertificate<'_>,
+    algorithms: &WebPkiSupportedAlgorithms,
+) -> bool {
+    let spki = cert.subject_public_key_info();
+    let Some(algorithm) = spki_algorithm(spki.as_ref()) else {
+        return true;
+    };
+    algorithms
+        .all
+        .iter()
+        .any(|alg| alg.public_key_alg_id().as_ref() == algorithm)
+}
+
+/// The contents of the `AlgorithmIdentifier` of a DER `SubjectPublicKeyInfo`.
+fn spki_algorithm(spki: &[u8]) -> Option<&[u8]> {
+    let mut reader = SliceReader::new(spki).ok()?;
+    reader
+        .sequence(|seq| {
+            let algorithm = AnyRef::decode(seq)?;
+            seq.drain(seq.remaining_len())?;
+            Ok::<_, x509_cert::der::Error>(algorithm.value())
+        })
+        .ok()
 }
 
 /// True for an RSA key whose modulus size or public exponent ring refuses to verify with
@@ -245,6 +289,7 @@ mod tests {
     const RSA2048_SHA1: &[u8] = include_bytes!("../tests/fixtures/rsa2048-sha1.crt");
     const CRITICAL_EXT: &[u8] = include_bytes!("../tests/fixtures/critical-ext.crt");
     const RSA1024: &[u8] = include_bytes!("../tests/fixtures/rsa1024-sha256.crt");
+    const EC_P521: &[u8] = include_bytes!("../tests/fixtures/ec-p521.crt");
 
     fn cert(pem: &[u8]) -> CertificateDer<'static> {
         CertificateDer::from_pem_slice(pem).unwrap()
@@ -381,6 +426,54 @@ mod tests {
             ))
         );
         assert!(unsupported.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_signature_of_another_key_type_than_the_certificate_is_not_called_unsupported() {
+        // an impostor replays the host's RSA certificate and signs with its own ECDSA key: webpki
+        // reports the scheme as unsupported for that key, but the certificate is fine
+        let (verifier, unsupported) = verifier();
+        let leaf = cert(RSA2048);
+        let ecdsa = dss(SignatureScheme::ECDSA_NISTP256_SHA256, vec![0x5a; 72]);
+        for result in [
+            verifier.verify_tls12_signature(b"transcript", &leaf, &ecdsa),
+            verifier.verify_tls13_signature(b"transcript", &leaf, &ecdsa),
+        ] {
+            assert!(
+                matches!(
+                    result,
+                    Err(rustls::Error::InvalidCertificate(
+                        CertificateError::UnsupportedSignatureAlgorithmForPublicKeyContext { .. }
+                    ))
+                ),
+                "{result:?}"
+            );
+        }
+        assert!(!unsupported.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_key_type_the_provider_cannot_verify_with_is_marked_unsupported() {
+        // ECDSA P-521: the ring provider has no algorithm for that curve
+        let (verifier, unsupported) = verifier();
+        let signed = dss(SignatureScheme::ECDSA_NISTP384_SHA384, vec![0x5a; 104]);
+        assert!(matches!(
+            verifier.verify_tls12_signature(b"transcript", &cert(EC_P521), &signed),
+            Err(rustls::Error::InvalidCertificate(
+                CertificateError::UnsupportedSignatureAlgorithmForPublicKeyContext { .. }
+            ))
+        ));
+        assert!(unsupported.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn key_types_are_compared_with_the_provider_algorithms() {
+        let algorithms = rustls::crypto::ring::default_provider().signature_verification_algorithms;
+        for (pem, supported) in [(RSA2048, true), (RSA1024, true), (EC_P521, false)] {
+            let der = cert(pem);
+            let parsed = ParsedCertificate::try_from(&der).unwrap();
+            assert_eq!(key_type_supported(&parsed, &algorithms), supported);
+        }
     }
 
     #[test]
