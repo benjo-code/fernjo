@@ -634,6 +634,10 @@ struct Shared {
     /// Input, resizes and the close request, in order, towards the live `Session`. `None` while
     /// there is no shell. Lock order: `ops` before `size`.
     ops: Mutex<Option<UnboundedSender<Op>>>,
+    /// The tab was closed (`shut_down`). Set and read only while `ops` is locked, so a connect
+    /// that finishes after the close is torn down by [`install_ops`] instead of installing a
+    /// queue nobody will ever close (M11 review #59).
+    closed: AtomicBool,
     /// Input bytes queued in `ops` and not yet handled by the writer.
     input_budget: InputBudget,
     /// An `Op::Resize` is in `ops` and the writer has not taken its size yet. Set and cleared
@@ -670,6 +674,7 @@ impl Shared {
             phase: Mutex::new(phase),
             size: Mutex::new(size),
             ops: Mutex::new(None),
+            closed: AtomicBool::new(false),
             input_budget: InputBudget::default(),
             resize_queued: AtomicBool::new(false),
         }
@@ -1075,14 +1080,16 @@ pub(crate) fn exit_action(code: Option<i32>, connected: usize, prompt_open: bool
 /// and aborts the connect task. For SSH the abort is what ends a session whose server stopped
 /// reading: the writer may hang in a write and never take `Op::Close`, but aborting `run` drops
 /// the events receiver, which makes `fernjo_ssh::Session` shut its socket down and fail that write
-/// (M11 review #22).
+/// (M11 review #22). `closed` is set under the `ops` lock, so a connect task that has not
+/// installed its queue yet closes its session in [`install_ops`] (M11 review #59).
 fn shut_down(entry: &Entry) {
     entry.shared.sink.close();
     entry.shared.hub.close();
-    if let Ok(ops) = entry.shared.ops.lock()
-        && let Some(tx) = ops.as_ref()
-    {
-        let _ = tx.send(Op::Close);
+    if let Ok(ops) = entry.shared.ops.lock() {
+        entry.shared.closed.store(true, Ordering::SeqCst);
+        if let Some(tx) = ops.as_ref() {
+            let _ = tx.send(Op::Close);
+        }
     }
     if let Ok(mut task) = entry.task.lock()
         && let Some(handle) = task.take()
@@ -1201,10 +1208,19 @@ async fn write_ops(session: Session, mut ops: UnboundedReceiver<Op>, shared: Arc
 /// under the `ops` and `size` locks, so a resize that arrives during this call is either seen
 /// here or queued by `SessionManager::resize` on the new sender. It also resets a flag left set
 /// by a writer that stopped with a resize still queued.
+///
+/// When the tab was already closed (`shut_down` ran before the connect finished), nothing is
+/// installed: the writer gets `Op::Close` and the sender is dropped, so it closes the session and
+/// ends instead of keeping it alive with no entry left to close it.
 fn install_ops(shared: &Shared, tx: UnboundedSender<Op>, differs: impl Fn((u32, u32)) -> bool) {
     let Ok(mut slot) = shared.ops.lock() else {
+        let _ = tx.send(Op::Close);
         return;
     };
+    if shared.closed.load(Ordering::SeqCst) {
+        let _ = tx.send(Op::Close);
+        return;
+    }
     let resize = shared.size.lock().is_ok_and(|size| {
         let wanted = differs(*size);
         shared.resize_queued.store(wanted, Ordering::SeqCst);

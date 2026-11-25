@@ -1379,6 +1379,7 @@ fn entry_in(phase: Phase) -> Arc<Entry> {
             phase: Mutex::new(phase),
             size: Mutex::new((80, 24)),
             ops: Mutex::new(None),
+            closed: std::sync::atomic::AtomicBool::new(false),
             input_budget: InputBudget::default(),
             resize_queued: std::sync::atomic::AtomicBool::new(false),
         }),
@@ -1588,6 +1589,48 @@ fn a_resize_during_the_connect_is_queued_when_the_shell_starts() {
     install_ops(&entry.shared, tx, |size| size != (80, 24));
     assert!(matches!(ops.try_recv().unwrap(), Op::Resize));
     assert_eq!(take_resize(&entry.shared), (120, 40));
+}
+
+#[tokio::test]
+async fn a_session_that_connects_after_its_tab_was_closed_is_torn_down() {
+    // M11 review #59: `shut_down` found no op queue yet, then the connect task finished and
+    // installed one. The writer must still get the close and end, or it keeps the live session
+    // (and the shared state) with no entry left to close it.
+    let manager = SessionManager::default();
+    let entry = entry_in(Phase::Connecting);
+    manager
+        .entries
+        .lock()
+        .unwrap()
+        .insert("a".to_string(), Arc::clone(&entry));
+    let weak = manager.weak_shared("a").unwrap();
+    // the connect task's own handle on the shared state
+    let shared = Arc::clone(&entry.shared);
+    manager.close("a").unwrap();
+    drop(entry);
+    // what `run` does once `Session::connect` returned
+    let (tx, mut ops) = unbounded_channel();
+    install_ops(&shared, tx, |_| false);
+    let writer_shared = Arc::clone(&shared);
+    // the writer loop of `write_ops`, without a session
+    let writer = tokio::spawn(async move {
+        let _shared = writer_shared;
+        while let Some(op) = ops.recv().await {
+            if matches!(op, Op::Close) {
+                break;
+            }
+        }
+    });
+    // `abort` stopped `run` at its next await: its handle goes away
+    drop(shared);
+    timeout(Duration::from_secs(2), writer)
+        .await
+        .expect("the writer of a closed tab must end")
+        .unwrap();
+    assert!(
+        weak.upgrade().is_none(),
+        "nothing may keep the session of a closed tab"
+    );
 }
 
 // ---------- restored tabs (no server needed) ----------

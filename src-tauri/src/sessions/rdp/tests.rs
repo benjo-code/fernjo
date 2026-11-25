@@ -75,6 +75,7 @@ fn shared_with(channel: Channel<InvokeResponseBody>, flow: FlowControl) -> Arc<S
         phase: Mutex::new(Phase::Connected),
         size: Mutex::new((1280, 800)),
         ops: Mutex::new(None),
+        closed: std::sync::atomic::AtomicBool::new(false),
         input_budget: InputBudget::default(),
         resize_queued: std::sync::atomic::AtomicBool::new(false),
     })
