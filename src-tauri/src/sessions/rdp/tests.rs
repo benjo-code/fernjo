@@ -170,6 +170,10 @@ fn sizes_are_even_clamped_and_never_zero() {
     assert_eq!(desktop_size(100_000, 200), Some((8192, 200)));
     assert_eq!(desktop_size(0, 800), None);
     assert_eq!(desktop_size(800, 0), None);
+    // one side absurdly large, the other tiny: each side is clamped on its own (8192 x 200 is
+    // 1.6 million pixels, far below the area limit, so nothing is scaled)
+    assert_eq!(desktop_size(u32::MAX, 1), Some((8192, 200)));
+    assert_eq!(desktop_size(1, u32::MAX), Some((200, 8192)));
 }
 
 #[test]
