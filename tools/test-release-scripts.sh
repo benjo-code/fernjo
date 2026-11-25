@@ -489,6 +489,42 @@ smoke_cleans_up_after_a_hang() {
 }
 assert_true smoke_hub_image_cleans_up_after_a_hang smoke_cleans_up_after_a_hang
 
+# --- hub deploy files ---
+deploy="$root/crates/fernjo-hub/deploy"
+hub_ref='ghcr.io/benjo-code/fernjo-hub:0.3.1'
+compose_pins_the_image_and_hardens_it() {
+  local f="$deploy/compose.yaml"
+  grep -Eq "^    image: $hub_ref\$" "$f" &&
+    grep -Eq '^    user: "10001:10001"$' "$f" &&
+    grep -Eq '^    init: true$' "$f" &&
+    grep -Eq '^    read_only: true$' "$f" &&
+    grep -Eq '^    cap_drop: \[ALL\]$' "$f" &&
+    grep -Eq '^    security_opt: \["no-new-privileges:true"\]$' "$f" &&
+    grep -Eq '^    restart: unless-stopped$' "$f" &&
+    grep -Eq '^      - "127\.0\.0\.1:8787:8787"$' "$f" &&
+    grep -Eq '^      - "hub-data:/data"$' "$f" &&
+    grep -Eq '^  hub-data: \{\}$' "$f"
+}
+assert_true hub_compose_pins_the_image_and_hardens_it compose_pins_the_image_and_hardens_it
+compose_base_file_has_no_podman_only_key() {
+  [ -f "$deploy/compose.yaml" ] && ! grep -Eq '^[^#]*(userns_mode|keep-id)' "$deploy/compose.yaml"
+}
+assert_true hub_compose_base_file_has_no_podman_only_key compose_base_file_has_no_podman_only_key
+compose_podman_override_holds_keep_id() {
+  local f="$deploy/compose.podman.yaml"
+  grep -Fxq '    userns_mode: "keep-id:uid=10001,gid=10001"' "$f" && ! grep -Eq '^[^#]*image:' "$f"
+}
+assert_true hub_compose_podman_override_holds_keep_id compose_podman_override_holds_keep_id
+quadlet_uses_the_ghcr_image_and_keeps_its_hardening() {
+  local f="$deploy/fernjo-hub.container" line
+  ! grep -Fq 'localhost/fernjo-hub' "$f" || return 1
+  for line in "Image=$hub_ref" 'UserNS=keep-id:uid=10001,gid=10001' 'RunInit=true' 'ReadOnly=true' \
+    'DropCapability=ALL' 'NoNewPrivileges=true' 'PublishPort=127.0.0.1:8787:8787'; do
+    grep -Fxq "$line" "$f" || return 1
+  done
+}
+assert_true hub_quadlet_uses_the_ghcr_image_and_keeps_its_hardening quadlet_uses_the_ghcr_image_and_keeps_its_hardening
+
 # --- third-party-notices.mjs (pure checks through --fixture; the full run needs cargo-about) ---
 notices="$root/tools/third-party-notices.mjs"
 

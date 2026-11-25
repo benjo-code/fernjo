@@ -1,0 +1,7 @@
+# Override for rootless Podman: use it after compose.yaml (see the header there).
+#   podman compose -f compose.yaml -f compose.podman.yaml up -d
+# In a rootless user namespace the image's user 10001 is mapped onto the volume's owner by
+# keep-id. This is a Podman-only key, which is why it is not in compose.yaml (Docker rejects it).
+services:
+  hub:
+    userns_mode: "keep-id:uid=10001,gid=10001"
