@@ -333,7 +333,8 @@ pub fn build_status(state: &AppState) -> SyncStatus {
                 if error_now.is_none() {
                     error_now = Some(StatusError {
                         code: "vault_rolled_back".to_owned(),
-                        message: "the hub holds an older vault than this device has seen;                                   re-seed the hub from this device if that is expected"
+                        message: "the hub holds an older vault than this device has seen; \
+                                  re-seed the hub from this device if that is expected"
                             .to_owned(),
                     });
                 }
