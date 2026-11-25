@@ -311,8 +311,10 @@ pub mod handlers {
     }
 
     /// Restarts the application the way a close ends it (M11 review #65): while a session is
-    /// connected it shows the "Restart fernjo?" confirmation first, and the restart waits for the
-    /// sync close push like a window close does. Returns at once; the process is replaced later.
+    /// connected it shows the "Restart fernjo?" confirmation first. No sync push runs before it:
+    /// the command is offered only while a data folder change waits, and sync is paused then
+    /// (`sync_runner::ready`), so `finish_after_push` restarts at once. Returns at once; the
+    /// process is replaced later.
     #[tauri::command]
     pub fn restart_app(window: tauri::Window) {
         use crate::sessions::{CloseThen, ExitAction};

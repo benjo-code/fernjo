@@ -230,8 +230,9 @@ export interface Api {
   /** Opens the folder picker; `null` when it was cancelled. */
   chooseDataFolder(): Promise<DataFolderInfo | null>;
   /**
-   * Restarts the app like a close: with a connected session Rust asks first ("Restart fernjo?"),
-   * and the sync close push runs. Resolves at once, also when the user keeps the app open.
+   * Restarts the app like a close: with a connected session Rust asks first ("Restart fernjo?").
+   * No sync push runs first: sync is paused while a data folder change waits for the restart.
+   * Resolves at once, also when the user keeps the app open.
    */
   restartApp(): Promise<void>;
   /**
