@@ -1,8 +1,8 @@
 //! The one hardened atomic file writer and capped file reader of fernjo.
 //!
 //! Every crate that writes or reads its own files (the data folder, the device folder, the
-//! hub store) goes through these helpers, so a fix lands in one place. The crate depends only
-//! on `std` and `getrandom` and never on Tauri, so every crate may use it.
+//! hub store) goes through these helpers, so a fix lands in one place. The crate never depends on
+//! Tauri, so every crate may use it.
 //!
 //! [`write_atomic`] writes to a fresh `<file>.<16 hex>.tmp` opened with `create_new` (never an
 //! existing file, never through a symlink at that name; mode 0600 on Unix for
@@ -11,6 +11,13 @@
 //! effort). The `.bak` name is never opened for writing: the previous content is copied into a
 //! second fresh temp file that is renamed onto `<file>.bak`, so a symlink planted at that name is
 //! replaced instead of followed.
+//!
+//! Neither helper follows a symlink at the target name itself: [`read_capped`] and the `.bak`
+//! copy open only a regular file (`O_NOFOLLOW` and `O_NONBLOCK` on Unix, a `symlink_metadata`
+//! check everywhere, then the opened handle's type), and [`write_atomic`] refuses a target that
+//! exists but is not a regular file. A planted link to a private file, to `/dev/zero` or to a FIFO
+//! is therefore never read, copied into `<file>.bak` or blocked on. The crate depends only on `std`,
+//! `getrandom` and, on Unix, `libc` (for the open flags).
 
 use std::ffi::OsString;
 use std::fs::{self, File};
@@ -19,6 +26,10 @@ use std::path::{Path, PathBuf};
 
 #[cfg(test)]
 mod tests;
+
+/// Text of the error for a path that is not a regular file.
+pub(crate) const NOT_REGULAR: &str =
+    "not a regular file (a symbolic link, a folder or a special file)";
 
 /// How many random temp names [`write_atomic`] tries before it gives up.
 const TEMP_ATTEMPTS: usize = 8;
@@ -76,9 +87,13 @@ pub fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
 /// file that grows between the check and the read cannot bypass the cap. Oversize is an
 /// `InvalidData` error with the text "the file is too large"; a missing file keeps its
 /// `NotFound` kind.
+///
+/// The file is opened with [`open_regular`]: a symlink, a folder or a special file at `path` is
+/// refused with the error "not a regular file …" (never `InvalidData`, never `NotFound`, also for
+/// a dangling link), so a planted link to another file, to `/dev/zero` or to a FIFO is never read.
 pub fn read_capped(path: &Path, max: u64) -> io::Result<Vec<u8>> {
     let too_large = || io::Error::new(io::ErrorKind::InvalidData, "the file is too large");
-    let file = File::open(path)?;
+    let file = open_regular(path)?;
     let len = file.metadata()?.len();
     if len > max {
         return Err(too_large());
@@ -93,9 +108,49 @@ pub fn read_capped(path: &Path, max: u64) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// Opens `path` for reading only when it is a regular file, without following a symlink at its
+/// last component (links in the folders above are followed as usual):
+/// - every platform: `symlink_metadata` must say "regular file" before the open (on Windows a
+///   symlink or junction is refused; other reparse points such as OneDrive placeholders count as
+///   regular files, as `std` reports them);
+/// - Unix: the open itself uses `O_NOFOLLOW` (a link swapped in after the check fails with
+///   `ELOOP`) and `O_NONBLOCK` (a FIFO or device swapped in does not block the open; the flag has
+///   no effect on reading a regular file);
+/// - every platform: the opened handle's metadata must say "regular file" again, which is the
+///   race-free part on Unix.
+///
+/// The Windows check is a check-then-open (a link swapped in between is followed); creating a
+/// symlink there needs admin rights or developer mode.
+pub(crate) fn open_regular(path: &Path) -> io::Result<File> {
+    if !fs::symlink_metadata(path)?.file_type().is_file() {
+        return Err(not_regular());
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.file_type().is_file() {
+        return Err(not_regular());
+    }
+    Ok(file)
+}
+
+fn not_regular() -> io::Error {
+    io::Error::other(NOT_REGULAR)
+}
+
 /// Writes `bytes` exactly (nothing added) to `path` atomically; see the crate documentation for
 /// the steps. On every failure the temp files this call created are removed and the target is
 /// left as it was. A failed folder sync after the rename does not fail the write.
+///
+/// A target that exists but is not a regular file (a symlink, also a dangling one, a folder, a
+/// FIFO) is refused with the "not a regular file …" error before anything is created: a link is
+/// neither followed nor silently replaced. The `.bak` step opens the current file with
+/// [`open_regular`] as well, so a link swapped in after this check is still never copied.
 pub fn write_atomic(path: &Path, bytes: &[u8], options: WriteOptions) -> io::Result<()> {
     let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
     if let Some(dir) = dir {
@@ -104,6 +159,10 @@ pub fn write_atomic(path: &Path, bytes: &[u8], options: WriteOptions) -> io::Res
             Parent::CreatePrivate => create_dir_all(dir, true)?,
             Parent::CreateDefault => create_dir_all(dir, false)?,
         }
+    }
+    // an error here (a missing parent, no permission) is left to the steps below, as before
+    if fs::symlink_metadata(path).is_ok_and(|meta| !meta.file_type().is_file()) {
+        return Err(not_regular());
     }
     let (tmp, mut file) = create_temp_file(path, options.file_mode)?;
     let result = (|| -> io::Result<()> {
@@ -129,9 +188,10 @@ pub fn write_atomic(path: &Path, bytes: &[u8], options: WriteOptions) -> io::Res
 
 /// Copies the current content of `path` (when it exists) into a fresh temp file and renames that
 /// onto `<path>.bak`. The `.bak` name itself is never opened, so a symlink there is replaced by
-/// the rename, not followed.
+/// the rename, not followed. The current file is opened with [`open_regular`], so a symlink or
+/// special file at `path` itself is refused instead of copied.
 fn keep_backup(path: &Path, mode: FileMode) -> io::Result<()> {
-    let mut current = match File::open(path) {
+    let mut current = match open_regular(path) {
         Ok(file) => file,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(e),

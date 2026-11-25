@@ -23,6 +23,8 @@ secrecy = "0.10.3"
 zeroize = "1.9.1"
 unicode-normalization = "0.1.26"
 getrandom = "0.4.3"
+# `O_NOFOLLOW` and `O_NONBLOCK` for `fernjo-fs` on Unix (already in the tree through `getrandom`)
+libc = "0.2.191"
 fernjo-fs = { path = "crates/fernjo-fs" }
 russh = { version = "0.65.1", default-features = false, features = ["flate2", "ring", "rsa"] }
 tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros", "io-util"] }
