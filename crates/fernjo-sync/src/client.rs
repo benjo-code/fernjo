@@ -126,7 +126,8 @@ fn valid_port(port: &str) -> bool {
 
 /// A configured connection to one hub. Cheap to keep; methods block.
 pub struct HubClient {
-    agent: ureq::Agent,
+    /// `None` for [`HubClient::offline`]: every request fails as `hub_unreachable`.
+    agent: Option<ureq::Agent>,
     base: String,
     secret: SecretString,
 }
@@ -186,10 +187,27 @@ impl HubClient {
             .build()
             .into();
         Ok(HubClient {
-            agent,
+            agent: Some(agent),
             base: cfg.url.trim_end_matches('/').to_owned(),
             secret: cfg.secret.clone(),
         })
+    }
+
+    /// A client that never talks: no address, no TLS roots, and every request fails as
+    /// `hub_unreachable` without touching the network. For the engine calls that use only the
+    /// local side (`Engine::pending_changes`) or build their own client (`setup`, `join`), so no
+    /// placeholder address has to pass [`check_hub_url`].
+    #[must_use]
+    pub fn offline() -> HubClient {
+        HubClient {
+            agent: None,
+            base: String::new(),
+            secret: SecretString::from(String::new()),
+        }
+    }
+
+    fn agent(&self) -> Result<&ureq::Agent, SyncError> {
+        self.agent.as_ref().ok_or(SyncError::HubUnreachable)
     }
 
     fn bearer(&self) -> String {
@@ -199,7 +217,7 @@ impl HubClient {
     /// `GET /v1/info`.
     pub fn info(&self) -> Result<HubInfo, SyncError> {
         let resp = self
-            .agent
+            .agent()?
             .get(format!("{}/v1/info", self.base))
             .header("Authorization", self.bearer())
             .call()
@@ -216,7 +234,7 @@ impl HubClient {
     /// `GET /v1/head`: `None` when the hub holds nothing yet, otherwise the `seq` and the envelope.
     pub fn get_head(&self) -> Result<Option<(u64, Vec<u8>)>, SyncError> {
         let resp = self
-            .agent
+            .agent()?
             .get(format!("{}/v1/head", self.base))
             .header("Authorization", self.bearer())
             .call()
@@ -271,7 +289,7 @@ impl HubClient {
             }
         }
         let request = self
-            .agent
+            .agent()?
             .put(format!("{}/v1/head", self.base))
             .header("Authorization", self.bearer())
             .header("Content-Type", "application/octet-stream");
@@ -422,6 +440,18 @@ mod tests {
                 "{url}"
             );
         }
+    }
+
+    #[test]
+    fn an_offline_client_needs_no_address_and_never_talks() {
+        let client = HubClient::offline();
+        assert_eq!(client.info().unwrap_err(), SyncError::HubUnreachable);
+        assert_eq!(client.get_head().unwrap_err(), SyncError::HubUnreachable);
+        let bytes = envelope(1);
+        assert_eq!(
+            client.put_head(Expected::Empty, 1, &bytes).unwrap_err(),
+            SyncError::HubUnreachable
+        );
     }
 
     #[test]

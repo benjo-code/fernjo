@@ -257,19 +257,16 @@ fn state_store(state: &AppState) -> Result<StateStore, CommandError> {
         })
 }
 
-/// A client that never talks: `Engine::pending_changes` and `setup` need a `HubClient` in the
-/// struct but use only the local side (setup builds its own client). Loopback `http` needs no
-/// certificate roots, so this is cheap.
-fn idle_hub() -> Result<HubClient, SyncError> {
-    HubClient::new(&HubConfig {
-        url: "http://127.0.0.1:9".to_owned(),
-        secret: SecretString::from(String::new()),
-        ca_pem: None,
-    })
+/// A client that never talks: `Engine::pending_changes`, `setup` and `join` need a `HubClient`
+/// in the struct but use only the local side (setup and join build their own client).
+/// `HubClient::offline` has no address, so it does not depend on which addresses this build
+/// accepts (release builds refuse plain `http://`), and loads no certificate roots.
+fn idle_hub() -> HubClient {
+    HubClient::offline()
 }
 
 fn pending_changes(state: &AppState, store: &StateStore) -> Result<usize, SyncError> {
-    let hub = idle_hub()?;
+    let hub = idle_hub();
     let port = AppPort(state);
     Engine {
         hub: &hub,
@@ -536,7 +533,7 @@ pub fn sync_setup(
     let store = state_store(state)?;
     let device_name = check_device_name(&device_name)?;
     let _guard = begin(state)?;
-    let hub = idle_hub()?;
+    let hub = idle_hub();
     let port = AppPort(state);
     Engine {
         hub: &hub,
@@ -629,7 +626,7 @@ pub fn sync_join(
     }
     let _guard = begin(state)?;
     state.sessions.close_all();
-    let hub = idle_hub()?;
+    let hub = idle_hub();
     let port = AppPort(state);
     Engine {
         hub: &hub,

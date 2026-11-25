@@ -239,6 +239,31 @@ fn sync_status_is_off_without_setup() {
 }
 
 #[test]
+fn the_status_of_a_paired_device_never_builds_a_hub_address() {
+    // a device paired with an https hub (state written directly, no hub runs): the status and
+    // the pending count use only local data, in debug and in release builds alike
+    let d = dev();
+    conn(&d, "web");
+    StateStore::new(d.device.clone())
+        .save(&fernjo_sync::state::SyncState {
+            url: "https://hub.example.test".to_owned(),
+            ca_pem: None,
+            device: fernjo_sync::DeviceInfo {
+                id: uuid::Uuid::from_u128(1),
+                name: "d".to_owned(),
+            },
+            group: uuid::Uuid::from_u128(2),
+            last_seq: 1,
+        })
+        .unwrap();
+    let s = sync_status(&d.st).unwrap();
+    assert_eq!(s.state, "ok", "{:?}", s.error);
+    assert_eq!(s.error, None);
+    assert_eq!(s.pending_changes, 1, "no base yet: the one node waits");
+    assert!(has_pending_changes(&d.st));
+}
+
+#[test]
 fn setup_without_a_device_folder_or_while_a_restart_waits_is_refused() {
     let hub = start_hub();
     let dir = TempDir::new().unwrap();
