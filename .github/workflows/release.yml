@@ -1,18 +1,20 @@
 name: Release
 
-# A published release builds the installers on GitHub-hosted runners and attaches them, plus
-# SHA256SUMS, to that release. `workflow_dispatch` with a `tag` re-attaches them to an existing
-# release (it only exists once this file is on the default branch). A pull request that touches
-# the packaging inputs runs the same builds as a dry run: artifacts only, nothing is published.
+# Releases are made immutable (repository setting, which the owner turns on before v0.3.0): a
+# published release then takes no new files and its tag cannot move. So a release is built from a
+# draft: push the tag `vX.Y.Z`, create a draft release for it
+# (`gh release create vX.Y.Z --draft --verify-tag ...`), and the tag push runs this workflow, which
+# builds the installers on GitHub-hosted runners, attaches them, SHA256SUMS and their build
+# provenance to the draft and then publishes it. A failed run is repeated with "Re-run failed jobs"
+# (reuses the built artifacts for 7 days) or, after that, `workflow_dispatch` run on the tag
+# (`gh workflow run release.yml --ref vX.Y.Z`, builds again) while the release is still a draft;
+# run on a branch it only builds. A pull request that touches the packaging inputs runs the
+# same builds as a dry run: artifacts only, nothing is published.
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
-    inputs:
-      tag:
-        description: Existing release tag to build and attach the installers to (for example v0.1.0)
-        required: false
-        type: string
   pull_request:
     paths:
       - .github/workflows/release.yml
@@ -28,14 +30,15 @@ on:
 permissions:
   contents: read
 
-# The release tag, empty on a pull request (and on a manual run without a tag). The checkouts below
-# use the full `refs/tags/<tag>`: a bare tag name lets actions/checkout prefer a branch of the same
-# name (M11 review #70).
+# The release tag: set when the run's ref is a `v*` tag (the tag push, or a manual run on the tag),
+# empty on a pull request and on a manual run on a branch. The checkouts below use the full
+# `refs/tags/<tag>`: a bare tag name lets actions/checkout prefer a branch of the same name (M11
+# review #70).
 env:
-  RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+  RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
 
 concurrency:
-  group: release-${{ github.event.release.tag_name || inputs.tag || github.ref }}
+  group: release-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -78,10 +81,10 @@ jobs:
           persist-credentials: false
 
       - name: Check that the tag matches the app version
-        if: github.event_name == 'release' || inputs.tag != ''
+        if: env.RELEASE_TAG != ''
         shell: bash
         env:
-          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          TAG: ${{ env.RELEASE_TAG }}
         run: bash tools/check-release-version.sh "$TAG"
 
       - name: Install Linux build dependencies
@@ -220,7 +223,7 @@ jobs:
   publish:
     name: publish
     needs: build
-    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+    if: github.event_name != 'pull_request' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -233,6 +236,23 @@ jobs:
           ref: ${{ format('refs/tags/{0}', env.RELEASE_TAG) }}
           persist-credentials: false
 
+      # A published release is immutable and takes no new files, so the installers go onto a draft
+      # that the last step publishes. Without a draft the run stops here; create it and use "Re-run
+      # failed jobs" (see CLAUDE.md "Releases").
+      - name: Check that the release is a draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ env.RELEASE_TAG }}
+        run: |
+          if ! draft="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)"; then
+            echo "::error::could not read a release for $TAG (see the gh error above): if there is none, create the draft (gh release create $TAG --draft --verify-tag), then re-run the failed jobs"
+            exit 1
+          fi
+          if [ "$draft" != "true" ]; then
+            echo "::error::the release $TAG is already published; a published release takes no new files"
+            exit 1
+          fi
+
       # One folder per artifact (not merged into one), so one build job cannot overwrite another
       # platform's installer. verify-installers.sh --artifacts refuses any other or extra artifact and
       # any file outside its own platform's folder, then collects the five into installers/
@@ -244,24 +264,32 @@ jobs:
 
       - name: Verify the installer set
         env:
-          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          TAG: ${{ env.RELEASE_TAG }}
         run: bash tools/verify-installers.sh "${TAG#v}" --artifacts artifacts installers
 
       - name: Write SHA256SUMS
         run: (cd installers && sha256sum -- *) > SHA256SUMS
 
-      # Build provenance (M11 review #71): SHA256SUMS sits in the same mutable release as the
-      # installers, so it proves integrity, not origin. The attestation ties each installer to a run
-      # of this workflow and its ref (the tag for a release event); check it with `gh attestation
-      # verify <file> --repo benjo-code/fernjo --signer-workflow
-      # benjo-code/fernjo/.github/workflows/release.yml --source-ref refs/tags/<tag>` (see the
-      # README; the tag pin holds while tags cannot be moved).
+      # Build provenance (M11 review #71): SHA256SUMS sits in the same release as the installers, so
+      # it proves integrity, not origin. The attestation ties each installer to a run of this
+      # workflow and its ref (the tag); check it with `gh attestation verify <file> --repo
+      # benjo-code/fernjo --signer-workflow benjo-code/fernjo/.github/workflows/release.yml
+      # --source-ref refs/tags/<tag>` (see the README; the tag pin holds because the `v*` tag
+      # ruleset stops tags from moving).
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: installers/*
 
-      - name: Attach the installers to the release
+      # --clobber only replaces files of an earlier failed run on the same draft.
+      - name: Attach the installers to the draft
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          TAG: ${{ env.RELEASE_TAG }}
         run: gh release upload "$TAG" installers/* SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"
+
+      # From here on the release, its files and its tag are immutable.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ env.RELEASE_TAG }}
+        run: gh release edit "$TAG" --draft=false --repo "$GITHUB_REPOSITORY"

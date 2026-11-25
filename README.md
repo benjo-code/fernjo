@@ -55,7 +55,7 @@ gh attestation verify <installer file> --repo benjo-code/fernjo \
   --source-ref refs/tags/vX.Y.Z
 ```
 
-Replace `vX.Y.Z` with the release's tag. A passing check proves that the file was built by this repository's `release.yml` from that tag. All three options matter: `--repo` alone accepts an attestation from any workflow of the repository, and `--signer-workflow` checks only the workflow's path, so a copy of `release.yml` on another branch would pass it; `--source-ref` pins the tag. That holds only as long as release tags cannot be moved, which a tag ruleset on the repository will enforce; that setting is not on yet. An installer attached again later by a manual run of the workflow fails `--source-ref` (its provenance names the branch the run started from). Releases before v0.3.0 have no attestation.
+Replace `vX.Y.Z` with the release's tag. A passing check proves that the file was built by this repository's `release.yml` from that tag. All three options matter: `--repo` alone accepts an attestation from any workflow of the repository, and `--signer-workflow` checks only the workflow's path, so a copy of `release.yml` on another branch would pass it; `--source-ref` pins the tag. That holds because a tag ruleset on the repository stops release tags from being moved or deleted, and from v0.3.0 on releases are immutable: once published, a release's files and its tag cannot change. Releases before v0.3.0 have no attestation.
 
 **Windows.** Run the setup. SmartScreen shows "Windows protected your PC": choose "More info", then "Run anyway". The install is per user (under `%LOCALAPPDATA%\fernjo`) and needs no administrator rights. Uninstalling keeps your data in `%APPDATA%\fernjo`.
 
