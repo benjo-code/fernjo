@@ -20,6 +20,9 @@ use fernjo_fs::{FileMode, Parent, WriteOptions};
 const ENTRY_NAME: &str = "fernjo.desktop";
 const ICON_NAME: &str = "fernjo.png";
 const ICON_BYTES: &[u8] = include_bytes!("../icons/128x128.png");
+/// The largest existing menu entry that is compared with the one fernjo would write (the real one
+/// is well under 1 KiB); a larger file, like a missing or unreadable one, is offered again.
+const MAX_ENTRY_LEN: u64 = 64 * 1024;
 /// Marker in the device-local folder: the user chose "Never".
 pub const NEVER_FILE: &str = "appmenu-never";
 
@@ -90,7 +93,9 @@ pub fn desktop_entry(appimage: &str) -> Option<String> {
 
 /// Whether to show the dialog: only for an AppImage with an absolute path, never after "Never",
 /// and not when the entry already says exactly what it would say now (an entry that points to a
-/// moved file is asked about again).
+/// moved file is asked about again). The existing entry is read through `fernjo_fs::read_capped`
+/// (a regular file of at most `MAX_ENTRY_LEN`, no symbolic link followed); any read failure means
+/// "no current entry".
 pub fn should_offer(appimage: Option<&str>, data_home: &Path, never: bool) -> bool {
     // a plain '/' test like `data_home`: a relative path would resolve against whatever the
     // working directory is when the desktop starts the entry
@@ -104,7 +109,7 @@ pub fn should_offer(appimage: Option<&str>, data_home: &Path, never: bool) -> bo
         return false;
     };
     let (entry, _) = entry_paths(data_home);
-    std::fs::read_to_string(entry).map_or(true, |have| have != wanted)
+    fernjo_fs::read_capped(&entry, MAX_ENTRY_LEN).map_or(true, |have| have != wanted.as_bytes())
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
@@ -287,6 +292,32 @@ mod tests {
             should_offer(Some("/elsewhere/fernjo.AppImage"), home, false),
             "the AppImage moved: ask again"
         );
+    }
+
+    #[test]
+    fn an_oversized_entry_is_offered_again_without_being_read_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        install(APP, home).unwrap();
+        let (entry, _) = entry_paths(home);
+        let mut text = desktop_entry(APP).unwrap().into_bytes();
+        text.resize(usize::try_from(MAX_ENTRY_LEN).unwrap() + 1, b'\n');
+        std::fs::write(&entry, text).unwrap();
+        assert!(should_offer(Some(APP), home, false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_entry_is_not_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        // a matching entry elsewhere, linked at the entry's name: not read, so offered again
+        let real = home.join("elsewhere.desktop");
+        std::fs::write(&real, desktop_entry(APP).unwrap()).unwrap();
+        let (entry, _) = entry_paths(home);
+        std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&real, &entry).unwrap();
+        assert!(should_offer(Some(APP), home, false));
     }
 
     #[test]
