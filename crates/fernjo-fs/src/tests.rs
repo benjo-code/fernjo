@@ -4,7 +4,10 @@ use std::path::Path;
 
 use tempfile::TempDir;
 
-use crate::{FileMode, NOT_REGULAR, Parent, WriteOptions, read_capped, with_suffix, write_atomic};
+use crate::{
+    FileMode, NOT_REGULAR, Parent, WriteOptions, create_temp_file, read_capped, with_suffix,
+    write_atomic,
+};
 
 fn names(dir: &Path) -> Vec<String> {
     let mut names: Vec<_> = fs::read_dir(dir)
@@ -162,6 +165,29 @@ fn write_refuses_a_target_that_is_not_a_regular_file() {
     }
 }
 
+#[test]
+fn temp_file_names_are_the_file_name_plus_sixteen_lowercase_hex_and_tmp() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("file.json");
+    let (first, f1) = create_temp_file(&path, FileMode::OwnerOnly).unwrap();
+    let (second, f2) = create_temp_file(&path, FileMode::OwnerOnly).unwrap();
+    drop((f1, f2));
+    for tmp in [&first, &second] {
+        assert_eq!(tmp.parent(), Some(dir.path()), "next to the target");
+        let name = tmp.file_name().unwrap().to_str().unwrap();
+        let hex = name
+            .strip_prefix("file.json.")
+            .and_then(|rest| rest.strip_suffix(".tmp"))
+            .unwrap_or_else(|| panic!("unexpected temp name {name}"));
+        assert_eq!(hex.len(), 16, "{name}");
+        assert!(
+            hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
+            "{name}"
+        );
+    }
+    assert_ne!(first, second, "every call picks a fresh name");
+}
+
 #[cfg(unix)]
 mod unix {
     use std::fs;
@@ -285,6 +311,29 @@ mod unix {
         assert_eq!(mode(&b), 0o700);
         assert_eq!(mode(&path), 0o600);
         assert_eq!(mode(&with_suffix(&path, ".bak")), 0o600);
+    }
+
+    #[test]
+    fn default_parent_and_default_file_mode_are_not_forced_private() {
+        // a folder and a file made the plain way show what the umask leaves; write_atomic with the
+        // `Default` choices must give exactly that (not 0700 / 0600). The process umask is not
+        // changed, it is read off the reference entries.
+        let dir = TempDir::new().unwrap();
+        let ref_dir = dir.path().join("ref_dir");
+        fs::create_dir(&ref_dir).unwrap();
+        let ref_file = dir.path().join("ref_file");
+        fs::File::create(&ref_file).unwrap();
+
+        let path = dir.path().join("made").join("sub").join("f");
+        let options = WriteOptions {
+            parent: Parent::CreateDefault,
+            backup: false,
+            file_mode: FileMode::Default,
+        };
+        write_atomic(&path, b"x", options).unwrap();
+        assert_eq!(mode(&dir.path().join("made")), mode(&ref_dir));
+        assert_eq!(mode(&dir.path().join("made").join("sub")), mode(&ref_dir));
+        assert_eq!(mode(&path), mode(&ref_file));
     }
 
     #[test]
