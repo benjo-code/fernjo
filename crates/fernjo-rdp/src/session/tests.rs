@@ -186,7 +186,15 @@ fn a_channel_message_announced_above_the_cap_ends_the_session_before_the_stage_b
     let mut image = DecodedImage::new(PixelFormat::RgbA32, 64, 64);
     let frame = first_chunk(1005, channel_cap::MAX_CHANNEL_MESSAGE + 1);
     assert_eq!(
-        process_frame(&mut stage, &mut image, &channels, Action::X224, &frame).err(),
+        process_frame(
+            &mut stage,
+            &mut image,
+            &channels,
+            &mut updates(),
+            Action::X224,
+            &frame
+        )
+        .err(),
         Some(CloseReason::ChannelTooLarge)
     );
 }
@@ -197,8 +205,15 @@ fn a_channel_message_below_the_cap_reaches_the_stage() {
     let (mut stage, channels) = stage_with_drdynvc(1005);
     let mut image = DecodedImage::new(PixelFormat::RgbA32, 64, 64);
     let frame = first_chunk(1005, 2 * 1024 * 1024 + 64);
-    let outputs = process_frame(&mut stage, &mut image, &channels, Action::X224, &frame)
-        .expect("a message below the cap is processed");
+    let outputs = process_frame(
+        &mut stage,
+        &mut image,
+        &channels,
+        &mut updates(),
+        Action::X224,
+        &frame,
+    )
+    .expect("a message below the cap is processed");
     // nothing goes back to the server (the stage reports an empty response frame)
     assert!(
         outputs
@@ -206,6 +221,100 @@ fn a_channel_message_below_the_cap_reaches_the_stage() {
             .all(|o| matches!(o, ActiveStageOutput::ResponseFrame(f) if f.is_empty())),
         "{outputs:?}"
     );
+}
+
+// ---- the display update caps in the read path ---------------------------------------------------
+
+/// The update check of a 64 x 64 desktop on I/O channel 1003 (the stages above use that id).
+fn updates() -> UpdateCheck {
+    UpdateCheck::new(1003, 64, 64)
+}
+
+/// An active stage that draws the server's pointer the way a real session does.
+fn stage_with_pointer() -> (ActiveStage, ChannelIds) {
+    build_stage(ActiveStageBuilder {
+        static_channels: Default::default(),
+        user_channel_id: 1002,
+        io_channel_id: 1003,
+        message_channel_id: None,
+        share_id: 0,
+        compression_type: None,
+        enable_server_pointer: true,
+        pointer_software_rendering: true,
+    })
+}
+
+#[test]
+fn an_endless_fragmented_update_ends_the_session_at_the_cap() {
+    use super::update_cap::tests::{fast_path_frame, update};
+    use ironrdp_pdu::fast_path::{Fragmentation, UpdateCode};
+    let (mut stage, channels) = stage_with_pointer();
+    let mut image = DecodedImage::new(PixelFormat::RgbA32, 64, 64);
+    let mut updates = updates();
+    let fragment = |fragmentation| {
+        fast_path_frame(&[update(UpdateCode::Bitmap, fragmentation, &[0u8; 16 * 1024])])
+    };
+    let mut process = |frame: &[u8]| {
+        process_frame(
+            &mut stage,
+            &mut image,
+            &channels,
+            &mut updates,
+            Action::FastPath,
+            frame,
+        )
+        .err()
+    };
+    // IronRDP holds every fragment below the cap without complaint ...
+    assert_eq!(process(&fragment(Fragmentation::First)), None);
+    for _ in 1..512 {
+        assert_eq!(process(&fragment(Fragmentation::Next)), None);
+    }
+    // ... and the one that crosses it ends the session before IronRDP appends it
+    assert_eq!(
+        process(&fragment(Fragmentation::Next)),
+        Some(CloseReason::UpdateOutOfLimits)
+    );
+}
+
+#[test]
+fn a_pointer_outside_the_cache_ends_the_session_and_one_inside_reaches_the_stage() {
+    use super::update_cap::tests::{fast_path_frame, pointers, update};
+    use ironrdp_pdu::fast_path::Fragmentation;
+    let (mut stage, channels) = stage_with_pointer();
+    let mut image = DecodedImage::new(PixelFormat::RgbA32, 64, 64);
+    let mut updates = updates();
+    for (code, _, data) in pointers(32, 32, 32) {
+        let frame = fast_path_frame(&[update(code, Fragmentation::Single, &data)]);
+        assert_eq!(
+            process_frame(
+                &mut stage,
+                &mut image,
+                &channels,
+                &mut updates,
+                Action::FastPath,
+                &frame
+            )
+            .err(),
+            Some(CloseReason::UpdateOutOfLimits),
+            "{code:?}"
+        );
+    }
+    for (code, _, data) in pointers(31, 32, 32) {
+        let frame = fast_path_frame(&[update(code, Fragmentation::Single, &data)]);
+        assert!(
+            process_frame(
+                &mut stage,
+                &mut image,
+                &channels,
+                &mut updates,
+                Action::FastPath,
+                &frame
+            )
+            .is_ok(),
+            "{code:?}"
+        );
+    }
 }
 
 mod write_bounded {

@@ -23,6 +23,7 @@ use tokio::net::TcpStream;
 use tokio::sync::{Notify, mpsc};
 
 use self::channel_cap::ChannelIds;
+use self::update_cap::UpdateCheck;
 use crate::connect::{ClipboardWiring, Established, establish};
 use crate::text_clipboard::{ClipEvent, LocalText};
 use crate::{ConnectParams, Framebuffer, InputEvent, Interaction, MouseButton, RdpError, Rect};
@@ -78,6 +79,11 @@ pub enum CloseReason {
     /// The server announced a virtual channel message above the cap (4 MiB); the session ended
     /// before the client buffered it.
     ChannelTooLarge,
+    /// The server sent a display update beyond the client's limits: a fragmented fast-path update
+    /// above its cap (8 MiB, or twice the raw desktop when that is more), or a pointer whose cache
+    /// index is outside the 32 advertised entries or whose side is above 384 pixels. The session
+    /// ended before the client buffered or decoded it.
+    UpdateOutOfLimits,
 }
 
 /// What a session reports. The queue is bounded; `Damage` events are merged while it is full.
@@ -257,6 +263,7 @@ async fn drive(
     let size = result.desktop_size;
     let mut image = DecodedImage::new(PixelFormat::RgbA32, size.width, size.height);
     let activation_factory = result.activation_factory;
+    let mut updates = UpdateCheck::new(result.io_channel_id, size.width, size.height);
     let (mut stage, channels) = build_stage(ActiveStageBuilder {
         static_channels: result.static_channels,
         user_channel_id: result.user_channel_id,
@@ -285,7 +292,7 @@ async fn drive(
         let outputs: Vec<ActiveStageOutput> = tokio::select! {
             frame = reader.read_pdu() => {
                 let Ok((action, payload)) = frame else { return CloseReason::ConnectionLost };
-                match process_frame(&mut stage, &mut image, &channels, action, &payload) {
+                match process_frame(&mut stage, &mut image, &channels, &mut updates, action, &payload) {
                     Ok(outputs) => outputs,
                     Err(reason) => return reason,
                 }
@@ -448,6 +455,8 @@ async fn drive(
                         return CloseReason::ConnectionLost;
                     }
                     image = DecodedImage::new(PixelFormat::RgbA32, desktop.width, desktop.height);
+                    // a new fast-path processor holds no fragments, and the cap follows the desktop
+                    updates.reactivated(activation.io_channel_id(), desktop.width, desktop.height);
                     stage.set_fastpath_processor(
                         fast_path::ProcessorBuilder {
                             io_channel_id: activation.io_channel_id(),
@@ -487,16 +496,22 @@ fn build_stage(builder: ActiveStageBuilder) -> (ActiveStage, ChannelIds) {
 }
 
 /// Hands a frame from the server to the active stage, unless it announces a channel message above
-/// the cap: that one is refused before IronRDP sizes a reassembly buffer from it.
+/// the cap (refused before IronRDP sizes a reassembly buffer from it) or carries a display update
+/// beyond the limits (a fragment taking a fast-path update above its cap, a pointer outside the
+/// cache or the size the client advertises).
 fn process_frame(
     stage: &mut ActiveStage,
     image: &mut DecodedImage,
     channels: &ChannelIds,
+    updates: &mut UpdateCheck,
     action: Action,
     payload: &[u8],
 ) -> Result<Vec<ActiveStageOutput>, CloseReason> {
     channel_cap::check_frame(action, payload, channels)
         .map_err(|_| CloseReason::ChannelTooLarge)?;
+    updates
+        .check(action, payload)
+        .map_err(|_| CloseReason::UpdateOutOfLimits)?;
     stage
         .process(image, action, payload, None)
         .map_err(|_| CloseReason::ConnectionLost)
@@ -601,3 +616,4 @@ fn to_fast_path(
 mod channel_cap;
 #[cfg(test)]
 mod tests;
+mod update_cap;

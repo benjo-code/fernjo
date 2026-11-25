@@ -232,6 +232,10 @@ fn rdp_end_is_never_clean() {
             CloseReason::ChannelTooLarge,
             "The server sent a channel message that is too large.",
         ),
+        (
+            CloseReason::UpdateOutOfLimits,
+            "The server sent a display update beyond the limits of this client.",
+        ),
     ] {
         let ended = classify_rdp_end(reason);
         assert_eq!(ended.text, text);

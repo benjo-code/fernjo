@@ -131,6 +131,9 @@ pub(crate) fn classify_rdp_end(reason: CloseReason) -> Ended {
         CloseReason::ConnectionLost => "The connection was lost.",
         CloseReason::ClosedByUser => "The session was closed.",
         CloseReason::ChannelTooLarge => "The server sent a channel message that is too large.",
+        CloseReason::UpdateOutOfLimits => {
+            "The server sent a display update beyond the limits of this client."
+        }
     };
     Ended {
         text: text.to_string(),

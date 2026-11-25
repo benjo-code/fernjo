@@ -33,6 +33,13 @@ pub enum RdpError {
 #[error("the server announced a channel message that is too large")]
 pub(crate) struct ChannelTooLarge;
 
+/// A server sent a display update beyond the client's limits (a fragmented fast-path update above
+/// its cap, or a pointer outside the advertised cache or size); the session ends with
+/// `CloseReason::UpdateOutOfLimits`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the server sent a display update beyond the client's limits")]
+pub(crate) struct UpdateOutOfLimits;
+
 impl RdpError {
     /// Stable code shown to the UI and used in tests.
     pub fn code(&self) -> &'static str {

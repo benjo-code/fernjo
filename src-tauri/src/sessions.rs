@@ -70,7 +70,10 @@
 //! * An RDP session never ends "cleanly" (`endedCleanly` is always `false`): there is no shell exit
 //!   status and the tab stays until the user closes it. A server that announces a virtual channel
 //!   message above 4 MiB ends the session with the detail "The server sent a channel message that
-//!   is too large." (`fernjo_rdp::CloseReason::ChannelTooLarge`).
+//!   is too large." (`fernjo_rdp::CloseReason::ChannelTooLarge`). A fragmented fast-path update
+//!   above its cap (8 MiB, or twice the raw desktop when that is more) or a pointer outside the 32
+//!   advertised cache entries or above 384 pixels ends it with "The server sent a display update
+//!   beyond the limits of this client." (`fernjo_rdp::CloseReason::UpdateOutOfLimits`).
 //!
 //! No event carries a secret: prompts describe what is asked, answers travel UI to Rust only.
 
