@@ -781,7 +781,7 @@ fn control_and_direction_characters_are_removed_from_names_hosts_descriptions_an
     let fernjo_core::NodeKind::Folder { children } = &p.folder.kind else {
         panic!("folder")
     };
-    assert_eq!(children[0].name, "unnamed");
+    assert_eq!(children[0].name, "Unnamed");
 }
 
 #[test]
