@@ -442,7 +442,8 @@ impl AppState {
     /// Drops the pending import or restore (every page load does this, next to closing the
     /// sessions); a poisoned lock is recovered. It never waits: while an apply holds the lock
     /// (disk work on another thread) the call is skipped, which is safe because the apply
-    /// clears the value itself on success, and on failure when `page_reloaded` is set. A pick or inspect holds the lock only
+    /// clears the value itself on success, and on failure when `page_reloaded` is set, and an inspect that installs its
+    /// result while the flag is set drops it instead. A pick or inspect holds the lock only
     /// to swap the value, never across I/O.
     pub fn clear_pending(&self) {
         match self.pending.try_lock() {

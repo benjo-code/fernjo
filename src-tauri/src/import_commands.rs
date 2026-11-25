@@ -429,6 +429,12 @@ fn install(
     next: Pending,
 ) -> Result<(), CommandError> {
     let mut slot = pending_slot(state);
+    // A page load that had to skip (`clear_pending` found the lock held) could not drop the
+    // value; the page is gone, so the result is dropped here instead of waiting in memory.
+    if state.page_reloaded.swap(false, Ordering::SeqCst) {
+        *slot = None;
+        return Err(error("no_pending_import", "the page was reloaded"));
+    }
     match &*slot {
         Some(Pending::Picked {
             kind: now_kind,
@@ -2205,6 +2211,23 @@ mod tests {
         // the flag is spent: a later import that fails keeps its value
         inspect(&s, ImportKind::Mremoteng, &path, None).unwrap();
         assert_eq!(apply(&s).unwrap_err().code, "vault_needed");
+        assert_eq!(pending_kind(&s), "mremoteng");
+    }
+
+    #[test]
+    fn an_inspect_that_finishes_after_a_skipped_page_load_drops_its_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = st(&dir.path().join("d"));
+        let path = file(dir.path(), "c.xml", DEFAULT_KEY_XML);
+        import_begin(&s, ImportKind::Mremoteng, path.clone());
+        // the page load skipped (the lock was held) while the inspect was still working
+        s.page_reloaded.store(true, Ordering::SeqCst);
+        let e = inspect_on(&s, None, TODAY).unwrap_err();
+        assert_eq!(e.code, "no_pending_import");
+        assert_eq!(pending_kind(&s), "none");
+        assert!(!s.page_reloaded.load(Ordering::SeqCst));
+        // the flag is spent: the next pick and inspect keep their value
+        inspect(&s, ImportKind::Mremoteng, &path, None).unwrap();
         assert_eq!(pending_kind(&s), "mremoteng");
     }
 
