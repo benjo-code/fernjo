@@ -39,7 +39,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 | 10 | Daily-use features | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-23-milestone-10-daily-use-features.md) | 2026-11-24 |
 | 11 | Full hardening and security check | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-24-milestone-11-hardening-security.md) | 2026-11-25 |
 | – | **Release `v0.3.0`** – Sync, daily-use features and security check (M9 to M11) | – | ✅ done | – | 2026-11-25 |
-| 12 | Hub image on GitHub | 1 – fernjo app | ⬜ open | – | – |
+| 12 | Hub image on GitHub | 1 – fernjo app | 🟡 planned | [Plan](superpowers/plans/2026-11-25-milestone-12-hub-image.md) | – |
 | – | **Release `v0.3.1`** – Hub image on GitHub (M12) | – | ⬜ open | – | – |
 
 ## Scope changes
@@ -615,7 +615,7 @@ The M7 hardening gave `vault.fernjo` and `known_hosts` a random temp file name c
 Device sync (M9), the daily-use features (M10) and a full hardening and security check of everything in the release (M11).
 
 ## Milestone 12 – Hub image on GitHub
-**Status:** ⬜ open · **Plan:** – · **Prerequisites:** M9, M11
+**Status:** 🟡 planned · **Plan:** [2026-11-25-milestone-12-hub-image.md](superpowers/plans/2026-11-25-milestone-12-hub-image.md) · **Prerequisites:** M9, M11
 
 Goal: The sync hub can be set up from a ready-made image on the GitHub container registry with Compose (main path) or Quadlet, without building it from the source code first.
 

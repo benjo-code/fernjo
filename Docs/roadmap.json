@@ -521,7 +521,8 @@
         {
           "id": "12",
           "title": "Hub image on GitHub",
-          "status": "open",
+          "status": "planned",
+          "plan": "superpowers/plans/2026-11-25-milestone-12-hub-image.md",
           "prerequisites": ["9", "11"],
           "goal": "The sync hub can be set up from a ready-made image on the GitHub container registry with Compose (main path) or Quadlet, without building it from the source code first.",
           "tasks": [
