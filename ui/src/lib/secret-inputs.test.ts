@@ -4,7 +4,7 @@
 // after a reveal and a new secret field would otherwise slip in unnoticed.
 import { describe, expect, test } from "vitest";
 
-const sources = import.meta.glob("./components/*.svelte", {
+const sources = import.meta.glob("../**/*.svelte", {
   query: "?raw",
   import: "default",
   eager: true,
@@ -34,6 +34,9 @@ function tags(source: string): string[] {
   return out;
 }
 
+// Detection is name-based: a tag counts as a secret input only when its text mentions one of these
+// names (an input with an unrelated name that holds a secret would not be found). The scan covers
+// every .svelte file under ui/src.
 const SECRET =
   /"password"|-password|passphrase|private-key|pairing|secret|aria-label="Pairing code"/i;
 const OPT_OUT = /autocomplete="(off|new-password)"/;
@@ -63,7 +66,8 @@ describe("secret inputs", () => {
   });
 
   test("the_masked_field_uses_new_password_so_chromium_never_offers_a_saved_password", () => {
-    const field = tags(sources["./components/PasswordField.svelte"]!)[0]!;
+    const file = Object.keys(sources).find((f) => f.endsWith("/components/PasswordField.svelte"))!;
+    const field = tags(sources[file]!)[0]!;
     expect(field).toContain('autocomplete="new-password"');
   });
 });
