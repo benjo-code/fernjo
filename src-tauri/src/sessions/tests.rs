@@ -876,10 +876,13 @@ async fn a_malformed_hand_built_quick_target_opens_no_session() {
     let bad_port = quick_target_with(|t| t.port = 0);
     let bad_user = quick_target_with(|t| t.user = Some("u\nx".into()));
     let long_user = quick_target_with(|t| t.user = Some("u".repeat(300)));
+    // M11 review #60: a password typed into the user never reaches a session or open-tabs.json
+    let password_user = quick_target_with(|t| t.user = Some("root:secret".into()));
     for (target, expected) in [
         (bad_port, "quick_bad_port"),
         (bad_user, "quick_bad_target"),
         (long_user, "quick_bad_target"),
+        (password_user, "quick_user_password"),
     ] {
         let (ch, _rec) = recorder();
         assert_eq!(
