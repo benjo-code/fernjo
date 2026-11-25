@@ -172,7 +172,7 @@ describe("VaultNote", () => {
     await expand();
     const field = fields()[0];
     expect(field.type).toBe("password");
-    expect(field.getAttribute("autocomplete")).toBe("off");
+    expect(field.getAttribute("autocomplete")).toBe("new-password");
     const toggle = document.querySelector<HTMLButtonElement>("button[aria-pressed]")!;
     expect(toggle.getAttribute("aria-label")).toBe("Show master password");
     expect(toggle.getAttribute("aria-pressed")).toBe("false");

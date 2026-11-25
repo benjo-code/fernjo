@@ -331,6 +331,7 @@
         readonly
         rows="4"
         aria-label="Pairing code"
+        autocomplete="off"
         spellcheck="false"
         value={sync.pairingCode}></textarea>
       <div class="actions">

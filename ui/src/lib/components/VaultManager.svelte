@@ -511,7 +511,13 @@
             <div class="revealed" role="group" aria-label="Revealed secret">
               {#if revealed.password !== undefined}
                 <label for="cred-revealed-password">Stored password</label>
-                <input id="cred-revealed-password" type="text" readonly value={revealed.password} />
+                <input
+                  id="cred-revealed-password"
+                  type="text"
+                  autocomplete="off"
+                  readonly
+                  value={revealed.password}
+                />
               {/if}
               {#if revealed.privateKey !== undefined}
                 <span class="label">Stored private key</span>
@@ -521,6 +527,7 @@
                 <label for="cred-revealed-passphrase">Stored passphrase</label>
                 <input
                   id="cred-revealed-passphrase"
+                  autocomplete="off"
                   type="text"
                   readonly
                   value={revealed.passphrase}
