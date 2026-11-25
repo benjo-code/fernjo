@@ -425,6 +425,27 @@ publish_goes_through_a_draft() {
 }
 assert_true release_publish_attaches_to_a_draft_then_publishes publish_goes_through_a_draft
 
+# --- hub Containerfile ---
+hub_containerfile="$root/crates/fernjo-hub/Containerfile"
+containerfile_final_stage_is_scratch_as_10001() {
+  grep -Fxq 'FROM scratch' "$hub_containerfile" &&
+    grep -Fxq 'USER 10001:10001' "$hub_containerfile" &&
+    grep -Fxq 'VOLUME /data' "$hub_containerfile" &&
+    grep -Fxq 'COPY --from=build --chown=10001:10001 /data /data' "$hub_containerfile"
+}
+assert_true hub_containerfile_final_stage_is_scratch_as_10001 containerfile_final_stage_is_scratch_as_10001
+containerfile_has_the_oci_labels() {
+  local key
+  for key in source version revision licenses description; do
+    grep -Fq "org.opencontainers.image.$key=" "$hub_containerfile" || return 1
+  done
+  grep -Fq 'org.opencontainers.image.licenses="MIT OR Apache-2.0"' "$hub_containerfile" &&
+    grep -Fq 'org.opencontainers.image.source="https://github.com/benjo-code/fernjo"' "$hub_containerfile" &&
+    grep -Fxq 'ARG VERSION=dev' "$hub_containerfile" &&
+    grep -Fxq 'ARG REVISION=unknown' "$hub_containerfile"
+}
+assert_true hub_containerfile_has_the_oci_labels containerfile_has_the_oci_labels
+
 # --- third-party-notices.mjs (pure checks through --fixture; the full run needs cargo-about) ---
 notices="$root/tools/third-party-notices.mjs"
 

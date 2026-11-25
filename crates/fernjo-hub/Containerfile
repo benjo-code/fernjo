@@ -1,6 +1,9 @@
 # Build from the repository root:
 #   podman build -f crates/fernjo-hub/Containerfile -t fernjo-hub .
 # (`docker build` works the same.) Static musl binary, non-root user, nothing else in the image.
+# Optional build arguments, set by the release workflow and recorded in the image labels:
+#   --build-arg VERSION=<x.y.z> --build-arg REVISION=<commit sha>   (defaults: dev, unknown)
+# The published image (ghcr.io/benjo-code/fernjo-hub) needs no build: see Docs/hub.md.
 # The build context is filtered by the .dockerignore at the repository root.
 
 # The tag matches rust-toolchain.toml (1.100.0), so cargo does not download another toolchain.
@@ -14,6 +17,14 @@ RUN cargo build --release --locked -p fernjo-hub --target "$(uname -m)-unknown-l
 RUN mkdir /data
 
 FROM scratch
+# ARGs are per stage: declared here so the labels below can use them
+ARG VERSION=dev
+ARG REVISION=unknown
+LABEL org.opencontainers.image.source="https://github.com/benjo-code/fernjo" \
+      org.opencontainers.image.version="$VERSION" \
+      org.opencontainers.image.revision="$REVISION" \
+      org.opencontainers.image.licenses="MIT OR Apache-2.0" \
+      org.opencontainers.image.description="Sync hub for fernjo: stores one encrypted snapshot and ten older ones"
 COPY --from=build /fernjo-hub /fernjo-hub
 # /data is the only writable place; it is created here and owned by the unprivileged user,
 # so a new named volume mounted on it is writable by 10001 without any chown
