@@ -1,12 +1,13 @@
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::time::{Duration, SystemTime};
 
 use tempfile::TempDir;
 
 use crate::{
-    FileMode, NOT_REGULAR, Parent, WriteOptions, create_temp_file, read_capped, with_suffix,
-    write_atomic,
+    FileMode, NOT_REGULAR, Parent, STALE_TEMP_AGE, WriteOptions, create_temp_file, read_capped,
+    sweep_stale_temps, with_suffix, write_atomic,
 };
 
 fn names(dir: &Path) -> Vec<String> {
@@ -188,6 +189,51 @@ fn temp_file_names_are_the_file_name_plus_sixteen_lowercase_hex_and_tmp() {
     assert_ne!(first, second, "every call picks a fresh name");
 }
 
+/// Sets the last change of a regular file `age` into the past.
+fn set_age(path: &Path, age: Duration) {
+    let file = fs::OpenOptions::new().write(true).open(path).unwrap();
+    file.set_modified(SystemTime::now() - age).unwrap();
+}
+
+#[test]
+fn sweep_removes_only_old_temp_files_of_the_named_file() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("connections.json");
+    fs::write(&path, b"current").unwrap();
+    let old = STALE_TEMP_AGE + Duration::from_secs(3600);
+    let stale = dir.path().join("connections.json.0123456789abcdef.tmp");
+    let fresh = dir.path().join("connections.json.fedcba9876543210.tmp");
+    let other_file = dir.path().join("settings.json.0123456789abcdef.tmp");
+    let upper = dir.path().join("connections.json.ABCDEF0123456789.tmp");
+    let short = dir.path().join("connections.json.0123.tmp");
+    let plain = dir.path().join("connections.json.tmp");
+    let bak = dir.path().join("connections.json.bak");
+    let folder = dir.path().join("connections.json.aaaaaaaaaaaaaaaa.tmp");
+    for p in [&stale, &fresh, &other_file, &upper, &short, &plain, &bak] {
+        fs::write(p, b"x").unwrap();
+    }
+    fs::create_dir(&folder).unwrap();
+    for p in [&stale, &other_file, &upper, &short, &plain, &bak] {
+        set_age(p, old);
+    }
+    set_age(&fresh, Duration::from_secs(60));
+
+    sweep_stale_temps(&path, STALE_TEMP_AGE);
+
+    assert!(!stale.exists(), "the old temp file is removed");
+    for p in [&fresh, &other_file, &upper, &short, &plain, &bak, &path] {
+        assert!(p.exists(), "{p:?} must stay");
+    }
+    assert!(folder.is_dir(), "a folder with a temp name stays");
+}
+
+#[test]
+fn sweep_without_a_folder_or_with_a_missing_one_does_nothing() {
+    sweep_stale_temps(Path::new("connections.json"), Duration::ZERO);
+    let dir = TempDir::new().unwrap();
+    sweep_stale_temps(&dir.path().join("none").join("x.json"), Duration::ZERO);
+}
+
 #[cfg(unix)]
 mod unix {
     use std::fs;
@@ -220,6 +266,51 @@ mod unix {
         });
         rx.recv_timeout(Duration::from_secs(5))
             .expect("the call blocked on the FIFO")
+    }
+
+    /// Sets the last change of `path` itself (a symlink or a FIFO is neither followed nor opened)
+    /// to 2000-01-01; `touch -h` does that on Linux and macOS.
+    fn make_old_nofollow(path: &Path) {
+        let status = Command::new("touch")
+            .args(["-h", "-t", "200001010000"])
+            .arg(path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "touch -h failed");
+    }
+
+    #[test]
+    fn sweep_keeps_an_old_symlink_and_an_old_fifo_with_a_temp_name() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("known_hosts");
+        let victim = dir.path().join("victim");
+        fs::write(&victim, b"victim data").unwrap();
+        let link = dir.path().join("known_hosts.0123456789abcdef.tmp");
+        symlink(&victim, &link).unwrap();
+        let fifo = dir.path().join("known_hosts.fedcba9876543210.tmp");
+        mkfifo(&fifo);
+        let regular = dir.path().join("known_hosts.1111111111111111.tmp");
+        fs::write(&regular, b"x").unwrap();
+        for p in [&victim, &link, &fifo, &regular] {
+            make_old_nofollow(p);
+        }
+
+        let swept = path.clone();
+        finishes_quickly(move || crate::sweep_stale_temps(&swept, crate::STALE_TEMP_AGE));
+
+        assert!(!regular.exists(), "the old regular temp file is removed");
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::read(&victim).unwrap(),
+            b"victim data",
+            "the link's target stays"
+        );
+        assert!(fs::symlink_metadata(&fifo).is_ok(), "the FIFO stays");
     }
 
     #[test]

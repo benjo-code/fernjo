@@ -48,6 +48,8 @@ impl Store {
     /// file there).
     fn open_with(dir: &Path, after_read: &mut dyn FnMut()) -> Result<Opened, LoadError> {
         let path = dir.join(FILE_NAME);
+        // leftovers of an interrupted save (`connections.json.<16 hex>.tmp`, best effort)
+        fernjo_fs::sweep_stale_temps(&path, fernjo_fs::STALE_TEMP_AGE);
         let loaded = persist::load_with(&path, after_read)?;
         let fingerprint = adopted_fingerprint(&path, &loaded);
         Ok(Opened {
@@ -226,6 +228,28 @@ mod tests {
         assert!(opened.store.tree().children().is_empty());
         assert!(fs::read_dir(dir.path()).unwrap().next().is_none());
         assert_eq!(opened.store.path(), dir.path().join(FILE_NAME));
+    }
+
+    /// Final M11 review, Minor 2: a temp file of an interrupted save older than a day is removed
+    /// on open; a younger one stays (it may belong to a save that is still running).
+    #[test]
+    fn open_removes_stale_temp_files_of_connections_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let stale = dir.path().join(format!("{FILE_NAME}.0123456789abcdef.tmp"));
+        let fresh = dir.path().join(format!("{FILE_NAME}.fedcba9876543210.tmp"));
+        for p in [&stale, &fresh] {
+            fs::write(p, b"x").unwrap();
+        }
+        let old = fernjo_fs::STALE_TEMP_AGE + std::time::Duration::from_secs(3600);
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&stale)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - old)
+            .unwrap();
+        Store::open(dir.path()).unwrap();
+        assert!(!stale.exists());
+        assert!(fresh.exists());
     }
 
     #[test]

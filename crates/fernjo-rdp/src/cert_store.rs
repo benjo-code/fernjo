@@ -101,7 +101,11 @@ impl CertStore {
 
     fn write(&self, contents: &[u8]) -> Result<(), RdpError> {
         match &self.path {
-            Some(path) => write_atomic(path, contents),
+            Some(path) => {
+                // leftovers of an interrupted earlier save of the pin file (best effort)
+                fernjo_fs::sweep_stale_temps(path, fernjo_fs::STALE_TEMP_AGE);
+                write_atomic(path, contents)
+            }
             None => {
                 *self.memory.lock().map_err(|_| RdpError::Io)? = contents.to_vec();
                 Ok(())

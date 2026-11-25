@@ -176,7 +176,12 @@ impl KnownHosts {
                 *memory.lock().map_err(|_| SshError::Io)? = contents.to_vec();
                 Ok(())
             }
-            None => write_atomic(&self.path, contents),
+            None => {
+                // leftovers of an interrupted earlier save of this file (best effort); this runs
+                // under `WRITE_LOCK` on the blocking pool, like the write itself
+                fernjo_fs::sweep_stale_temps(&self.path, fernjo_fs::STALE_TEMP_AGE);
+                write_atomic(&self.path, contents)
+            }
         }
     }
 

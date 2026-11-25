@@ -1,11 +1,10 @@
 //! The `Vault`: create, open, unlock, lock, and the encrypted atomic save.
 
 use std::fmt;
-use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -159,7 +158,7 @@ impl Vault {
     /// # Errors
     /// `unreadable`, `newer_format`, `invalid_kdf_params`.
     pub fn open(path: &Path) -> Result<Option<Self>, VaultError> {
-        sweep_stale_temp_files(path, STALE_TEMP_AGE);
+        fernjo_fs::sweep_stale_temps(path, STALE_TEMP_AGE);
         let bytes = match read_capped(path, MAX_FILE_LEN) {
             Ok(b) => b,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -998,62 +997,12 @@ fn check_foreign_len(bytes: &[u8]) -> Result<(), VaultError> {
 }
 
 /// A temp file of an interrupted save older than this is left over and gets removed by
-/// [`Vault::open`].
-pub const STALE_TEMP_AGE: Duration = Duration::from_secs(24 * 60 * 60);
-
-/// Whether `name` is `<file name>.<16 lowercase hex>.tmp`, the temp name `write_atomic` uses.
-fn is_temp_name(file_name: &str, name: &str) -> bool {
-    let Some(rest) = name.strip_prefix(file_name) else {
-        return false;
-    };
-    let Some(hex) = rest.strip_prefix('.').and_then(|r| r.strip_suffix(".tmp")) else {
-        return false;
-    };
-    hex.len() == 16 && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
-}
-
-/// Removes regular files named like a vault temp file next to `path` that were last modified
-/// more than `age` ago. Symlinks, directories and every other name stay; errors are ignored.
-fn sweep_stale_temp_files(path: &Path, age: Duration) {
-    let (Some(dir), Some(file_name)) = (
-        path.parent().filter(|p| !p.as_os_str().is_empty()),
-        path.file_name().and_then(|n| n.to_str()),
-    ) else {
-        return;
-    };
-    let Ok(read) = fs::read_dir(dir) else {
-        return;
-    };
-    let now = SystemTime::now();
-    for entry in read.flatten() {
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            continue;
-        };
-        if !is_temp_name(file_name, name) {
-            continue;
-        }
-        let candidate = entry.path();
-        let Ok(meta) = fs::symlink_metadata(&candidate) else {
-            continue;
-        };
-        if !meta.file_type().is_file() {
-            continue;
-        }
-        let stale = meta
-            .modified()
-            .ok()
-            .and_then(|m| now.duration_since(m).ok())
-            .is_some_and(|d| d > age);
-        if stale {
-            let _ = fs::remove_file(&candidate);
-        }
-    }
-}
+/// [`Vault::open`] (`fernjo_fs::sweep_stale_temps`, which the other data files share).
+pub const STALE_TEMP_AGE: Duration = fernjo_fs::STALE_TEMP_AGE;
 
 /// Writes `bytes` to `path` through `fernjo_fs::write_atomic` with the data-file options:
 /// missing folders created private, a random `<file>.<16 hex>.tmp` (the name
-/// [`sweep_stale_temp_files`] looks for), owner-only modes on Unix, the previous file kept as
+/// `fernjo_fs::sweep_stale_temps` looks for), owner-only modes on Unix, the previous file kept as
 /// `.bak` (never written through a symlink at that name), rename, folder sync on Unix.
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     fernjo_fs::write_atomic(path, bytes, fernjo_fs::WriteOptions::data_file())

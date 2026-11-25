@@ -16,13 +16,15 @@
 //! copy open only a regular file (`O_NOFOLLOW` and `O_NONBLOCK` on Unix, a `symlink_metadata`
 //! check everywhere, then the opened handle's type), and [`write_atomic`] refuses a target that
 //! exists but is not a regular file. A planted link to a private file, to `/dev/zero` or to a FIFO
-//! is therefore never read, copied into `<file>.bak` or blocked on. The crate depends only on `std`,
+//! is therefore never read, copied into `<file>.bak` or blocked on. [`sweep_stale_temps`] removes
+//! the temp files that a cut-off write left behind. The crate depends only on `std`,
 //! `getrandom` and, on Unix, `libc` (for the open flags).
 
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 #[cfg(test)]
 mod tests;
@@ -80,6 +82,61 @@ pub fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     let mut name: OsString = path.as_os_str().to_owned();
     name.push(suffix);
     PathBuf::from(name)
+}
+
+/// The age after which a temp file of an interrupted [`write_atomic`] counts as left over: one
+/// day, far longer than any save takes.
+pub const STALE_TEMP_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Removes the temp files that interrupted [`write_atomic`] calls left next to `path`: siblings
+/// named exactly `<file name>.<16 lowercase hex>.tmp` (the name `write_atomic` uses for the new
+/// content and for the `.bak` copy) whose last change is more than `age` ago. Only regular files
+/// are removed, judged by `symlink_metadata`: a symlink (never followed), a folder, a FIFO or any
+/// other name stays. Best effort: every error is ignored, so a caller can run it on each open
+/// without a new failure mode.
+pub fn sweep_stale_temps(path: &Path, age: Duration) {
+    let (Some(dir), Some(file_name)) = (
+        path.parent().filter(|p| !p.as_os_str().is_empty()),
+        path.file_name().and_then(|n| n.to_str()),
+    ) else {
+        return;
+    };
+    let Ok(read) = fs::read_dir(dir) else {
+        return;
+    };
+    let now = SystemTime::now();
+    for entry in read.flatten() {
+        let name = entry.file_name();
+        if !name.to_str().is_some_and(|n| is_temp_name(file_name, n)) {
+            continue;
+        }
+        let candidate = entry.path();
+        let Ok(meta) = fs::symlink_metadata(&candidate) else {
+            continue;
+        };
+        if !meta.file_type().is_file() {
+            continue;
+        }
+        let stale = meta
+            .modified()
+            .ok()
+            .and_then(|m| now.duration_since(m).ok())
+            .is_some_and(|d| d > age);
+        if stale {
+            let _ = fs::remove_file(&candidate);
+        }
+    }
+}
+
+/// Whether `name` is `<file_name>.<16 lowercase hex>.tmp`, the temp name of [`write_atomic`].
+fn is_temp_name(file_name: &str, name: &str) -> bool {
+    let Some(rest) = name.strip_prefix(file_name) else {
+        return false;
+    };
+    let Some(hex) = rest.strip_prefix('.').and_then(|r| r.strip_suffix(".tmp")) else {
+        return false;
+    };
+    hex.len() == 16 && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// Reads a whole file, but never more than `max` bytes. The length is checked up front (so an

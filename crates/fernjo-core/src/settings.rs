@@ -229,6 +229,8 @@ fn read_file(path: &Path) -> Result<Read, LoadError> {
 /// main file falls back to `.bak` (the bad file is moved aside) and otherwise fails with
 /// [`LoadError::Unreadable`]. Nothing else is written.
 pub fn load(path: &Path) -> Result<AppSettings, LoadError> {
+    // leftovers of an interrupted save (`settings.json.<16 hex>.tmp`, best effort)
+    fernjo_fs::sweep_stale_temps(path, fernjo_fs::STALE_TEMP_AGE);
     let reason = match read_file(path)? {
         Read::Parsed(settings) => return Ok(settings),
         Read::Missing => None,
@@ -313,6 +315,28 @@ mod tests {
             fs::metadata(&p).unwrap().len(),
             crate::persist::MAX_DATA_FILE_LEN + 1
         );
+    }
+
+    /// Final M11 review, Minor 2: a temp file of an interrupted save older than a day is removed
+    /// on open; a younger one stays (it may belong to a save that is still running).
+    #[test]
+    fn load_removes_stale_temp_files_of_settings_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let stale = dir.path().join(format!("{FILE_NAME}.0123456789abcdef.tmp"));
+        let fresh = dir.path().join(format!("{FILE_NAME}.fedcba9876543210.tmp"));
+        for p in [&stale, &fresh] {
+            fs::write(p, b"x").unwrap();
+        }
+        let old = fernjo_fs::STALE_TEMP_AGE + std::time::Duration::from_secs(3600);
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&stale)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - old)
+            .unwrap();
+        load(&path(dir.path())).unwrap();
+        assert!(!stale.exists());
+        assert!(fresh.exists());
     }
 
     #[test]
