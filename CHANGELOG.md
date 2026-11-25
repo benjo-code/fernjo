@@ -49,6 +49,13 @@ Daily-use features: milestone M10.
 - The splitter's keyboard focus is a 1 px centred line and its hit area no longer covers the tree's scrollbar.
 - The tree keeps 21 rows at the default window size instead of 23 (the quick connect field takes the room) so the properties panel stays reachable at 1280x800.
 - Data files are never read or copied through a symbolic link at their own name (M11): a `known_hosts`, `settings.json` or other data file that is a symbolic link (a sync tool can plant one pointing at, for example, a private SSH key) is refused instead of being read and written back, together with its `.bak`, as a regular file in the synced folder. A FIFO or device at the name is refused without blocking, and `known_hosts` is read only up to 16 MiB. A single data file you linked on purpose (for example `known_hosts` to `~/.ssh/known_hosts`) now makes the connect or load fail with an error; link the whole data folder instead. Choosing a new data folder copies `connections.json` and the vault the same way (never through a link at the source name, never through a fixed temporary name in the new folder).
+- Terminal paste (M11): pasted text can no longer end the shell's paste mode early and run as typed commands. fernjo removes the bracketed-paste markers and every control character except tab and line ends from text before it reaches the terminal (menu Paste and the keyboard paste); multi-line pastes keep their lines.
+- RDP clipboard (M11): a remote desktop tab in the background no longer writes what its server copies to your clipboard. Only the remote desktop in front with the focus does; text copied meanwhile is written when you return to that tab.
+- Hyperlinks a server prints in the terminal (OSC 8, for example from `ls --hyperlink`) now open in your browser through the same checks as plain links, and only for http and https; before, clicking one showed a browser confirmation with the server's text and opened nothing (M11).
+- Quick connect (M11): `user:password@host` is refused with "type only the user name (no :password); fernjo asks for the password", so a typed password never lands in the tab title, the saved open tabs or the server's log as a user name.
+- "Restart now" after a data folder change (M11) now asks "Restart fernjo?" while a session is connected, like closing the window, and gives sync its last push before restarting.
+- The remote desktop tab's clipboard mark (M11) now always shows the clipboard setting the session really uses; it could disagree for a moment after a sync or an edit.
+- Pasting against a clipboard that never answers (M11) no longer piles up background work that could stall sync, import and export; while one read hangs, further pastes fail at once.
 
 ## [0.2.0] - 2026-11-22
 
