@@ -786,7 +786,8 @@ impl Vault {
     /// This is a check, then a write, not a lock: a sync tool can still win the race in
     /// the instant between the check and the rename.
     fn check_unchanged_on_disk(&self) -> Result<(), VaultError> {
-        let file = match fs::File::open(&self.path) {
+        // never through a symlink, never a FIFO or device (a save would block on it)
+        let file = match fernjo_fs::open_regular(&self.path) {
             Ok(f) => f,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
             Err(e) => return Err(VaultError::SaveFailed(e.to_string())),

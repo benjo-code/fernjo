@@ -242,7 +242,10 @@ mod unix {
         // a link to a device is refused before any byte is read
         let zero = dir.path().join("zero");
         symlink("/dev/zero", &zero).unwrap();
-        assert!(read_capped(&zero, 1024).is_err());
+        assert_eq!(
+            read_capped(&zero, 1024).unwrap_err().to_string(),
+            NOT_REGULAR
+        );
     }
 
     #[test]

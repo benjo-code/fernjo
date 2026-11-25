@@ -119,9 +119,10 @@ pub fn read_capped(path: &Path, max: u64) -> io::Result<Vec<u8>> {
 /// - every platform: the opened handle's metadata must say "regular file" again, which is the
 ///   race-free part on Unix.
 ///
-/// The Windows check is a check-then-open (a link swapped in between is followed); creating a
+/// Public for callers that read only part of a file (the vault's header check). The Windows
+/// check is a check-then-open (a link swapped in between is followed); creating a
 /// symlink there needs admin rights or developer mode.
-pub(crate) fn open_regular(path: &Path) -> io::Result<File> {
+pub fn open_regular(path: &Path) -> io::Result<File> {
     if !fs::symlink_metadata(path)?.file_type().is_file() {
         return Err(not_regular());
     }
