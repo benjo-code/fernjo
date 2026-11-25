@@ -503,6 +503,21 @@ hub_image_pushes_with_a_digest_check() {
     job_block hub-image | grep -Fxq '      - name: Check that every tag has the same digest'
 }
 assert_true release_hub_image_pushes_with_a_digest_check hub_image_pushes_with_a_digest_check
+# The installer release must not be published while the image it points at is missing: the published
+# release is immutable and its deploy files pin that image.
+publish_waits_for_the_hub_image() {
+  job_block publish | awk '/^    needs:$/ { n = 1; next } n && /^      - / { sub(/^ +/, ""); print; next } n { exit }' | sort | tr '\n' ' ' |
+    grep -Fxq -- '- build - hub-image '
+}
+assert_true release_publish_waits_for_the_hub_image publish_waits_for_the_hub_image
+hub_image_checks_the_registry_digests() {
+  job_block hub-image | grep -Fq "skopeo inspect --format '{{.Digest}}'"
+}
+assert_true release_hub_image_checks_the_registry_digests hub_image_checks_the_registry_digests
+hub_image_annotates_the_index_with_the_source() {
+  job_block hub-image | grep -Fq 'podman manifest annotate --index --annotation org.opencontainers.image.source=https://github.com/benjo-code/fernjo'
+}
+assert_true release_hub_image_annotates_the_index_with_the_source hub_image_annotates_the_index_with_the_source
 
 # --- hub Containerfile ---
 hub_containerfile="$root/crates/fernjo-hub/Containerfile"

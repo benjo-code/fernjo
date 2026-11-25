@@ -333,17 +333,24 @@ jobs:
           refs="$(bash tools/hub-image-tags.sh "$TAG" "$IMAGE")"
           list=localhost/fernjo-hub-list
           podman manifest create "$list"
+          # GHCR links a new package to the repository through the source annotation of the index (the
+          # labels sit in the per-architecture images). Podman before 5 has no `--index`; then the
+          # owner connects the package by hand (Docs/hub.md, "Make the package public").
+          if ! podman manifest annotate --index --annotation org.opencontainers.image.source=https://github.com/benjo-code/fernjo "$list"; then
+            echo "::warning::could not annotate the index with its source; connect the package to the repository by hand"
+          fi
           podman manifest add "$list" oci-archive:hub-archives/hub-image-amd64/hub-amd64.oci.tar
           podman manifest add "$list" oci-archive:hub-archives/hub-image-arm64/hub-arm64.oci.tar
           : > digests.txt
           while read -r ref; do
-            podman manifest push --all --digestfile digest.tmp "$list" "docker://$ref"
+            podman manifest push --all --digestfile digest.tmp "$list" "docker://$ref" < /dev/null
             echo "$ref $(cat digest.tmp)" | tee -a digests.txt
           done <<< "$refs"
 
       - name: Check that every tag has the same digest
         id: digest
         run: |
+          export REGISTRY_AUTH_FILE="$HOME/.docker/config.json"
           if [ "$(wc -l < digests.txt)" -ne 3 ]; then
             echo "::error::expected three pushed tags"
             cat digests.txt
@@ -355,6 +362,14 @@ jobs:
             cat digests.txt
             exit 1
           fi
+          # What Podman reported is not enough: ask the registry what each tag holds now.
+          while read -r ref _; do
+            actual="$(skopeo inspect --format '{{.Digest}}' "docker://$ref" < /dev/null)"
+            if [ "$actual" != "$digest" ]; then
+              echo "::error::$ref holds $actual in the registry, expected $digest"
+              exit 1
+            fi
+          done < digests.txt
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: Verify both architectures
@@ -375,7 +390,8 @@ jobs:
           echo "$ref holds amd64 and arm64"
 
       # Build provenance for the image: ties the digest to this workflow and the tag. Check it with
-      # `gh attestation verify oci://ghcr.io/benjo-code/fernjo-hub:<version> --repo benjo-code/fernjo`.
+      # `gh attestation verify oci://ghcr.io/benjo-code/fernjo-hub:<version> --repo benjo-code/fernjo
+      # --signer-workflow benjo-code/fernjo/.github/workflows/release.yml --source-ref refs/tags/v<version>`.
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/benjo-code/fernjo-hub
@@ -384,7 +400,11 @@ jobs:
 
   publish:
     name: publish
-    needs: build
+    # The release is immutable once published and its deploy files pin the hub image, so it is not
+    # published while the image is missing: a failed push leaves a draft to repeat.
+    needs:
+      - build
+      - hub-image
     if: github.event_name != 'pull_request' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 45

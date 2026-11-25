@@ -97,12 +97,14 @@ Every release also bumps the tag in both deploy files to its own version, so the
 The release workflow attests the build provenance of the image. Check that the image you pulled was built by this repository's release workflow:
 
 ```sh
-gh attestation verify oci://ghcr.io/benjo-code/fernjo-hub:0.3.1 --repo benjo-code/fernjo
+gh attestation verify oci://ghcr.io/benjo-code/fernjo-hub:0.3.1 --repo benjo-code/fernjo \n  --signer-workflow benjo-code/fernjo/.github/workflows/release.yml --source-ref refs/tags/v0.3.1
 ```
+
+The two extra flags matter: without them any workflow of this repository on any branch would pass. Use the tag of the version you pulled (replace `0.3.1` in this command and in the examples above when you use another version).
 
 ## Make the package public (once, owner)
 
-GitHub creates the package `fernjo-hub` private on the first push. So that everybody can pull it without logging in, the repository owner changes its visibility once: on GitHub open the package (github.com/benjo-code, Packages, `fernjo-hub`), Package settings, Change visibility, Public. Check it from a machine that is not logged in to GHCR: `docker pull ghcr.io/benjo-code/fernjo-hub:0.3.1`.
+GitHub creates the package `fernjo-hub` private on the first push. So that everybody can pull it without logging in, the repository owner changes its visibility once: on GitHub open the package (github.com/benjo-code, Packages, `fernjo-hub`), Package settings, Change visibility, Public. Check it from a machine that is not logged in to GHCR: `docker pull ghcr.io/benjo-code/fernjo-hub:0.3.1`. Also check once that the package is connected to the repository (the package page shows `benjo-code/fernjo`, and Package settings, Manage Actions access, lists it with Write): the workflow annotates the image index with its source for that, but older Podman versions cannot (the run then prints a warning), and an unconnected package can refuse the next release's push. Connect it there if it is missing.
 
 ## Build the image yourself
 
@@ -185,7 +187,7 @@ Wire formats, the envelope layout and the merge rules are in `Docs/sync-format.m
 
 ## Not verified yet (owner checks)
 
-- The published image itself: it exists only after the v0.3.1 tag. Then: `docker buildx imagetools inspect ghcr.io/benjo-code/fernjo-hub:0.3.1` lists both architectures, `X.Y` and `latest` show the same digest, and `gh attestation verify oci://ghcr.io/benjo-code/fernjo-hub:0.3.1 --repo benjo-code/fernjo` passes. The login to GHCR and the attestation with `push-to-registry` have only run on a real tag push, never before.
+- The published image itself: it exists only after the v0.3.1 tag. Then: `docker buildx imagetools inspect ghcr.io/benjo-code/fernjo-hub:0.3.1` lists both architectures, `X.Y` and `latest` show the same digest, and the `gh attestation verify oci://... --signer-workflow ... --source-ref refs/tags/v0.3.1` command above passes. The login to GHCR and the attestation with `push-to-registry` have only run on a real tag push, never before.
 - That the package can be pulled without a login once the owner has made it public ("Make the package public" above).
 - The Compose files and the Quadlet unit with the published image on the owner's Podman machines, and `podman compose -f compose.yaml -f compose.podman.yaml` (Podman's Compose was not run here, only Docker's).
 - Linux: the Secret Service keychain item (set up, restart, leave sync, item gone) and a sync run from a Linux device (the CachyOS laptop).
