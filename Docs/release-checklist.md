@@ -491,7 +491,7 @@ Not run here: the live SSH container tests (`cargo test -p fernjo-ssh`; they run
 | M10 owner checks, M7 and M8 and earlier owner checks (roadmap blocks) | Owner checks, not run or waived, still open |
 | `fernjo-fs` on macOS (CI tests on Linux only) | Known gap, low risk (same libc flags) |
 | Performance not re-measured since v0.1.1 | Not re-run: no WebView2 runtime on this machine; CHANGELOG and README claim no number for 0.3.0 |
-| Build provenance and the draft-then-publish flow | Unverified until the release run; the outcome is added after the release |
+| Build provenance and the draft-then-publish flow | Verified on the release run of 2026-11-25 (see "Release" below): the draft was filled and published by `release.yml`, `gh attestation verify` passed on all five installers |
 | Row 73 (fork pull request dry run publishes artifacts of the official repository) | After release |
 | Accepted findings, acknowledged behaviour changes, the NLA requirement, row 52 not put to the owner | Accepted by the owner (`Docs/DECISIONS.md` "M11: owner decisions on the security review (2026-11-25)"), unchanged |
 
@@ -500,12 +500,22 @@ Not run here: the live SSH container tests (`cargo test -p fernjo-ssh`; they run
 | Area | Verdict | Reasoning |
 |---|---|---|
 | Security review | Go | No High or Medium open (see "v0.3.0 readiness"); the delta since it holds no application code; 0 open code-scanning alerts, gitleaks clean |
-| Installers | Go on the dry run | Judged by the dry run of the release PR (evidence added after the release); provenance unverified until the release run |
+| Installers | Go on the dry run | Judged by the dry run of the release PR; the release run then built, smoke-tested, attested and published them (see "Release" below) |
 | Docs | Go | README, CHANGELOG, SECURITY.md, roadmap and this file match the code and the evidence; unverified items are named as such |
 | Performance | Not re-run | No claim is made for v0.3.0 |
 | Repo settings | Go | All settings on (SHA pinning, `v*` tag ruleset, immutable releases, CodeQL for `actions`); the draft-then-publish flow first runs on this release |
 
 **Overall: no unfixed High or Medium finding; no blocker for v0.3.0 from the checks run here. The PR to `main` and the tag wait for the owner's instruction.**
+
+**Release (2026-11-25, on the owner's instructions: go for the PR after the report, go for the tag and the back-merge at Stop B).**
+
+- Release PR [#53](https://github.com/benjo-code/fernjo/pull/53) (`release/v0.3.0`, head `361b1db`) merged into `main` with a merge commit, `8a450b0` (parents `0cf988f` and `361b1db`). All checks passed: `roadmap`, `rust` (steps "Start the SSH test server" and "Run cargo test --workspace" succeeded, so the SSH container tests ran in CI), `ui`, `tauri-build`, `cargo-deny`, `workflows`, CodeQL `analyze` for `actions`, `javascript-typescript` and `rust` and the `CodeQL` result (no new alerts, nothing dismissed). The release dry run [45688207067](https://github.com/benjo-code/fernjo/actions/runs/45688207067): "Check the binary for build paths" and the installer smoke test `success` on `build (windows)`, `build (macos-arm64)`, `build (macos-x64)` and `build (linux)`; `publish` skipped by design. `CI`, `CodeQL` and `Roadmap` then passed on `8a450b0` on `main`.
+- Tag `v0.3.0` on `8a450b0` (pushed with `git tag v0.3.0 origin/main`; `git ls-remote` shows the same hash), then the draft release at once with `gh release create v0.3.0 --draft --verify-tag`. The release notes are short and hand-written in the style of v0.1.1 (the CHANGELOG stays the detailed list and is linked). `release.yml` run [45693223198](https://github.com/benjo-code/fernjo/actions/runs/45693223198): `build (windows)`, `build (linux)`, `build (macos-x64)`, `build (macos-arm64)` and `publish` all `success`. This was the first run of the draft-then-publish flow: the check for a draft, the attestation, the upload and the publish step all worked without a rerun. The release [v0.3.0](https://github.com/benjo-code/fernjo/releases/tag/v0.3.0) is not a draft and not a prerelease; `gh release view` shows `targetCommitish: dev` (the draft's default target; the tag itself is on `8a450b0`).
+- Assets: `fernjo_0.3.0_x64-setup.exe`, `fernjo_0.3.0_aarch64.dmg`, `fernjo_0.3.0_x64.dmg`, `fernjo_0.3.0_amd64.deb`, `fernjo_0.3.0_amd64.AppImage` and `SHA256SUMS`. Downloaded into an empty folder: `sha256sum -c SHA256SUMS` reported `OK` for all five; `bash tools/verify-installers.sh 0.3.0 <dir>` exits 0 on a folder that holds only the five installers.
+- Provenance: `gh attestation verify <file> --repo benjo-code/fernjo --signer-workflow benjo-code/fernjo/.github/workflows/release.yml --source-ref refs/tags/v0.3.0` exited 0 on all five installers; the JSON output shows signer `release.yml@refs/tags/v0.3.0`, source ref `refs/tags/v0.3.0` and source digest `8a450b0`. The same command with `--source-ref refs/tags/v9.9.9` exits 1. `gh` 2.105.0 prints nothing on success when its output is not a terminal; the exit code and `--format json` carry the result. This was the first attestation check against a real one.
+- Back-merge PR [#54](https://github.com/benjo-code/fernjo/pull/54) (`main` into `dev`) merged with a merge commit, `6c757ef`; `origin/main` is an ancestor of `origin/dev`, which holds version `0.3.0`. All its checks passed.
+
+Still unverified after the release: an installer started on a real machine (the smoke tests prove that it starts on the runner), sync on Linux and the Linux Secret Service keychain item, `fernjo-fs` on macOS, performance for 0.3.0, the M10 and earlier owner checks, and row 73 (the other known gaps are in the table above).
 
 ## v0.1.0 security review
 
