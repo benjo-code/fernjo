@@ -170,6 +170,11 @@ mod tests {
             assert_eq!(clean(&s, 10, false), "ab", "{bad:?}");
             assert_eq!(clean(&s, 10, true), "ab", "{bad:?} (descriptions)");
         }
+        // right-to-left text itself (Arabic "server", Hebrew "server") is not touched, only the
+        // invisible direction controls are; written as escapes so the source reads in one direction
+        let rtl = "\u{062E}\u{0627}\u{062F}\u{0645} \u{05E9}\u{05E8}\u{05EA}";
+        assert_eq!(clean(rtl, 20, false), rtl);
+        assert_eq!(clean(rtl, 20, true), rtl);
         // joiners that emoji and some scripts need stay
         assert_eq!(
             clean("a\u{200D}b\u{200C}c", 10, false),
