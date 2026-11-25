@@ -229,6 +229,10 @@ export interface Api {
   getDataFolder(): Promise<DataFolderInfo>;
   /** Opens the folder picker; `null` when it was cancelled. */
   chooseDataFolder(): Promise<DataFolderInfo | null>;
+  /**
+   * Restarts the app like a close: with a connected session Rust asks first ("Restart fernjo?"),
+   * and the sync close push runs. Resolves at once, also when the user keeps the app open.
+   */
   restartApp(): Promise<void>;
   /**
    * Starts a session. Terminal output reaches `onEvent` as an `ArrayBuffer`, events as parsed

@@ -2271,13 +2271,14 @@ mod tests {
 
     /// Commands that need an `AppHandle` cannot be called without a running app, so they have
     /// no `table()` entry. Each is exempt for the stated reason: no secret type appears in
-    /// its signature (`choose_data_folder` returns `DataFolderInfo`, `restart_app` nothing).
+    /// its signature (`choose_data_folder` returns `DataFolderInfo`, `restart_app` nothing; it
+    /// takes the `Window`, which needs the running app just the same).
     const APP_HANDLE_EXEMPT: [(&str, &str); 6] = [
         (
             "choose_data_folder",
             "takes an AppHandle; returns only DataFolderInfo",
         ),
-        ("restart_app", "takes an AppHandle; returns nothing"),
+        ("restart_app", "takes the Window; returns nothing"),
         ("open_external_url", "takes an AppHandle; returns nothing"),
         (
             "import_pick",

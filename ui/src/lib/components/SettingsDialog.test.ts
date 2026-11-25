@@ -224,8 +224,10 @@ describe("SettingsDialog", () => {
   });
 
   test("restart_now_calls_restart_app", async () => {
+    const pending = deferred<void>();
     const { calls } = await setup({
       chooseDataFolder: async () => dataFolder({ path: "/new", restartRequired: true }),
+      restartApp: () => pending.promise,
     });
     button("Choose folder…").click();
     await settle();
@@ -235,6 +237,14 @@ describe("SettingsDialog", () => {
     // aria-disabled, not disabled: a focused button that becomes disabled drops focus to <body>
     expect(button("Restart now").getAttribute("aria-disabled")).toBe("true");
     expect((button("Restart now") as HTMLButtonElement).disabled).toBe(false);
+    // M11 review #65: with a connected session Rust asks first and the command returns; after
+    // "Keep open" the button works again
+    pending.resolve();
+    await settle();
+    expect(button("Restart now").getAttribute("aria-disabled")).toBe("false");
+    button("Restart now").click();
+    await settle();
+    expect(calls.restartApp).toHaveLength(2);
   });
 
   test("while_choosing_focus_stays_in_the_dialog_and_escape_still_closes", async () => {

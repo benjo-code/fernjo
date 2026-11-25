@@ -280,10 +280,13 @@
     restarting = true;
     error = null;
     try {
+      // Returns at once: with a connected session Rust asks "Restart fernjo?" first, and after
+      // "Keep open" the button must work again (the restart itself replaces the page).
       await api.restartApp();
     } catch (e) {
-      restarting = false;
       error = toApiError(e).message;
+    } finally {
+      restarting = false;
     }
   }
 

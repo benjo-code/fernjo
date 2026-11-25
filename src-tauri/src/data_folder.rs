@@ -273,7 +273,7 @@ pub fn apply_data_folder(state: &AppState, target: &Path) -> Result<DataFolderIn
 /// The `#[tauri::command]` wrappers registered in `run()`.
 pub mod handlers {
     use super::*;
-    use tauri::{AppHandle, State};
+    use tauri::{AppHandle, Manager, State};
     use tauri_plugin_dialog::DialogExt;
 
     #[tauri::command]
@@ -303,10 +303,22 @@ pub mod handlers {
         super::apply_data_folder(&state, &path).map(Some)
     }
 
-    /// Restarts the application. Never returns: the process is replaced.
+    /// Restarts the application the way a close ends it (M11 review #65): while a session is
+    /// connected it shows the "Restart fernjo?" confirmation first, and the restart waits for the
+    /// sync close push like a window close does. Returns at once; the process is replaced later.
     #[tauri::command]
-    pub fn restart_app(app: AppHandle) {
-        app.restart()
+    pub fn restart_app(window: tauri::Window) {
+        use crate::sessions::{CloseThen, ExitAction};
+        let state = window.state::<AppState>();
+        let prompt_open = state.close_prompt_open.load(Ordering::SeqCst);
+        match state.sessions.restart_action(prompt_open) {
+            ExitAction::Allow => crate::sync_runner::finish_after_push(window, CloseThen::Restart),
+            ExitAction::Prevent => {}
+            ExitAction::Ask => {
+                let connected = state.sessions.connected_count();
+                crate::ask_to_close(&window, connected, CloseThen::Restart);
+            }
+        }
     }
 }
 

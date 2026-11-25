@@ -1054,6 +1054,12 @@ impl SessionManager {
             .count()
     }
 
+    /// What a restart request (`restart_app`) does: like an exit without a code, it asks while a
+    /// session is connected and does nothing while the dialog is already open (M11 review #65).
+    pub(crate) fn restart_action(&self, prompt_open: bool) -> ExitAction {
+        exit_action(None, self.connected_count(), prompt_open)
+    }
+
     /// Number of sessions that exist (open, connecting, prompting or disconnected).
     #[cfg(test)]
     pub fn len(&self) -> usize {
@@ -1086,6 +1092,40 @@ pub(crate) fn exit_action(code: Option<i32>, connected: usize, prompt_open: bool
         ExitAction::Prevent
     } else {
         ExitAction::Ask
+    }
+}
+
+/// What follows the close confirmation (and the sync close push): the window goes, or the app
+/// restarts (`restart_app`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CloseThen {
+    Exit,
+    Restart,
+}
+
+/// The texts of the "sessions still connected" dialog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ClosePrompt {
+    pub title: &'static str,
+    pub message: String,
+    /// The confirming button; the other one is "Keep open".
+    pub confirm: &'static str,
+}
+
+pub(crate) fn close_prompt(connected: usize, then: CloseThen) -> ClosePrompt {
+    let noun = if connected == 1 {
+        "session is"
+    } else {
+        "sessions are"
+    };
+    let (title, verb, confirm) = match then {
+        CloseThen::Exit => ("Close fernjo?", "Closing", "Close"),
+        CloseThen::Restart => ("Restart fernjo?", "Restarting", "Restart"),
+    };
+    ClosePrompt {
+        title,
+        message: format!("{connected} {noun} still connected. {verb} fernjo ends them."),
+        confirm,
     }
 }
 

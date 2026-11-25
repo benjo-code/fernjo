@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::sessions::CloseThen;
 use crate::state::AppState;
 use crate::sync_commands::{build_status, run_background};
 
@@ -209,6 +210,13 @@ pub fn hold_close(state: &AppState) -> bool {
 /// the engine is built for that (an interrupted run is repaired by the next one). Without sync
 /// (or with a restart pending) the window is destroyed at once.
 pub fn destroy_after_push(window: tauri::Window) {
+    finish_after_push(window, CloseThen::Exit);
+}
+
+/// Like [`destroy_after_push`], but `then` says what follows the push: the window is destroyed,
+/// or the app restarts (`restart_app`, M11 review #65). A restart asked for while a close push is
+/// already under way is dropped: the app is closing anyway.
+pub fn finish_after_push(window: tauri::Window, then: CloseThen) {
     let app = window.app_handle().clone();
     let state = app.state::<AppState>();
     if state.sync_closing.load(Ordering::SeqCst) {
@@ -216,7 +224,7 @@ pub fn destroy_after_push(window: tauri::Window) {
         return;
     }
     if !ready(&state) {
-        let _ = window.destroy();
+        finish(&window, then);
         return;
     }
     state.sync_closing.store(true, Ordering::SeqCst);
@@ -238,11 +246,22 @@ pub fn destroy_after_push(window: tauri::Window) {
             if run.is_ok() {
                 let _ = rx.recv_timeout(CLOSE_BUDGET);
             }
-            let _ = window.destroy();
+            finish(&window, then);
         });
     if spawned.is_err() {
         // no thread: close at once rather than never
-        let _ = fallback.destroy();
+        finish(&fallback, then);
+    }
+}
+
+/// Ends the window, or restarts through the event loop (`request_restart`, safe from any thread;
+/// its `ExitRequested` carries an exit code, which the exit handler always lets through).
+fn finish(window: &tauri::Window, then: CloseThen) {
+    match then {
+        CloseThen::Exit => {
+            let _ = window.destroy();
+        }
+        CloseThen::Restart => window.app_handle().request_restart(),
     }
 }
 

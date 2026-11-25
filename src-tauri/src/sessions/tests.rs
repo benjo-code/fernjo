@@ -1435,6 +1435,52 @@ fn a_second_request_while_the_dialog_is_open_prevents_without_a_second_dialog() 
     assert_eq!(exit_action(None, 2, true), ExitAction::Prevent);
 }
 
+#[test]
+fn a_restart_asks_like_a_close_while_a_session_is_connected() {
+    // M11 review #65: `restart_app` replaced the process without the close confirmation
+    let manager = SessionManager::default();
+    assert_eq!(manager.restart_action(false), ExitAction::Allow);
+    for (id, phase) in [
+        ("connecting", Phase::Connecting),
+        ("vault", Phase::NeedsVault),
+        ("gone", Phase::Disconnected),
+    ] {
+        manager
+            .entries
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), entry_in(phase));
+    }
+    // nothing connected: nothing to lose, the restart goes ahead
+    assert_eq!(manager.restart_action(false), ExitAction::Allow);
+    manager
+        .entries
+        .lock()
+        .unwrap()
+        .insert("live".to_string(), entry_in(Phase::Connected));
+    assert_eq!(manager.restart_action(false), ExitAction::Ask);
+    // one dialog at a time, shared with the window close and Cmd+Q
+    assert_eq!(manager.restart_action(true), ExitAction::Prevent);
+}
+
+#[test]
+fn the_restart_dialog_says_restart_and_the_close_dialog_says_close() {
+    let close = close_prompt(1, CloseThen::Exit);
+    assert_eq!(close.title, "Close fernjo?");
+    assert_eq!(
+        close.message,
+        "1 session is still connected. Closing fernjo ends them."
+    );
+    assert_eq!(close.confirm, "Close");
+    let restart = close_prompt(2, CloseThen::Restart);
+    assert_eq!(restart.title, "Restart fernjo?");
+    assert_eq!(
+        restart.message,
+        "2 sessions are still connected. Restarting fernjo ends them."
+    );
+    assert_eq!(restart.confirm, "Restart");
+}
+
 // ---------- input queue cap ----------
 
 #[test]

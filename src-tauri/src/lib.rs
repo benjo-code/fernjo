@@ -101,7 +101,7 @@ pub fn run() {
                     return;
                 }
                 api.prevent_close();
-                ask_to_close(window, connected);
+                ask_to_close(window, connected, sessions::CloseThen::Exit);
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -189,7 +189,11 @@ pub fn run() {
                         // with no main window there is nothing to ask in: the exit goes ahead
                         if let Some(window) = app.get_webview_window("main") {
                             api.prevent_exit();
-                            ask_to_close(&window.as_ref().window(), connected);
+                            ask_to_close(
+                                &window.as_ref().window(),
+                                connected,
+                                sessions::CloseThen::Exit,
+                            );
                         }
                     }
                 }
@@ -197,30 +201,26 @@ pub fn run() {
         });
 }
 
-/// Asks whether to end `connected` sessions by closing fernjo; one dialog at a time
-/// (`close_prompt_open`). The dialog is non-blocking; on "Close" its callback ends the sessions
-/// and destroys the window (after a last sync push), which raises no `CloseRequested`; with no
-/// session left the following `ExitRequested` is allowed.
-fn ask_to_close(window: &tauri::Window, connected: usize) {
+/// Asks whether to end `connected` sessions by closing (or, for `restart_app`, restarting)
+/// fernjo; one dialog at a time (`close_prompt_open`, shared by the window close, Cmd+Q and the
+/// restart). The dialog is non-blocking; on "Close" or "Restart" its callback ends the sessions
+/// and, after a last sync push, destroys the window (which raises no `CloseRequested`; with no
+/// session left the following `ExitRequested` is allowed) or requests the restart (whose
+/// `ExitRequested` carries an exit code and is always allowed).
+pub(crate) fn ask_to_close(window: &tauri::Window, connected: usize, then: sessions::CloseThen) {
     let state = window.state::<AppState>();
     if state.close_prompt_open.swap(true, Ordering::SeqCst) {
         return;
     }
-    let noun = if connected == 1 {
-        "session is"
-    } else {
-        "sessions are"
-    };
+    let prompt = sessions::close_prompt(connected, then);
     let window = window.clone();
     window
         .dialog()
-        .message(format!(
-            "{connected} {noun} still connected. Closing fernjo ends them."
-        ))
-        .title("Close fernjo?")
+        .message(prompt.message)
+        .title(prompt.title)
         .kind(MessageDialogKind::Warning)
         .buttons(MessageDialogButtons::OkCancelCustom(
-            "Close".into(),
+            prompt.confirm.into(),
             "Keep open".into(),
         ))
         .show({
@@ -232,7 +232,7 @@ fn ask_to_close(window: &tauri::Window, connected: usize) {
                     .store(false, Ordering::SeqCst);
                 if confirmed {
                     window.state::<AppState>().sessions.close_all();
-                    sync_runner::destroy_after_push(window.clone());
+                    sync_runner::finish_after_push(window.clone(), then);
                 }
             }
         });
