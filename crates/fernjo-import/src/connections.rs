@@ -2,15 +2,15 @@
 //! time, without any credential reference (credentials are vault ids and mean nothing on
 //! another machine).
 //!
-//! The file is the `connections.json` document, so `fernjo_core::persist::parse_document`
+//! The file is the `connections.json` document, so `fernjo_core::persist::parse_document_bytes`
 //! migrates and validates it unchanged and there is no second version number. The export
 //! serialises a struct (not a `serde_json::Value`, which sorts keys) so the key order is
 //! `format`, `exportedAt`, `schemaVersion`, `children`.
 
-use fernjo_core::persist::{CURRENT_VERSION, parse_document};
+use fernjo_core::json;
+use fernjo_core::persist::{CURRENT_VERSION, parse_document_bytes};
 use fernjo_core::{DocumentError, Node, NodeId, NodeKind, Protocol, Settings, Tree};
 use serde::Serialize;
-use serde_json::Value;
 
 use crate::limits::{MAX_MESSAGE_CHARS, cut_chars, sanitize_nodes};
 use crate::mremoteng::file::{MAX_DEPTH, MAX_FILE_BYTES, MAX_HOST_CHARS, MAX_NODES};
@@ -143,7 +143,7 @@ fn rebuild(
 /// Reads an export file. `today` is `YYYY-MM-DD`; `taken_names` are the existing top-level names
 /// (for the ` (2)`, ` (3)` suffix of the new folder).
 ///
-/// The document goes through `parse_document`, so the core's migration and validation apply.
+/// The document goes through `parse_document_bytes`, so the core's migration and validation apply.
 /// The core refuses a port of 0 for the whole file and silently renews repeated ids; it reports
 /// nothing else about what it changed, so the report has no line for that. Ids are renewed here
 /// anyway.
@@ -158,8 +158,9 @@ pub fn plan(
         ));
     }
     let bytes = bytes.strip_prefix(UTF8_BOM).unwrap_or(bytes);
-    let value: Value = match serde_json::from_slice(bytes) {
-        Ok(v) => v,
+    // validated and `format` read without building a `serde_json::Value` (M11 review #28)
+    let format = match json::head(bytes, ["format"]) {
+        Ok([format]) => format,
         // serde_json refuses to nest deeper than 128 levels instead of overflowing the stack
         Err(e) if e.to_string().starts_with("recursion limit exceeded") => {
             return Err(ConnectionsError::Invalid(
@@ -168,10 +169,10 @@ pub fn plan(
         }
         Err(_) => return Err(ConnectionsError::NotThisFormat),
     };
-    if value.get("format").and_then(Value::as_str) != Some(FORMAT) {
+    if format.as_str() != Some(FORMAT) {
         return Err(ConnectionsError::NotThisFormat);
     }
-    let tree = parse_document(value).map_err(|e| match e {
+    let tree = parse_document_bytes(bytes).map_err(|e| match e {
         DocumentError::NewerSchema { found, supported } => {
             ConnectionsError::NewerSchema { found, supported }
         }

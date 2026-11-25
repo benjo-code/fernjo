@@ -14,7 +14,6 @@ use std::path::Path;
 use fernjo_core::{NodeId, Protocol, QuickTarget};
 use fernjo_fs::{FileMode, Parent, WriteOptions};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::commands::{CommandError, with_store};
 use crate::connect_plan::Target;
@@ -77,12 +76,12 @@ fn read(device_dir: &Path) -> Option<OpenTabsFile> {
     let path = device_dir.join(FILE_NAME);
     // an oversized or unreadable file reads as empty
     let bytes = fernjo_fs::read_capped(&path, MAX_FILE_LEN).ok()?;
-    let value: Value = serde_json::from_slice(&bytes).ok()?;
-    let schema = value.get("schema")?.as_u64()?;
-    if schema != u64::from(CURRENT_SCHEMA) {
+    // validated and `schema` read without building a `serde_json::Value` (M11 review #28)
+    let [schema] = fernjo_core::json::head(&bytes, ["schema"]).ok()?;
+    if schema.as_u64()? != u64::from(CURRENT_SCHEMA) {
         return None;
     }
-    serde_json::from_value(value).ok()
+    serde_json::from_slice(&bytes).ok()
 }
 
 /// Writes the file atomically through `fernjo-fs`: a random-named temp file (`create_new`, so a
@@ -331,7 +330,7 @@ mod tests {
     use super::*;
     use crate::commands;
     use fernjo_core::{AppSettings, DataDirSource, NodePatch, settings};
-    use serde_json::json;
+    use serde_json::{Value, json};
     use std::path::PathBuf;
 
     fn quick(host: &str) -> QuickTarget {

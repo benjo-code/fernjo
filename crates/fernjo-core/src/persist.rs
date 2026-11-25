@@ -12,6 +12,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::error::{DocumentError, LoadError, SaveError};
+use crate::json;
 use crate::model::{Node, NodeId, NodeKind, RDP_COLOR_DEPTHS, Settings, is_valid_domain};
 use crate::tree::Tree;
 
@@ -55,7 +56,9 @@ struct FileOut<'a> {
     children: &'a [Node],
 }
 
-#[derive(Deserialize)]
+/// What a `connections.json` document is read into. Only `children` is read; `schemaVersion` is
+/// read before by `json::head`, unknown keys are skipped without being kept.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct FileIn {
     children: Vec<Node>,
 }
@@ -145,18 +148,21 @@ pub(crate) fn move_aside(path: &Path) -> io::Result<PathBuf> {
 
 /// Upgrades a parsed file from version `from` using `steps` (step `i` upgrades
 /// version `i + 1` to `i + 2`).
-pub fn migrate_with(value: Value, from: u32, steps: &[fn(Value) -> Value]) -> Value {
+pub fn migrate_with<T>(value: T, from: u32, steps: &[fn(T) -> T]) -> T {
     let skip = from.saturating_sub(1) as usize;
     steps.iter().skip(skip).fold(value, |v, step| step(v))
 }
 
-/// Upgrade steps; step `i` upgrades version `i + 1` to `i + 2`.
-const MIGRATIONS: [fn(Value) -> Value; 2] = [one_to_two, two_to_three];
+/// Upgrade steps; step `i` upgrades version `i + 1` to `i + 2`. They run on the typed document:
+/// every schema so far only added optional fields, which the typed read fills with their defaults
+/// for an older file. A future step that has to rewrite data reads the old shape into its own
+/// typed struct; it must not go back to a `serde_json::Value` (M11 review #28, `crate::json`).
+const MIGRATIONS: [fn(FileIn) -> FileIn; 2] = [one_to_two, two_to_three];
 
 /// 1 -> 2: schema 2 adds the optional `credential` setting, so nothing is rewritten. The
 /// version still has to change: an older build would silently drop `credential` on its next
 /// save, so it must refuse the file as a newer schema instead.
-fn one_to_two(value: Value) -> Value {
+fn one_to_two(value: FileIn) -> FileIn {
     value
 }
 
@@ -164,11 +170,11 @@ fn one_to_two(value: Value) -> Value {
 /// `rdpColorDepth`, `rdpClipboard`), so nothing is rewritten. The version still has to change: an
 /// older build would silently drop them on its next save, so it must refuse the file as a newer
 /// schema instead.
-fn two_to_three(value: Value) -> Value {
+fn two_to_three(value: FileIn) -> FileIn {
     value
 }
 
-fn migrate(value: Value, from: u32) -> Value {
+fn migrate(value: FileIn, from: u32) -> FileIn {
     migrate_with(value, from, &MIGRATIONS)
 }
 
@@ -201,11 +207,7 @@ fn read_file(path: &Path) -> Result<Read, LoadError> {
     };
     // editors on Windows may add a UTF-8 byte order mark; that is not corruption
     let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
-    let value: Value = match serde_json::from_slice(bytes) {
-        Ok(v) => v,
-        Err(e) => return Ok(Read::Bad(e.to_string())),
-    };
-    match parse_document(value) {
+    match parse_document_bytes(bytes) {
         Ok(tree) => Ok(Read::Parsed(tree)),
         Err(DocumentError::NewerSchema { found, supported }) => Err(LoadError::NewerSchema {
             found,
@@ -216,10 +218,14 @@ fn read_file(path: &Path) -> Result<Read, LoadError> {
     }
 }
 
-/// Turns a parsed `connections.json` document into a tree: checks `schemaVersion`, migrates
-/// older versions and runs `sanitize`. Shared by loading a file and by importing a document.
-pub fn parse_document(value: Value) -> Result<Tree, DocumentError> {
-    let Some(version) = value.get("schemaVersion").and_then(Value::as_u64) else {
+/// Turns the bytes of a `connections.json` document into a tree: checks that it is JSON and its
+/// `schemaVersion`, migrates older versions and runs `sanitize`. Shared by loading a file and by
+/// importing a document. The document is never built as a `serde_json::Value` (`crate::json`):
+/// the first pass validates it and reads `schemaVersion`, the second reads it into `FileIn`.
+pub fn parse_document_bytes(bytes: &[u8]) -> Result<Tree, DocumentError> {
+    let [version] =
+        json::head(bytes, ["schemaVersion"]).map_err(|e| DocumentError::Invalid(e.to_string()))?;
+    let Some(version) = version.as_u64() else {
         return Err(DocumentError::Invalid(
             "missing or invalid schemaVersion".to_string(),
         ));
@@ -236,10 +242,19 @@ pub fn parse_document(value: Value) -> Result<Tree, DocumentError> {
             "invalid schemaVersion 0".to_string(),
         ));
     }
-    let mut file: FileIn = serde_json::from_value(migrate(value, version))
-        .map_err(|e| DocumentError::Invalid(e.to_string()))?;
+    let file: FileIn =
+        serde_json::from_slice(bytes).map_err(|e| DocumentError::Invalid(e.to_string()))?;
+    let mut file = migrate(file, version);
     sanitize(&mut file.children, &mut HashSet::new()).map_err(DocumentError::Invalid)?;
     Ok(Tree::from_children(file.children))
+}
+
+/// [`parse_document_bytes`] for a document that is already in memory as a `serde_json::Value`
+/// (tests, a document fernjo built itself). A file or anything from another device goes through
+/// [`parse_document_bytes`], never through a `Value`.
+pub fn parse_document(value: Value) -> Result<Tree, DocumentError> {
+    let bytes = serde_json::to_vec(&value).expect("a Value always serialises");
+    parse_document_bytes(&bytes)
 }
 
 /// Writes `bytes` to `path` exactly as given (no trailing newline, no `.bak`): random temp
@@ -801,15 +816,16 @@ mod tests {
     #[test]
     fn migration_chain_has_a_one_to_two_and_a_two_to_three_step() {
         assert_eq!(MIGRATIONS.len(), CURRENT_VERSION as usize - 1);
-        let v1 = json!({ "schemaVersion": 1, "children": [{ "name": "a" }] });
+        // the steps run on the typed document (M11 review #28: no `Value` on the load path)
+        let file = FileIn {
+            children: sample_tree("a").children().to_vec(),
+        };
         // the 1 -> 2 step only exists to make older builds refuse the file: nothing is rewritten
-        assert_eq!(migrate_with(v1.clone(), 1, &MIGRATIONS), v1);
-        let v2 = json!({ "schemaVersion": 2, "children": [] });
-        assert_eq!(migrate_with(v2.clone(), 2, &MIGRATIONS), v2);
+        assert_eq!(migrate_with(file.clone(), 1, &MIGRATIONS), file);
+        assert_eq!(migrate_with(file.clone(), 2, &MIGRATIONS), file);
         // the 2 -> 3 step only exists so that v0.1.1 refuses the file instead of dropping the
         // RDP settings on its next save
-        let v3 = json!({ "schemaVersion": 3, "children": [] });
-        assert_eq!(migrate_with(v3.clone(), 3, &MIGRATIONS), v3);
+        assert_eq!(migrate_with(file.clone(), 3, &MIGRATIONS), file);
     }
 
     #[test]

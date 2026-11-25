@@ -4,13 +4,15 @@
 //! folder is). Same rules as `connections.json`: atomic write with `.bak`, missing means
 //! defaults, a newer schema is refused and never overwritten.
 
+use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use serde::de::{self, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
 
 use crate::error::{LoadError, SaveError};
+use crate::json;
 use crate::persist::{move_aside, read_capped, with_suffix, write_atomic};
 
 /// Name of the settings file inside the config folder.
@@ -69,10 +71,59 @@ pub enum Theme {
 }
 
 /// Reads the theme, mapping an unknown string or a wrong JSON type to `None` so a hand-edited
-/// or newer value never makes the whole file unusable.
+/// or newer value never makes the whole file unusable. A value that is not a string is skipped
+/// without being kept (M11 review #28).
 fn lenient_theme<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Theme>, D::Error> {
-    let value = Value::deserialize(d)?;
-    Ok(serde_json::from_value::<Theme>(value).ok())
+    d.deserialize_any(LenientTheme)
+}
+
+struct LenientTheme;
+
+impl<'de> Visitor<'de> for LenientTheme {
+    type Value = Option<Theme>;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("any JSON value")
+    }
+
+    fn visit_str<E: de::Error>(self, v: &str) -> Result<Option<Theme>, E> {
+        Ok(match v {
+            "system" => Some(Theme::System),
+            "light" => Some(Theme::Light),
+            "dark" => Some(Theme::Dark),
+            _ => None,
+        })
+    }
+
+    fn visit_bool<E: de::Error>(self, _: bool) -> Result<Option<Theme>, E> {
+        Ok(None)
+    }
+
+    fn visit_i64<E: de::Error>(self, _: i64) -> Result<Option<Theme>, E> {
+        Ok(None)
+    }
+
+    fn visit_u64<E: de::Error>(self, _: u64) -> Result<Option<Theme>, E> {
+        Ok(None)
+    }
+
+    fn visit_f64<E: de::Error>(self, _: f64) -> Result<Option<Theme>, E> {
+        Ok(None)
+    }
+
+    fn visit_unit<E: de::Error>(self) -> Result<Option<Theme>, E> {
+        Ok(None)
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Option<Theme>, A::Error> {
+        while seq.next_element::<IgnoredAny>()?.is_some() {}
+        Ok(None)
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Option<Theme>, A::Error> {
+        while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+        Ok(None)
+    }
 }
 
 /// Default terminal font size in pixels.
@@ -149,11 +200,12 @@ fn read_file(path: &Path) -> Result<Read, LoadError> {
         }
     };
     let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
-    let value: Value = match serde_json::from_slice(bytes) {
-        Ok(v) => v,
+    // validated and `schemaVersion` read without building a `serde_json::Value` (`crate::json`)
+    let version = match json::head(bytes, ["schemaVersion"]) {
+        Ok([version]) => version,
         Err(e) => return Ok(Read::Bad(e.to_string())),
     };
-    let Some(version) = value.get("schemaVersion").and_then(Value::as_u64) else {
+    let Some(version) = version.as_u64() else {
         return Ok(Read::Bad("missing or invalid schemaVersion".to_string()));
     };
     let version = u32::try_from(version).unwrap_or(u32::MAX);
@@ -167,7 +219,7 @@ fn read_file(path: &Path) -> Result<Read, LoadError> {
     if version == 0 {
         return Ok(Read::Bad("invalid schemaVersion 0".to_string()));
     }
-    match serde_json::from_value::<AppSettings>(value) {
+    match serde_json::from_slice::<AppSettings>(bytes) {
         Ok(settings) => Ok(Read::Parsed(settings)),
         Err(e) => Ok(Read::Bad(e.to_string())),
     }
