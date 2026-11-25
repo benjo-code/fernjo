@@ -10,6 +10,10 @@ name: Release
 # (`gh workflow run release.yml --ref vX.Y.Z`, builds again) while the release is still a draft;
 # run on a branch it only builds. A pull request that touches the packaging inputs runs the
 # same builds as a dry run: artifacts only, nothing is published.
+# The hub image (ghcr.io/benjo-code/fernjo-hub) is built for amd64 and arm64 in the same runs: the
+# dry run builds and smoke-tests it, only a tag push pushes it (job hub-image). Paths filter the
+# whole workflow, so a pull request that touches only the hub image inputs also runs the
+# installer builds.
 on:
   push:
     tags:
@@ -24,6 +28,9 @@ on:
       - tools/**
       - about.toml
       - src-tauri/resources/**
+      - crates/fernjo-hub/Containerfile
+      - crates/fernjo-hub/deploy/**
+      - .dockerignore
 
 # Untrusted values (the tag, release text, inputs) reach scripts only through env:. Jobs get
 # read access by default; only the publish job below raises it.
@@ -220,9 +227,184 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # The hub image (M12). The two build jobs run the same steps natively (no emulation) and only
+  # read the repository; the image they test is the image `hub-image` pushes, as an OCI archive
+  # that travels between the jobs. On a pull request the build jobs are the dry run: image built
+  # and smoke-tested, nothing pushed. The jobs use Podman (preinstalled on the runners), the
+  # owner's own tool; if the smoke test cannot run rootless there, switch every `podman` of the
+  # three steps to `sudo podman` rather than weaken the test.
+  hub-image-build:
+    name: hub image (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            os: ubuntu-latest
+          - arch: arm64
+            os: ubuntu-24.04-arm
+    steps:
+      # Empty on a pull request, which then builds the merge commit.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG && format('refs/tags/{0}', env.RELEASE_TAG) || '' }}
+          persist-credentials: false
+
+      # Also checks the image tag pinned in the Compose file and the Quadlet unit.
+      - name: Check that the tag matches the app version
+        if: env.RELEASE_TAG != ''
+        env:
+          TAG: ${{ env.RELEASE_TAG }}
+        run: bash tools/check-release-version.sh "$TAG"
+
+      - name: Build the image
+        run: |
+          version=dev
+          if [ -n "$RELEASE_TAG" ]; then version="${RELEASE_TAG#v}"; fi
+          podman build --build-arg VERSION="$version" --build-arg REVISION="$GITHUB_SHA" -f crates/fernjo-hub/Containerfile -t localhost/fernjo-hub:test .
+
+      # init, serve, /v1/info, stop: a failing smoke test stops the run before anything is pushed.
+      - name: Smoke-test the image
+        env:
+          ENGINE: podman
+        run: bash tools/smoke-hub-image.sh localhost/fernjo-hub:test
+
+      - name: Save the image as an OCI archive
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: podman save --format oci-archive -o "hub-${ARCH}.oci.tar" localhost/fernjo-hub:test
+
+      # A pull request from a fork still builds (the dry run), but its archive is not offered for
+      # download from this repository's run page, like the installers.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        with:
+          name: hub-image-${{ matrix.arch }}
+          path: hub-${{ matrix.arch }}.oci.tar
+          if-no-files-found: error
+          retention-days: 7
+
+  # The only job that may write packages. It pushes the archives the build jobs tested as one
+  # manifest list under X.Y.Z, X.Y and latest (the image is public-readable only after the owner
+  # changes the package's visibility once, see Docs/hub.md). A failed run is repeated with "Re-run
+  # failed jobs": pushing the same list again gives the same digest on every tag.
+  hub-image:
+    name: hub image (push)
+    needs: hub-image-build
+    if: github.event_name != 'pull_request' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ format('refs/tags/{0}', env.RELEASE_TAG) }}
+          persist-credentials: false
+
+      # One folder per artifact (no merge): hub-archives/hub-image-<arch>/hub-<arch>.oci.tar
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: hub-image-*
+          path: hub-archives
+
+      # The auth file sits where Podman, skopeo and the attestation step all look for it. The
+      # first push creates the package and links it to this repository (the `source` label).
+      - name: Log in to GHCR
+        env:
+          REGISTRY_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$HOME/.docker"
+          printf '%s' "$REGISTRY_TOKEN" | podman login ghcr.io --authfile "$HOME/.docker/config.json" -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Push the manifest list
+        env:
+          TAG: ${{ env.RELEASE_TAG }}
+          IMAGE: ghcr.io/benjo-code/fernjo-hub
+        run: |
+          export REGISTRY_AUTH_FILE="$HOME/.docker/config.json"
+          refs="$(bash tools/hub-image-tags.sh "$TAG" "$IMAGE")"
+          list=localhost/fernjo-hub-list
+          podman manifest create "$list"
+          # GHCR links a new package to the repository through the source annotation of the index (the
+          # labels sit in the per-architecture images). Podman before 5 has no `--index`; then the
+          # owner connects the package by hand (Docs/hub.md, "Make the package public").
+          if ! podman manifest annotate --index --annotation org.opencontainers.image.source=https://github.com/benjo-code/fernjo "$list"; then
+            echo "::warning::could not annotate the index with its source; connect the package to the repository by hand"
+          fi
+          podman manifest add "$list" oci-archive:hub-archives/hub-image-amd64/hub-amd64.oci.tar
+          podman manifest add "$list" oci-archive:hub-archives/hub-image-arm64/hub-arm64.oci.tar
+          : > digests.txt
+          while read -r ref; do
+            podman manifest push --all --digestfile digest.tmp "$list" "docker://$ref" < /dev/null
+            echo "$ref $(cat digest.tmp)" | tee -a digests.txt
+          done <<< "$refs"
+
+      - name: Check that every tag has the same digest
+        id: digest
+        run: |
+          export REGISTRY_AUTH_FILE="$HOME/.docker/config.json"
+          if [ "$(wc -l < digests.txt)" -ne 3 ]; then
+            echo "::error::expected three pushed tags"
+            cat digests.txt
+            exit 1
+          fi
+          digest="$(cut -d ' ' -f 2 digests.txt | sort -u)"
+          if [ "$(printf '%s\n' "$digest" | wc -l)" -ne 1 ] || ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::the tags do not share one digest"
+            cat digests.txt
+            exit 1
+          fi
+          # What Podman reported is not enough: ask the registry what each tag holds now.
+          while read -r ref _; do
+            actual="$(skopeo inspect --format '{{.Digest}}' "docker://$ref" < /dev/null)"
+            if [ "$actual" != "$digest" ]; then
+              echo "::error::$ref holds $actual in the registry, expected $digest"
+              exit 1
+            fi
+          done < digests.txt
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Verify both architectures
+        env:
+          TAG: ${{ env.RELEASE_TAG }}
+          IMAGE: ghcr.io/benjo-code/fernjo-hub
+        run: |
+          export REGISTRY_AUTH_FILE="$HOME/.docker/config.json"
+          ref="$(bash tools/hub-image-tags.sh "$TAG" "$IMAGE" | head -n 1)"
+          manifest="$(skopeo inspect --raw "docker://$ref")"
+          for arch in amd64 arm64; do
+            if ! printf '%s\n' "$manifest" | grep -Eq "\"architecture\": ?\"$arch\""; then
+              echo "::error::$ref has no $arch image"
+              printf '%s\n' "$manifest"
+              exit 1
+            fi
+          done
+          echo "$ref holds amd64 and arm64"
+
+      # Build provenance for the image: ties the digest to this workflow and the tag. Check it with
+      # `gh attestation verify oci://ghcr.io/benjo-code/fernjo-hub:<version> --repo benjo-code/fernjo
+      # --signer-workflow benjo-code/fernjo/.github/workflows/release.yml --source-ref refs/tags/v<version>`.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/benjo-code/fernjo-hub
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          push-to-registry: true
+
   publish:
     name: publish
-    needs: build
+    # The release is immutable once published and its deploy files pin the hub image, so it is not
+    # published while the image is missing: a failed push leaves a draft to repeat.
+    needs:
+      - build
+      - hub-image
     if: github.event_name != 'pull_request' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 45

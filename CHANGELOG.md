@@ -6,6 +6,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 
 ## [Unreleased]
 
+### Added
+
+- The sync hub now comes as a ready-made image, `ghcr.io/benjo-code/fernjo-hub`, for amd64 and arm64 (milestone 12). A Compose file and an updated Quadlet unit run it, so the hub no longer has to be built from source. The app itself is unchanged.
+
 ## [0.3.0] - 2026-11-25
 
 Multi-device sync (M9), daily-use features (M10) and the security hardening of both (M11).

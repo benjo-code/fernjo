@@ -1,0 +1,34 @@
+# fernjo sync hub from the published image (see Docs/hub.md).
+#
+# One-time setup: create the hub's config and print its secret (shown once, store it safely):
+#   docker compose -f compose.yaml run --rm hub init --data /data
+# Start, check and stop:
+#   docker compose -f compose.yaml up -d
+#   docker compose -f compose.yaml down        # the data volume is kept
+#
+# Rootless Podman needs one more file (the image's user 10001 must map onto the volume's owner):
+#   podman compose -f compose.yaml -f compose.podman.yaml run --rm hub init --data /data
+#   podman compose -f compose.yaml -f compose.podman.yaml up -d
+# That mapping is not in this file: Docker rejects `userns_mode: keep-id:...`.
+#
+# `compose run` does not publish the service's ports, so the one-time `init` never clashes with a
+# running hub. The hub speaks plain HTTP on 127.0.0.1 only; put a TLS reverse proxy in front of it
+# (Docs/hub.md, Caddyfile.example). The tag below is bumped together with every release.
+name: fernjo-hub
+
+services:
+  hub:
+    image: ghcr.io/benjo-code/fernjo-hub:0.3.1
+    user: "10001:10001"
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - "hub-data:/data"
+
+volumes:
+  hub-data: {}
