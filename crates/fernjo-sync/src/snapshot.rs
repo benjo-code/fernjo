@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::envelope::GroupId;
-use crate::error::SyncError;
+use crate::error::{SyncError, snapshot_invalid};
 
 /// The snapshot format version this build writes and understands.
 pub const SNAPSHOT_FORMAT_VERSION: u32 = 1;
@@ -60,8 +60,8 @@ struct WireIn {
     vault: Option<String>,
 }
 
-fn invalid(reason: impl ToString) -> SyncError {
-    SyncError::SnapshotInvalid(reason.to_string())
+fn invalid(reason: impl std::fmt::Display) -> SyncError {
+    snapshot_invalid(reason)
 }
 
 impl Snapshot {
@@ -239,5 +239,24 @@ mod tests {
         value["vault"] = serde_json::json!("!!!");
         let err = Snapshot::from_plaintext(&serde_json::to_vec(&value).unwrap()).unwrap_err();
         assert_eq!(err.code(), "snapshot_invalid");
+    }
+    #[test]
+    fn peer_text_in_a_snapshot_invalid_message_is_cut() {
+        let big = "x".repeat(1024 * 1024);
+        let tree = Tree::from_children(vec![connection("c")]);
+        let mut bad_protocol = as_value(&snapshot(tree.clone(), None));
+        bad_protocol["connections"]["children"][0]["protocol"] = serde_json::json!(big);
+        let mut bad_port = as_value(&snapshot(tree, None));
+        bad_port["connections"]["children"][0]["name"] = serde_json::json!(big);
+        bad_port["connections"]["children"][0]["settings"]["port"] = serde_json::json!(0);
+        let mut bad_type = as_value(&snapshot(Tree::new(), None));
+        bad_type["seq"] = serde_json::json!(big);
+        for value in [bad_protocol, bad_port, bad_type] {
+            let err = Snapshot::from_plaintext(&serde_json::to_vec(&value).unwrap()).unwrap_err();
+            assert_eq!(err.code(), "snapshot_invalid");
+            let message = err.to_string();
+            assert!(message.len() < 1024, "{} bytes", message.len());
+            assert!(format!("{err:?}").len() < 1024);
+        }
     }
 }

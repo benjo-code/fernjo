@@ -155,3 +155,35 @@ impl fmt::Display for SyncError {
 }
 
 impl std::error::Error for SyncError {}
+
+/// The most characters of a reason `SnapshotInvalid` keeps. A reason can quote peer content
+/// (serde quotes the offending value, a node name names the node), and the message reaches the
+/// webview with every `sync-status`.
+pub(crate) const MAX_REASON_CHARS: usize = 200;
+
+/// `SnapshotInvalid` with `reason` cut to [`MAX_REASON_CHARS`] characters (an ellipsis marks the
+/// cut).
+pub(crate) fn snapshot_invalid(reason: impl fmt::Display) -> SyncError {
+    let reason = reason.to_string();
+    let mut chars = reason.char_indices();
+    match chars.nth(MAX_REASON_CHARS) {
+        Some((cut, _)) => SyncError::SnapshotInvalid(format!("{}…", &reason[..cut])),
+        None => SyncError::SnapshotInvalid(reason),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_snapshot_invalid_reason_is_cut_at_200_characters() {
+        let short = "ä".repeat(MAX_REASON_CHARS);
+        assert_eq!(snapshot_invalid(&short), SyncError::SnapshotInvalid(short));
+        let long = format!("{}tail", "ä".repeat(MAX_REASON_CHARS));
+        assert_eq!(
+            snapshot_invalid(long),
+            SyncError::SnapshotInvalid(format!("{}…", "ä".repeat(MAX_REASON_CHARS)))
+        );
+    }
+}
