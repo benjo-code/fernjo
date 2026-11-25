@@ -461,6 +461,31 @@ async fn an_unwritable_known_hosts_fails_when_the_trust_is_applied() {
     );
 }
 
+/// N1 of the final M11 review: `known_hosts` lost the line of a key this device confirmed and
+/// cannot be written (read-only data folder, full disk). The write-back is best effort, so the
+/// connect goes on without a prompt, while a user's "Trust always" in the same spot still fails
+/// (`an_unwritable_known_hosts_fails_when_the_trust_is_applied`).
+#[tokio::test]
+async fn a_confirmed_key_connects_when_known_hosts_cannot_be_written_back() {
+    let f = fixture();
+    let Some(path) = unwritable_known_hosts(f.dir.path()) else {
+        return; // running as root: a read-only folder does not stop the write
+    };
+    add(&f.confirmed, &key(ED_A));
+    let confirmed_before = std::fs::read(&f.confirmed).unwrap();
+    let (h, script) = handler(
+        &path,
+        Some(KnownHosts::new(&f.confirmed)),
+        Script::default(),
+    );
+    assert!(h.decide(&key(ED_A)).await);
+    assert_eq!(script.prompts(), (0, 0, 0));
+    assert!(rejection(&h).is_none());
+    h.apply_pending_trust().await.unwrap();
+    assert!(!path.exists(), "the write-back failed");
+    assert_eq!(std::fs::read(&f.confirmed).unwrap(), confirmed_before);
+}
+
 #[tokio::test]
 async fn an_in_memory_confirmed_layer_asks_once_per_process() {
     let f = fixture();

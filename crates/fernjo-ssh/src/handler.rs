@@ -33,6 +33,10 @@ pub(crate) enum TrustAction {
     Replace(PublicKey),
     /// The key is already in `known_hosts`; only this device confirms it.
     Confirm(PublicKey),
+    /// `known_hosts` lost the line of a key this device already confirmed: write it back, best
+    /// effort. A failed write is ignored (read-only data folder, full disk), because this device's
+    /// own record already vouches for exactly this key.
+    Restore(PublicKey),
 }
 
 pub(crate) struct ClientHandler<I: Interaction> {
@@ -140,8 +144,9 @@ impl<I: Interaction> ClientHandler<I> {
                 let confirmed = self.confirmed_keys().await;
                 if confirmed.contains(key) {
                     // this device confirmed exactly this key: `known_hosts` only lost its line
-                    // (sync, a hand edit), so it is written back after the handshake, silently
-                    return self.park(TrustAction::Add(key.clone()));
+                    // (sync, a hand edit), so it is written back after the handshake, silently and
+                    // best effort
+                    return self.park(TrustAction::Restore(key.clone()));
                 }
                 if !confirmed.is_empty() {
                     let old = confirmed.iter().map(fingerprint).collect();
@@ -246,8 +251,9 @@ impl<I: Interaction> ClientHandler<I> {
 
     /// Writes the parked decision. Called by `Session::connect` after the handshake succeeded;
     /// a failed handshake never calls it, so a peer that merely offered a key cannot get it
-    /// recorded. A failed write of `known_hosts` is
-    /// an error (the connect stops); the device-confirmed file is best effort.
+    /// recorded. A failed write of `known_hosts` after a user's decision (`Add`, `Replace`) is an
+    /// error (the connect stops); the write-back of `Restore` and the device-confirmed file are
+    /// best effort.
     pub(crate) async fn apply_pending_trust(&self) -> Result<(), SshError> {
         let action = self.pending_trust.lock().ok().and_then(|mut s| s.take());
         match action {
@@ -264,6 +270,12 @@ impl<I: Interaction> ClientHandler<I> {
             }
             Some(TrustAction::Confirm(key)) => {
                 self.confirm(&key).await;
+                Ok(())
+            }
+            Some(TrustAction::Restore(key)) => {
+                // the key is in the confirmed file already: nothing to confirm, and a failed
+                // write-back only means the next connect restores it again
+                let _ = self.write_known(key, false).await;
                 Ok(())
             }
         }
