@@ -370,6 +370,17 @@ publish_keeps_artifacts_apart() {
   ! grep -q "merge-multiple:" "$release_yml" && grep -Fq 'verify-installers.sh "${TAG#v}" --artifacts artifacts installers' "$release_yml"
 }
 assert_true release_publish_keeps_each_artifact_in_its_own_folder publish_keeps_artifacts_apart
+# Immutable releases (M11 review #71): the tag push starts the run, never a published release (which
+# takes no new files), and publish checks for a draft first, attaches, then publishes last.
+publish_goes_through_a_draft() {
+  local steps
+  steps="$(grep -E '^ *- name: (Check that the release is a draft|Attach the installers to the draft|Publish the release)$' "$release_yml" | sed 's/^ *- name: //')"
+  ! grep -Eq '^  release:' "$release_yml" &&
+    grep -Fq "startsWith(github.ref, 'refs/tags/v')" "$release_yml" &&
+    [ "$steps" = "$(printf '%s\n' 'Check that the release is a draft' 'Attach the installers to the draft' 'Publish the release')" ] &&
+    [ "$(grep -E '^ *- name: ' "$release_yml" | tail -n 1 | sed 's/^ *- name: //')" = 'Publish the release' ]
+}
+assert_true release_publish_attaches_to_a_draft_then_publishes publish_goes_through_a_draft
 
 # --- third-party-notices.mjs (pure checks through --fixture; the full run needs cargo-about) ---
 notices="$root/tools/third-party-notices.mjs"
