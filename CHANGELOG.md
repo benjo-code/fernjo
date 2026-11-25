@@ -33,7 +33,7 @@ Daily-use features: milestone M10.
 
 ### Changed
 
-- RDP (M11): fernjo now requires Network Level Authentication (NLA). A server that offers only TLS or standard RDP security is refused with "the server does not offer Network Level Authentication (NLA)" before any certificate question or password prompt, and fernjo sends it nothing further, so the password never reaches such a server (or a machine in the path pretending to be one) in plain form. Hosts with NLA switched off no longer connect; switch NLA on at the host.
+- RDP (M11): fernjo now requires Network Level Authentication (NLA): the password is only ever sent inside NLA (CredSSP). A server that does not offer CredSSP (security layer set to "RDP" or "SSL" only, some xrdp setups, very old hosts) is refused with "the server does not offer Network Level Authentication (NLA)" before any certificate question or password prompt, and fernjo sends it nothing further, so such a server (or a machine in the path pretending to be one) never receives the password. A Windows host where NLA is merely not required still connects over CredSSP.
 
 ### Fixed
 

@@ -272,7 +272,7 @@ fn a_server_without_nla_has_its_own_failure_text() {
     assert_eq!(
         RdpError::NlaRequired.to_string(),
         "the server does not offer Network Level Authentication (NLA); fernjo only connects to \
-         RDP servers with NLA, so the password never goes to the server in plain form"
+         RDP servers with NLA, so the password is only ever sent inside NLA (CredSSP)"
     );
 }
 

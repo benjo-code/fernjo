@@ -14,7 +14,7 @@ pub enum RdpError {
     #[error("the secure connection to the server failed")]
     TlsFailed,
     #[error(
-        "the server does not offer Network Level Authentication (NLA); fernjo only connects to RDP servers with NLA, so the password never goes to the server in plain form"
+        "the server does not offer Network Level Authentication (NLA); fernjo only connects to RDP servers with NLA, so the password is only ever sent inside NLA (CredSSP)"
     )]
     NlaRequired,
     #[error("the server certificate is not supported")]

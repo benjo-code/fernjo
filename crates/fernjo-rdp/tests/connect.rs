@@ -10,6 +10,7 @@
 mod support;
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use fernjo_rdp::{
@@ -335,6 +336,8 @@ async fn assert_refused_without_nla(behaviour: Behaviour) {
         server.after_confirm().await.is_empty(),
         "the client sent something after the confirm"
     );
+    // no second attempt (with TLS, say) on another connection
+    assert_eq!(server.connections.load(Ordering::SeqCst), 1);
     assert_eq!(
         certs
             .check("127.0.0.1", server.addr.port(), &server.fingerprint)
@@ -362,6 +365,17 @@ async fn a_tls_only_server_is_refused_with_nla_required_before_tls_and_any_promp
 #[tokio::test]
 async fn a_server_selecting_standard_rdp_security_is_refused_with_nla_required() {
     assert_refused_without_nla(Behaviour::Selects(SecurityProtocol::empty())).await;
+}
+
+#[tokio::test]
+async fn any_other_selection_without_credssp_is_refused_with_nla_required() {
+    // RDSTLS sends the password inside TLS like TLS-only; an unknown bit next to SSL is no CredSSP
+    // either. fernjo refuses them itself instead of relying on IronRDP's generic check.
+    assert_refused_without_nla(Behaviour::Selects(SecurityProtocol::RDSTLS)).await;
+    assert_refused_without_nla(Behaviour::Selects(
+        SecurityProtocol::SSL | SecurityProtocol::from_bits_retain(0x0000_0100),
+    ))
+    .await;
 }
 
 #[tokio::test]

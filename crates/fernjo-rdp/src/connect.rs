@@ -20,7 +20,7 @@ use ironrdp_pdu::rdp::capability_sets::{
 };
 use ironrdp_pdu::rdp::client_info::{PerformanceFlags, TimezoneInfo};
 use ironrdp_pdu::x224::X224;
-use ironrdp_tokio::{FramedWrite as _, NetworkClient, ShouldUpgrade, TokioFramed};
+use ironrdp_tokio::{NetworkClient, ShouldUpgrade, TokioFramed};
 use secrecy::{ExposeSecret, SecretString};
 use sha2::{Digest, Sha256};
 use tokio::net::TcpStream;
@@ -98,8 +98,9 @@ fn build_config(
         // NLA only: the X.224 request offers CredSSP (HYBRID, HYBRID_EX) and not TLS alone. On the
         // TLS-only path the Client Info PDU carries the password in the clear inside TLS, to
         // whoever holds the certificate the user accepted; with CredSSP a man in the middle gets
-        // at most a NetNTLMv2 response. A server that selects TLS-only or standard RDP security
-        // anyway is refused with `nla_required` by `check_confirm`, before the TLS handshake.
+        // at most a NetNTLMv2 response. A server whose selection lacks CredSSP (TLS-only, standard
+        // RDP security, RDSTLS, ...) is refused with `nla_required` by `check_confirm`, before the
+        // TLS handshake.
         enable_tls: false,
         enable_credssp: true,
         keyboard_type: KeyboardType::IBM_ENHANCED,
@@ -198,10 +199,12 @@ pub(crate) fn map_connector_error(error: &ConnectorError) -> RdpError {
 }
 
 /// fernjo's own check of the server's X.224 connection confirm, run before the connector sees it.
-/// A server that selects TLS-only (`SSL`) or standard RDP security, or that refuses the CredSSP-only
-/// request because it wants TLS-only, standard RDP security or TLS with client certificates, does
-/// not offer NLA: `NlaRequired`. IronRDP would refuse a selection outside the request too, but only
-/// with a generic error. Bytes that do not decode and other answers are left to the connector.
+/// A server whose selection holds neither `HYBRID` nor `HYBRID_EX` (TLS-only `SSL`, standard RDP
+/// security, `RDSTLS`, `RDSAAD`, unknown bits) does not run CredSSP, and one that refuses the
+/// CredSSP-only request because it wants TLS-only, standard RDP security or TLS with client
+/// certificates does not offer it: `NlaRequired`. IronRDP would refuse a selection outside the
+/// request too, but only with a generic error, and fernjo does not rely on that check. Bytes that
+/// do not decode and other failure codes are left to the connector.
 pub(crate) fn check_confirm(pdu: &[u8]) -> Result<(), RdpError> {
     let Ok(X224(confirm)) = ironrdp_core::decode::<X224<ConnectionConfirm>>(pdu) else {
         return Ok(());
@@ -210,10 +213,8 @@ pub(crate) fn check_confirm(pdu: &[u8]) -> Result<(), RdpError> {
         ConnectionConfirm::Response { protocol, .. } => {
             if protocol.intersects(SecurityProtocol::HYBRID | SecurityProtocol::HYBRID_EX) {
                 Ok(())
-            } else if protocol.is_standard_rdp_security() || protocol == SecurityProtocol::SSL {
-                Err(RdpError::NlaRequired)
             } else {
-                Ok(())
+                Err(RdpError::NlaRequired)
             }
         }
         ConnectionConfirm::Failure { code } => {
@@ -257,11 +258,10 @@ async fn negotiate(
         let written = connector
             .step(&pdu, framed.last_read_at(), &mut buf)
             .map_err(|e| map_connector_error(&e))?;
-        if let Some(len) = written.size() {
-            framed
-                .write_all(&buf.filled()[..len])
-                .await
-                .map_err(|_| RdpError::ConnectFailed)?;
+        // processing the confirm sends nothing (IronRDP 0.12); a connector that wanted to would be
+        // a change this loop does not know, so the attempt ends instead of sending unseen bytes
+        if written.size().is_some() {
+            return Err(RdpError::Protocol);
         }
     }
     Ok(ironrdp_tokio::skip_connect_begin(connector))
@@ -445,15 +445,25 @@ mod tests {
     }
 
     #[test]
-    fn credssp_passes_and_tls_only_or_standard_security_is_nla_required() {
+    fn credssp_passes_and_every_selection_without_it_is_nla_required() {
         for ok in [
             SecurityProtocol::HYBRID,
             SecurityProtocol::HYBRID_EX,
             SecurityProtocol::HYBRID | SecurityProtocol::HYBRID_EX,
+            SecurityProtocol::SSL | SecurityProtocol::HYBRID,
         ] {
             assert_eq!(check_confirm(&response(ok)), Ok(()), "{ok:?}");
         }
-        for refused in [SecurityProtocol::SSL, SecurityProtocol::empty()] {
+        let unknown_bit = SecurityProtocol::from_bits_retain(0x0000_0100);
+        for refused in [
+            SecurityProtocol::SSL,
+            SecurityProtocol::empty(),
+            SecurityProtocol::RDSTLS,
+            SecurityProtocol::RDSAAD,
+            SecurityProtocol::SSL | SecurityProtocol::RDSTLS,
+            SecurityProtocol::SSL | unknown_bit,
+            unknown_bit,
+        ] {
             assert_eq!(
                 check_confirm(&response(refused)),
                 Err(RdpError::NlaRequired),

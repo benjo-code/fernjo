@@ -73,8 +73,9 @@
 //!   signature, for example RSA under 2048 bits) fails before any prompt with "the server
 //!   certificate is not supported" (`certificate_unsupported`); other TLS failures keep "the secure
 //!   connection to the server failed" (`tls_failed`). A server without NLA (its X.224 confirm
-//!   selects TLS-only or standard RDP security, or refuses CredSSP) fails before TLS and any prompt
-//!   with "the server does not offer Network Level Authentication (NLA); …" (`nla_required`).
+//!   selects no CredSSP protocol, for example TLS-only or standard RDP security, or refuses
+//!   CredSSP) fails before TLS and any prompt with "the server does not offer Network Level
+//!   Authentication (NLA); …" (`nla_required`).
 //! * An RDP session never ends "cleanly" (`endedCleanly` is always `false`): there is no shell exit
 //!   status and the tab stays until the user closes it. A server that announces a virtual channel
 //!   message above 4 MiB ends the session with the detail "The server sent a channel message that
