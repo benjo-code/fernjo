@@ -14,7 +14,10 @@
 #     the block indicator (`run: | # note`).
 #   - writes a run:, script: or uses: key in a form this line-based check cannot read: flow style
 #     (`- { uses: ... }`, `steps: [ ... ]`), a quoted or spaced key, a quoted value that does not close
-#     on its line, or YAML anchors, aliases and merge keys anywhere outside a run value (fail closed).
+#     on its line, YAML explicit keys (`? key`), a quoted key containing a backslash escape, or YAML
+#     anchors, aliases and merge keys anywhere outside a run value. This is a line-based check, not a
+#     YAML parser: it refuses the forms it knows it cannot read, it does not prove that every other
+#     form is read correctly, so workflows are written in plain block style.
 set -euo pipefail
 
 dir="${1:-.github/workflows}"
@@ -112,6 +115,10 @@ for f in "${files[@]}"; do
 
       # The checks below read block-style keys only. Anything that would hide a step key from them
       # fails closed: flow mappings or sequences, quoted or spaced keys, anchors, aliases, merge keys.
+      if (line ~ /^[ ]*(- )?\?([ ]|$)/)
+        report("a YAML explicit key (?) can hide a run:, script: or uses: key and cannot be checked; write plain block keys")
+      if (line ~ /(^[ ]*(- )?|[{,][ ]*)"[^"]*\\[^"]*"[ \t]*:([ \t]|$)/)
+        report("a quoted key containing a backslash escape can spell run, script or uses and cannot be checked; write plain block keys")
       canonical = (line ~ /^[ ]*(- )?(uses|run|script):/)
       if (!canonical && line ~ /(^|[^A-Za-z0-9_-])["\047]?(uses|run|script)["\047]?[ \t]*:([ \t]|$)/) {
         if (line ~ /[{[][^"\047]*(uses|run|script)/)

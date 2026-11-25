@@ -192,6 +192,16 @@ wf_case yaml_alias "alias" "$job
         name: s
         run: echo ok
       - *step"
+wf_case explicit_key "explicit" "$job
+      - name: s
+        ? run
+        : echo $e"
+wf_case explicit_key_in_sequence_item "explicit" "$job
+      - ? uses
+        : actions/checkout@v4"
+wf_case escaped_quoted_key "backslash" "$job
+      - name: s
+        \"r\\u0075n\": echo $e"
 wf_case workflow_run_trigger "workflow_run" "$job
       - run: echo ok" "workflow_run"
 
