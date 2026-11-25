@@ -27,6 +27,15 @@ use crate::params::{ConnectParams, Credential};
 const EVENT_QUEUE: usize = 4;
 /// Keyboard-interactive rounds one attempt may take before it counts as failed.
 const MAX_KI_ROUNDS: usize = 5;
+/// Keepalives sent without an answer before russh ends the connection.
+const KEEPALIVE_MAX: usize = 3;
+/// Lower bound of the stall limit (see [`stall_limit`]): above OpenSSH's default login grace time
+/// (120 s) and the agent's sign wait ([`ConnectParams::DEFAULT_AGENT_SIGN_TIMEOUT`], 120 s), so a
+/// prompt or a touch that keeps the connection silent before the login is not cut short by it.
+const STALL_FLOOR: Duration = Duration::from_secs(180);
+/// How long closing waits for the polite end (the disconnect message sent and the connection task
+/// finished) before the socket is shut down regardless.
+const CLOSE_GRACE: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloseReason {
@@ -42,11 +51,16 @@ pub enum SessionEvent {
     Closed(CloseReason),
 }
 
-/// Handle on a running shell session. Output arrives on the receiver `connect` returned.
+/// Handle on a running shell session. Output arrives on the receiver `connect` returned. The
+/// session ends (and its socket is shut down) when it is closed, when the handle is dropped and
+/// when that receiver is dropped.
 pub struct Session {
     writer: ChannelWriteHalf<Msg>,
     stop: Arc<Notify>,
     closed: Arc<AtomicBool>,
+    /// Closed when the session task ended, so a write that waits for the stalled connection (for
+    /// SSH window or for room in russh's queue, neither of which a dead task ever frees) returns.
+    alive: mpsc::Sender<()>,
 }
 
 pub(crate) fn client_config(keepalive_secs: u32) -> client::Config {
@@ -65,7 +79,8 @@ pub(crate) fn client_config(keepalive_secs: u32) -> client::Config {
         preferred,
         keepalive_interval: (keepalive_secs > 0)
             .then(|| Duration::from_secs(u64::from(keepalive_secs))),
-        keepalive_max: 3,
+        keepalive_max: KEEPALIVE_MAX,
+        inactivity_timeout: stall_limit(keepalive_secs),
         nodelay: true,
         // Everything between the server and the terminal must drain before Ctrl+C is echoed, so the
         // data in flight is kept small: SSH window + packets buffered in the channel + EVENT_QUEUE
@@ -74,6 +89,23 @@ pub(crate) fn client_config(keepalive_secs: u32) -> client::Config {
         channel_buffer_size: 4,
         ..client::Config::default()
     }
+}
+
+/// russh's `inactivity_timeout`, here the limit for a connection that is stuck: russh races it
+/// against every write to the socket, so a server that stops reading (the write never completes,
+/// and while it hangs russh polls neither keepalives nor anything else) ends the connection with
+/// `ConnectionLost` instead of freezing the tab for good (M11 review #22). The timer also restarts
+/// whenever anything is sent or received except the keepalive tick itself, and a live server
+/// answers every keepalive, so with keepalive on it never fires on an idle session earlier than
+/// the keepalive check would (`keepalive_max + 1` silent intervals); [`STALL_FLOOR`] keeps it clear
+/// of long silences before the login. With keepalive off there is no limit: an idle shell would
+/// otherwise be cut, and nothing tells it apart from a stall.
+fn stall_limit(keepalive_secs: u32) -> Option<Duration> {
+    (keepalive_secs > 0).then(|| {
+        let keepalive_check = Duration::from_secs(u64::from(keepalive_secs))
+            * u32::try_from(KEEPALIVE_MAX + 1).unwrap_or(u32::MAX);
+        keepalive_check.max(STALL_FLOOR)
+    })
 }
 
 /// Offer only the host key algorithms already stored for this host, so a server cannot dodge the
@@ -529,39 +561,37 @@ async fn with_handshake_deadline<T>(
     }
 }
 
-/// Shuts the TCP socket down when the handshake is left before the key exchange finished.
+/// Shuts the TCP socket down when it is dropped: when a connect is left at any step, and when the
+/// session ends.
 ///
 /// russh's `client::connect_stream` spawns the session task, which takes the stream, as soon as
 /// it has read the server's identification line, and hands out the task's `JoinHandle` only after
 /// the key exchange. A handshake that is dropped in between (our deadline, or the connect task
 /// aborted because the tab was closed) drops that future but not the task: while a key exchange
 /// is active the task does not look at its (now closed) command channel, so against a server that
-/// goes silent it would wait on the socket forever. A clone of the socket, taken before the
-/// handshake, lets this guard shut the connection down so the task's read ends and the task with
-/// it. Once the handshake returned, the task belongs to the `Handle` and the guard is disarmed.
-struct HandshakeSocketGuard(Option<std::net::TcpStream>);
+/// goes silent it would wait on the socket forever. After the handshake the same holds for a
+/// server that stops reading: the task hangs in a write and never sees the disconnect request
+/// (M11 review #22). A clone of the socket, taken before the handshake and kept for the session's
+/// lifetime (the session's `pump` owns it), lets this guard shut the connection down so the
+/// task's read and write end and the task with them. The clone also keeps the connection open
+/// after the task dropped its own half, so the guard must be dropped for the connection to close.
+struct SocketGuard(std::net::TcpStream);
 
-impl HandshakeSocketGuard {
+impl SocketGuard {
     fn new(stream: TcpStream) -> Result<(TcpStream, Self), SshError> {
         let std_stream = stream.into_std().map_err(|_| SshError::ConnectFailed)?;
         let clone = std_stream
             .try_clone()
             .map_err(|_| SshError::ConnectFailed)?;
         let stream = TcpStream::from_std(std_stream).map_err(|_| SshError::ConnectFailed)?;
-        Ok((stream, Self(Some(clone))))
-    }
-
-    fn disarm(mut self) {
-        self.0 = None;
+        Ok((stream, Self(clone)))
     }
 }
 
-impl Drop for HandshakeSocketGuard {
+impl Drop for SocketGuard {
     fn drop(&mut self) {
-        if let Some(socket) = self.0.take() {
-            // A socket the task already closed reports an error; there is nothing left to do.
-            let _ = socket.shutdown(std::net::Shutdown::Both);
-        }
+        // A socket the peer or the task already closed reports an error; nothing is left to do.
+        let _ = self.0.shutdown(std::net::Shutdown::Both);
     }
 }
 
@@ -599,7 +629,7 @@ impl Session {
             Ok(Ok(stream)) => stream,
         };
         let _ = stream.set_nodelay(true);
-        let (stream, socket_guard) = HandshakeSocketGuard::new(stream)?;
+        let (stream, socket_guard) = SocketGuard::new(stream)?;
 
         let rejection: Rejection = Rejection::default();
         let prompting = Arc::new(AtomicBool::new(false));
@@ -629,9 +659,6 @@ impl Session {
                     }));
                 }
             };
-        // The key exchange finished: the session task is owned by `handle` from here on.
-        socket_guard.disarm();
-
         // The key exchange is verified: only now is the user's decision about the key written.
         trust.apply_pending_trust().await?;
 
@@ -666,8 +693,13 @@ impl Session {
         let (tx, rx) = mpsc::channel(EVENT_QUEUE);
         let stop = Arc::new(Notify::new());
         let closed = Arc::new(AtomicBool::new(false));
+        let (alive, alive_rx) = mpsc::channel(1);
         tokio::spawn(pump(
-            handle,
+            Connection {
+                handle,
+                socket: socket_guard,
+                _alive: alive_rx,
+            },
             reader,
             tx,
             Arc::clone(&stop),
@@ -678,26 +710,32 @@ impl Session {
                 writer,
                 stop,
                 closed,
+                alive,
             },
             rx,
         ))
     }
 
+    /// Sends input. Waits while the SSH window or russh's queue is full; returns an error once
+    /// the session ended, also when the write was waiting for a connection that is stuck.
     pub async fn write(&self, data: Vec<u8>) -> Result<(), SshError> {
         if self.closed.load(Ordering::SeqCst) {
             return Err(SshError::Closed);
         }
-        self.writer.data_bytes(data).await.map_err(|_| self.gone())
+        tokio::select! {
+            sent = self.writer.data_bytes(data) => sent.map_err(|_| self.gone()),
+            () = self.alive.closed() => Err(self.gone()),
+        }
     }
 
     pub async fn resize(&self, cols: u32, rows: u32) -> Result<(), SshError> {
         if self.closed.load(Ordering::SeqCst) {
             return Err(SshError::Closed);
         }
-        self.writer
-            .window_change(cols, rows, 0, 0)
-            .await
-            .map_err(|_| self.gone())
+        tokio::select! {
+            sent = self.writer.window_change(cols, rows, 0, 0) => sent.map_err(|_| self.gone()),
+            () = self.alive.closed() => Err(self.gone()),
+        }
     }
 
     /// Ends the session; the events channel then yields `Closed(ClosedByUser)`.
@@ -739,8 +777,42 @@ async fn deliver(tx: &mpsc::Sender<SessionEvent>, stop: &Notify, event: SessionE
     }
 }
 
-async fn pump<H: client::Handler>(
+/// What the session holds of the connection besides its channel. Dropped (and so the socket shut
+/// down and every waiting `Session::write` released) when `pump` returns.
+struct Connection<H: client::Handler> {
     handle: client::Handle<H>,
+    socket: SocketGuard,
+    /// Its sender is `Session::alive`.
+    _alive: mpsc::Receiver<()>,
+}
+
+impl<H: client::Handler> Connection<H> {
+    /// Asks the server politely to end the connection and waits for russh's task to finish, at most
+    /// [`CLOSE_GRACE`]; then shuts the socket down. The bound matters: against a server that stopped
+    /// reading, russh's task hangs in a write and its queue is full, so the disconnect request is
+    /// never taken (M11 review #22); the shutdown makes that write fail and the task end.
+    async fn end(self) {
+        let Self {
+            mut handle,
+            socket,
+            _alive,
+        } = self;
+        let polite = async {
+            if handle
+                .disconnect(Disconnect::ByApplication, "", "en")
+                .await
+                .is_ok()
+            {
+                let _ = (&mut handle).await;
+            }
+        };
+        let _ = tokio::time::timeout(CLOSE_GRACE, polite).await;
+        drop(socket);
+    }
+}
+
+async fn pump<H: client::Handler>(
+    connection: Connection<H>,
     mut reader: russh::ChannelReadHalf,
     tx: mpsc::Sender<SessionEvent>,
     stop: Arc<Notify>,
@@ -748,10 +820,14 @@ async fn pump<H: client::Handler>(
 ) {
     let mut exit: Option<u32> = None;
     let mut exited = false;
+    // `None`: nobody listens any more, so there is nobody to tell.
     let reason = loop {
         let msg = tokio::select! {
             biased;
-            () = stop.notified() => break CloseReason::ClosedByUser,
+            () = stop.notified() => break Some(CloseReason::ClosedByUser),
+            // The receiver was dropped (the app aborts the task that reads it when a tab closes):
+            // end the connection now, not only when the next output finds nobody to take it.
+            () = tx.closed() => break None,
             msg = reader.wait() => msg,
         };
         let data = match msg {
@@ -765,28 +841,24 @@ async fn pump<H: client::Handler>(
                 exited = true;
                 continue;
             }
-            Some(ChannelMsg::Close) => break CloseReason::Exit(exit),
-            None if exited => break CloseReason::Exit(exit),
-            None => break CloseReason::ConnectionLost,
+            Some(ChannelMsg::Close) => break Some(CloseReason::Exit(exit)),
+            None if exited => break Some(CloseReason::Exit(exit)),
+            None => break Some(CloseReason::ConnectionLost),
             Some(_) => continue,
         };
         match deliver(&tx, &stop, SessionEvent::Output(data.to_vec())).await {
             Flow::Continue => {}
-            Flow::UserClose => break CloseReason::ClosedByUser,
-            Flow::ReceiverGone => {
-                closed.store(true, Ordering::SeqCst);
-                // Nobody listens any more: just end the connection.
-                drop(reader);
-                let _ = handle.disconnect(Disconnect::ByApplication, "", "en").await;
-                return;
-            }
+            Flow::UserClose => break Some(CloseReason::ClosedByUser),
+            Flow::ReceiverGone => break None,
         }
     };
     closed.store(true, Ordering::SeqCst);
     // Release russh's channel first: its session loop may be parked on a full channel.
     drop(reader);
-    let _ = handle.disconnect(Disconnect::ByApplication, "", "en").await;
-    let _ = tx.send(SessionEvent::Closed(reason)).await;
+    connection.end().await;
+    if let Some(reason) = reason {
+        let _ = tx.send(SessionEvent::Closed(reason)).await;
+    }
 }
 
 #[cfg(test)]
@@ -889,6 +961,18 @@ mod tests {
         assert_eq!(c.keepalive_interval, Some(Duration::from_secs(30)));
         assert_eq!(c.keepalive_max, 3);
         assert_eq!(client_config(0).keepalive_interval, None);
+    }
+
+    /// M11 review #22: with keepalive on, a connection stuck in a write ends after the keepalive
+    /// check's span (`keepalive_max + 1` intervals), never sooner than the floor; with keepalive
+    /// off nothing ends an idle shell.
+    #[test]
+    fn client_config_ends_a_stalled_connection_only_with_keepalive_on() {
+        let limit = |k| client_config(k).inactivity_timeout;
+        assert_eq!(limit(30), Some(Duration::from_secs(180)));
+        assert_eq!(limit(60), Some(Duration::from_secs(240)));
+        assert_eq!(limit(1), Some(STALL_FLOOR));
+        assert_eq!(limit(0), None);
     }
 
     fn offered<T: AsRef<str>>(list: &[T]) -> Vec<&str> {

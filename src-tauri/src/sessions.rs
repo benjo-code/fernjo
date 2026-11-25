@@ -1061,7 +1061,10 @@ pub(crate) fn exit_action(code: Option<i32>, connected: usize, prompt_open: bool
 }
 
 /// Mutes the channel, answers every prompt with the safe answer, tells the writer task to close
-/// and aborts the connect task.
+/// and aborts the connect task. For SSH the abort is what ends a session whose server stopped
+/// reading: the writer may hang in a write and never take `Op::Close`, but aborting `run` drops
+/// the events receiver, which makes `fernjo_ssh::Session` shut its socket down and fail that write
+/// (M11 review #22).
 fn shut_down(entry: &Entry) {
     entry.shared.sink.close();
     entry.shared.hub.close();

@@ -1,10 +1,12 @@
-//! russh client handler: decides about the server's host key before anything else is sent.
+//! russh client handler: decides about the server's host key before anything else is sent, and
+//! refuses every channel the server opens.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use russh::client::Handler;
+use russh::client::{self, Handler, Msg};
 use russh::keys::PublicKey;
+use russh::{Channel, ChannelOpenFailure};
 
 use crate::SshError;
 use crate::interaction::{
@@ -234,6 +236,16 @@ impl<I: Interaction> ClientHandler<I> {
     }
 }
 
+/// Refuses a channel the server opened. fernjo asks for no forwarding (no X11, agent, TCP or
+/// socket forwarding), so a server-opened channel is never expected; russh's default would accept
+/// it and keep it, unread, until the server closes it (M11 review #23).
+async fn refuse(reply: client::ChannelOpenHandle) -> Result<(), russh::Error> {
+    reply
+        .reject(ChannelOpenFailure::AdministrativelyProhibited)
+        .await;
+    Ok(())
+}
+
 impl<I: Interaction> Handler for ClientHandler<I> {
     type Error = russh::Error;
 
@@ -250,6 +262,84 @@ impl<I: Interaction> Handler for ClientHandler<I> {
                 Ok(self.reject(SshError::HostKeyRejected))
             }
         }
+    }
+
+    // Every channel type a server can open is refused. Unknown types are already refused by
+    // russh (`should_accept_unknown_server_channel` defaults to false).
+
+    async fn server_channel_open_session(
+        &mut self,
+        _channel: Channel<Msg>,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        refuse(reply).await
+    }
+
+    async fn server_channel_open_x11(
+        &mut self,
+        _channel: Channel<Msg>,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        refuse(reply).await
+    }
+
+    async fn server_channel_open_agent_forward(
+        &mut self,
+        _channel: Channel<Msg>,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        refuse(reply).await
+    }
+
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        _channel: Channel<Msg>,
+        _connected_address: &str,
+        _connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        refuse(reply).await
+    }
+
+    async fn server_channel_open_direct_tcpip(
+        &mut self,
+        _channel: Channel<Msg>,
+        _host_to_connect: &str,
+        _port_to_connect: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        refuse(reply).await
+    }
+
+    async fn server_channel_open_forwarded_streamlocal(
+        &mut self,
+        _channel: Channel<Msg>,
+        _socket_path: &str,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        refuse(reply).await
+    }
+
+    async fn server_channel_open_direct_streamlocal(
+        &mut self,
+        _channel: Channel<Msg>,
+        _socket_path: &str,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        refuse(reply).await
     }
 }
 
