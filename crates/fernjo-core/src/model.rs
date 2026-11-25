@@ -111,8 +111,9 @@ pub struct Node {
     pub kind: NodeKind,
 }
 
-/// What a node is. Serialised as an internal `type` tag next to the node fields.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// What a node is. Serialised as an internal `type` tag next to the node fields. Write-only: it has
+/// no `Deserialize` because `Node` reads its own kind by hand (see its `Deserialize` impl).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum NodeKind {
     Folder {

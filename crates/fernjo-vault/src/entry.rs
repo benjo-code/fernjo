@@ -376,11 +376,18 @@ mod tests {
             r#"{"password":5,"type":"password"}"#,
             r#"{"type":"privateKey","passphrase":"pp"}"#,
             r#"{"type":"privateKey","key":"k","passphrase":5}"#,
-            r#"["password","pw"]"#,
             r#"{"type":"password","password":"a","password":"b"}"#,
             r#"{"type":"password","type":"privateKey","key":"k"}"#,
         ] {
             assert!(read(text).is_err(), "{text}");
         }
+    }
+
+    /// Behaviour that differs from the derived (internally tagged) impl on purpose (M11 review #28,
+    /// `Docs/DECISIONS.md`): the old impl read a sequence `["password","pw"]` (its tag as first
+    /// element); the hand-written one only reads maps.
+    #[test]
+    fn a_secret_no_longer_reads_the_sequence_form_the_derived_impl_accepted() {
+        assert!(read(r#"["password","pw"]"#).is_err());
     }
 }
