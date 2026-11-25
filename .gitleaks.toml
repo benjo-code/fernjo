@@ -1,7 +1,8 @@
 # gitleaks configuration (used by the release security review: docs/release-checklist.md, gap 9).
 # Run from the repo root:
 #   docker run --rm -v "<repo>:/repo:ro" ghcr.io/gitleaks/gitleaks:v8.30.1 detect --source /repo --redact --no-banner
-# It reads this file from the scanned repository. Expected result: "no leaks found".
+# It reads this file from the scanned repository. Expected result: "no leaks found". The allowlist paths
+# match with or without a leading folder, so a `dir /repo` scan (absolute paths) is judged the same way.
 #
 # The allowlists below are deliberately narrow (exact files, one rule) so that a real secret in any
 # other file, or any other rule firing in these files, still fails the scan.
@@ -18,10 +19,10 @@ useDefault = true
 description = "mRemoteNG import test fixtures (synthetic or sanitised, encrypted test passwords and key vectors)"
 targetRules = ["generic-api-key"]
 paths = [
-  '''^crates/fernjo-import/tests/fixtures/custom-key\.xml$''',
-  '''^crates/fernjo-import/tests/fixtures/default-key\.xml$''',
-  '''^crates/fernjo-import/tests/fixtures/owner-confCons\.xml$''',
-  '''^crates/fernjo-import/tests/fixtures/vectors\.json$''',
+  '''(^|/)crates/fernjo-import/tests/fixtures/custom-key\.xml$''',
+  '''(^|/)crates/fernjo-import/tests/fixtures/default-key\.xml$''',
+  '''(^|/)crates/fernjo-import/tests/fixtures/owner-confCons\.xml$''',
+  '''(^|/)crates/fernjo-import/tests/fixtures/vectors\.json$''',
 ]
 
 # localStorage key names of the UI (view state only, not secrets).
@@ -33,8 +34,8 @@ targetRules = ["generic-api-key"]
 condition = "AND"
 regexTarget = "line"
 paths = [
-  '''^ui/src/lib/store\.svelte\.ts$''',
-  '''^ui/src/lib/store\.test\.ts$''',
+  '''(^|/)ui/src/lib/store\.svelte\.ts$''',
+  '''(^|/)ui/src/lib/store\.test\.ts$''',
 ]
 regexes = [
   '''(STORAGE_KEY|KEY) = "fernjo\.[A-Za-z0-9._-]+"''',
@@ -45,5 +46,5 @@ regexes = [
 description = "RDP TLS test-only private keys"
 targetRules = ["private-key"]
 paths = [
-  '''^crates/fernjo-rdp/tests/fixtures/[a-z0-9-]+\.key$''',
+  '''(^|/)crates/fernjo-rdp/tests/fixtures/[a-z0-9-]+\.key$''',
 ]
