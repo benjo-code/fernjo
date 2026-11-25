@@ -447,7 +447,7 @@ Not run here: the RDP tests that need a host (`cargo test -p fernjo-rdp --test c
 
 | Area | Verdict |
 |---|---|
-| Security review | **Go.** No High is open (row 21, a High by ruling, is fixed and re-read), every Medium is fixed (22 to 32 and 80) or its remaining risk is accepted by the owner (the rest of row 22), and every Low is fixed, not a defect (78), accepted with the reason recorded, or an owner repo setting named below (rows 32, 69, 70, 71). What the review cannot show is on the owner's list above (real hosts, real devices, real app). |
+| Security review | **Go.** No High is open (row 21, a High by ruling, is fixed and re-read), every Medium is fixed in the code (22 to 31 and 80) or its remaining risk is accepted by the owner (the rest of row 22), and every Low is fixed, not a defect (78) or accepted with the reason recorded. Row 32 is a Medium whose code part is fixed (the Dependabot cooldown, which takes effect after the merge to `dev`) and whose other half, required reviews on `dev`, is an owner repo setting that is still open; rows 69, 70 and 71 (Lows) have open repo settings too. The go therefore holds with those four settings recorded as open owner items, not as closed. What the review cannot show is on the owner's list above (real hosts, real devices, real app). |
 | Installers | **Not built in M11.** The `release.yml` dry run on the pull request and the release run are the evidence; provenance is unverified until that run. |
 | Docs | **Go.** README, `SECURITY.md`, `CHANGELOG.md` `[Unreleased]` and `CLAUDE.md` match the code as far as read; the known gaps are named above. |
 | Performance | **Not re-run.** No claim is made for 0.3.0 beyond `Docs/performance.md` (measured for 0.1.1). |
