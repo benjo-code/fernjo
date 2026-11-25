@@ -56,6 +56,11 @@ Daily-use features: milestone M10.
 - "Restart now" after a data folder change (M11) now asks "Restart fernjo?" while a session is connected, like closing the window, and gives sync its last push before restarting.
 - The remote desktop tab's clipboard mark (M11) now always shows the clipboard setting the session really uses; it could disagree for a moment after a sync or an edit.
 - Pasting against a clipboard that never answers (M11) no longer piles up background work that could stall sync, import and export; while one read hangs, further pastes fail at once.
+- Vault auto-lock (M11): when the idle time had already run out while the computer slept, the first key press or mouse move after waking now locks the vault instead of restarting the idle clock.
+- Locking the vault (M11) also drops an import or restore that was waiting with decrypted passwords (an mRemoteNG file with credentials, a backup with entries); pick and inspect it again after unlocking. Locking and the vault status no longer read the stored unlock key from the keychain.
+- Import (M11): names, descriptions, hosts and domains from an mRemoteNG file lose control characters, and text from every import path (mRemoteNG, connections file, backup) loses right-to-left overrides and other direction characters that could display a name reversed. The RDP domain setting is cleaned the same way.
+- Import (M11): closing or reloading the window while a picked file is being read no longer leaves the decrypted backup in memory.
+- Data safety (M11): `connections.json` is compared with the exact bytes fernjo loaded, not with a second read, so a file replaced by a sync tool during loading is no longer overwritten without the "changed on disk" notice.
 
 ## [0.2.0] - 2026-11-22
 
