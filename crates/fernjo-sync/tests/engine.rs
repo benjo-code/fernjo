@@ -904,6 +904,14 @@ fn a_head_below_the_base_but_newer_than_the_local_file_is_vault_below_mark() {
     b.assert_untouched(&before);
     assert_eq!(head_seq(&hub), Some(3), "nothing was pushed");
     assert!(b.port.entry_names().is_empty());
+
+    // Once the local file is above the head again (in the app one save does it, because the save
+    // goes above the device mark; this port has no mark, so two saves), the head below the base
+    // is refused again, now as `rolled_back`: Re-seed is offered, not a merge.
+    b.port.add_entry("b1");
+    b.port.add_entry("b2");
+    assert_eq!(b.run_err(), local_failed("rolled_back"));
+    assert_eq!(head_seq(&hub), Some(3), "nothing was pushed");
 }
 
 #[test]

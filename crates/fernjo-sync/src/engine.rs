@@ -149,8 +149,10 @@ fn next_seq(seq: u64) -> Result<u64, SyncError> {
 /// head is older than the local vault file, so a re-seed (which pushes the local file) keeps
 /// the newer vault. Otherwise the local file itself is behind (for example after "open the older
 /// version" whose re-stamp save failed) and a re-seed would push it over a newer head:
-/// `vault_below_mark`, which a save of the vault on this device resolves (the save writes a
-/// generation above the mark, so the next run merges).
+/// `vault_below_mark`. A save of the vault on this device writes a generation above the mark;
+/// the next run then merges the head (the head was saved from the base, the `adopt_file` corner)
+/// or, when the head is also older than the base (the engine's V5 corner), refuses it again, as
+/// `rolled_back` with the Re-seed offer, because the local file is then the newer one.
 #[must_use]
 pub fn refused_head(head_generation: u64, local_generation: u64) -> SyncError {
     let code = if head_generation < local_generation {
