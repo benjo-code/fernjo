@@ -8,10 +8,17 @@ describe("syncErrorText", () => {
     expect(e.code).toBeNull();
   });
 
-  test("the_vault_rollback_names_the_vault_and_the_reseed", () => {
+  test("the_vault_rollback_names_the_vault_the_likely_cause_and_the_reseed", () => {
     const e = syncErrorText({ code: "vault_rolled_back", message: "raw" });
-    expect(e.text).toContain("older vault");
-    expect(e.text).toContain("Re-seed");
+    expect(e.text).toBe(
+      "The hub holds an older vault than this device, typically because another device re-seeded the hub from an older copy. Re-seed replaces it with this device's vault.",
+    );
+    expect(e.code).toBeNull();
+  });
+
+  test("a_hub_rollback_keeps_the_restored_on_purpose_wording", () => {
+    const e = syncErrorText({ code: "hub_rolled_back", message: "raw" });
+    expect(e.text).toContain("restored on purpose");
     expect(e.code).toBeNull();
   });
 

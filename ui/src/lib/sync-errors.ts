@@ -19,12 +19,13 @@ const TEXT: Record<string, string> = {
   already_paired: "This device is already part of a sync group.",
   changed_on_disk:
     "The data changed on disk while syncing. Reload and try again, or lock and unlock the vault.",
-  hub_rolled_back: "The hub shows an older state than this device has seen. Re-seed it from here.",
+  hub_rolled_back:
+    "The hub shows an older state than this device has seen. If you know the hub was restored on purpose, re-seed it from this device.",
   rolled_back: "The hub shows an older state than this device has seen.",
   seq_exhausted:
     "The hub's sequence number is at its maximum, so nothing can be sent to it, not even by a re-seed. The hub's admin has to remove its head.",
   vault_rolled_back:
-    "The hub holds an older vault than this device has seen. Re-seed it from here if that is expected.",
+    "The hub holds an older vault than this device, typically because another device re-seeded the hub from an older copy. Re-seed replaces it with this device's vault.",
   vault_below_mark:
     "The hub's vault was not taken because this device's vault file is older than one it opened before. Save the vault once on this device (for example add or edit a credential), then sync again.",
 };

@@ -4,6 +4,7 @@ import { SyncStore } from "../sync.svelte";
 import { apiError, deferred, mockApi, syncStatus } from "../testing";
 import type { Api, SyncStatus } from "../types";
 import SyncSettings from "./SyncSettings.svelte";
+import { syncErrorText } from "../sync-errors";
 
 let mounted: ReturnType<typeof mount> | null = null;
 
@@ -211,6 +212,40 @@ describe("SyncSettings", () => {
     document.querySelector<HTMLButtonElement>('[role="alertdialog"] .danger')!.click();
     await settle();
     expect(calls.syncReseed).toHaveLength(1);
+  });
+
+  test("the_reseed_confirmation_says_what_is_lost", async () => {
+    await setup(paired({ state: "rolled_back" }));
+    await click("Re-seed hub…");
+    expect(document.querySelector('[role="alertdialog"]')!.textContent).toContain(
+      "Changes other devices pushed to the hub since this device last synced are lost.",
+    );
+  });
+
+  test("rolled_back_shows_the_text_of_its_code", async () => {
+    await setup(
+      paired({
+        state: "rolled_back",
+        error: { code: "vault_rolled_back", message: "raw vault message" },
+      }),
+    );
+    expect(shown()).toContain(syncErrorText({ code: "vault_rolled_back", message: "" }).text);
+    expect(shown()).not.toContain("restored on purpose");
+    expect(shown()).not.toContain("raw vault message");
+    unmount(mounted!);
+    mounted = null;
+    document.body.innerHTML = "";
+
+    await setup(
+      paired({ state: "rolled_back", error: { code: "hub_rolled_back", message: "raw" } }),
+    );
+    expect(shown()).toContain("If you know the hub was restored on purpose");
+  });
+
+  test("a_local_vault_below_the_mark_shows_the_way_out_and_no_reseed", async () => {
+    await setup(paired({ state: "error", error: { code: "vault_below_mark", message: "raw" } }));
+    expect(shown()).toContain("Save the vault once on this device");
+    expect(button("Re-seed hub…")).toBeUndefined();
   });
 
   test("leave_asks_first", async () => {

@@ -57,7 +57,7 @@ export function syncLine(status: SyncStatus | null): SyncLine | null {
     case "rolled_back":
       return {
         text: "Sync: hub older than this device",
-        title: status.error?.message ?? "The hub shows an older state than this device has seen.",
+        title: rolledBackText(status),
         tone: "attention",
         action: "reseed",
       };
@@ -71,10 +71,18 @@ export function syncLine(status: SyncStatus | null): SyncLine | null {
   }
 }
 
+/**
+ * What the rolled-back state means, worded from its code (`hub_rolled_back` for an older hub,
+ * `vault_rolled_back` for an older vault in it); shared by the footer tooltip and Settings.
+ */
+export function rolledBackText(status: SyncStatus): string {
+  return syncErrorText(status.error ?? { code: "hub_rolled_back", message: "" }).text;
+}
+
 /** The confirmation of a re-seed, shared by the Settings section and the footer's "Re-seed…". */
 export const RESEED_CONFIRM = {
   title: "Re-seed the hub from this device?",
   detail:
-    "The hub's data is replaced with what this device has now. Other devices then follow this device's state.",
+    "The hub's data is replaced with this device's connections and vault. Changes other devices pushed to the hub since this device last synced are lost. Other devices then follow this device's state.",
   confirmLabel: "Re-seed",
 } as const;
