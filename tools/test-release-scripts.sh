@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for tools/check-workflows.sh, check-release-version.sh, verify-installers.sh and third-party-notices.mjs.
+# Tests for tools/check-workflows.sh, check-release-version.sh, hub-image-tags.sh, verify-installers.sh and third-party-notices.mjs.
 # Plain bash, temp dirs, no dependencies. Run: bash tools/test-release-scripts.sh
 set -uo pipefail
 
@@ -253,6 +253,48 @@ if [ -e "$marker" ]; then
 else
   echo "ok   check_release_version_does_not_evaluate_the_tag"
 fi
+
+# --- hub-image-tags.sh ---
+hub_tags="$root/tools/hub-image-tags.sh"
+
+# assert_lines <name> <expected output, one line each> <command...>: exit 0 and the output equals the lines exactly.
+assert_lines() {
+  local name="$1" want="$2"
+  shift 2
+  total=$((total + 1))
+  local out got
+  out="$("$@" 2>&1)"
+  got=$?
+  if [ "$got" -ne 0 ] || [ "$out" != "$want" ]; then
+    echo "FAIL $name: exit $got, output:"
+    echo "$out" | sed 's/^/     | /'
+    failures=$((failures + 1))
+    return
+  fi
+  echo "ok   $name"
+}
+
+want_tags=$'ghcr.io/x/y:0.3.1\nghcr.io/x/y:0.3\nghcr.io/x/y:latest'
+assert_lines hub_image_tags_for_a_plain_version "$want_tags" bash "$hub_tags" v0.3.1 ghcr.io/x/y
+assert_lines hub_image_tags_accept_the_tag_without_v "$want_tags" bash "$hub_tags" 0.3.1 ghcr.io/x/y
+# A stray tag must produce no image tags at all, so it can never move `latest`.
+assert_exit hub_image_tags_reject_a_prerelease 1 "not a valid" bash "$hub_tags" v0.3.1-rc.1 ghcr.io/x/y
+assert_exit hub_image_tags_reject_two_parts 1 "not a valid" bash "$hub_tags" v1.2 ghcr.io/x/y
+assert_exit hub_image_tags_reject_four_parts 1 "not a valid" bash "$hub_tags" v1.2.3.4 ghcr.io/x/y
+hub_marker="$tmp/hub-pwned"
+assert_exit hub_image_tags_reject_shell_metacharacters 1 "not a valid" \
+  bash "$hub_tags" "v1.2.3; touch $hub_marker" ghcr.io/x/y
+assert_exit hub_image_tags_reject_command_substitution 1 "not a valid" \
+  bash "$hub_tags" '$(touch '"$hub_marker"')' ghcr.io/x/y
+total=$((total + 1))
+if [ -e "$hub_marker" ]; then
+  echo "FAIL hub_image_tags_do_not_evaluate_the_tag: marker file exists"
+  failures=$((failures + 1))
+else
+  echo "ok   hub_image_tags_do_not_evaluate_the_tag"
+fi
+assert_exit hub_image_tags_wrong_argument_count 2 "usage" bash "$hub_tags" v0.3.1
+assert_exit hub_image_tags_no_arguments 2 "usage" bash "$hub_tags"
 
 # --- verify-installers.sh ---
 verify="$root/tools/verify-installers.sh"
