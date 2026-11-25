@@ -525,12 +525,21 @@ impl Vault {
         })
     }
 
-    /// The current vault file, read with the size cap (for sync: the local side of a merge).
+    /// The vault file as this handle last read or wrote it, read from disk with the size cap
+    /// (for sync: the local side of a merge and what is pushed). A file that no longer starts
+    /// with the header this handle knows (an older copy, another vault's file or anything else
+    /// a writer of the data folder put there) is `changed_on_disk`, the same rule the save guard
+    /// applies: such a file is never handed out to be pushed. Lock and unlock to load it.
     ///
     /// # Errors
-    /// `unreadable` (missing, unreadable or larger than `MAX_FILE_LEN`).
+    /// `unreadable` (missing, unreadable or larger than `MAX_FILE_LEN`), `changed_on_disk`.
     pub fn file_bytes(&self) -> Result<Vec<u8>, VaultError> {
-        read_capped(&self.path, MAX_FILE_LEN).map_err(|e| VaultError::Unreadable(e.to_string()))
+        let bytes = read_capped(&self.path, MAX_FILE_LEN)
+            .map_err(|e| VaultError::Unreadable(e.to_string()))?;
+        if bytes.get(..HEADER_LEN) != Some(self.disk_header.as_slice()) {
+            return Err(VaultError::ChangedOnDisk);
+        }
+        Ok(bytes)
     }
 
     /// Parses `bytes` as a file of this vault: size cap, header (KDF bounds, newer-format rule)
@@ -663,18 +672,30 @@ impl Vault {
     /// vault): `entries` under the held data key, with the header of `head_bytes` (its
     /// password wrap and KDF cost) and a generation above both this handle's and the head's.
     /// `head_bytes` must belong to this vault and open with the held key, otherwise nothing is
-    /// written (`unreadable`). Entries are validated like [`Vault::replace_entries`]. On any
-    /// error the handle and the file stay as they were.
+    /// written (`unreadable`). `base_generation` is the generation of the base file both sides
+    /// started from (0 without one): a head below it is an older file of this vault played back
+    /// (every save since the base raised the generation), so nothing is written (`rolled_back`).
+    /// The head is not compared with this handle's floor or the device mark: those include this
+    /// device's own saves since the base, so a head that saved fewer times is still newer than
+    /// the base. Entries are validated like [`Vault::replace_entries`]. On any error the handle
+    /// and the file stay as they were.
     ///
     /// # Errors
-    /// `vault_locked`, `unreadable`, `newer_format`, `invalid_kdf_params`, `empty_name`,
-    /// `duplicate_entry`, `changed_on_disk`, `save_failed`.
+    /// `vault_locked`, `unreadable`, `newer_format`, `invalid_kdf_params`, `rolled_back`,
+    /// `empty_name`, `duplicate_entry`, `changed_on_disk`, `save_failed`.
     pub fn adopt_merged(
         &mut self,
         head_bytes: &[u8],
+        base_generation: u64,
         entries: Vec<(EntryId, NewEntry)>,
     ) -> Result<(), VaultError> {
         let (head_header, head_body) = self.open_foreign(head_bytes)?;
+        if head_body.generation < base_generation {
+            return Err(VaultError::RolledBack {
+                found: head_body.generation,
+                seen: base_generation,
+            });
+        }
         let mut seen = std::collections::HashSet::new();
         let mut list = Vec::with_capacity(entries.len());
         for (id, new) in entries {

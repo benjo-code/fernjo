@@ -898,6 +898,63 @@ fn a_rolled_back_hub_is_reported_and_reseed_repairs_it() {
     assert_eq!(now(&a).state, "ok");
 }
 
+fn head_seq(hub: &Hub) -> Option<u64> {
+    HubClient::new(&HubConfig {
+        url: hub.url(),
+        secret: sec(HUB_SECRET),
+        ca_pem: None,
+    })
+    .unwrap()
+    .get_head()
+    .unwrap()
+    .map(|(seq, _)| seq)
+}
+
+#[test]
+fn a_vault_file_planted_behind_the_vault_is_never_pushed() {
+    let hub = start_hub();
+    let (a, b) = (dev(), dev());
+    vault_create(&a.st, sec(MASTER), false).unwrap();
+    credential(&a, "one");
+    let older = vault_file(&a);
+    setup(&a, &hub, "a");
+    join(&b, &a, "b");
+    credential(&a, "two");
+    assert_eq!(now(&a).state, "ok");
+    assert_eq!(head_seq(&hub), Some(2));
+
+    // a writer of the data folder puts the older copy back while fernjo runs
+    let path = a.data.join(fernjo_vault::FILE_NAME);
+    fs::write(&path, &older).unwrap();
+    let s = now(&a);
+    assert_eq!(s.state, "error");
+    assert_eq!(s.error.as_ref().unwrap().code, "changed_on_disk");
+    assert_eq!(codes(sync_reseed(&a.st)), "changed_on_disk");
+    assert_eq!(head_seq(&hub), Some(2), "nothing was pushed");
+    assert_eq!(vault_file(&a), older, "the planted file is left alone");
+    // the other device still gets the real vault
+    assert_eq!(now(&b).state, "ok");
+    vault_unlock(&b.st, sec(MASTER), false).unwrap();
+    assert_eq!(credential_names(&b), ["one", "two"]);
+
+    // set-up refuses a planted file too and uploads nothing
+    let (c, empty_hub) = (dev(), start_hub());
+    vault_create(&c.st, sec(MASTER), false).unwrap();
+    let first = vault_file(&c);
+    credential(&c, "x");
+    fs::write(c.data.join(fernjo_vault::FILE_NAME), &first).unwrap();
+    let r = sync_setup(
+        &c.st,
+        empty_hub.url(),
+        sec(HUB_SECRET),
+        None,
+        "c".to_owned(),
+    );
+    assert_eq!(codes(r), "changed_on_disk");
+    assert_eq!(head_seq(&empty_hub), None, "nothing was uploaded");
+    assert_eq!(sync_status(&c.st).unwrap().state, "off");
+}
+
 #[test]
 fn leave_removes_state_base_and_keychain_items_and_keeps_local_data() {
     let hub = start_hub();
@@ -1147,7 +1204,8 @@ fn a_vault_file_that_cannot_be_read_ends_the_run_and_is_never_replaced() {
     fs::write(a.data.join(fernjo_vault::FILE_NAME), b"garbage").unwrap();
     let s = now(&a);
     assert_eq!(s.state, "error");
-    assert_eq!(s.error.as_ref().unwrap().code, "vault_unreadable");
+    // the file is not the one the vault handle knows (since M11 review #30)
+    assert_eq!(s.error.as_ref().unwrap().code, "changed_on_disk");
     assert_eq!(
         fs::read(a.data.join(fernjo_vault::FILE_NAME)).unwrap(),
         b"garbage"
@@ -1192,6 +1250,7 @@ fn a_foreign_connections_file_refuses_an_apply_with_a_vault_change_before_any_va
         let vault = if merged {
             VaultChange::Merged {
                 head: vault_before.clone(),
+                base_generation: 0,
                 entries: Vec::new(),
             }
         } else {

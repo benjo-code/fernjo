@@ -3,8 +3,10 @@
 //!
 //! Locking: every method takes the locks in the app's order (pending, then vault, then store),
 //! copies out or writes, and releases them before it returns, so the engine never holds one while
-//! it talks to the hub. `read` copies the tree, the vault file bytes and, while the vault is
-//! unlocked, its entries and data key. `apply` takes the locks again and first compares the
+//! it talks to the hub. `read` copies the tree, the vault file bytes (`Vault::file_bytes`: only the
+//! file the vault handle last read or wrote, `changed_on_disk` for a file a data-folder writer put
+//! there, so such a file is never pushed) and, while the vault is unlocked, its entries and data
+//! key. `apply` takes the locks again and first compares the
 //! current tree and vault file bytes with what the merge was made from (`expected`): any
 //! difference is `local_changed` and nothing is written, so a user edit between "read" and
 //! "apply" is never overwritten (the engine starts the run over). The writes then go through
@@ -164,8 +166,14 @@ fn apply_vault(
 ) -> Result<(), SyncError> {
     match change {
         VaultChange::Keep => Ok(()),
-        VaultChange::Merged { head, entries } => match slot {
-            VaultState::Open(v) => v.adopt_merged(&head, entries).map_err(|e| vault_failed(&e)),
+        VaultChange::Merged {
+            head,
+            base_generation,
+            entries,
+        } => match slot {
+            VaultState::Open(v) => v
+                .adopt_merged(&head, base_generation, entries)
+                .map_err(|e| vault_failed(&e)),
             VaultState::None => Err(local_failed("no_vault")),
             VaultState::Unusable { .. } => Err(local_failed("vault_unusable")),
         },

@@ -139,6 +139,16 @@ fn same_version(a: &[u8], b: &[u8]) -> bool {
     }
 }
 
+/// A local vault file that would be pushed or merged must parse (size cap, header, KDF bounds):
+/// one that does not is `local_failed` with `vault_unreadable` and never leaves the device.
+fn check_local_vault(local: &LocalState) -> Result<(), SyncError> {
+    if let Some(side) = &local.vault {
+        inspect_file(&side.file)
+            .map_err(|_| SyncError::LocalFailed("vault_unreadable".to_owned()))?;
+    }
+    Ok(())
+}
+
 /// Whether `side` differs from `base` (a missing file against a present one is a change).
 fn vault_changed(side: Option<&[u8]>, base: Option<&[u8]>) -> bool {
     match (side, base) {
@@ -330,36 +340,45 @@ impl Engine<'_> {
             .then_some(local.id)
     }
 
-    /// The merged entries and findings, or `None` when the vault is locked.
+    /// The merged entries, the base file's generation and the findings, or `None` when the vault
+    /// is locked. A head whose generation is below the base's is an older file of the vault
+    /// played back (every save since the base raised the generation): `local_failed` with
+    /// `rolled_back`, nothing merged (V5).
     fn merge_vault(
         &self,
         base: Option<&[u8]>,
         side: &VaultSide,
         head: &[u8],
-    ) -> Result<Option<MergedEntries>, SyncError> {
+    ) -> Result<Option<(MergedEntries, u64)>, SyncError> {
         let (Some(key), Some(local_entries)) = (&side.key, &side.entries) else {
             return Ok(None);
         };
         if !self.local.vault_unlocked() {
             return Ok(None);
         }
-        let base_entries = match base {
+        let (base_generation, base_entries) = match base {
             Some(bytes) => {
-                read_entries(bytes, key)
-                    .map_err(|_| {
-                        SyncError::StateUnusable(
-                            "the base vault does not open with this device's key".to_owned(),
-                        )
-                    })?
-                    .entries
+                let contents = read_entries(bytes, key).map_err(|_| {
+                    SyncError::StateUnusable(
+                        "the base vault does not open with this device's key".to_owned(),
+                    )
+                })?;
+                (contents.generation, contents.entries)
             }
-            None => Vec::new(),
+            None => (0, Vec::new()),
         };
-        let head_entries = read_entries(head, key)
-            .map_err(|_| invalid("the vault in the snapshot does not open with this key"))?
-            .entries;
-        let merged = merge_entries(&base_entries, local_entries, &head_entries, &self.ctx);
-        Ok(Some((merged.entries, merged.findings)))
+        let head_contents = read_entries(head, key)
+            .map_err(|_| invalid("the vault in the snapshot does not open with this key"))?;
+        if head_contents.generation < base_generation {
+            return Err(SyncError::LocalFailed("rolled_back".to_owned()));
+        }
+        let merged = merge_entries(
+            &base_entries,
+            local_entries,
+            &head_contents.entries,
+            &self.ctx,
+        );
+        Ok(Some(((merged.entries, merged.findings), base_generation)))
     }
 
     /// Writes the new base, then the state with `last_seq` (see the module comment for why).
@@ -522,13 +541,14 @@ impl Engine<'_> {
                 match self.merge_vault(base.vault.as_deref(), side, head_file)? {
                     // V2: locked, so the whole run waits: nothing applied, nothing pushed
                     None => return Ok(Planned::Stop(Outcome::WaitingForUnlock)),
-                    Some((entries, entry_findings)) => {
+                    Some(((entries, entry_findings), base_generation)) => {
                         findings.extend(entry_findings);
                         if let Some(vault) = dropped_password {
                             findings.push(Finding::PasswordChangeDropped { vault });
                         }
                         VaultChange::Merged {
                             head: head_file.to_vec(),
+                            base_generation,
                             entries,
                         }
                     }
@@ -604,10 +624,7 @@ impl Engine<'_> {
         } else {
             None
         };
-        if let Some(side) = &work.local.vault {
-            inspect_file(&side.file)
-                .map_err(|_| SyncError::LocalFailed("vault_unreadable".to_owned()))?;
-        }
+        check_local_vault(&work.local)?;
         let merged_vault = matches!(work.vault_change, VaultChange::Merged { .. });
         let apply = work.tree_change.is_some() || !matches!(work.vault_change, VaultChange::Keep);
         let Work {
@@ -705,7 +722,8 @@ impl Engine<'_> {
     /// the secrets and the state, and returns the pairing code.
     ///
     /// # Errors
-    /// `already_paired`, the hub errors, `hub_not_empty`, `snapshot_too_large`,
+    /// `already_paired`, the hub errors, `hub_not_empty`, `snapshot_too_large`, `local_failed`
+    /// (also `vault_unreadable`: a local vault file that does not parse is never uploaded),
     /// `keychain_unavailable` (nothing is uploaded then), `state_write_failed`.
     pub fn setup(&self, cfg: &HubConfig, device_name: &str) -> Result<PairingCode, SyncError> {
         if self.state.load()?.is_some() {
@@ -723,6 +741,7 @@ impl Engine<'_> {
             name: device_name.to_owned(),
         };
         let local = self.local.read()?;
+        check_local_vault(&local)?;
         let snapshot = Self::snapshot(group, 1, &device, &self.ctx.date, local);
         let plaintext = Zeroizing::new(snapshot.to_plaintext()?);
         let envelope = seal(&key, group, 1, &plaintext)?;
@@ -825,7 +844,8 @@ impl Engine<'_> {
     ///
     /// # Errors
     /// `not_paired`, `keychain_unavailable`, the hub errors (`hub_conflict` when another device
-    /// pushed meanwhile), `wrong_group`, `snapshot_too_large`, `state_write_failed`.
+    /// pushed meanwhile), `wrong_group`, `snapshot_too_large`, `local_failed` (also
+    /// `vault_unreadable`), `state_write_failed`.
     pub fn reseed(&self) -> Result<(), SyncError> {
         let st = self.state.load()?.ok_or(SyncError::NotPaired)?;
         let (_, key) = self.keys(st.group)?;
@@ -840,6 +860,7 @@ impl Engine<'_> {
             None => (Expected::Empty, st.last_seq + 1),
         };
         let local = self.local.read()?;
+        check_local_vault(&local)?;
         let snapshot = Self::snapshot(st.group, new_seq, &st.device, &self.ctx.date, local);
         let plaintext = Zeroizing::new(snapshot.to_plaintext()?);
         let envelope = seal(&key, st.group, new_seq, &plaintext)?;
