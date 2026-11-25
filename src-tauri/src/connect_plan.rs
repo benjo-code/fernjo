@@ -79,9 +79,9 @@ pub enum RdpCredentialPlan {
     Ready(SecretString),
 }
 
-/// Everything the session manager needs to open an RDP connection. `Debug` never shows the
-/// password.
-#[derive(Debug)]
+/// Everything the session manager needs to open an RDP connection. `Debug` shows neither the
+/// password (a `SecretString`) nor the user name and domain (redacted like `ConnectParams`, so a
+/// log line or a panic message never names the account).
 pub struct RdpPlan {
     pub host: String,
     pub port: u16,
@@ -92,6 +92,21 @@ pub struct RdpPlan {
     pub color_depth: u8,
     pub clipboard: bool,
     pub credential: RdpCredentialPlan,
+}
+
+impl std::fmt::Debug for RdpPlan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RdpPlan")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &self.username.as_ref().map(|_| "<redacted>"))
+            .field("domain", &self.domain.as_ref().map(|_| "<redacted>"))
+            .field("resolution", &self.resolution)
+            .field("color_depth", &self.color_depth)
+            .field("clipboard", &self.clipboard)
+            .field("credential", &self.credential)
+            .finish()
+    }
 }
 
 /// The plan for either protocol.

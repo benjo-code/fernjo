@@ -937,3 +937,19 @@ fn rdp_ops_weigh_at_least_the_minimum_and_resizes_are_coalesced() {
     assert_eq!(super::super::take_resize(&shared), (1499, 1199));
     assert_eq!(shared.input_budget.queued(), 2 * MIN_OP_WEIGHT);
 }
+
+/// `ConnectParams` and `RdpPlan` print the host but neither the account nor the password
+/// (M11 review #79: the guard in `vault_commands` covers the plan, this covers the params built
+/// from it).
+#[test]
+fn debug_output_of_plan_and_params_hides_user_domain_and_password() {
+    let p = plan(RdpResolution::Fit);
+    let plan_text = format!("{p:?}");
+    let params = build_params(p, (1280, 800), CertStore::in_memory());
+    for text in [plan_text, format!("{params:?}")] {
+        assert!(text.contains("dc01"), "the host stays visible: {text}");
+        for secret in ["admin", "CORP", "sentinel-pw"] {
+            assert!(!text.contains(secret), "Debug leaked {secret}: {text}");
+        }
+    }
+}

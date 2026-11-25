@@ -751,8 +751,9 @@ mod tests {
     // the hub secret typed into the sync commands
     const SYNC_SECRET: &str = "SENTINEL-hubsecret-3e8d52";
     // The RDP user and domain are connection fields (shown in the UI, saved in connections.json), so
-    // they are not in SENTINELS; they must still stay out of every RDP command response, session
-    // event and Debug output of the connect plan and the state.
+    // they are not in SENTINELS; they must still stay out of every RDP command response and session
+    // event (`no_response_contains_a_secret`) and out of the `Debug` output of the RDP connect plan
+    // (`rdp_plan_debug_hides_password_user_and_domain`; `AppState`'s own `Debug` prints neither).
     const RDP_USER: &str = "SENTINEL-RDP-USER";
     const RDP_DOMAIN: &str = "SENTINEL-RDP-DOMAIN";
     const SENTINELS: [&str; 6] = [MASTER, NEW_MASTER, PW, KEY, PASS, SYNC_SECRET];
@@ -2199,6 +2200,55 @@ mod tests {
         }
     }
 
+    /// The `Debug` output of what the RDP path builds from a connection (the plan) holds neither
+    /// the password nor the user name nor the domain. M11 review #79: the old check formatted
+    /// `AppState`, whose `Debug` prints three fields and never a plan, so it could not fail.
+    #[test]
+    fn rdp_plan_debug_hides_password_user_and_domain() {
+        let w = world(true);
+        let node = commands::create_connection(
+            &w.st,
+            None,
+            None,
+            "rdp".into(),
+            fernjo_core::Protocol::Rdp,
+            "dc01.example.net".into(),
+        )
+        .unwrap()
+        .id
+        .unwrap();
+        commands::update_node(
+            &w.st,
+            node,
+            patch(json!({"credential": w.pw_id, "domain": RDP_DOMAIN, "username": RDP_USER})),
+        )
+        .unwrap();
+        let plan = crate::connect_plan::resolve_session(&w.st, node, false).unwrap();
+        let crate::connect_plan::Plan::Rdp(rdp) = &plan else {
+            panic!("an RDP connection resolves to an RDP plan: {plan:?}");
+        };
+        // the fixture really carries all three values, so absence below means redaction
+        {
+            use secrecy::ExposeSecret;
+            assert_eq!(rdp.username.as_deref(), Some(RDP_USER));
+            assert_eq!(rdp.domain.as_deref(), Some(RDP_DOMAIN));
+            let crate::connect_plan::RdpCredentialPlan::Ready(secret) = &rdp.credential else {
+                panic!("the vault is unlocked, the password must be ready");
+            };
+            assert_eq!(secret.expose_secret(), PW);
+        }
+        for text in [format!("{plan:?}"), format!("{rdp:?}")] {
+            assert!(
+                text.contains("dc01.example.net"),
+                "the host stays visible: {text}"
+            );
+            for s in [PW, RDP_USER, RDP_DOMAIN] {
+                assert!(!text.contains(s), "RDP plan Debug leaked {s}: {text}");
+            }
+            assert_no_sentinel("RDP plan Debug", &text);
+        }
+    }
+
     #[test]
     fn no_response_contains_a_secret() {
         for unlocked in [true, false] {
@@ -2227,10 +2277,6 @@ mod tests {
                 if name.starts_with("rdp_") {
                     for s in [RDP_USER, RDP_DOMAIN] {
                         assert!(!out.contains(s), "{label} leaked {s}: {out}");
-                        assert!(
-                            !format!("{:?}", w.st).contains(s),
-                            "AppState Debug after {label} leaked {s}"
-                        );
                     }
                 }
                 // the saved tree, the Debug output of state and status never hold a secret
