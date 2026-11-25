@@ -29,10 +29,6 @@ const EVENT_QUEUE: usize = 4;
 const MAX_KI_ROUNDS: usize = 5;
 /// Keepalives sent without an answer before russh ends the connection.
 const KEEPALIVE_MAX: usize = 3;
-/// Lower bound of the stall limit (see [`stall_limit`]): above OpenSSH's default login grace time
-/// (120 s) and the agent's sign wait ([`ConnectParams::DEFAULT_AGENT_SIGN_TIMEOUT`], 120 s), so a
-/// prompt or a touch that keeps the connection silent before the login is not cut short by it.
-const STALL_FLOOR: Duration = Duration::from_secs(180);
 /// How long closing waits for the polite end (the disconnect message sent and the connection task
 /// finished) before the socket is shut down regardless.
 const CLOSE_GRACE: Duration = Duration::from_secs(2);
@@ -80,7 +76,6 @@ pub(crate) fn client_config(keepalive_secs: u32) -> client::Config {
         keepalive_interval: (keepalive_secs > 0)
             .then(|| Duration::from_secs(u64::from(keepalive_secs))),
         keepalive_max: KEEPALIVE_MAX,
-        inactivity_timeout: stall_limit(keepalive_secs),
         nodelay: true,
         // Everything between the server and the terminal must drain before Ctrl+C is echoed, so the
         // data in flight is kept small: SSH window + packets buffered in the channel + EVENT_QUEUE
@@ -89,23 +84,6 @@ pub(crate) fn client_config(keepalive_secs: u32) -> client::Config {
         channel_buffer_size: 4,
         ..client::Config::default()
     }
-}
-
-/// russh's `inactivity_timeout`, here the limit for a connection that is stuck: russh races it
-/// against every write to the socket, so a server that stops reading (the write never completes,
-/// and while it hangs russh polls neither keepalives nor anything else) ends the connection with
-/// `ConnectionLost` instead of freezing the tab for good (M11 review #22). The timer also restarts
-/// whenever anything is sent or received except the keepalive tick itself, and a live server
-/// answers every keepalive, so with keepalive on it never fires on an idle session earlier than
-/// the keepalive check would (`keepalive_max + 1` silent intervals); [`STALL_FLOOR`] keeps it clear
-/// of long silences before the login. With keepalive off there is no limit: an idle shell would
-/// otherwise be cut, and nothing tells it apart from a stall.
-fn stall_limit(keepalive_secs: u32) -> Option<Duration> {
-    (keepalive_secs > 0).then(|| {
-        let keepalive_check = Duration::from_secs(u64::from(keepalive_secs))
-            * u32::try_from(KEEPALIVE_MAX + 1).unwrap_or(u32::MAX);
-        keepalive_check.max(STALL_FLOOR)
-    })
 }
 
 /// The host key algorithms to offer for a host: those of the keys this device confirmed first,
@@ -991,6 +969,11 @@ mod tests {
         assert_eq!(c.keepalive_interval, Some(Duration::from_secs(30)));
         assert_eq!(c.keepalive_max, 3);
         assert_eq!(client_config(0).keepalive_interval, None);
+        // No inactivity timeout: russh restarts it only on a non-keepalive loop pass, and its clock
+        // keeps counting while the computer sleeps, so after a sleep longer than the limit a
+        // healthy idle session would end at wake (Docs/DECISIONS.md, M11 review #22).
+        assert_eq!(c.inactivity_timeout, None);
+        assert_eq!(client_config(0).inactivity_timeout, None);
     }
 
     /// M11 review #24: the types this device confirmed are offered first, whatever the synced
@@ -1017,18 +1000,6 @@ mod tests {
             stored_algorithms(vec![], vec![p256.clone(), Algorithm::Ed25519]),
             [p256, Algorithm::Ed25519]
         );
-    }
-
-    /// M11 review #22: with keepalive on, a connection stuck in a write ends after the keepalive
-    /// check's span (`keepalive_max + 1` intervals), never sooner than the floor; with keepalive
-    /// off nothing ends an idle shell.
-    #[test]
-    fn client_config_ends_a_stalled_connection_only_with_keepalive_on() {
-        let limit = |k| client_config(k).inactivity_timeout;
-        assert_eq!(limit(30), Some(Duration::from_secs(180)));
-        assert_eq!(limit(60), Some(Duration::from_secs(240)));
-        assert_eq!(limit(1), Some(STALL_FLOOR));
-        assert_eq!(limit(0), None);
     }
 
     fn offered<T: AsRef<str>>(list: &[T]) -> Vec<&str> {
