@@ -96,7 +96,7 @@ If the hub's data is lost, restored from an older backup, or the volume is recre
 
 ## History files
 
-Each replaced head is kept as `history/<seq>.env`, the newest ten. They are encrypted envelopes, so reading one needs the sync key; to roll back, copy one over `head.env` while the hub is stopped, and use "Re-seed" afterwards if devices complain. Writes are atomic (random temp name, fsync, rename), and a stale write (HTTP 412) leaves head and history untouched.
+Each replaced head is kept as `history/<seq>.env`, the newest ten. They are encrypted envelopes, so reading one needs the sync key; to roll back, copy one over `head.env` while the hub is stopped (a copy, not a symbolic link: the hub refuses a `head.env` that is a link or larger than 64 MiB), and use "Re-seed" afterwards if devices complain. Writes are atomic (random temp name, fsync, rename), and a stale write (HTTP 412) leaves head and history untouched.
 
 ## API (protocol 1)
 
