@@ -392,6 +392,68 @@ Secrets check (reviewer W, by reading): all 19 commands added since v0.2.0 have 
 - Release workflow and scripts (C): top-level `contents: read` with write only in `publish` and CodeQL, SHA-pinned actions, untrusted values only through `env:`, the publish job, cache scopes, build pins, `check-no-build-paths.sh` (the M11 Task 11 fix is correct), the smoke-test scripts, the notices generator, the performance scripts, `deny.toml` sources and licences, the bundle configuration, the required checks and the narrow M11 `.gitignore`/`.gitleaks.toml` additions.
 - Diff `v0.2.0...HEAD` (D): the hub HTTP layer, store and deployment, the sync client, envelope, pairing, engine, state files and keychain item, the app sync commands and port (except row 30), vault adopt/replace/install/merge, `fernjo-fs` (except row 21), quick connect, open tabs, the session queue, pending host-key trust, Pageant selection, idle auto-lock, native paste, the RDP TLS verifier, channel cap and write timeout, the import changes, the AppImage menu entry, the data-folder guard, the webview side and the CI and dependency changes.
 
+## v0.3.0 readiness
+
+Date 2026-11-25. Branch `feature/m11-hardening-security`, not yet pushed and without a pull request. Code head `bf0013e`; the two commits after it (`docs(m11): record the owner decisions on the security review` and this section) change only documents, so the command results below hold for the final head. Plan `Docs/superpowers/plans/2026-11-24-milestone-11-hardening-security.md`, Task 20. This section prepares the decision; no release step was performed (no version bump, no release branch, no tag). The version files still say `0.0.0`, so step 1 of the reusable checklist (`bash tools/check-release-version.sh v0.3.0`) is not run here; it belongs to the release branch.
+
+### Reusable checklist on the branch head
+
+- **Step 2, documentation matches the app:** `README.md` (RDP bullet: NLA required, clipboard default and mark; a sync bullet; the privacy statement now names the hub that sync talks to when it is set up; install section and attestation command unchanged), `SECURITY.md` (what matters most: NLA, sync, symlinks and memory; a "Releases" paragraph on attestations and the missing code signing) and `CHANGELOG.md` `[Unreleased]` (milestones M9, M10 and M11 named; the minimum weight of queued input added) were compared with the code and its error texts (`nla_required`, `certificate_unsupported`, `input_queue_full`, `quick_user_password`, `changed_on_disk` in `ui/src/lib/sync-errors.ts`, the update-limit text, "Clipboard shared with"). `ui/src/lib/shortcuts.ts` was not changed in M11, so the README shortcut table is as checked in M10. `CLAUDE.md` "Project-specific" records `fernjo-fs`, the channel cap, `tls::upgrade`, `resize_queued`, `MIN_OP_WEIGHT` (new sentence), NLA and the attestation permissions. `dotnet run tools/roadmap.cs -- check` is in the table below.
+- **Step 3, build and test evidence:** the table below. `gh pr checks` and the CodeQL result check do not exist yet (no pull request), and the `release.yml` dry run has not run for this branch; both are gaps, not results.
+- **Step 4, security review:** the section "v0.3.0 security review" above (nine reviewers, rows 21 to 80, every row decided). `gh api "repos/benjo-code/fernjo/code-scanning/alerts?state=open" --jq length` on 2026-11-25: `0` (covers `dev` and `main`; this branch has not been scanned). Open Dependabot alert: `glib` GHSA-wrw7-89jp-8q8g, known since M0 and accepted. gitleaks v8.30.1 over the history (`MSYS_NO_PATHCONV=1 docker run --rm -v "D:/VS-Code/fernjo:/repo:ro" ghcr.io/gitleaks/gitleaks:v8.30.1 detect --source /repo --config /repo/.gitleaks.toml --redact --no-banner`): 126 commits scanned, "no leaks found".
+- **Step 5, known gaps:** the table below.
+- **Step 7, verdict:** the last table of this section.
+
+### Commands (Windows 11, `bf0013e`, all run again for this section)
+
+| Command | Result |
+|---|---|
+| `cargo build --workspace` | exit 0 |
+| `cargo test --workspace` | exit 0, 1240 passed, 0 failed, 2 ignored (summed over 43 test binaries; `time_spent_on_the_host_key_prompt...` passed, no rerun needed) |
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo deny check` | exit 0, "advisories ok, bans ok, licenses ok, sources ok" (61 duplicate-crate warnings only; no new ignore in M11) |
+| `pnpm test` | exit 0, 59 files, 806 tests passed |
+| `pnpm lint` | exit 0 (ESLint, Prettier clean, `svelte-check` 272 files, 0 errors, 0 warnings) |
+| `pnpm audit --prod` | exit 0, "No known vulnerabilities found" |
+| `bash tools/test-release-scripts.sh` | exit 0, 78/78 passed (one Unix permission case skips under Git Bash on Windows and says so) |
+| `bash tools/check-workflows.sh` | exit 0 |
+| `dotnet run tools/roadmap.cs -- check` | "Roadmap is valid and ROADMAP.md is up to date." |
+| `cargo test -p fernjo-ssh` with the throwaway container (`eval "$(tools/ssh-test-server.sh start)"`, run, `tools/ssh-test-server.sh stop`) | exit 0, 94 passed, 0 failed; the container was removed afterwards; the agent test skips on Windows |
+
+Not run here: the RDP tests that need a host (`cargo test -p fernjo-rdp --test connect` with `FERNJO_TEST_RDP_ADDR`, they skip without it, also in CI) and the Unix-only tests (file and folder modes, symlinks, FIFOs, `fernjo-hub` signal handling), which compile out on Windows; the Unix test in `fernjo-fs` was type-checked for `x86_64-unknown-linux-gnu` and first runs for real in CI job `rust` on the pull request.
+
+### Known gaps
+
+| Gap | Disposition |
+|---|---|
+| **RDP on a real Windows 11 host after the M11 changes** (NLA required, own TLS verifier from PR #25, channel and update caps, clipboard marker): `cargo test -p fernjo-rdp --test connect` with `FERNJO_TEST_RDP_*` and one connection from `pnpm tauri dev` on a scratch `FERNJO_DATA_DIR` (certificate prompt, typing, resize, clipboard both ways, the marker). The NLA refusal is checked with a host whose security layer is set to "RDP" only (a host set to "SSL" still negotiates CredSSP and connects). The own TLS verifier has not met a real host either. | **Blocker** (owner, M11 "Manual, owner") |
+| **Sync on two real devices after the M11 sync fixes** (older-head refusal, vault file guard, `seq` checks, linear merge): pair, edit on each side, vault entry on one and connect with it on the other; the Linux laptop and its Secret Service keychain item were never run (M9 block "Open manual checks (owner): M9") | **Blocker** (owner, M11 "Manual, owner") |
+| **Real-app UI checks of M11** (no WebView2 runtime on the development machine, so only the Chromium harness and unit tests ran): the paste filter with a hostile paste, an OSC 8 link from the SSH test container, the RDP clipboard hold (a hidden tab writes nothing), the "Restart fernjo?" dialog and the sync close push, the CSP and `form-action` in a `pnpm tauri build --no-bundle` binary with no console warning, `freezePrototype` (left off), the opener plugin without its init script, the clipboard timeout with a hanging owner | **Blocker** for the owner walk-through; each is a recorded check in `Docs/DECISIONS.md` |
+| **Windows sleep with an SSH tab open**: the SSH inactivity timeout was dropped because it cut healthy sessions after a sleep; the replacement (a bounded close, no detection) was never run through a real sleep | Owner check; accepted risk if skipped |
+| **M10 owner checks** (roadmap, M10 block "Open manual checks (owner): M10"): quick connect, restore tabs, vault auto-lock, Pageant, Cmd+Q, native paste on all three systems, layout at 1280x800 | Owner checks, not run |
+| **M7, M8 and earlier owner checks** (roadmap blocks "Open manual checks (owner)" and "Open manual checks (owner): M9"): Linux and macOS items postponed on 2026-11-15, the close dialog on every OS, the discoverability walk-through, M8 Windows Server with NLA | Owner checks, waived for earlier milestones, still open |
+| **Unix-only tests and the Linux and macOS code paths** have not run for this branch (`fernjo-fs` modes and symlinks, hub signals, the changed `agent.rs`) | Run in the pull request's CI jobs; check `gh pr checks` before the merge |
+| **`release.yml` dry run** for the packaging inputs changed in M11 (provenance permissions, `publish` folders), and CodeQL on the branch | Runs on the pull request; check before the release |
+| **Build provenance** (row 71) is first exercised on the v0.3.0 release run; `gh attestation verify` with `--repo`, `--signer-workflow` and `--source-ref` has not been run against a real attestation | Unverified claim, not shown as verified; check on the release run |
+| **Repo settings** (the owner's, open): required reviews on `dev` (row 32), "Require actions to be pinned to a full-length commit SHA" and CodeQL for `actions` (row 69), a ruleset for `v*` tags (row 70), immutable releases with a draft-then-publish flow (row 71). Without the tag ruleset the attestation claim in the README ("holds as long as release tags cannot be moved") is conditional. | Owner, before or soon after the release |
+| **Row 73** (fork pull request dry run publishes artifacts of the official repository): needs a real fork pull request run | After release |
+| **Accepted findings** (`Docs/DECISIONS.md` "M11: owner decisions on the security review (2026-11-25)"): the rest of row 22 (a frozen SSH tab is not detected), Lows 35, 36, 37, 38, 40, 41, 42, 45, 51, 55, 56, 57, 62, 68 and 75; acknowledged design changes (rows 21, 24, 28, 53); the glib Dependabot alert; unsigned installers; the v0.2.0 Medium on the RDP clipboard default | Accepted by the owner, remaining risks recorded |
+| **Behaviour change that can surprise**: an RDP host without NLA no longer connects (backlog "RDP: allow servers without NLA per connection"); named in the CHANGELOG | Accepted by the owner (row 27) |
+| **Not put to the owner**: a native confirmation for `sync_setup` and `sync_join` (row 52, backlog) | After release unless the owner wants it first |
+| **Performance not re-run** after M11 (the JSON readers now run two passes, the writer and reader moved into `fernjo-fs`); `tools/measure-performance.ps1 -Exe target/release/fernjo.exe -Runs 10` needs a release build and the WebView2 runtime | Owner or a machine with the runtime, before the release if possible |
+
+### Verdict
+
+| Area | Verdict |
+|---|---|
+| Security review | **Go.** No High is open (row 21, a High by ruling, is fixed and re-read), every Medium is fixed (22 to 32 and 80) or its remaining risk is accepted by the owner (the rest of row 22), and every Low is fixed, not a defect (78), accepted with the reason recorded, or an owner repo setting named below (rows 32, 69, 70, 71). What the review cannot show is on the owner's list above (real hosts, real devices, real app). |
+| Installers | **Not built in M11.** The `release.yml` dry run on the pull request and the release run are the evidence; provenance is unverified until that run. |
+| Docs | **Go.** README, `SECURITY.md`, `CHANGELOG.md` `[Unreleased]` and `CLAUDE.md` match the code as far as read; the known gaps are named above. |
+| Performance | **Not re-run.** No claim is made for 0.3.0 beyond `Docs/performance.md` (measured for 0.1.1). |
+| Repo settings | **Open** (four owner settings, above). |
+| **Overall** | **No-go until the owner checks.** The code is gate-green and the review is closed, but the RDP and sync checks on real hosts and devices and the real-app UI checks are the owner's, and M11 stays `in-progress` until they ran or the owner waives them with a date. After them: Task 22 (record the results, close M11), the pull request to `dev`, then the release procedure on the owner's instruction. |
+
 ## v0.1.0 security review
 
 Review date: 2026-11-18 (Windows 11; CI dry-run installers of run `44205574554`, PR #10). The checks of Steps 1-4 ran on `target/release/fernjo.exe` built from commit `1bc2762` (built after the last commit that touched `src-tauri`, `crates` or `ui`). The fix commits of this review (`64aa818`, `6648cff`, `5791506`) and the later import fixes (`36c3be0`, `de2a615`, `c809677`) post-date that binary; the real-app checks were not repeated on a rebuild, so they say nothing about those changes (the code fixes have their own tests). Every check below records its command, its result and the date. Real-app checks ran with a scratch `FERNJO_DATA_DIR`; the owner's real data folder was not read, printed or modified, and "Unlock automatically on this device" was never ticked.

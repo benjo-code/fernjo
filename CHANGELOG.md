@@ -6,7 +6,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 
 ## [Unreleased]
 
-Daily-use features: milestone M10.
+Multi-device sync (M9), daily-use features (M10) and the security hardening of both (M11).
 
 ### Added
 
@@ -49,7 +49,7 @@ Daily-use features: milestone M10.
 - SSH (M11): channels a server tries to open towards fernjo (forwarding, X11, agent, a second session) are refused; fernjo asks for none, and before they were accepted and kept.
 - Host keys are written to `known_hosts` only after the SSH handshake succeeded (before, the decision was written inside the key check; the library already verified the signature first, so this is defence in depth). A failed handshake leaves the file unchanged.
 - Reading JSON files no longer costs many times their size in memory (M11): a hostile connections export, backup, sync snapshot or a `connections.json` or `settings.json` with junk in it could make fernjo allocate gigabytes (a 32 MiB import file took 3 GiB, a `connections.json` at the 64 MiB limit about 6 GiB on every start, which can end the program). Reading now needs a small multiple of the file's size. A key that appears twice in one object of `connections.json`, `settings.json` or a sync state file now makes that file unreadable (the last one used to win; fernjo never writes such a file).
-- The input a session can have waiting is capped at 8 MiB; beyond it the call is refused with "too much input is waiting; try again" instead of growing memory.
+- The input a session can have waiting is capped at 8 MiB; beyond it the call is refused with "too much input is waiting; try again" instead of growing memory. Every queued write counts at least 64 bytes against that cap, so a flood of one-byte writes is bounded too (M11), and a burst of window resizes queues a single resize.
 - App shortcuts (Ctrl+Shift+letter, Cmd+letter) work on non-Latin keyboard layouts, and Ctrl+Shift+W no longer closes a hidden tab while the vault view is open.
 - The splitter's keyboard focus is a 1 px centred line and its hit area no longer covers the tree's scrollbar.
 - The tree keeps 21 rows at the default window size instead of 23 (the quick connect field takes the room) so the properties panel stays reachable at 1280x800.
