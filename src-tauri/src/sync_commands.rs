@@ -472,6 +472,13 @@ fn record(state: &AppState, result: Result<Outcome, SyncError>) {
             rt.last = LastOutcome::VaultRolledBack;
             rt.error = None;
         }
+        // `build_status` derives the rolled-back state (and its Re-seed offer) from `rt.last`
+        // before it looks at `rt.error`: an earlier rolled-back outcome must not survive this
+        // refusal, or Re-seed would push the older local vault over the head
+        Err(e @ SyncError::LocalFailed(_)) if code_of(&e) == "vault_below_mark" => {
+            rt.last = LastOutcome::Unknown;
+            rt.error = Some(status_error(&e));
+        }
         Err(e) => rt.error = Some(status_error(&e)),
     }
 }

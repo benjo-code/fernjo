@@ -1006,6 +1006,27 @@ fn a_head_newer_than_a_local_vault_below_the_mark_is_not_offered_reseed() {
     assert_eq!(credential_names(&a), ["one", "three", "two"]);
 }
 
+/// N1-N4 review, minor 2: a rolled-back outcome of an earlier run (vault or hub sequence) must not
+/// survive a later `vault_below_mark`, or the status would still offer Re-seed for it.
+#[test]
+fn vault_below_mark_after_a_rolled_back_run_offers_no_reseed() {
+    let hub = start_hub();
+    let a = dev();
+    setup(&a, &hub, "a");
+    let below_mark = || Err(SyncError::LocalFailed("vault_below_mark".to_owned()));
+    for earlier in [
+        Err(SyncError::LocalFailed("rolled_back".to_owned())),
+        Ok(Outcome::HubRolledBack { found: 1, seen: 2 }),
+    ] {
+        record(&a.st, earlier);
+        assert_eq!(build_status(&a.st).state, "rolled_back");
+        record(&a.st, below_mark());
+        let s = build_status(&a.st);
+        assert_eq!(s.state, "error", "{:?}", s.error);
+        assert_eq!(s.error.as_ref().unwrap().code, "vault_below_mark");
+    }
+}
+
 fn head_seq(hub: &Hub) -> Option<u64> {
     HubClient::new(&HubConfig {
         url: hub.url(),
