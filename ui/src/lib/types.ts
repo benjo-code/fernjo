@@ -445,7 +445,6 @@ export type Prompt =
       port: number;
       keyType: string;
       fingerprint: string;
-      previous: string[];
     }
   | {
       kind: "hostKeyChanged";

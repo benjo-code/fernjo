@@ -20,7 +20,6 @@ const prompt: HostKey = {
   port: 2222,
   keyType: "ssh-ed25519",
   fingerprint: FINGERPRINT,
-  previous: [],
 };
 
 async function setup() {
@@ -144,43 +143,12 @@ test("tab_and_shift_tab_wrap_inside_the_prompt", async () => {
   expect(press(false).defaultPrevented).toBe(false);
 });
 
-test("synced_host_key_prompt_explains_where_the_key_came_from_and_shows_no_previous_when_empty", async () => {
+test("synced_host_key_prompt_explains_where_the_key_came_from", async () => {
   await setup();
   const text = document.body.textContent!.replace(/\s+/g, " ");
   expect(text).toContain(
     "This host key was added by another device or file. This device has not confirmed it. If you did not add this host yourself on one of your devices, cancel.",
   );
-  expect(text).not.toContain("previously trusted");
-});
-
-test("synced_host_key_prompt_lists_the_previously_trusted_fingerprints", async () => {
-  const t = await startedTab();
-  const withPrevious: HostKey = { ...prompt, previous: ["SHA256:old1", "SHA256:old2"] };
-  t.emit({ kind: "prompt", id: 7, prompt: withPrevious });
-  mounted = mount(HostKeySyncedPrompt, {
-    target: document.body,
-    props: { tab: t.tab, sessions: t.sessions, prompt: withPrevious },
-  });
-  flushSync();
-  await tick();
-  expect(document.body.textContent).toContain("This device previously trusted");
-  const codes = [...document.querySelectorAll<HTMLElement>("code")].map((c) => c.textContent);
-  expect(codes).toEqual(expect.arrayContaining([FINGERPRINT, "SHA256:old1", "SHA256:old2"]));
-  expect(document.querySelectorAll("code")).toHaveLength(3);
-});
-
-test("synced_host_key_prompt_lists_a_repeated_previous_fingerprint_without_a_keying_error", async () => {
-  const t = await startedTab();
-  const repeated: HostKey = { ...prompt, previous: ["SHA256:SAME", "SHA256:SAME"] };
-  t.emit({ kind: "prompt", id: 7, prompt: repeated });
-  mounted = mount(HostKeySyncedPrompt, {
-    target: document.body,
-    props: { tab: t.tab, sessions: t.sessions, prompt: repeated },
-  });
-  flushSync();
-  await tick();
-  const codes = [...document.querySelectorAll<HTMLElement>("code")].map((c) => c.textContent);
-  expect(codes).toEqual([FINGERPRINT, "SHA256:SAME", "SHA256:SAME"]);
 });
 
 test("the_two_confirm_buttons_are_explained_in_one_muted_line_under_the_buttons", async () => {

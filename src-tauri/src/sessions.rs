@@ -34,11 +34,12 @@
 //! 128 KiB unacknowledged and at most one more batch (`MAX_BATCH` 32 KiB). Details and
 //! measurements: `Docs/DECISIONS.md`, "M4 flow control numbers".
 //!
-//! Host keys: `hostKey` is a host that is not in `known_hosts`, `hostKeyChanged` a stored key that
-//! differs, and `hostKeySynced` a key that `known_hosts` has but this device has not confirmed
-//! (another device or a file added it; it carries `previous`, the fingerprints this device
-//! confirmed before for that host, port and key type). `hostKey` and `hostKeySynced` are answered
-//! with `{kind:"hostKey", decision:"once"|"always"|"reject"}`; for the synced one "always" confirms
+//! Host keys: `hostKey` is a host that neither `known_hosts` nor this device's confirmed keys know,
+//! `hostKeyChanged` a key that differs from the stored ones (in `known_hosts` for its type, or any
+//! key this device confirmed for the host, whatever its type), and `hostKeySynced` a key that
+//! `known_hosts` has but this device has not confirmed, for a host this device confirmed nothing
+//! for (another device or a file added it). `hostKey` and `hostKeySynced` are answered with
+//! `{kind:"hostKey", decision:"once"|"always"|"reject"}`; for the synced one "always" confirms
 //! the key on this device and "once" records nothing.
 //!
 //! # RDP sessions
@@ -195,7 +196,6 @@ pub enum PromptView {
         port: u16,
         key_type: String,
         fingerprint: String,
-        previous: Vec<String>,
     },
     HostKeyChanged {
         host: String,
@@ -510,7 +510,6 @@ impl Interaction for TauriInteraction {
             port: prompt.port,
             key_type: prompt.key_type,
             fingerprint: prompt.fingerprint,
-            previous: prompt.previous,
         };
         match self.ask(view).await {
             Some(PromptAnswer::HostKey { decision }) => match decision {

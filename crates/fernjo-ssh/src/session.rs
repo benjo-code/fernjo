@@ -108,6 +108,20 @@ fn stall_limit(keepalive_secs: u32) -> Option<Duration> {
     })
 }
 
+/// The host key algorithms to offer for a host: those of the keys this device confirmed first,
+/// then those of the synced `known_hosts`, without duplicates. The synced file can be written by
+/// others, so it must not be able to put a type this device never confirmed ahead of the
+/// confirmed one, nor drop the confirmed type by losing the host's lines (M11 review #24).
+fn stored_algorithms(confirmed: Vec<Algorithm>, known: Vec<Algorithm>) -> Vec<Algorithm> {
+    let mut out = confirmed;
+    for alg in known {
+        if !out.contains(&alg) {
+            out.push(alg);
+        }
+    }
+    out
+}
+
 /// Offer only the host key algorithms already stored for this host, so a server cannot dodge the
 /// stored key by presenting a different type (OpenSSH does the same).
 fn restrict_host_key_algorithms(config: &mut client::Config, stored: &[Algorithm]) {
@@ -618,7 +632,20 @@ impl Session {
             let (store, host, port) = (known_hosts.clone(), params.host.clone(), params.port);
             crate::known_hosts::blocking(move || store.stored_algorithms(&host, port)).await?
         };
-        restrict_host_key_algorithms(&mut config, &stored);
+        // An unreadable confirmed file adds nothing here; the handler then asks (never trusts).
+        let confirmed_algorithms = match &confirmed {
+            Some(store) => {
+                let (store, host, port) = (store.clone(), params.host.clone(), params.port);
+                crate::known_hosts::blocking(move || store.stored_algorithms(&host, port))
+                    .await
+                    .unwrap_or_default()
+            }
+            None => Vec::new(),
+        };
+        restrict_host_key_algorithms(
+            &mut config,
+            &stored_algorithms(confirmed_algorithms, stored),
+        );
 
         // Name resolution and the TCP connect get the whole timeout.
         let stream = match tokio::time::timeout(
@@ -964,6 +991,32 @@ mod tests {
         assert_eq!(c.keepalive_interval, Some(Duration::from_secs(30)));
         assert_eq!(c.keepalive_max, 3);
         assert_eq!(client_config(0).keepalive_interval, None);
+    }
+
+    /// M11 review #24: the types this device confirmed are offered first, whatever the synced
+    /// `known_hosts` lists (an added ECDSA line ahead of them, or no line at all).
+    #[test]
+    fn the_confirmed_host_key_types_are_offered_first() {
+        let p256 = Algorithm::Ecdsa {
+            curve: EcdsaCurve::NistP256,
+        };
+        for known in [vec![p256.clone(), Algorithm::Ed25519], vec![]] {
+            let mut config = client_config(30);
+            restrict_host_key_algorithms(
+                &mut config,
+                &stored_algorithms(vec![Algorithm::Ed25519], known.clone()),
+            );
+            assert_eq!(config.preferred.key[0], Algorithm::Ed25519, "{known:?}");
+            assert_eq!(
+                config.preferred.key.len(),
+                if known.is_empty() { 1 } else { 2 }
+            );
+        }
+        // nothing confirmed: `known_hosts` alone, in its order
+        assert_eq!(
+            stored_algorithms(vec![], vec![p256.clone(), Algorithm::Ed25519]),
+            [p256, Algorithm::Ed25519]
+        );
     }
 
     /// M11 review #22: with keepalive on, a connection stuck in a write ends after the keepalive

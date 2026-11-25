@@ -56,7 +56,6 @@ test("session_prompt_picks_the_variant", async () => {
       port: 22,
       keyType: "ssh-ed25519",
       fingerprint: "SHA256:x",
-      previous: [],
     },
   });
   expect(title()).toBe("Confirm this host key?");

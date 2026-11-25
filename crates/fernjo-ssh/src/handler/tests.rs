@@ -8,6 +8,8 @@ use secrecy::SecretString;
 const ED_A: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIJ4tyazBiaSQKaes5aSfu9yuLDHNJEPyJiAHqg83VN5T";
 const FP_ED_A: &str = "SHA256:fJx8pIbcHzkR2+fd1fj6DszwZ7Uzsw82br7NCdiBVQg";
 const ED_B: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIMBS1jUJrjneokA1w91/JopLVVupB9FJxwYnQw8HiGVt";
+const EC_X: &str = "AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBKMNL3Oj68qibnhw2CsFjpUuUG0PT24VO3pPh7xdd24NHoWiNtA5zM5HfyvdTlx5GtITgyTX0XRZjFOOd3mpCDg=";
+const FP_EC_X: &str = "SHA256:L1oGUojNYTobppCbpYRKbpqCK2TMVx8HPOE4uztJs5k";
 
 fn key(b64: &str) -> PublicKey {
     russh::keys::parse_public_key_base64(b64).unwrap()
@@ -177,7 +179,6 @@ async fn known_but_unconfirmed_asks_and_always_records_so_the_next_attempt_is_si
         ("Host.Example", 2222, "ssh-ed25519")
     );
     assert_eq!(prompt.fingerprint, FP_ED_A);
-    assert!(prompt.previous.is_empty());
     assert!(
         !f.confirmed.exists(),
         "nothing is written before the handshake"
@@ -225,19 +226,22 @@ async fn reject_of_a_synced_key_is_host_key_rejected_and_records_nothing() {
 }
 
 #[tokio::test]
-async fn a_key_that_differs_from_the_confirmed_one_asks_with_previous() {
+async fn a_key_that_differs_from_the_confirmed_one_is_a_changed_key() {
+    // `known_hosts` (synced) holds B, this device confirmed A: the warning names A, and
+    // "replace" confirms B on this device without touching `known_hosts`.
     let f = fixture();
     add(&f.known, &key(ED_B));
     add(&f.confirmed, &key(ED_A));
+    let known_before = std::fs::read(&f.known).unwrap();
     let (h, script) = handler(
         &f.known,
         Some(KnownHosts::new(&f.confirmed)),
-        Script::default().synced(HostKeyDecision::TrustAlways),
+        Script::default().changed(HostKeyChangedDecision::Replace),
     );
     assert!(h.decide(&key(ED_B)).await);
-    assert_eq!(script.prompts(), (0, 1, 0));
-    let prompt = script.synced_prompts.lock().unwrap()[0].clone();
-    assert_eq!(prompt.previous, vec![FP_ED_A.to_string()]);
+    assert_eq!(script.prompts(), (0, 0, 1));
+    let prompt = script.changed_prompts.lock().unwrap()[0].clone();
+    assert_eq!(prompt.old, vec![FP_ED_A.to_string()]);
     h.apply_pending_trust().await.unwrap();
     // The confirmed key was replaced, not duplicated.
     assert_eq!(status(&f.confirmed, &key(ED_B)), HostKeyStatus::Known);
@@ -245,6 +249,56 @@ async fn a_key_that_differs_from_the_confirmed_one_asks_with_previous() {
         status(&f.confirmed, &key(ED_A)),
         HostKeyStatus::Changed { .. }
     ));
+    assert_eq!(std::fs::read(&f.known).unwrap(), known_before);
+}
+
+/// M11 review #24, variant a: whoever can write the synced folder deletes the host's lines from
+/// `known_hosts`, and a machine in the path presents a key of another type. This device confirmed
+/// an ed25519 key, so the person gets the changed-key warning naming it, not a first-contact
+/// prompt.
+#[tokio::test]
+async fn a_host_this_device_confirmed_is_never_a_first_contact_even_when_known_hosts_lost_it() {
+    let f = fixture();
+    add(&f.confirmed, &key(ED_A));
+    let (h, script) = handler(
+        &f.known,
+        Some(KnownHosts::new(&f.confirmed)),
+        Script::default(),
+    );
+    assert!(!h.decide(&key(EC_X)).await);
+    assert_eq!(script.prompts(), (0, 0, 1));
+    let prompt = script.changed_prompts.lock().unwrap()[0].clone();
+    assert_eq!(prompt.old, vec![FP_ED_A.to_string()]);
+    assert_eq!(prompt.new, FP_EC_X);
+    assert_eq!(prompt.key_type, "ecdsa-sha2-nistp256");
+    assert!(matches!(
+        rejection(&h),
+        Some(SshError::HostKeyChangedRejected)
+    ));
+}
+
+/// M11 review #24, variant b: the writer adds an ECDSA line for the host to `known_hosts`. The key
+/// is "known" there but this device confirmed only its ed25519 key: the changed-key warning, with
+/// the confirmed fingerprint, not the mild "came from sync" prompt.
+#[tokio::test]
+async fn a_key_of_another_type_planted_in_known_hosts_is_a_changed_key() {
+    let f = fixture();
+    add(&f.known, &key(EC_X));
+    add(&f.known, &key(ED_A));
+    add(&f.confirmed, &key(ED_A));
+    let (h, script) = handler(
+        &f.known,
+        Some(KnownHosts::new(&f.confirmed)),
+        Script::default().changed(HostKeyChangedDecision::Replace),
+    );
+    assert!(h.decide(&key(EC_X)).await);
+    assert_eq!(script.prompts(), (0, 0, 1));
+    let prompt = script.changed_prompts.lock().unwrap()[0].clone();
+    assert_eq!(prompt.old, vec![FP_ED_A.to_string()]);
+    // "replace" confirms the new key next to the old one of the other type
+    h.apply_pending_trust().await.unwrap();
+    assert_eq!(status(&f.confirmed, &key(EC_X)), HostKeyStatus::Known);
+    assert_eq!(status(&f.confirmed, &key(ED_A)), HostKeyStatus::Known);
 }
 
 #[tokio::test]

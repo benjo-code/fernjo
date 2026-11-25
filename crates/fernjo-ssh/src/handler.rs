@@ -111,6 +111,19 @@ impl<I: Interaction> ClientHandler<I> {
         .await
     }
 
+    /// The keys this device confirmed for the host and port, of every algorithm. Empty when the
+    /// layer is off or nothing is confirmed; an unreadable confirmed file also counts as empty
+    /// (it never makes a key trusted, see `decide_synced`).
+    async fn confirmed_keys(&self) -> Vec<PublicKey> {
+        let Some(confirmed) = &self.confirmed else {
+            return Vec::new();
+        };
+        let (store, host, port) = (confirmed.clone(), self.host.clone(), self.port);
+        blocking(move || store.stored_keys(&host, port))
+            .await
+            .unwrap_or_default()
+    }
+
     async fn decide(&self, key: &PublicKey) -> bool {
         if let Ok(mut slot) = self.pending_trust.lock() {
             *slot = None;
@@ -122,6 +135,15 @@ impl<I: Interaction> ClientHandler<I> {
         match status {
             HostKeyStatus::Known => self.decide_synced(key).await,
             HostKeyStatus::Unknown => {
+                // `known_hosts` is synced and can lose the host's lines; this device's own record
+                // decides whether this is a first contact (M11 review #24).
+                let confirmed = self.confirmed_keys().await;
+                if !confirmed.is_empty() && !confirmed.contains(key) {
+                    let old = confirmed.iter().map(fingerprint).collect();
+                    return self
+                        .ask_changed(key, old, TrustAction::Replace(key.clone()))
+                        .await;
+                }
                 let prompt = HostKeyPrompt {
                     host: self.host.clone(),
                     port: self.port,
@@ -139,43 +161,63 @@ impl<I: Interaction> ClientHandler<I> {
                 }
             }
             HostKeyStatus::Changed { stored } => {
-                let prompt = HostKeyChangedPrompt {
-                    host: self.host.clone(),
-                    port: self.port,
-                    key_type: key.algorithm().to_string(),
-                    old: stored,
-                    new: fingerprint(key),
-                };
-                let decision = {
-                    let _prompting = Prompting::begin(&self.prompting);
-                    self.interaction.host_key_changed(prompt).await
-                };
-                match decision {
-                    HostKeyChangedDecision::Replace => self.park(TrustAction::Replace(key.clone())),
-                    HostKeyChangedDecision::Reject => self.reject(SshError::HostKeyChangedRejected),
-                }
+                self.ask_changed(key, stored, TrustAction::Replace(key.clone()))
+                    .await
             }
         }
     }
 
+    /// The changed-key warning: `old` are the fingerprints the presented key differs from.
+    /// "Replace" parks `on_replace`.
+    async fn ask_changed(
+        &self,
+        key: &PublicKey,
+        old: Vec<String>,
+        on_replace: TrustAction,
+    ) -> bool {
+        let prompt = HostKeyChangedPrompt {
+            host: self.host.clone(),
+            port: self.port,
+            key_type: key.algorithm().to_string(),
+            old,
+            new: fingerprint(key),
+        };
+        let decision = {
+            let _prompting = Prompting::begin(&self.prompting);
+            self.interaction.host_key_changed(prompt).await
+        };
+        match decision {
+            HostKeyChangedDecision::Replace => self.park(on_replace),
+            HostKeyChangedDecision::Reject => self.reject(SshError::HostKeyChangedRejected),
+        }
+    }
+
     /// The key is in the synced `known_hosts`. That file can be written by another device or a
-    /// sync tool, so it is only trusted silently when this device confirmed the same key.
+    /// sync tool, so it is only trusted silently when this device confirmed the same key. When
+    /// this device confirmed other keys for the host (of any type), the key counts as changed:
+    /// the warning names the confirmed fingerprints (M11 review #24). Only a host this device has
+    /// confirmed nothing for gets the milder "came from another device" prompt.
     async fn decide_synced(&self, key: &PublicKey) -> bool {
-        let Some(confirmed) = &self.confirmed else {
+        if self.confirmed.is_none() {
             return true;
-        };
+        }
         // An unreadable confirmed file counts as "not confirmed": it asks, it never trusts.
-        let previous = match self.check_in(confirmed, key).await {
-            Ok(HostKeyStatus::Known) => return true,
-            Ok(HostKeyStatus::Unknown) | Err(_) => Vec::new(),
-            Ok(HostKeyStatus::Changed { stored }) => stored,
-        };
+        let confirmed = self.confirmed_keys().await;
+        if confirmed.contains(key) {
+            return true;
+        }
+        if !confirmed.is_empty() {
+            let old = confirmed.iter().map(fingerprint).collect();
+            // `known_hosts` already has the key: "replace" only confirms it on this device
+            return self
+                .ask_changed(key, old, TrustAction::Confirm(key.clone()))
+                .await;
+        }
         let prompt = HostKeySyncedPrompt {
             host: self.host.clone(),
             port: self.port,
             key_type: key.algorithm().to_string(),
             fingerprint: fingerprint(key),
-            previous,
         };
         let decision = {
             let _prompting = Prompting::begin(&self.prompting);

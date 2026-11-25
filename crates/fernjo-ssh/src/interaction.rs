@@ -13,15 +13,14 @@ pub struct HostKeyPrompt {
 }
 
 /// The key is in the synced `known_hosts` but this device has not confirmed it (another device
-/// or a file added it). `previous` are the fingerprints this device confirmed earlier for the
-/// same host, port and key type when they differ from the presented key.
+/// or a file added it), and this device has confirmed no other key for the host and port (that
+/// case is a changed key, [`HostKeyChangedPrompt`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostKeySyncedPrompt {
     pub host: String,
     pub port: u16,
     pub key_type: String,
     pub fingerprint: String,
-    pub previous: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

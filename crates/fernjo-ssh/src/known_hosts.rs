@@ -117,6 +117,15 @@ impl KnownHosts {
         Ok(out)
     }
 
+    /// The keys stored for the host and port, of every algorithm, in file order.
+    pub fn stored_keys(&self, host: &str, port: u16) -> Result<Vec<PublicKey>, SshError> {
+        let bytes = self.read()?;
+        Ok(find_matches(&bytes, &host_port(host, port)?)
+            .into_iter()
+            .map(|m| m.key)
+            .collect())
+    }
+
     /// Appends the key unless it is already stored for the host and port.
     pub fn add(&self, host: &str, port: u16, key: &PublicKey) -> Result<(), SshError> {
         let name = host_port(host, port)?;

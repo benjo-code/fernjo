@@ -134,7 +134,6 @@ describe("TabStrip", () => {
         port: 22,
         keyType: "ssh-ed25519",
         fingerprint: "SHA256:x",
-        previous: [],
       },
     });
     flushSync();

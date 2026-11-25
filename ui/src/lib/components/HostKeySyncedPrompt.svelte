@@ -50,14 +50,6 @@
     <dt>Fingerprint</dt>
     <dd><code class="fingerprint">{prompt.fingerprint}</code></dd>
   </dl>
-  {#if prompt.previous.length > 0}
-    <div class="previous">
-      <span>This device previously trusted</span>
-      {#each prompt.previous as fingerprint, i (i)}
-        <code class="fingerprint">{fingerprint}</code>
-      {/each}
-    </div>
-  {/if}
   <div class="actions">
     <button type="button" class="btn primary" onclick={() => decide("always")}>
       Confirm and connect
@@ -99,14 +91,6 @@
     font-family: var(--font-mono);
     font-size: var(--text-sm);
     user-select: text;
-  }
-
-  .previous {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-    color: var(--color-text-muted);
-    font-size: var(--text-sm);
   }
 
   .choice-note {

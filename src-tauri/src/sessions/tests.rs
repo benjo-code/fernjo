@@ -416,7 +416,6 @@ fn session_event_json_has_no_secret_field() {
                 port: 22,
                 key_type: "ssh-ed25519".into(),
                 fingerprint: "SHA256:x".into(),
-                previous: vec!["SHA256:a".into()],
             },
         },
     ];
@@ -450,7 +449,7 @@ fn session_event_json_has_no_secret_field() {
     assert_eq!(
         json[10]["prompt"],
         json!({"kind": "hostKeySynced", "host": "h", "port": 22, "keyType": "ssh-ed25519",
-            "fingerprint": "SHA256:x", "previous": ["SHA256:a"]})
+            "fingerprint": "SHA256:x"})
     );
     // no key anywhere in the serialised events names a secret
     fn keys(v: &Value, out: &mut Vec<String>) {
@@ -1312,7 +1311,6 @@ async fn synced_host_key_prompt_maps_answers_and_falls_back_to_reject() {
         port: 22,
         key_type: "ssh-ed25519".into(),
         fingerprint: "SHA256:x".into(),
-        previous: vec!["SHA256:a".into()],
     };
     for (wire, expected) in [
         (
@@ -1336,7 +1334,6 @@ async fn synced_host_key_prompt_maps_answers_and_falls_back_to_reject() {
         let (d, _) = tokio::join!(ia.host_key_synced(prompt()), async {
             let (id, p) = rec.wait_prompt().await;
             assert_eq!(p["kind"], "hostKeySynced");
-            assert_eq!(p["previous"], json!(["SHA256:a"]));
             hub.answer(id, answer(wire)).unwrap();
         });
         assert_eq!(d, expected);
