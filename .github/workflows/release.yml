@@ -1,7 +1,7 @@
 name: Release
 
-# Releases are made immutable (repository setting, which the owner turns on before v0.3.0): a
-# published release then takes no new files and its tag cannot move. So a release is built from a
+# Releases are immutable (repository setting, on since 2026-11-25): a published release takes no
+# new files and its tag cannot move. So a release is built from a
 # draft: push the tag `vX.Y.Z`, create a draft release for it
 # (`gh release create vX.Y.Z --draft --verify-tag ...`), and the tag push runs this workflow, which
 # builds the installers on GitHub-hosted runners, attaches them, SHA256SUMS and their build
