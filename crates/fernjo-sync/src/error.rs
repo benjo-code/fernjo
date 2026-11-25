@@ -62,6 +62,9 @@ pub enum SyncError {
     /// The local side (the store or the vault, behind a `LocalPort`) refused or failed; the
     /// text is the stable code of that error, never a value.
     LocalFailed(String),
+    /// The hub's head is at the highest sequence number (`u64::MAX`), so nothing can be pushed
+    /// above it, not even by a re-seed; only the hub's admin can clear it (remove `head.env`).
+    SeqExhausted,
 }
 
 impl SyncError {
@@ -96,6 +99,7 @@ impl SyncError {
             Self::VaultConflictDifferentVaults => "vault_conflict_different_vaults",
             Self::LocalChanged => "local_changed",
             Self::LocalFailed(_) => "local_failed",
+            Self::SeqExhausted => "seq_exhausted",
         }
     }
 }
@@ -143,6 +147,9 @@ impl fmt::Display for SyncError {
             ),
             Self::LocalChanged => f.write_str("the local data changed while syncing"),
             Self::LocalFailed(code) => write!(f, "the local data could not be updated ({code})"),
+            Self::SeqExhausted => f.write_str(
+                "the hub's sequence number is at its maximum; nothing can be pushed until the hub's admin removes its head",
+            ),
         }
     }
 }

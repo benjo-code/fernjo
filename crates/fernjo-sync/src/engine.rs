@@ -139,6 +139,11 @@ fn same_version(a: &[u8], b: &[u8]) -> bool {
     }
 }
 
+/// The sequence number above `seq`; at `u64::MAX` there is none (`seq_exhausted`), never a wrap.
+fn next_seq(seq: u64) -> Result<u64, SyncError> {
+    seq.checked_add(1).ok_or(SyncError::SeqExhausted)
+}
+
 /// A local vault file that would be pushed or merged must parse (size cap, header, KDF bounds):
 /// one that does not is `local_failed` with `vault_unreadable` and never leaves the device.
 fn check_local_vault(local: &LocalState) -> Result<(), SyncError> {
@@ -430,7 +435,7 @@ impl Engine<'_> {
     /// # Errors
     /// Hub errors other than "unreachable" (`hub_unauthorized`, `hub_tls_untrusted`,
     /// `hub_protocol`, ...), `wrong_group`, `wrong_key_or_damaged`, `snapshot_invalid`,
-    /// `newer_format`, `snapshot_too_large` (decided before anything is applied),
+    /// `newer_format`, `snapshot_too_large` and `seq_exhausted` (decided before anything is applied),
     /// `vault_conflict_different_vaults`, `not_paired`, `state_unusable`, `local_failed` (also
     /// `vault_unreadable` for a local vault file that does not parse: it is never pushed), and
     /// `local_changed` or `hub_conflict` when a run had to start over more than five times
@@ -595,7 +600,7 @@ impl Engine<'_> {
         };
         let snapshot = Self::build_snapshot(
             w.st.group,
-            w.head_seq + 1,
+            next_seq(w.head_seq)?,
             &w.st.device,
             &self.ctx.date,
             w.merged_tree.clone(),
@@ -676,7 +681,7 @@ impl Engine<'_> {
             let current = self.local.read()?;
             snapshot = Self::build_snapshot(
                 st.group,
-                head_seq + 1,
+                next_seq(head_seq)?,
                 &st.device,
                 &self.ctx.date,
                 current.tree,
@@ -844,8 +849,8 @@ impl Engine<'_> {
     ///
     /// # Errors
     /// `not_paired`, `keychain_unavailable`, the hub errors (`hub_conflict` when another device
-    /// pushed meanwhile), `wrong_group`, `snapshot_too_large`, `local_failed` (also
-    /// `vault_unreadable`), `state_write_failed`.
+    /// pushed meanwhile), `wrong_group`, `snapshot_too_large`, `seq_exhausted` (the head or `last_seq`
+    /// is at `u64::MAX`), `local_failed` (also `vault_unreadable`), `state_write_failed`.
     pub fn reseed(&self) -> Result<(), SyncError> {
         let st = self.state.load()?.ok_or(SyncError::NotPaired)?;
         let (_, key) = self.keys(st.group)?;
@@ -855,9 +860,12 @@ impl Engine<'_> {
                 if group != st.group {
                     return Err(SyncError::WrongGroup);
                 }
-                (Expected::Seq(head_seq), st.last_seq.max(head_seq) + 1)
+                (
+                    Expected::Seq(head_seq),
+                    next_seq(st.last_seq.max(head_seq))?,
+                )
             }
-            None => (Expected::Empty, st.last_seq + 1),
+            None => (Expected::Empty, next_seq(st.last_seq)?),
         };
         let local = self.local.read()?;
         check_local_vault(&local)?;

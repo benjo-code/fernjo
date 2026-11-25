@@ -1074,6 +1074,33 @@ fn a_push_conflict_restarts_the_run_and_a_notice_is_not_shown_twice() {
 // ---- hub misbehaviour -------------------------------------------------------------------------
 
 #[test]
+fn a_head_at_the_highest_sequence_number_ends_runs_and_reseed_with_a_clean_error() {
+    let hub = start();
+    let (a, b) = pair(&hub);
+    // a peer pushes a valid head at u64::MAX
+    let group = group_of(&a);
+    put_head(
+        &hub,
+        &key_of(&a, group),
+        group,
+        u64::MAX,
+        u64::MAX,
+        Tree::new(),
+    );
+    assert!(matches!(b.run(), Outcome::NothingToDo));
+    assert_eq!(b.last_seq(), u64::MAX);
+
+    // nothing can go above it: no wrap to 0, no panic, nothing written or pushed
+    b.port.add_connection("local edit");
+    let before = b.untouched();
+    assert_eq!(b.run_err(), SyncError::SeqExhausted);
+    b.assert_untouched(&before);
+    assert_eq!(b.engine().reseed().unwrap_err(), SyncError::SeqExhausted);
+    b.assert_untouched(&before);
+    assert_eq!(head_seq(&hub), Some(u64::MAX));
+}
+
+#[test]
 fn a_stale_head_below_last_seq_is_hub_rolled_back_and_nothing_is_written() {
     let hub = start();
     let (a, b) = pair(&hub);
