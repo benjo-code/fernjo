@@ -211,6 +211,46 @@ test("a fixed resolution is read from the connection when the canvas attaches", 
   expect(unknown.tab.fixedSize).toBe(false);
 });
 
+test("the clipboard marker follows the session's settings event, not the connection", async () => {
+  // M11 review #61: the connection says off, the plan the session really uses says on
+  const node = {
+    host: "from-get-node",
+    rdpResolution: { local: null, effective: { mode: "fit" }, source: { kind: "default" } },
+    rdpClipboard: { local: false, effective: false, source: { kind: "local" } },
+  } as never;
+  const t = await rdpTab({ getNode: async () => node });
+  await new Promise((r) => setTimeout(r, 0));
+  expect(t.tab.clipboard).toBe(false);
+  t.emit({ kind: "rdpSettings", clipboard: true, host: "dc01" });
+  expect(t.tab.clipboard).toBe(true);
+  expect(t.tab.host).toBe("dc01");
+  // a late connection read changes nothing
+  await new Promise((r) => setTimeout(r, 0));
+  expect(t.tab.clipboard).toBe(true);
+  expect(t.tab.host).toBe("dc01");
+  // a reconnect whose plan has the clipboard off turns the marker off
+  t.state("disconnected");
+  t.sessions.reconnect(t.tab.id);
+  await new Promise((r) => setTimeout(r, 0));
+  t.emit({ kind: "rdpSettings", clipboard: false, host: "dc01" });
+  expect(t.tab.clipboard).toBe(false);
+});
+
+test("without a settings event the clipboard stays off even when the connection says on", async () => {
+  const node = {
+    host: "h",
+    rdpResolution: { local: null, effective: { mode: "fit" }, source: { kind: "default" } },
+    rdpClipboard: { local: null, effective: true, source: { kind: "default" } },
+  } as never;
+  const t = await rdpTab({ getNode: async () => node });
+  await new Promise((r) => setTimeout(r, 0));
+  expect(t.tab.clipboard).toBe(false);
+  // and a connection read without the field no longer guesses "on"
+  const bare = await rdpTab({ getNode: async () => ({ host: "h" }) as never });
+  await new Promise((r) => setTimeout(r, 0));
+  expect(bare.tab.clipboard).toBe(false);
+});
+
 test("full screen is for a connected rdp tab and ends with any change of tab", async () => {
   const t = await rdpTab();
   t.sessions.toggleFullscreen();

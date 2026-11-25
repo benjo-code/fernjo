@@ -846,6 +846,11 @@ async fn open_session_for_an_rdp_node_starts_an_rdp_session() {
     .unwrap();
     let (channel, mut rec) = recorder();
     let id = open_session(&st, node, channel, 1280, 800).unwrap();
+    // the settings this attempt uses (M11 review #61: the clipboard marker follows them)
+    assert_eq!(
+        rec.next().await,
+        Msg::Json(json!({"kind": "rdpSettings", "clipboard": true, "host": "127.0.0.1"}))
+    );
     // connecting, then the RDP layer's own refusal (an SSH session says something else)
     let first = rec.next().await;
     assert_eq!(
@@ -865,6 +870,49 @@ async fn open_session_for_an_rdp_node_starts_an_rdp_session() {
     assert_eq!(
         code(st.sessions.rdp_input(&id, vec![key(30)])),
         "session_not_connected"
+    );
+}
+
+#[tokio::test]
+async fn the_rdp_settings_event_carries_the_clipboard_setting_the_session_uses() {
+    // M11 review #61: the marker and the UI clipboard sync follow the plan of the attempt, also on
+    // a reconnect after the setting changed, never a separate read of the connection
+    let dir = tempfile::tempdir().unwrap();
+    let st = crate::AppState::open(Some(dir.path().to_path_buf()));
+    let node = commands::create_connection(
+        &st,
+        None,
+        None,
+        "r".into(),
+        Protocol::Rdp,
+        "127.0.0.1".into(),
+    )
+    .unwrap()
+    .id
+    .unwrap();
+    let set = |v: Value| {
+        commands::update_node(&st, node, serde_json::from_value(v).unwrap()).unwrap();
+    };
+    set(json!({"port": 1, "rdpClipboard": false}));
+    let (channel, mut rec) = recorder();
+    let id = open_session(&st, node, channel, 1280, 800).unwrap();
+    assert_eq!(
+        rec.next().await,
+        Msg::Json(json!({"kind": "rdpSettings", "clipboard": false, "host": "127.0.0.1"}))
+    );
+    // wait for the refused connect to end
+    loop {
+        if let Msg::Json(v) = rec.next().await
+            && v["state"] == "disconnected"
+        {
+            break;
+        }
+    }
+    set(json!({"rdpClipboard": true}));
+    crate::session_commands::reconnect_session(&st, &id, 1280, 800).unwrap();
+    assert_eq!(
+        rec.next().await,
+        Msg::Json(json!({"kind": "rdpSettings", "clipboard": true, "host": "127.0.0.1"}))
     );
 }
 

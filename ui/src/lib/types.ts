@@ -483,7 +483,12 @@ export type SessionEvent =
   /** RDP: the remote desktop has this size in pixels (before the first region and on a change). */
   | { kind: "desktop"; width: number; height: number }
   /** RDP: the remote side copied this text. */
-  | { kind: "clipboard"; text: string };
+  | { kind: "clipboard"; text: string }
+  /**
+   * RDP: the effective settings of the plan this attempt uses (first event of every attempt). The
+   * clipboard marker and the clipboard sync follow `clipboard`; `host` is named in the marker.
+   */
+  | { kind: "rdpSettings"; clipboard: boolean; host: string };
 
 /** One keyboard or mouse event for an RDP session; coordinates are desktop pixels. */
 export type RdpInputEvent =

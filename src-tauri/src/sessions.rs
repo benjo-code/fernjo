@@ -55,6 +55,12 @@
 //!   from the spike, `Docs/DECISIONS.md` "M8: RDP render path spike").
 //! * Two more JSON events: `{kind:"desktop", width, height}` (before the first region and on every
 //!   desktop size change) and `{kind:"clipboard", text}` (the remote side copied text).
+//! * `{kind:"rdpSettings", clipboard, host}` comes first for every attempt (`open_session`,
+//!   `open_quick_session`, `reconnect_session`, and the start after a vault unlock), before its
+//!   first state event: the effective clipboard setting and host of the plan that attempt uses.
+//!   The UI derives the tab's clipboard marker and whether it touches the local clipboard from it,
+//!   never from a separate read of the connection (M11 review #61). A restored tab gets it only
+//!   when it is reconnected.
 //! * `open_session`, `session_resize` and `reconnect_session` carry **pixels** in their `cols` and
 //!   `rows` arguments. Input is `rdp_input(id, events)` (not `session_input`) and clipboard text
 //!   `rdp_clipboard(id, text)`.
@@ -175,6 +181,13 @@ pub enum UiEvent {
     /// RDP only: the remote side copied this text (line ends converted, size capped).
     Clipboard {
         text: String,
+    },
+    /// RDP only: the effective settings of the plan this attempt uses, sent before the attempt's
+    /// first state event. The tab's clipboard marker and the UI clipboard sync follow `clipboard`
+    /// (M11 review #61), `host` names the remote side in the marker.
+    RdpSettings {
+        clipboard: bool,
+        host: String,
     },
 }
 

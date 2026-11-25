@@ -229,6 +229,11 @@ pub(crate) fn build_params(plan: RdpPlan, size: (u32, u32), certs: CertStore) ->
 /// is unlocked.
 pub(super) fn start(entry: &Arc<Entry>, plan: RdpPlan, certs: CertStore) {
     let shared = &entry.shared;
+    // The UI's clipboard marker and sync follow the setting this attempt really uses.
+    shared.sink.event(&UiEvent::RdpSettings {
+        clipboard: plan.clipboard,
+        host: plan.host.clone(),
+    });
     let note = match &plan.credential {
         RdpCredentialPlan::NeedsVault => {
             shared.set_phase(Phase::NeedsVault);

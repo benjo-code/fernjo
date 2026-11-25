@@ -269,12 +269,6 @@ test("unmounting disposes the controller", () => {
 
 // ---------- clipboard ----------
 
-const node = (clipboard: boolean) =>
-  ({
-    rdpResolution: { local: null, effective: { mode: "fit" }, source: { kind: "default" } },
-    rdpClipboard: { local: null, effective: clipboard, source: { kind: "default" } },
-  }) as never;
-
 function fakeClipboard(read: () => Promise<string>) {
   const clipboard = {
     readText: vi.fn(read),
@@ -287,8 +281,11 @@ function fakeClipboard(read: () => Promise<string>) {
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 async function connected(clipboard: boolean) {
-  const t = setup(1, { getNode: async () => node(clipboard) });
+  const t = setup(1);
   await flush();
+  // the setting comes with the session (the plan it really uses), not from the connection
+  handlers[0]!({ kind: "rdpSettings", clipboard, host: "r0" });
+  flushSync();
   state(0, "connected");
   await flush();
   return t;
