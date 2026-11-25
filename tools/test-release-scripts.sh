@@ -134,6 +134,95 @@ mkdir -p "$d"
 good_workflow | awk '/echo "\$TAG"/ { print "          echo \"${{ format('"'"'{0}-{1}'"'"', matrix.os, runner.arch) }} ${{ contains(matrix.os, '"'"'win}}'"'"') }} ${{ startsWith(runner.os, '"'"'L'"'"') }}\""; next } { print }' >"$d/w.yml"
 assert_exit check_workflows_allows_functions_and_literals_over_allowed_identifiers 0 "" bash "$check_workflows" "$d"
 
+# YAML forms that used to slip past the line-based checks (M11 review #69). Each must fail.
+# wf_case <name> <expected output substring> <workflow body after "jobs:"> [<"on:" value>]
+wf_case() {
+  local d="$tmp/wf-form-$1"
+  mkdir -p "$d"
+  printf 'name: T\non: %s\npermissions:\n  contents: read\njobs:\n%s\n' "${4:-push}" "$3" >"$d/w.yml"
+  assert_exit "check_workflows_rejects_form_$1" 1 "$2" bash "$check_workflows" "$d"
+}
+job='  j:
+    runs-on: ubuntu-latest
+    steps:'
+e='${{ github.event.release.body }}'
+wf_case comment_after_block_indicator "not allowed inside run:" "$job
+      - name: s
+        run: | # note
+          echo \"$e\""
+wf_case comment_line_inside_run_block "not allowed inside run:" "$job
+      - name: s
+        run: |
+          # note $e
+          echo ok"
+wf_case flow_step_with_run "flow" "$job
+      - { name: s, run: \"echo $e\" }"
+wf_case flow_step_with_unpinned_uses "flow" "$job
+      - { uses: actions/checkout@v4 }"
+wf_case flow_steps_sequence "flow" "  j:
+    runs-on: ubuntu-latest
+    steps: [ { uses: actions/checkout@v4 } ]"
+wf_case quoted_run_key "quoted" "$job
+      - name: s
+        \"run\": echo $e"
+wf_case quoted_unpinned_uses_key "quoted" "$job
+      - \"uses\": actions/checkout@v4"
+wf_case spaced_run_key "run" "$job
+      - name: s
+        run : echo $e"
+wf_case multi_line_quoted_run_value "not allowed inside run:" "$job
+      - name: s
+        run: \"echo a
+          $e\""
+wf_case multi_line_plain_run_value "not allowed inside run:" "$job
+      - name: s
+        run: echo \"a
+          $e\""
+wf_case open_quote_run_value "closed" "$job
+      - name: s
+        run: 'echo a
+      $e'"
+wf_case github_script_script "not allowed inside" "$job
+      - uses: actions/github-script@$sha # v7
+        with:
+          script: |
+            console.log(\"$e\")"
+wf_case yaml_alias "alias" "$job
+      - &step
+        name: s
+        run: echo ok
+      - *step"
+wf_case workflow_run_trigger "workflow_run" "$job
+      - run: echo ok" "workflow_run"
+
+# The hardened checks must still accept the ordinary forms.
+d="$tmp/wf-form-ordinary"
+mkdir -p "$d"
+cat >"$d/w.yml" <<YML
+name: T
+on: push
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - name: s
+        run: | # a YAML comment
+          # a shell comment naming \${{ matrix.os }}
+          echo a && echo b
+      - run: 'echo it''s ok \${{ runner.os }}' # trailing comment
+      - run: echo "plain \${{ env.X }}"
+      - uses: actions/github-script@$sha # v7
+        with:
+          script: |
+            console.log("\${{ github.sha }}")
+YML
+assert_exit check_workflows_accepts_the_ordinary_block_forms 0 "" bash "$check_workflows" "$d"
+
 # --- check-release-version.sh ---
 check_version="$root/tools/check-release-version.sh"
 cur="$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version *= *"\(.*\)"/\1/p;}' "$root/Cargo.toml" | head -n 1)"

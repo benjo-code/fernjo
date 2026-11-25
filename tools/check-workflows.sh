@@ -3,12 +3,18 @@
 # Prints `file:line: reason` and exits 1 when a workflow
 #   - uses an action that is not pinned to a 40-hex commit SHA (local ./ actions are fine),
 #   - mentions self-hosted runners,
-#   - triggers on pull_request_target,
+#   - triggers on pull_request_target or workflow_run,
 #   - has no top-level `permissions:`,
 #   - uses a ${{ }} expression inside a `run:` script that mentions, anywhere in it, anything but
 #     matrix.*, runner.*, env.*, secrets.*, github.event_name, github.sha, github.repository or
 #     github.workspace (so github.event.*, inputs.*, github.head_ref, github.ref_name, github.ref,
 #     steps.* / needs.* outputs and github[...] indexing must go through `env:`).
+#     The same rule covers actions/github-script's `script:`, every line of a run value (comment-looking
+#     lines and the continuation lines of a plain or quoted scalar included) and a YAML comment after
+#     the block indicator (`run: | # note`).
+#   - writes a run:, script: or uses: key in a form this line-based check cannot read: flow style
+#     (`- { uses: ... }`, `steps: [ ... ]`), a quoted or spaced key, a quoted value that does not close
+#     on its line, or YAML anchors, aliases and merge keys anywhere outside a run value (fail closed).
 set -euo pipefail
 
 dir="${1:-.github/workflows}"
@@ -73,15 +79,48 @@ for f in "${files[@]}"; do
           report("expression \"${{ " e " }}\" is not allowed inside run: pass it through env: instead")
       }
     }
+    # A quoted scalar (first character a single or a double quote) that ends on this line.
+    function quote_closed(v,   q, i, n, c) {
+      q = substr(v, 1, 1); n = length(v)
+      for (i = 2; i <= n; i++) {
+        c = substr(v, i, 1)
+        if (q == "\"" && c == "\\") { i++; continue }
+        if (c == q) {
+          if (q == "\047" && substr(v, i + 1, 1) == "\047") { i++; continue }
+          return 1
+        }
+      }
+      return 0
+    }
     BEGIN { in_run = 0; has_perm = 0 }
     {
       line = $0
-      if (line ~ /^[ \t]*#/) next                      # full-line comment
       if (line ~ /^permissions:/) has_perm = 1
 
-      # leave a run block when indentation drops back to the key level or less
+      # Leave a run value when indentation drops back to the key level or less. Everything more
+      # indented than a run: or script: key is its value (block scalar, or the continuation lines
+      # of a plain or quoted one), comment-looking lines included: GitHub expands expressions there too.
       match(line, /^[ ]*/); indent = RLENGTH
       if (in_run && line !~ /^[ \t]*$/ && indent <= run_indent) in_run = 0
+      if (!in_run && line ~ /^[ \t]*#/) next           # full-line comment outside a run value
+
+      if (line ~ /self-hosted/) report("self-hosted runners are not allowed")
+      if (line ~ /pull_request_target/) report("pull_request_target is not allowed")
+      if (line ~ /workflow_run/) report("workflow_run is not allowed")
+
+      if (in_run) { check_exprs(line); next }
+
+      # The checks below read block-style keys only. Anything that would hide a step key from them
+      # fails closed: flow mappings or sequences, quoted or spaced keys, anchors, aliases, merge keys.
+      canonical = (line ~ /^[ ]*(- )?(uses|run|script):/)
+      if (!canonical && line ~ /(^|[^A-Za-z0-9_-])["\047]?(uses|run|script)["\047]?[ \t]*:([ \t]|$)/) {
+        if (line ~ /[{[][^"\047]*(uses|run|script)/)
+          report("a run:, script: or uses: key in a flow-style mapping or sequence cannot be checked; use block style")
+        else
+          report("a quoted or unusual run:, script: or uses: key cannot be checked; write it as a plain block key")
+      }
+      if (!canonical && (line ~ /(^|[ [{,])[&*][A-Za-z0-9_]/ || line ~ /<<[ ]*:/))
+        report("YAML anchors, aliases and merge keys are not allowed (an alias hides what it expands to)")
 
       if (line ~ /^[ ]*(- )?uses:/) {
         v = line
@@ -91,19 +130,22 @@ for f in "${files[@]}"; do
         if (v !~ /^\.\// && !pinned(v))
           report("action \"" v "\" is not pinned to a 40-character commit SHA")
       }
-      if (line ~ /self-hosted/) report("self-hosted runners are not allowed")
-      if (line ~ /pull_request_target/) report("pull_request_target is not allowed")
 
-      if (line ~ /^[ ]*(- )?run:/) {
+      # run: and actions/github-script\047s script: are both code with the same rules.
+      if (line ~ /^[ ]*(- )?(run|script):/) {
         run_indent = indent
         if (line ~ /^[ ]*- /) run_indent = indent + 2
         rest = line
-        sub(/^[ ]*(- )?run:[ ]*/, "", rest)
-        if (rest ~ /^[|>][-+0-9]*[ ]*$/) in_run = 1
-        else check_exprs(rest)
+        sub(/^[ ]*(- )?(run|script):[ ]*/, "", rest)
+        in_run = 1
+        if (rest ~ /^[|>][-+0-9]*[ ]*(#.*)?$/) next   # block scalar, the comment is YAML
+        if (rest ~ /^[&*!]/)
+          report("a run: or script: value that is an anchor, alias or tag cannot be checked")
+        if (rest ~ /^["\047]/ && !quote_closed(rest))
+          report("a quoted run: or script: value that is not closed on this line cannot be checked; use a block scalar (run: |)")
+        check_exprs(rest)
         next
       }
-      if (in_run) check_exprs(line)
     }
     END { if (!has_perm) { printf "%s:1: no top-level permissions: block\n", file; bad = 1 } exit bad }
   ' "$f")" || status=1
