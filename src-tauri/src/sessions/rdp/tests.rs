@@ -395,6 +395,64 @@ async fn a_remote_clipboard_event_reaches_the_ui_as_text() {
     );
 }
 
+fn clipboard_texts(seen: &[Msg]) -> Vec<String> {
+    seen.iter()
+        .filter_map(|msg| match msg {
+            Msg::Json(v) if v["kind"] == "clipboard" => Some(v["text"].as_str()?.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_burst_of_remote_clipboard_text_reaches_the_ui_coalesced() {
+    let (channel, mut rec) = recorder();
+    let shared = shared_with(channel, credit_for(8, 8));
+    let fb = Framebuffer::new(8, 8).unwrap();
+    let (tx, task) = spawn_forward(&shared, &fb);
+    assert!(is_desktop(&rec.next().await, 8, 8));
+    let started = tokio::time::Instant::now();
+
+    // a hostile server streams clipboard text; the clock stands still meanwhile
+    for i in 0..1000 {
+        tx.send(SessionEvent::Clipboard(format!("text {i}")))
+            .await
+            .unwrap();
+    }
+    // the forwarder has read all of them by the time the clock moves on by a millisecond
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    assert_eq!(
+        clipboard_texts(&rec.drain()),
+        vec!["text 0".to_string()],
+        "the first text goes out at once, the rest waits"
+    );
+
+    // after the gap only the latest text follows
+    let Msg::Json(next) = rec.next().await else {
+        panic!("expected a clipboard event")
+    };
+    assert_eq!(next["text"], "text 999");
+    assert_eq!(started.elapsed(), CLIPBOARD_EVENT_GAP);
+    tokio::time::sleep(CLIPBOARD_EVENT_GAP * 4).await;
+    assert!(rec.drain().is_empty(), "nothing else was waiting");
+
+    // text still waiting for its gap when the session ends is delivered before the end
+    tx.send(SessionEvent::Clipboard("one".into()))
+        .await
+        .unwrap();
+    tx.send(SessionEvent::Clipboard("two".into()))
+        .await
+        .unwrap();
+    tx.send(SessionEvent::Closed(CloseReason::ServerClosed))
+        .await
+        .unwrap();
+    timeout(WAIT, task).await.unwrap().unwrap();
+    assert_eq!(
+        clipboard_texts(&rec.drain()),
+        vec!["one".to_string(), "two".to_string()]
+    );
+}
+
 #[tokio::test]
 async fn a_closed_event_queue_is_a_lost_connection() {
     let (channel, _rec) = recorder();

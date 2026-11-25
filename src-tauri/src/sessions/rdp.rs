@@ -37,6 +37,12 @@ const DEFAULT_SIZE: (u16, u16) = (1280, 800);
 /// Smallest desktop a resize or a fit-to-tab connect asks for.
 const MIN_DIMENSION: u32 = 200;
 
+/// The shortest time between two remote clipboard events towards the UI. Clipboard events carry
+/// no credit (unlike region messages), and Tauri parks a large event body until the webview
+/// fetches it, so a server that streams clipboard text must not turn into an event per message:
+/// [`forward`] sends the first text at once and, within the gap, keeps only the latest one.
+pub(crate) const CLIPBOARD_EVENT_GAP: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// Bytes of a region message header.
 pub(crate) const HEADER_LEN: usize = 8;
 
@@ -310,7 +316,8 @@ async fn write_ops(session: Session, mut ops: UnboundedReceiver<Op>, shared: Arc
 
 /// Sends the pending damage as one region message once the flow control has credit; until then
 /// the events keep being read and merged, so the newest pixels are what goes out and the queue
-/// towards the session never backs up. Ends with the session.
+/// towards the session never backs up. Remote clipboard text goes out at most once per
+/// [`CLIPBOARD_EVENT_GAP`], the latest text winning. Ends with the session.
 pub(crate) async fn forward(
     shared: &Shared,
     mut rx: Receiver<SessionEvent>,
@@ -320,7 +327,20 @@ pub(crate) async fn forward(
     let (width, height) = framebuffer.size();
     shared.sink.event(&UiEvent::Desktop { width, height });
     let mut damage = Damage::default();
+    // remote clipboard text waiting for its gap (only the latest is kept), and when it may go
+    let mut clip: Option<String> = None;
+    let mut clip_due = tokio::time::Instant::now();
+    let flush_clip = |clip: &mut Option<String>| {
+        if let Some(text) = clip.take() {
+            shared.sink.event(&UiEvent::Clipboard { text });
+        }
+    };
     loop {
+        if clip.is_some() && tokio::time::Instant::now() >= clip_due {
+            flush_clip(&mut clip);
+            clip_due = tokio::time::Instant::now() + CLIPBOARD_EVENT_GAP;
+            continue;
+        }
         if !damage.is_empty() && shared.flow.lock().map_or(true, |f| f.should_send()) {
             if let Some(rect) = damage.take()
                 && let Some(message) = region_message(&framebuffer, rect)
@@ -332,14 +352,12 @@ pub(crate) async fn forward(
             }
             continue;
         }
-        let event = if damage.is_empty() {
-            rx.recv().await
-        } else {
-            // out of credit: an acknowledgement wakes this up, a damage event is merged
-            tokio::select! {
-                event = rx.recv() => event,
-                () = shared.wake.notified() => continue,
-            }
+        // with damage pending the UI is out of credit: an acknowledgement wakes this up, a damage
+        // event is merged; waiting clipboard text wakes it up when its gap is over
+        let event = tokio::select! {
+            event = rx.recv() => event,
+            () = shared.wake.notified(), if !damage.is_empty() => continue,
+            () = tokio::time::sleep_until(clip_due), if clip.is_some() => continue,
         };
         match event {
             Some(SessionEvent::Damage(rect)) => damage.add(rect),
@@ -351,11 +369,17 @@ pub(crate) async fn forward(
                 }
                 shared.sink.event(&UiEvent::Desktop { width, height });
             }
-            Some(SessionEvent::Clipboard(text)) => {
-                shared.sink.event(&UiEvent::Clipboard { text });
+            // sent at the top of the loop once its gap is over; a newer text replaces it
+            Some(SessionEvent::Clipboard(text)) => clip = Some(text),
+            // the last text the remote side copied is still worth delivering
+            Some(SessionEvent::Closed(reason)) => {
+                flush_clip(&mut clip);
+                return classify_rdp_end(reason);
             }
-            Some(SessionEvent::Closed(reason)) => return classify_rdp_end(reason),
-            None => return classify_rdp_end(CloseReason::ConnectionLost),
+            None => {
+                flush_clip(&mut clip);
+                return classify_rdp_end(CloseReason::ConnectionLost);
+            }
         }
     }
 }

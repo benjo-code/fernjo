@@ -74,6 +74,10 @@
 //!   above its cap (8 MiB, or twice the raw desktop when that is more) or a pointer outside the 32
 //!   advertised cache entries or above 384 pixels ends it with "The server sent a display update
 //!   beyond the limits of this client." (`fernjo_rdp::CloseReason::UpdateOutOfLimits`).
+//! * Remote clipboard text reaches the UI coalesced: at most one `clipboard` event per
+//!   `sessions::rdp::CLIPBOARD_EVENT_GAP` (500 ms) per session; text that arrives within the gap
+//!   replaces the text still waiting, so only the latest goes out (and it is still delivered when
+//!   the session ends).
 //!
 //! No event carries a secret: prompts describe what is asked, answers travel UI to Rust only.
 

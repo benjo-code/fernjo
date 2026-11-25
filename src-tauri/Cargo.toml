@@ -42,3 +42,5 @@ arboard = { version = "3.7", default-features = false, features = ["wayland-data
 tempfile.workspace = true
 fernjo-hub = { path = "../crates/fernjo-hub" }
 base64.workspace = true
+# a paused clock for the timing tests of the RDP forwarder
+tokio = { workspace = true, features = ["test-util"] }
