@@ -431,7 +431,7 @@ assert_true() {
 checkout_refs_are_full_tag_refs() {
   local refs
   refs="$(awk '/uses: actions\/checkout@/ { c = 1; next } c && /^ *ref:/ { print; c = 0 } /^ *- / { c = 0 }' "$release_yml")"
-  [ "$(printf '%s\n' "$refs" | grep -c .)" -eq 2 ] && ! printf '%s\n' "$refs" | grep -vq "refs/tags/"
+  [ "$(printf '%s\n' "$refs" | grep -c .)" -eq 4 ] && ! printf '%s\n' "$refs" | grep -vq "refs/tags/"
 }
 assert_true release_checkouts_use_full_tag_refs checkout_refs_are_full_tag_refs
 upload_skips_forks() {
@@ -455,6 +455,54 @@ publish_goes_through_a_draft() {
     [ "$(grep -E '^ *- name: ' "$release_yml" | tail -n 1 | sed 's/^ *- name: //')" = 'Publish the release' ]
 }
 assert_true release_publish_attaches_to_a_draft_then_publishes publish_goes_through_a_draft
+
+# --- release.yml: hub image ---
+# job_block <job key>: the lines of one job of release.yml (from its key to the next job key).
+job_block() {
+  awk -v job="  $1:" '$0 == job { p = 1; print; next } p && /^  [a-z][a-z0-9-]*:$/ { exit } p { print }' "$release_yml"
+}
+hub_image_is_the_only_job_with_packages_write() {
+  [ "$(grep -c 'packages: write' "$release_yml")" -eq 1 ] &&
+    job_block hub-image | grep -Fxq '      packages: write'
+}
+assert_true release_hub_image_is_the_only_job_with_packages_write hub_image_is_the_only_job_with_packages_write
+hub_image_build_has_read_only_permissions() {
+  local perms
+  perms="$(job_block hub-image-build | awk '/^    permissions:$/ { p = 1; next } p && /^      [a-z-]+:/ { print; next } p { exit }')"
+  [ "$perms" = '      contents: read' ]
+}
+assert_true release_hub_image_build_has_read_only_permissions hub_image_build_has_read_only_permissions
+hub_image_runs_only_on_a_tag_push() {
+  local block
+  block="$(job_block hub-image)"
+  printf '%s\n' "$block" | grep -Fxq "    if: github.event_name != 'pull_request' && startsWith(github.ref, 'refs/tags/v')" &&
+    printf '%s\n' "$block" | grep -Fxq '    needs: hub-image-build'
+}
+assert_true release_hub_image_runs_only_on_a_tag_push hub_image_runs_only_on_a_tag_push
+hub_image_build_matrix_has_both_architectures() {
+  local block
+  block="$(job_block hub-image-build)"
+  printf '%s\n' "$block" | grep -Fq 'os: ubuntu-latest' && printf '%s\n' "$block" | grep -Fq 'os: ubuntu-24.04-arm'
+}
+assert_true release_hub_image_build_matrix_has_both_architectures hub_image_build_matrix_has_both_architectures
+hub_image_upload_skips_forks() {
+  job_block hub-image-build | awk '/uses: actions\/upload-artifact@/ { getline; print; exit }' |
+    grep -Fq "if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository"
+}
+assert_true release_hub_image_upload_skips_fork_pull_requests hub_image_upload_skips_forks
+pull_request_paths_cover_the_hub_image() {
+  local paths want
+  paths="$(awk '/^on:/ { o = 1; next } o && /^[^ ]/ { o = 0 } o && /^  pull_request:/ { p = 1; next } p && /^  [a-z_]+:/ { p = 0 } p && /^      - / { print }' "$release_yml")"
+  for want in crates/fernjo-hub/Containerfile 'crates/fernjo-hub/deploy/**' .dockerignore; do
+    printf '%s\n' "$paths" | grep -Fxq "      - $want" || return 1
+  done
+}
+assert_true release_pull_request_paths_cover_the_hub_image_inputs pull_request_paths_cover_the_hub_image
+hub_image_pushes_with_a_digest_check() {
+  job_block hub-image | grep -Fxq '      - name: Push the manifest list' &&
+    job_block hub-image | grep -Fxq '      - name: Check that every tag has the same digest'
+}
+assert_true release_hub_image_pushes_with_a_digest_check hub_image_pushes_with_a_digest_check
 
 # --- hub Containerfile ---
 hub_containerfile="$root/crates/fernjo-hub/Containerfile"
