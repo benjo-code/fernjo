@@ -93,9 +93,11 @@ pub fn desktop_entry(appimage: &str) -> Option<String> {
 
 /// Whether to show the dialog: only for an AppImage with an absolute path, never after "Never",
 /// and not when the entry already says exactly what it would say now (an entry that points to a
-/// moved file is asked about again). The existing entry is read through `fernjo_fs::read_capped`
-/// (a regular file of at most `MAX_ENTRY_LEN`, no symbolic link followed); any read failure means
-/// "no current entry".
+/// moved file is asked about again). An entry that is a symbolic link (checked with
+/// `symlink_metadata`, never followed) is managed by the user, for example by a dotfile manager:
+/// no dialog, since "Add" could not replace it anyway (`write_atomic` refuses a non-regular
+/// target). Otherwise the entry is read through `fernjo_fs::read_capped` (a regular file of at
+/// most `MAX_ENTRY_LEN`); any read failure means "no current entry".
 pub fn should_offer(appimage: Option<&str>, data_home: &Path, never: bool) -> bool {
     // a plain '/' test like `data_home`: a relative path would resolve against whatever the
     // working directory is when the desktop starts the entry
@@ -109,6 +111,9 @@ pub fn should_offer(appimage: Option<&str>, data_home: &Path, never: bool) -> bo
         return false;
     };
     let (entry, _) = entry_paths(data_home);
+    if std::fs::symlink_metadata(&entry).is_ok_and(|m| m.file_type().is_symlink()) {
+        return false;
+    }
     fernjo_fs::read_capped(&entry, MAX_ENTRY_LEN).map_or(true, |have| have != wanted.as_bytes())
 }
 
@@ -308,16 +313,19 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_symlinked_entry_is_not_followed() {
+    fn a_symlinked_entry_is_managed_by_the_user_and_never_offered() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();
-        // a matching entry elsewhere, linked at the entry's name: not read, so offered again
+        // an entry elsewhere (a dotfile manager's), linked at the entry's name: whatever it
+        // says, and also when the link is dangling, the user manages it, so no dialog
         let real = home.join("elsewhere.desktop");
-        std::fs::write(&real, desktop_entry(APP).unwrap()).unwrap();
+        std::fs::write(&real, "[Desktop Entry]\nName=other\n").unwrap();
         let (entry, _) = entry_paths(home);
         std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(&real, &entry).unwrap();
-        assert!(should_offer(Some(APP), home, false));
+        assert!(!should_offer(Some(APP), home, false));
+        std::fs::remove_file(&real).unwrap();
+        assert!(!should_offer(Some(APP), home, false), "dangling link");
     }
 
     #[test]
