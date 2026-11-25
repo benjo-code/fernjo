@@ -96,7 +96,9 @@ impl HubStore {
     }
 
     fn read_head_unlocked(&self) -> io::Result<Option<(u64, Vec<u8>)>> {
-        match fs::read(self.head_path()) {
+        // capped at the envelope limit (a larger head was never written by `put`), and never
+        // through a symlink or from a special file at the name
+        match fernjo_fs::read_capped(&self.head_path(), MAX_ENVELOPE_LEN as u64) {
             Ok(bytes) => {
                 let (_, seq) = peek_header(&bytes).ok_or_else(|| {
                     io::Error::new(io::ErrorKind::InvalidData, "head file is not an envelope")
@@ -354,6 +356,34 @@ mod tests {
             Err(PutError::TooLarge)
         ));
         assert!(s.head().unwrap().is_none());
+    }
+
+    #[test]
+    fn an_oversized_head_file_is_refused_and_left_alone() {
+        let (d, s) = open();
+        put(&s, Expected::Empty, 1).unwrap();
+        let head = d.path().join(HEAD_FILE);
+        // a valid header followed by padding past the envelope limit (sparse, nothing is
+        // allocated); a reader without the cap would serve it as head 1
+        let file = fs::OpenOptions::new().write(true).open(&head).unwrap();
+        file.set_len(MAX_ENVELOPE_LEN as u64 + 1).unwrap();
+        drop(file);
+
+        // (no `unwrap_err`: on failure it would print the whole 64 MiB head)
+        let refused = matches!(s.head(), Err(e) if e.kind() == io::ErrorKind::InvalidData);
+        assert!(refused, "the oversized head was read");
+        assert!(matches!(put(&s, Expected::Seq(1), 2), Err(PutError::Io(_))));
+        assert_eq!(
+            fs::metadata(&head).unwrap().len(),
+            MAX_ENVELOPE_LEN as u64 + 1
+        );
+        assert!(s.history().unwrap().is_empty(), "nothing was written");
+
+        // exactly at the limit is still read
+        let file = fs::OpenOptions::new().write(true).open(&head).unwrap();
+        file.set_len(MAX_ENVELOPE_LEN as u64).unwrap();
+        drop(file);
+        assert_eq!(s.head().unwrap().unwrap().0, 1);
     }
 
     #[test]
