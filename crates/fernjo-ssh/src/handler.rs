@@ -138,7 +138,12 @@ impl<I: Interaction> ClientHandler<I> {
                 // `known_hosts` is synced and can lose the host's lines; this device's own record
                 // decides whether this is a first contact (M11 review #24).
                 let confirmed = self.confirmed_keys().await;
-                if !confirmed.is_empty() && !confirmed.contains(key) {
+                if confirmed.contains(key) {
+                    // this device confirmed exactly this key: `known_hosts` only lost its line
+                    // (sync, a hand edit), so it is written back after the handshake, silently
+                    return self.park(TrustAction::Add(key.clone()));
+                }
+                if !confirmed.is_empty() {
                     let old = confirmed.iter().map(fingerprint).collect();
                     return self
                         .ask_changed(key, old, TrustAction::Replace(key.clone()))

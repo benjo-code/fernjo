@@ -301,6 +301,27 @@ async fn a_key_of_another_type_planted_in_known_hosts_is_a_changed_key() {
     assert_eq!(status(&f.confirmed, &key(ED_A)), HostKeyStatus::Known);
 }
 
+/// Final M11 review, Minor 7: `known_hosts` lost the host's line (sync, a hand edit), but this
+/// device confirmed exactly the presented key. No first-contact prompt: the key is accepted and
+/// written back to `known_hosts` once the handshake succeeded.
+#[tokio::test]
+async fn a_key_this_device_confirmed_is_accepted_silently_when_known_hosts_lost_it() {
+    let f = fixture();
+    add(&f.confirmed, &key(ED_A));
+    let (h, script) = handler(
+        &f.known,
+        Some(KnownHosts::new(&f.confirmed)),
+        Script::default(),
+    );
+    assert!(h.decide(&key(ED_A)).await);
+    assert_eq!(script.prompts(), (0, 0, 0));
+    assert!(rejection(&h).is_none());
+    assert!(!f.known.exists(), "nothing is written before the handshake");
+    h.apply_pending_trust().await.unwrap();
+    assert_eq!(status(&f.known, &key(ED_A)), HostKeyStatus::Known);
+    assert_eq!(status(&f.confirmed, &key(ED_A)), HostKeyStatus::Known);
+}
+
 #[tokio::test]
 async fn unknown_host_trust_always_writes_both_files() {
     let f = fixture();
