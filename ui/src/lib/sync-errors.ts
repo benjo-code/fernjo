@@ -21,6 +21,8 @@ const TEXT: Record<string, string> = {
     "The data changed on disk while syncing. Reload and try again, or lock and unlock the vault.",
   hub_rolled_back: "The hub shows an older state than this device has seen. Re-seed it from here.",
   rolled_back: "The hub shows an older state than this device has seen.",
+  vault_rolled_back:
+    "The hub holds an older vault than this device has seen. Re-seed it from here if that is expected.",
 };
 
 /** The text to show for an error, with the raw code appended when there is no wording for it. */

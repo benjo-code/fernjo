@@ -923,6 +923,44 @@ fn a_rolled_back_hub_is_reported_and_reseed_repairs_it() {
     assert_eq!(now(&a).state, "ok");
 }
 
+/// Final M11 review I2: a head whose vault is older than this device's base (another device
+/// re-seeded the hub with an older vault) is refused (V5) and must not leave a dead end: the status
+/// is the rolled-back one with its Re-seed action, and Re-seed pushes this device's newer vault.
+#[test]
+fn an_older_vault_in_the_head_offers_reseed_and_reseed_keeps_the_newer_local_vault() {
+    let hub = start_hub();
+    let (a, b) = (dev(), dev());
+    vault_create(&a.st, sec(MASTER), false).unwrap();
+    credential(&a, "one");
+    setup(&a, &hub, "a");
+    join(&b, &a, "b");
+    // A saves the vault twice more and syncs once in between; B never syncs again
+    credential(&a, "two");
+    assert_eq!(now(&a).state, "ok");
+    credential(&a, "three");
+    // B re-seeds the hub with its older vault, above A's last seq
+    assert_eq!(sync_reseed(&b.st).unwrap().state, "ok");
+
+    let s = now(&a);
+    assert_eq!(s.state, "rolled_back", "{:?}", s.error);
+    let error = s.error.as_ref().unwrap();
+    assert_eq!(error.code, "vault_rolled_back");
+    assert!(!error.message.contains(MASTER));
+    // the refusal stays until the hub is repaired, and the local vault is untouched
+    assert_eq!(now(&a).state, "rolled_back");
+    assert_eq!(credential_names(&a), ["one", "three", "two"]);
+
+    let s = sync_reseed(&a.st).unwrap();
+    assert_eq!(s.state, "ok", "{:?}", s.error);
+    assert_eq!(s.error, None);
+    assert_eq!(credential_names(&a), ["one", "three", "two"]);
+    assert_eq!(now(&a).state, "ok");
+    // the other device follows the re-seeded, newer vault
+    assert_eq!(now(&b).state, "ok");
+    vault_unlock(&b.st, sec(MASTER), false).unwrap();
+    assert_eq!(credential_names(&b), ["one", "three", "two"]);
+}
+
 fn head_seq(hub: &Hub) -> Option<u64> {
     HubClient::new(&HubConfig {
         url: hub.url(),

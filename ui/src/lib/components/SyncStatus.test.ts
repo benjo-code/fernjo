@@ -92,6 +92,22 @@ describe("SyncStatus", () => {
     expect(onreseed).toHaveBeenCalled();
   });
 
+  test("a_vault_older_than_this_device_offers_reseed_too", async () => {
+    // final M11 review I2: Rust reports the vault refusal (V5) as the rolled-back state
+    const { onreseed } = await setup(
+      syncStatus({
+        state: "rolled_back",
+        error: { code: "vault_rolled_back", message: "the hub holds an older vault" },
+      }),
+    );
+    expect(document.body.textContent).toContain("Sync: hub older than this device");
+    expect(document.querySelector("[title]")!.getAttribute("title")).toBe(
+      "the hub holds an older vault",
+    );
+    button("Re-seed…").click();
+    expect(onreseed).toHaveBeenCalled();
+  });
+
   test("error_says_sync_problem_with_the_code_text_in_the_tooltip_and_details_opens_settings", async () => {
     const { ondetails } = await setup(
       syncStatus({ state: "error", error: { code: "hub_unauthorized", message: "no" } }),
