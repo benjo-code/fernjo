@@ -49,10 +49,11 @@ shasum -a 256 <file>                       # macOS: compare the printed hash wit
 `SHA256SUMS` sits in the same release as the installers, so it only shows that the download is intact. To check where an installer came from, verify its build provenance with the [GitHub CLI](https://cli.github.com/):
 
 ```bash
-gh attestation verify <installer file> --repo benjo-code/fernjo
+gh attestation verify <installer file> --repo benjo-code/fernjo \
+  --signer-workflow benjo-code/fernjo/.github/workflows/release.yml
 ```
 
-A passing check proves that the file was built by this repository's release workflow from the tagged commit. Releases before v0.3.0 have no attestation.
+A passing check proves that the file was built by fernjo's release workflow in this repository (`--signer-workflow` matters: `--repo` alone also accepts an attestation made by any other workflow of the repository). For an installer the release itself attached, `--source-ref refs/tags/vX.Y.Z` additionally pins the tag it was built from; installers attached again later by a manual run of the workflow fail that option. Releases before v0.3.0 have no attestation.
 
 **Windows.** Run the setup. SmartScreen shows "Windows protected your PC": choose "More info", then "Run anyway". The install is per user (under `%LOCALAPPDATA%\fernjo`) and needs no administrator rights. Uninstalling keeps your data in `%APPDATA%\fernjo`.
 
