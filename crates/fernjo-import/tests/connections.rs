@@ -270,6 +270,24 @@ fn the_file_may_be_nested_to_the_limit_that_still_fits_below_the_import_folder()
 }
 
 #[test]
+fn json_import_removes_direction_characters_and_cleans_the_domain() {
+    let doc = json!({"format": "fernjo-connections", "exportedAt": AT, "schemaVersion": persist::CURRENT_VERSION,
+    "children": [
+        {"id": "6f0c1c2a-0000-4000-8000-000000000001", "name": "fdp\u{202E}.exe", "description": "d\u{2066}x",
+         "type": "connection", "protocol": "rdp", "host": "h\u{202E}ost", "settings": {"domain": "EX\u{202E}AMPLE"}}
+    ]});
+    let p = plan(doc.to_string().as_bytes(), TODAY, &[]).unwrap();
+    let NodeKind::Folder { children } = &p.folder.kind else {
+        panic!("folder")
+    };
+    let a = &children[0];
+    assert_eq!(a.name, "fdp.exe");
+    assert_eq!(a.description, "dx");
+    assert!(matches!(&a.kind, NodeKind::Connection { host, .. } if host == "host"));
+    assert_eq!(a.settings.domain.as_deref(), Some("EXAMPLE"));
+}
+
+#[test]
 fn json_import_strips_control_characters_and_caps_lengths() {
     let long_host = "h".repeat(300);
     let doc = json!({"format": "fernjo-connections", "exportedAt": AT, "schemaVersion": persist::CURRENT_VERSION,

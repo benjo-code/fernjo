@@ -2,7 +2,7 @@
 //! backup). The numbers are the mRemoteNG importer's (`mremoteng::file::MAX_*_CHARS`), so
 //! every import path bounds names, descriptions and hosts the same way.
 
-use fernjo_core::{Node, NodeKind};
+use fernjo_core::{MAX_DOMAIN_CHARS, Node, NodeKind, is_valid_domain};
 
 use crate::mremoteng::file::{MAX_DESCRIPTION_CHARS, MAX_HOST_CHARS, MAX_NAME_CHARS};
 
@@ -17,10 +17,22 @@ pub fn cut_chars(s: &str, max: usize) -> String {
     }
 }
 
-/// `s` without control characters (`keep_newlines` keeps `\n`, `\r` and `\t`), cut to `max`.
+/// Characters that change how text is laid out and so can display a name or host reversed or
+/// across lines: the bidi marks, embeddings, overrides and isolates, the Arabic letter mark and
+/// the line and paragraph separators. The joiners (U+200C, U+200D) are not on the list: emoji
+/// and some scripts need them (M11 review #46).
+fn is_layout_control(c: char) -> bool {
+    matches!(c,
+        '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{2028}' | '\u{2029}'
+        | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
+/// `s` without control characters and layout controls (`keep_newlines` keeps `\n`, `\r` and
+/// `\t`), cut to `max`.
 pub fn clean(s: &str, max: usize, keep_newlines: bool) -> String {
     let kept: String = s
         .chars()
+        .filter(|c| !is_layout_control(*c))
         .filter(|c| !c.is_control() || (keep_newlines && matches!(c, '\n' | '\r' | '\t')))
         .take(max + 1)
         .collect();
@@ -58,6 +70,15 @@ pub fn sanitize_nodes(nodes: &mut [Node]) -> Cleaned {
                 let cleaned = (!cleaned.is_empty()).then_some(cleaned);
                 if cleaned.as_deref() != Some(user.as_str()) {
                     node.settings.username = cleaned;
+                    out.changed += 1;
+                }
+            }
+            if let Some(domain) = &node.settings.domain {
+                // like the user name; one that is empty or still not a valid domain is dropped
+                let cleaned = clean(domain, MAX_DOMAIN_CHARS, false);
+                let cleaned = (!cleaned.is_empty() && is_valid_domain(&cleaned)).then_some(cleaned);
+                if cleaned.as_deref() != Some(domain.as_str()) {
+                    node.settings.domain = cleaned;
                     out.changed += 1;
                 }
             }
@@ -136,5 +157,40 @@ mod tests {
         assert_eq!(clean("a\u{1b}[2Jb\u{0}", 10, false), "a[2Jb");
         assert_eq!(clean("a\nb\u{7}", 10, true), "a\nb");
         assert_eq!(clean("a\nb", 10, false), "ab");
+    }
+
+    #[test]
+    fn clean_removes_direction_and_separator_characters() {
+        // bidi marks, embeddings, overrides and isolates can display a name reversed
+        for bad in [
+            '\u{202A}', '\u{202B}', '\u{202C}', '\u{202D}', '\u{202E}', '\u{2066}', '\u{2067}',
+            '\u{2068}', '\u{2069}', '\u{200E}', '\u{200F}', '\u{061C}', '\u{2028}', '\u{2029}',
+        ] {
+            let s = format!("a{bad}b");
+            assert_eq!(clean(&s, 10, false), "ab", "{bad:?}");
+            assert_eq!(clean(&s, 10, true), "ab", "{bad:?} (descriptions)");
+        }
+        // joiners that emoji and some scripts need stay
+        assert_eq!(
+            clean("a\u{200D}b\u{200C}c", 10, false),
+            "a\u{200D}b\u{200C}c"
+        );
+    }
+
+    #[test]
+    fn sanitize_nodes_cleans_the_domain_setting_and_drops_one_that_stays_invalid() {
+        let mut nodes = vec![
+            user_node("a", "u"),
+            user_node("b", "u"),
+            user_node("c", "u"),
+        ];
+        nodes[0].settings.domain = Some("EX\u{202E}AMPLE".to_owned());
+        nodes[1].settings.domain = Some("\u{202E}\t".to_owned());
+        nodes[2].settings.domain = Some("CORP".to_owned());
+        let out = sanitize_nodes(&mut nodes);
+        assert_eq!(nodes[0].settings.domain.as_deref(), Some("EXAMPLE"));
+        assert_eq!(nodes[1].settings.domain, None);
+        assert_eq!(nodes[2].settings.domain.as_deref(), Some("CORP"));
+        assert_eq!(out.changed, 2);
     }
 }

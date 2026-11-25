@@ -318,3 +318,22 @@ fn backup_tree_text_is_capped_like_the_other_importers() {
     assert_eq!(n.name.chars().count(), 256);
     assert!(matches!(&n.kind, NodeKind::Connection { host, .. } if host.is_empty()));
 }
+
+#[test]
+fn backup_text_loses_direction_characters_and_entry_secrets_stay_untouched() {
+    let secret = serde_json::to_value(Secret::Password { password: pw("pw") }).unwrap();
+    let body = serde_json::json!({
+        "schemaVersion": 1, "createdAt": "x", "app": "y",
+        "connections": {"schemaVersion": 3, "children": [
+            {"id": "6f0c1c2a-0000-4000-8000-000000000001", "name": "fdp\u{202E}.exe", "type": "connection",
+             "protocol": "rdp", "host": "h", "settings": {"domain": "EX\u{202E}AMPLE"}}]},
+        "entries": [{"id": "6f0c1c2a-0000-4000-8000-0000000000aa", "name": "o\u{202E}ps", "username": "ops",
+                     "secret": secret, "notes": ""}]
+    });
+    let back = backup::open(&seal(body.to_string().as_bytes()), &pw(PW)).unwrap();
+    let n = &back.tree.children()[0];
+    assert_eq!(n.name, "fdp.exe");
+    assert_eq!(n.settings.domain.as_deref(), Some("EXAMPLE"));
+    assert_eq!(back.entries[0].1.name, "ops");
+    assert_eq!(back.entries[0].1.username.as_deref(), Some("ops"));
+}

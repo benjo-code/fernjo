@@ -374,7 +374,8 @@ pub fn open(bytes: &[u8], password: &SecretString) -> Result<BackupContents, Bac
             (
                 e.id,
                 NewEntry {
-                    name: e.name,
+                    // shown in the vault list: no control or direction characters (never cut)
+                    name: clean(&e.name, e.name.chars().count(), false),
                     username: e.username,
                     domain: e.domain,
                     secret: e.secret,

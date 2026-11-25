@@ -756,6 +756,35 @@ fn control_characters_are_removed_from_a_username_and_an_empty_one_is_unset() {
 }
 
 #[test]
+fn control_and_direction_characters_are_removed_from_names_hosts_descriptions_and_domains() {
+    // character references can carry tab, line feed, DEL, C1 controls and bidi overrides
+    let n = one_node(
+        r#"Name="a&#10;b&#x85;c&#x9B;d&#x7F;e&#x202E;f" Hostname="h&#10;o&#x202E;st" Descr="l1&#10;l2&#x9B;&#x202E;x" Domain="EX&#x7F;AM&#x202E;PLE""#,
+    );
+    assert_eq!(n.name, "abcdef");
+    assert_eq!(n.hostname, "host");
+    // a description keeps its line breaks
+    assert_eq!(n.description, "l1\nl2x");
+    assert_eq!(n.domain, "EXAMPLE");
+    // through the mapper: none of it reaches the imported tree
+    let p = plan(&RawDocument { nodes: vec![n] }, "2026-11-18", &[]);
+    let fernjo_core::NodeKind::Folder { children } = &p.folder.kind else {
+        panic!("folder")
+    };
+    assert_eq!(children[0].name, "abcdef");
+    assert!(
+        matches!(&children[0].kind, fernjo_core::NodeKind::Connection { host, .. } if host == "host")
+    );
+    // a name that is nothing but controls reads as unnamed
+    let m = one_node(r#"Name="&#x202E;&#9;" Hostname="h""#);
+    let p = plan(&RawDocument { nodes: vec![m] }, "2026-11-18", &[]);
+    let fernjo_core::NodeKind::Folder { children } = &p.folder.kind else {
+        panic!("folder")
+    };
+    assert_eq!(children[0].name, "unnamed");
+}
+
+#[test]
 fn an_overlong_protocol_is_flagged_and_an_overlong_password_is_not_decrypted() {
     let n = one_node(&format!(
         r#"Name="n" Password="{}""#,
