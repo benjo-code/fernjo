@@ -15,6 +15,12 @@ describe("syncErrorText", () => {
     expect(e.code).toBeNull();
   });
 
+  test("an_exhausted_sequence_number_gets_human_text", () => {
+    const e = syncErrorText({ code: "seq_exhausted", message: "raw" });
+    expect(e.text).toContain("sequence number is at its maximum");
+    expect(e.code).toBeNull();
+  });
+
   test("an_unknown_code_shows_the_message_and_the_raw_code", () => {
     expect(syncErrorText({ code: "snapshot_invalid", message: "bad snapshot" })).toEqual({
       text: "bad snapshot",
