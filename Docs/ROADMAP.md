@@ -38,7 +38,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 | 9 | Multi-device sync | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-22-milestone-09-multi-device-sync.md) | 2026-11-23 |
 | 10 | Daily-use features | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-23-milestone-10-daily-use-features.md) | 2026-11-24 |
 | 11 | Full hardening and security check | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-24-milestone-11-hardening-security.md) | 2026-11-25 |
-| – | **Release `v0.3.0`** – Sync, daily-use features and security check (M9 to M11) | – | ⬜ open | – | – |
+| – | **Release `v0.3.0`** – Sync, daily-use features and security check (M9 to M11) | – | ✅ done | – | 2026-11-25 |
 
 ## Scope changes
 

@@ -6,6 +6,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-25
+
 Multi-device sync (M9), daily-use features (M10) and the security hardening of both (M11).
 
 ### Added
@@ -29,7 +31,8 @@ Multi-device sync (M9), daily-use features (M10) and the security hardening of b
   - **Verified on real hardware, except Linux.** The owner ran a Windows 11 PC and a macOS laptop against a hub in rootless Podman 5.7.0 behind Caddy `tls internal` on a separate VM (create, edit, delete versus edit, conflict copy, vault entry, offline then online, hub and Caddy restart, hub restored from an older snapshot and re-seeded, hub secret rotation, the OS keychain items on both systems). That run found two defects, fixed before release: the Quadlet unit used `Init=` (the key is `RunInit=`), and the notice for an item deleted on one device and changed on another said "changed here" also on the device that had deleted it. Not run: the Linux Secret Service keychain item and a Linux device.
 - The Reload bar (M7) now also appears when a vault credential delete or a restore from a backup finds that `connections.json` changed on disk, in addition to the plain error text. The file in question can be `vault.fernjo` (a restore saves the vault first), while the bar still names `connections.json`.
 - Leftover `<file>.<hex>.tmp` files of an interrupted save that are more than a day old are now removed: `vault.fernjo` when the vault is opened, `connections.json` and `settings.json` at start, `known_hosts`, `known_hosts.confirmed` and the RDP certificate pins on their next save. Younger ones, symbolic links and other names are left alone.
-- Build provenance for the installers (M11): from v0.3.0 on every installer of a release carries a GitHub build attestation. `gh attestation verify <installer file> --repo benjo-code/fernjo --signer-workflow benjo-code/fernjo/.github/workflows/release.yml --source-ref refs/tags/vX.Y.Z` shows that the file was built by this repository's `release.yml` from that tag (`SHA256SUMS` only shows that a download is intact); this holds as long as release tags cannot be moved, which a tag ruleset is still to enforce. Earlier releases have none.
+- Build provenance for the installers (M11): from v0.3.0 on every installer of a release carries a GitHub build attestation. `gh attestation verify <installer file> --repo benjo-code/fernjo --signer-workflow benjo-code/fernjo/.github/workflows/release.yml --source-ref refs/tags/vX.Y.Z` shows that the file was built by this repository's `release.yml` from that tag (`SHA256SUMS` only shows that a download is intact); this holds as long as release tags cannot be moved, which the repository's `v*` tag ruleset enforces. Earlier releases have none. v0.3.0 is the first release that produces the attestation, so the command above had not been run against a real one before this release (the outcome is recorded in `Docs/release-checklist.md`, "v0.3.0 result").
+- Not re-measured for this release: performance (cold start, idle memory and the 500-connection filter; the figures in `Docs/performance.md` date from v0.1.1 and are not claimed for 0.3.0), `fernjo-fs` on macOS (its tests run on Linux in CI) and the Linux Secret Service keychain item. Sync was run on Windows and macOS, not on Linux.
 
 ### Changed
 
