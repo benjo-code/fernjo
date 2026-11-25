@@ -9,6 +9,7 @@ import { VaultStore } from "../vault.svelte";
 import Sidebar from "./Sidebar.svelte";
 import NoticeBar from "./NoticeBar.svelte";
 import SyncStatusLine from "./SyncStatus.svelte";
+import { syncErrorText } from "../sync-errors";
 
 let mounted: ReturnType<typeof mount> | null = null;
 
@@ -90,6 +91,49 @@ describe("SyncStatus", () => {
     expect(document.body.textContent).toContain("Sync: hub older than this device");
     button("Re-seed…").click();
     expect(onreseed).toHaveBeenCalled();
+  });
+
+  test("a_vault_older_than_this_device_offers_reseed_too", async () => {
+    // final M11 review I2: Rust reports the vault refusal (V5) as the rolled-back state
+    const { onreseed } = await setup(
+      syncStatus({
+        state: "rolled_back",
+        error: { code: "vault_rolled_back", message: "the hub holds an older vault" },
+      }),
+    );
+    expect(document.body.textContent).toContain("Sync: hub older than this device");
+    // the tooltip words the code, never Rust's raw message
+    expect(document.querySelector("[title]")!.getAttribute("title")).toBe(
+      syncErrorText({ code: "vault_rolled_back", message: "" }).text,
+    );
+    button("Re-seed…").click();
+    expect(onreseed).toHaveBeenCalled();
+  });
+
+  test("a_rolled_back_hub_explains_a_restore_in_the_tooltip", async () => {
+    await setup(
+      syncStatus({
+        state: "rolled_back",
+        error: { code: "hub_rolled_back", message: "the hub shows state 1" },
+      }),
+    );
+    const title = document.querySelector("[title]")!.getAttribute("title")!;
+    expect(title).toContain("restored on purpose");
+    expect(title).not.toContain("state 1");
+  });
+
+  test("a_local_vault_below_the_mark_is_a_sync_problem_without_reseed", async () => {
+    // re-review N2: the head is newer than the local vault file, so a re-seed would lose it
+    const { ondetails } = await setup(
+      syncStatus({ state: "error", error: { code: "vault_below_mark", message: "raw" } }),
+    );
+    expect(document.body.textContent).toContain("Sync problem");
+    expect(button("Re-seed…")).toBeUndefined();
+    expect(document.querySelector("[title]")!.getAttribute("title")).toContain(
+      "Save the vault once on this device",
+    );
+    button("Details").click();
+    expect(ondetails).toHaveBeenCalled();
   });
 
   test("error_says_sync_problem_with_the_code_text_in_the_tooltip_and_details_opens_settings", async () => {

@@ -5,7 +5,7 @@ use fernjo_core::{
 };
 use uuid::Uuid;
 
-use super::tree::{TreeMerge, merge_tree_with};
+use super::tree::{TreeMerge, merge_tree_with, place_secondary};
 use super::{Finding, MergeContext};
 
 const DEVICE: &str = "laptop";
@@ -875,4 +875,107 @@ fn outline(tree: &Tree) -> String {
             .join(" ")
     }
     walk(tree.children())
+}
+
+#[test]
+fn many_head_additions_in_a_locally_reordered_folder_merge_in_linear_time() {
+    // local reordered the folder, the head did not and adds 99 000 nodes there: the head is the
+    // secondary side and every addition goes after its predecessor
+    const ADDED: u128 = 99_000;
+    let base = tree(vec![folder(
+        1,
+        "box",
+        vec![conn(2, "a", "h"), conn(3, "b", "h")],
+    )]);
+    let local = tree(vec![folder(
+        1,
+        "box",
+        vec![conn(3, "b", "h"), conn(2, "a", "h")],
+    )]);
+    let mut head_kids = vec![conn(2, "a", "h"), conn(3, "b", "h")];
+    head_kids.extend((0..ADDED).map(|n| conn(10 + n, "new", "h")));
+    let head = tree(vec![folder(1, "box", head_kids)]);
+
+    let started = std::time::Instant::now();
+    let merged = merge(&base, &local, &head);
+    let took = started.elapsed();
+    let mut expected = vec![id(3)];
+    expected.extend((0..ADDED).map(|n| id(10 + n)));
+    expected.push(id(2));
+    assert_eq!(ids(children(&merged.tree, 1)), expected);
+    // the search-and-insert placement took 46 s here in a debug build, the whole linear merge
+    // about 2 s; the bound only catches the quadratic case
+    assert!(took.as_secs() < 20, "the merge took {took:?}");
+}
+
+/// The placement as it was before M11 (a search and an insert per node): the reference the linear
+/// `place_secondary` must match.
+fn place_secondary_by_search(
+    out: &[NodeId],
+    secondary: &[NodeId],
+    members: &HashSet<NodeId>,
+    append: bool,
+    placed: &mut HashSet<NodeId>,
+) -> Vec<NodeId> {
+    let mut out = out.to_vec();
+    let mut last: Option<NodeId> = None;
+    for id in secondary {
+        if placed.contains(id) {
+            last = Some(*id);
+        } else if members.contains(id) {
+            let at = match last {
+                _ if append => out.len(),
+                Some(prev) => out
+                    .iter()
+                    .position(|x| *x == prev)
+                    .map_or(out.len(), |p| p + 1),
+                None => 0,
+            };
+            out.insert(at, *id);
+            placed.insert(*id);
+            last = Some(*id);
+        }
+    }
+    out
+}
+
+#[test]
+fn linear_sibling_placement_matches_the_search_and_insert_placement() {
+    // a small deterministic generator (xorshift), so the cases are the same on every run
+    let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+    let mut next = move |bound: u64| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state % bound
+    };
+    for case in 0..5000 {
+        let pool = 1 + next(12);
+        let members: HashSet<NodeId> = (0..pool)
+            .filter(|_| next(4) != 0)
+            .map(|n| id(n.into()))
+            .collect();
+        // the primary side: each member at most once, in some order (what `order_siblings` builds)
+        let mut out: Vec<NodeId> = Vec::new();
+        for _ in 0..next(pool + 1) {
+            let candidate = id(next(pool).into());
+            if members.contains(&candidate) && !out.contains(&candidate) {
+                out.push(candidate);
+            }
+        }
+        // the secondary side: anything from the pool, also repeated ids and non-members
+        let secondary: Vec<NodeId> = (0..next(2 * pool + 1))
+            .map(|_| id(next(pool + 2).into()))
+            .collect();
+        let append = next(5) == 0;
+        let placed: HashSet<NodeId> = out.iter().copied().collect();
+        let (mut fast_placed, mut slow_placed) = (placed.clone(), placed);
+        let fast = place_secondary(&out, &secondary, &members, append, &mut fast_placed);
+        let slow = place_secondary_by_search(&out, &secondary, &members, append, &mut slow_placed);
+        assert_eq!(
+            fast, slow,
+            "case {case}: out {out:?} secondary {secondary:?} append {append}"
+        );
+        assert_eq!(fast_placed, slow_placed, "case {case}");
+    }
 }

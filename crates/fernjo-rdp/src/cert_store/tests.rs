@@ -194,3 +194,19 @@ fn the_file_is_owner_only() {
         0o600
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_at_the_pin_file_bak_is_not_followed() {
+    let (dir, store, path) = setup();
+    let victim = dir.path().join("victim");
+    fs::write(&victim, "untouched").unwrap();
+    let bak = dir.path().join("rdp_certs.confirmed.bak");
+    std::os::unix::fs::symlink(&victim, &bak).unwrap();
+    store.pin("dc01", 3389, FP_A).unwrap();
+    let first = fs::read(&path).unwrap();
+    store.pin("dc02", 3389, FP_B).unwrap();
+    assert_eq!(fs::read_to_string(&victim).unwrap(), "untouched");
+    assert!(fs::symlink_metadata(&bak).unwrap().file_type().is_file());
+    assert_eq!(fs::read(&bak).unwrap(), first);
+}

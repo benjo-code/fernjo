@@ -206,6 +206,18 @@ fn attr(node: roxmltree::Node, name: &str, max: usize) -> (String, bool) {
     }
 }
 
+/// [`attr`] followed by [`crate::limits::clean`] (control and direction characters removed; the
+/// cut flag still says whether the raw value was too long).
+fn attr_clean(
+    node: roxmltree::Node,
+    name: &str,
+    max: usize,
+    keep_newlines: bool,
+) -> (String, bool) {
+    let (value, cut) = attr(node, name, max);
+    (crate::limits::clean(&value, max, keep_newlines), cut)
+}
+
 fn malformed(e: CryptoError) -> ImportError {
     match e {
         CryptoError::BadBase64 | CryptoError::TooShort => {
@@ -400,17 +412,21 @@ fn read_node(
     counter: &mut usize,
     ctx: &Ctx,
 ) -> Result<RawNode, ImportError> {
-    let (name, name_cut) = attr(el, "Name", MAX_NAME_CHARS);
-    let (description, description_cut) = attr(el, "Descr", MAX_DESCRIPTION_CHARS);
-    let (mut hostname, hostname_cut) = attr(el, "Hostname", MAX_HOST_CHARS);
+    // Text that is shown or used later is cleaned of control and direction characters right here
+    // (character references can carry them), after the cut and before anything looks at it.
+    let (name, name_cut) = attr_clean(el, "Name", MAX_NAME_CHARS, false);
+    let (description, description_cut) = attr_clean(el, "Descr", MAX_DESCRIPTION_CHARS, true);
+    let (mut hostname, hostname_cut) = attr_clean(el, "Hostname", MAX_HOST_CHARS, false);
     if hostname_cut {
         // too long to be a host: dropped, never cut into a different host
         hostname.clear();
     }
     let (protocol, protocol_cut) = attr(el, "Protocol", MAX_PROTOCOL_CHARS);
     let (username, username_cut) = attr(el, "Username", MAX_IDENTITY_CHARS);
-    let (domain, domain_cut) = attr(el, "Domain", MAX_IDENTITY_CHARS);
-    let (putty_session, _) = attr(el, "PuttySession", MAX_IDENTITY_CHARS);
+    // like a name: no control characters (a cleaned-empty user name is no user name)
+    let username = crate::limits::clean(&username, MAX_IDENTITY_CHARS, false);
+    let (domain, domain_cut) = attr_clean(el, "Domain", MAX_IDENTITY_CHARS, false);
+    let (putty_session, _) = attr_clean(el, "PuttySession", MAX_IDENTITY_CHARS, false);
     let (resolution, _) = attr(el, "Resolution", MAX_PROTOCOL_CHARS);
     let (colors, _) = attr(el, "Colors", MAX_PROTOCOL_CHARS);
     let kind = match el.attribute("Type").map(str::trim) {

@@ -14,6 +14,8 @@ src-tauri/gen/
 !.env.example
 *.pem
 *.key
+# the RDP TLS test certificates' keys are test data (crates/fernjo-rdp/tests/fixtures/README.md)
+!crates/fernjo-rdp/tests/fixtures/*.key
 id_rsa
 id_rsa.pub
 id_ed25519
@@ -33,7 +35,24 @@ connections.json.tmp
 *.ppk
 id_dsa*
 /settings.json
+settings.json.bak
 /data/
+# Newer user data (a scratch FERNJO_DATA_DIR inside the repo creates them): backups and exports,
+# the device folder with sync state, open tabs, vault marks and confirmed host keys and certificates,
+# the synced known_hosts, and a sync hub's data folder (head.env, history/<seq>.env).
+*.fjbk
+fernjo-connections-*.json
+*.bak
+.device/
+sync.json
+sync-base.json
+open-tabs.json
+vault-marks.json
+known_hosts
+known_hosts.confirmed
+rdp_certs.confirmed
+appmenu-never
+*.env
 
 # Agent and editor scratch
 .superpowers/

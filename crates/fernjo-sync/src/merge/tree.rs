@@ -504,24 +504,7 @@ impl Merger<'_> {
         // place and a conflict copy stays next to its original. Without a predecessor it is
         // placed first. When both sides reordered
         // (C8), such nodes are simply appended.
-        let mut last: Option<NodeId> = None;
-        for id in secondary {
-            if placed.contains(id) {
-                last = Some(*id);
-            } else if members.contains(id) {
-                let at = match last {
-                    _ if both_changed => out.len(),
-                    Some(prev) => out
-                        .iter()
-                        .position(|x| *x == prev)
-                        .map_or(out.len(), |p| p + 1),
-                    None => 0,
-                };
-                out.insert(at, *id);
-                placed.insert(*id);
-                last = Some(*id);
-            }
-        }
+        let mut out = place_secondary(&out, secondary, members, both_changed, &mut placed);
         let mut rest: Vec<NodeId> = members
             .iter()
             .copied()
@@ -531,6 +514,79 @@ impl Merger<'_> {
         out.extend(rest);
         (out, both_changed)
     }
+}
+
+/// `out` (the primary side's members, each once) with the members of `secondary` that are not
+/// `placed` yet: each goes right after its predecessor in `secondary` (the node before it there,
+/// placed earlier or just inserted), first when it has none, and at the end when `append` is set
+/// (C8). Every inserted id is added to `placed`.
+///
+/// Linear in the lengths: the order is kept as a list linked by id, so an insertion after a
+/// predecessor is a map update instead of a search plus a shift (a peer's 100 000 additions in a
+/// folder this device reordered cost about 10^10 steps that way, M11 review #54). The result is the
+/// same as searching the predecessor in the vector and inserting after it.
+pub(super) fn place_secondary(
+    out: &[NodeId],
+    secondary: &[NodeId],
+    members: &HashSet<NodeId>,
+    append: bool,
+    placed: &mut HashSet<NodeId>,
+) -> Vec<NodeId> {
+    // `next[id]` is the id after `id`; every listed id has an entry
+    let mut next: HashMap<NodeId, Option<NodeId>> =
+        HashMap::with_capacity(out.len() + secondary.len());
+    for pair in out.windows(2) {
+        next.insert(pair[0], Some(pair[1]));
+    }
+    let (mut first, mut tail) = (out.first().copied(), out.last().copied());
+    if let Some(t) = tail {
+        next.insert(t, None);
+    }
+    let mut last: Option<NodeId> = None;
+    for &id in secondary {
+        if placed.contains(&id) {
+            last = Some(id);
+            continue;
+        }
+        if !members.contains(&id) {
+            continue;
+        }
+        match last.filter(|prev| !append && next.contains_key(prev)) {
+            Some(prev) => {
+                let after = next.insert(prev, Some(id)).flatten();
+                next.insert(id, after);
+                if tail == Some(prev) {
+                    tail = Some(id);
+                }
+            }
+            None if last.is_none() && !append => {
+                next.insert(id, first);
+                first = Some(id);
+                if tail.is_none() {
+                    tail = Some(id);
+                }
+            }
+            None => {
+                match tail {
+                    Some(t) => {
+                        next.insert(t, Some(id));
+                    }
+                    None => first = Some(id),
+                }
+                next.insert(id, None);
+                tail = Some(id);
+            }
+        }
+        placed.insert(id);
+        last = Some(id);
+    }
+    let mut list = Vec::with_capacity(next.len());
+    let mut at = first;
+    while let Some(id) = at {
+        list.push(id);
+        at = next[&id];
+    }
+    list
 }
 
 fn plain(parent: Option<NodeId>) -> Choice {

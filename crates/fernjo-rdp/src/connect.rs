@@ -1,32 +1,35 @@
-//! The connect procedure: TCP, X.224 negotiation, TLS, the certificate decision, credentials, CredSSP
-//! and the rest of the RDP handshake. Nothing here keeps the connection alive afterwards; the
-//! caller (`session.rs`) takes the framed stream and the connection result.
+//! The connect procedure: TCP, X.224 negotiation (CredSSP only), TLS, the certificate decision,
+//! credentials, CredSSP and the rest of the RDP handshake. Nothing here keeps the connection alive
+//! afterwards; the caller (`session.rs`) takes the framed stream and the connection result.
 
 use std::future::Future;
-use std::sync::Arc;
 use std::time::Duration;
 
 use ironrdp_connector::credssp::KerberosConfig;
 use ironrdp_connector::{
-    BitmapConfig, ClientConnector, ConnectionResult, ConnectorError, ConnectorErrorKind,
-    ConnectorResult, Credentials, DesktopSize,
+    BitmapConfig, ClientConnector, ClientConnectorState, ConnectionResult, ConnectorError,
+    ConnectorErrorKind, ConnectorResult, Credentials, DesktopSize, Sequence as _,
 };
+use ironrdp_core::WriteBuf;
 use ironrdp_displaycontrol::client::DisplayControlClient;
 use ironrdp_dvc::DrdynvcClient;
 use ironrdp_pdu::gcc::{ConnectionType, KeyboardType};
+use ironrdp_pdu::nego::{ConnectionConfirm, FailureCode, SecurityProtocol};
 use ironrdp_pdu::rdp::capability_sets::{
     MajorPlatformType, RailSupportLevel, client_codecs_capabilities,
 };
 use ironrdp_pdu::rdp::client_info::{PerformanceFlags, TimezoneInfo};
-use ironrdp_tls::TlsStream;
-use ironrdp_tokio::{NetworkClient, TokioFramed};
+use ironrdp_pdu::x224::X224;
+use ironrdp_tokio::{NetworkClient, ShouldUpgrade, TokioFramed};
 use secrecy::{ExposeSecret, SecretString};
 use sha2::{Digest, Sha256};
 use tokio::net::TcpStream;
-use x509_cert::der::Encode as _;
+use tokio_rustls::client::TlsStream;
+use x509_cert::der::{Decode as _, Encode as _};
 
 use crate::cert_store::{CertCheck, valid_host};
 use crate::text_clipboard::{ClipEvent, LocalText, TextClipboard};
+use crate::tls;
 use crate::{
     CertChangedDecision, CertChangedPrompt, CertDecision, CertPrompt, ConnectParams, Interaction,
     RdpError,
@@ -92,8 +95,13 @@ fn build_config(
             password: password.expose_secret().to_string(),
         },
         domain: params.domain.clone(),
-        // TLS alone is accepted for servers without NLA (the Windows login screen then asks).
-        enable_tls: true,
+        // NLA only: the X.224 request offers CredSSP (HYBRID, HYBRID_EX) and not TLS alone. On the
+        // TLS-only path the Client Info PDU carries the password in the clear inside TLS, to
+        // whoever holds the certificate the user accepted; with CredSSP a man in the middle gets
+        // at most a NetNTLMv2 response. A server whose selection lacks CredSSP (TLS-only, standard
+        // RDP security, RDSTLS, ...) is refused with `nla_required` by `check_confirm`, before the
+        // TLS handshake.
+        enable_tls: false,
         enable_credssp: true,
         keyboard_type: KeyboardType::IBM_ENHANCED,
         keyboard_subtype: 0,
@@ -190,6 +198,75 @@ pub(crate) fn map_connector_error(error: &ConnectorError) -> RdpError {
     }
 }
 
+/// fernjo's own check of the server's X.224 connection confirm, run before the connector sees it.
+/// A server whose selection holds neither `HYBRID` nor `HYBRID_EX` (TLS-only `SSL`, standard RDP
+/// security, `RDSTLS`, `RDSAAD`, unknown bits) does not run CredSSP, and one that refuses the
+/// CredSSP-only request because it wants TLS-only, standard RDP security or TLS with client
+/// certificates does not offer it: `NlaRequired`. IronRDP would refuse a selection outside the
+/// request too, but only with a generic error, and fernjo does not rely on that check. Bytes that
+/// do not decode and other failure codes are left to the connector.
+pub(crate) fn check_confirm(pdu: &[u8]) -> Result<(), RdpError> {
+    let Ok(X224(confirm)) = ironrdp_core::decode::<X224<ConnectionConfirm>>(pdu) else {
+        return Ok(());
+    };
+    match confirm {
+        ConnectionConfirm::Response { protocol, .. } => {
+            if protocol.intersects(SecurityProtocol::HYBRID | SecurityProtocol::HYBRID_EX) {
+                Ok(())
+            } else {
+                Err(RdpError::NlaRequired)
+            }
+        }
+        ConnectionConfirm::Failure { code } => {
+            if code == FailureCode::SSL_REQUIRED_BY_SERVER
+                || code == FailureCode::SSL_NOT_ALLOWED_BY_SERVER
+                || code == FailureCode::SSL_WITH_USER_AUTH_REQUIRED_BY_SERVER
+            {
+                Err(RdpError::NlaRequired)
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
+/// The X.224 negotiation: `ironrdp_tokio::connect_begin` with `check_confirm` on the server's
+/// confirm. A refused confirm ends the attempt before the TLS handshake, so nothing more is sent.
+async fn negotiate(
+    framed: &mut TokioFramed<TcpStream>,
+    connector: &mut ClientConnector,
+) -> Result<ShouldUpgrade, RdpError> {
+    let mut buf = WriteBuf::new();
+    while !connector.should_perform_security_upgrade() {
+        if !matches!(
+            connector.state,
+            ClientConnectorState::ConnectionInitiationWaitConfirm { .. }
+        ) {
+            ironrdp_tokio::single_sequence_step(framed, connector, &mut buf)
+                .await
+                .map_err(|e| map_connector_error(&e))?;
+            continue;
+        }
+        let pdu = framed
+            .read_by_hint(&ironrdp_pdu::X224_HINT)
+            .await
+            .map_err(|e| {
+                map_connector_error(&ironrdp_connector::custom_err!("read frame by hint", e))
+            })?;
+        check_confirm(&pdu)?;
+        buf.clear();
+        let written = connector
+            .step(&pdu, framed.last_read_at(), &mut buf)
+            .map_err(|e| map_connector_error(&e))?;
+        // processing the confirm sends nothing (IronRDP 0.12); a connector that wanted to would be
+        // a change this loop does not know, so the attempt ends instead of sending unseen bytes
+        if written.size().is_some() {
+            return Err(RdpError::Protocol);
+        }
+    }
+    Ok(ironrdp_tokio::skip_connect_begin(connector))
+}
+
 /// Runs the whole connect procedure.
 pub(crate) async fn establish<I: Interaction>(
     params: &ConnectParams,
@@ -221,25 +298,18 @@ pub(crate) async fn establish<I: Interaction>(
                     .with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new()))),
             );
         }
-        let should_upgrade = ironrdp_tokio::connect_begin(&mut framed, &mut connector)
-            .await
-            .map_err(|e| map_connector_error(&e))?;
+        // a server without NLA is refused here, before TLS, the certificate and the prompts
+        let should_upgrade = negotiate(&mut framed, &mut connector).await?;
         let (stream, leftover) = framed.into_inner();
         if !leftover.is_empty() {
             return Err(RdpError::Protocol);
         }
-        // RDP servers present self-signed certificates, so a failed chain or name check is
-        // accepted here and the pin decides after the handshake. The handshake signature is
-        // still checked against the certificate's public key (`ironrdp_tls::upgrade` would turn
-        // that off too), so a server that only replays a public certificate cannot get through.
-        let (tls, cert) = ironrdp_tls::upgrade_with_certificate_validation_callback_for_endpoint(
-            stream,
-            &host,
-            &host,
-            Arc::new(|_cert: &[u8], _endpoint: &str, _failure: &str| true),
-        )
-        .await
-        .map_err(|_| RdpError::TlsFailed)?;
+        // RDP servers present self-signed certificates, so chain, name and expiry are not checked
+        // and the pin decides after the handshake. The handshake signature is still checked
+        // against the certificate's public key (`tls::PinVerifier`), so a server that only
+        // replays a public certificate cannot get through.
+        let (tls, leaf) = tls::upgrade(stream, &host).await?;
+        let cert = x509_cert::Certificate::from_der(&leaf).map_err(|_| RdpError::TlsFailed)?;
         let upgraded = ironrdp_tokio::mark_as_upgraded(should_upgrade, &mut connector);
         let der = cert
             .to_der()
@@ -355,4 +425,74 @@ pub(crate) async fn establish<I: Interaction>(
         result,
         clipboard,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ironrdp_pdu::nego::ResponseFlags;
+
+    fn response(protocol: SecurityProtocol) -> Vec<u8> {
+        ironrdp_core::encode_vec(&X224(ConnectionConfirm::Response {
+            flags: ResponseFlags::empty(),
+            protocol,
+        }))
+        .unwrap()
+    }
+
+    fn failure(code: FailureCode) -> Vec<u8> {
+        ironrdp_core::encode_vec(&X224(ConnectionConfirm::Failure { code })).unwrap()
+    }
+
+    #[test]
+    fn credssp_passes_and_every_selection_without_it_is_nla_required() {
+        for ok in [
+            SecurityProtocol::HYBRID,
+            SecurityProtocol::HYBRID_EX,
+            SecurityProtocol::HYBRID | SecurityProtocol::HYBRID_EX,
+            SecurityProtocol::SSL | SecurityProtocol::HYBRID,
+        ] {
+            assert_eq!(check_confirm(&response(ok)), Ok(()), "{ok:?}");
+        }
+        let unknown_bit = SecurityProtocol::from_bits_retain(0x0000_0100);
+        for refused in [
+            SecurityProtocol::SSL,
+            SecurityProtocol::empty(),
+            SecurityProtocol::RDSTLS,
+            SecurityProtocol::RDSAAD,
+            SecurityProtocol::SSL | SecurityProtocol::RDSTLS,
+            SecurityProtocol::SSL | unknown_bit,
+            unknown_bit,
+        ] {
+            assert_eq!(
+                check_confirm(&response(refused)),
+                Err(RdpError::NlaRequired),
+                "{refused:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_failures_that_mean_no_nla_are_nla_required() {
+        for code in [
+            FailureCode::SSL_REQUIRED_BY_SERVER,
+            FailureCode::SSL_NOT_ALLOWED_BY_SERVER,
+            FailureCode::SSL_WITH_USER_AUTH_REQUIRED_BY_SERVER,
+        ] {
+            assert_eq!(check_confirm(&failure(code)), Err(RdpError::NlaRequired));
+        }
+        // left to the connector, which reports them as before
+        for code in [
+            FailureCode::SSL_CERT_NOT_ON_SERVER,
+            FailureCode::INCONSISTENT_FLAGS,
+            FailureCode::HYBRID_REQUIRED_BY_SERVER,
+        ] {
+            assert_eq!(check_confirm(&failure(code)), Ok(()));
+        }
+    }
+
+    #[test]
+    fn bytes_that_do_not_decode_are_left_to_the_connector() {
+        assert_eq!(check_confirm(&[0x01, 0x00, 0x00, 0x08, 0xde, 0xad]), Ok(()));
+    }
 }

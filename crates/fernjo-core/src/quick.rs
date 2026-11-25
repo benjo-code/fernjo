@@ -31,6 +31,9 @@ impl QuickError {
             "quick_user_required" => "an SSH target needs a user name (user@host)",
             "quick_bad_scheme" => "the scheme must be ssh:// or rdp://",
             "quick_bad_port" => "the port must be a number from 1 to 65535",
+            "quick_user_password" => {
+                "type only the user name (no :password); fernjo asks for the password"
+            }
             _ => "this is not a valid target (use [ssh://|rdp://]user@host[:port])",
         }
     }
@@ -44,7 +47,8 @@ const fn err(code: &'static str) -> QuickError {
 /// optional (it can be typed at the prompt). An IPv6 host is written `[::1]`.
 ///
 /// # Errors
-/// `quick_empty`, `quick_user_required`, `quick_bad_scheme`, `quick_bad_port`, `quick_bad_target`.
+/// `quick_empty`, `quick_user_required`, `quick_bad_scheme`, `quick_bad_port`, `quick_bad_target`,
+/// `quick_user_password`.
 pub fn parse_quick(input: &str) -> Result<QuickTarget, QuickError> {
     let input = input.trim();
     if input.is_empty() {
@@ -112,12 +116,14 @@ const MAX_HOST_CHARS: usize = 255;
 
 /// Checks the structure of a target, whether it came from [`parse_quick`] or from the webview
 /// (which is not trusted): a non-zero port, a user (when present) that is non-empty, bounded and
-/// free of whitespace, control characters and `@`, a user for SSH, and a bounded host without
+/// free of whitespace, control characters and `@`, a user without `:` (a `user:password` typed
+/// out of URL habit would put the password into the tab title, `open-tabs.json` and the server's
+/// auth log; POSIX user names have no `:` and a Windows `DOMAIN\user` needs none), a user for SSH, and a bounded host without
 /// whitespace, control characters or `/ \ ; @ [ ]`. Which hosts may be connected to is decided
 /// separately by `fernjo_ssh::validate_host`.
 ///
 /// # Errors
-/// `quick_bad_port`, `quick_bad_target`, `quick_user_required`.
+/// `quick_bad_port`, `quick_bad_target`, `quick_user_required`, `quick_user_password`.
 pub fn validate_quick(target: &QuickTarget) -> Result<(), QuickError> {
     if target.port == 0 {
         return Err(err("quick_bad_port"));
@@ -130,6 +136,9 @@ pub fn validate_quick(target: &QuickTarget) -> Result<(), QuickError> {
                 .any(|c| c.is_whitespace() || c.is_control() || c == '@'))
     {
         return Err(err("quick_bad_target"));
+    }
+    if target.user.as_deref().is_some_and(|u| u.contains(':')) {
+        return Err(err("quick_user_password"));
     }
     if target.protocol == Protocol::Ssh && target.user.is_none() {
         return Err(err("quick_user_required"));
@@ -306,6 +315,29 @@ mod tests {
         rdp.protocol = Protocol::Rdp;
         rdp.user = None;
         assert_eq!(validate_quick(&rdp), Ok(()));
+    }
+
+    #[test]
+    fn refuses_a_password_typed_into_the_user() {
+        // M11 review #60: `user:password@host` must never become a user name, a tab title or an
+        // entry in open-tabs.json
+        assert_eq!(code("ssh://root:pw@h"), "quick_user_password");
+        assert_eq!(code("root:pw@h"), "quick_user_password");
+        assert_eq!(code("rdp://admin:S3cret@srv:3390"), "quick_user_password");
+        let mut t = ok("u@h");
+        t.user = Some("a:b".into());
+        let e = validate_quick(&t).unwrap_err();
+        assert_eq!(e.code, "quick_user_password");
+        assert!(
+            e.message().contains("only the user name"),
+            "{}",
+            e.message()
+        );
+        // a domain user is still fine
+        assert_eq!(
+            ok(r"rdp://CORP\admin@srv").user.as_deref(),
+            Some(r"CORP\admin")
+        );
     }
 
     #[test]

@@ -78,7 +78,7 @@ benjo.loc {
 
 If Caddy itself runs in a container, `127.0.0.1` inside that container is the container, not the host: point `reverse_proxy` at the host's address instead (the host's LAN address, `host.containers.internal` under Podman (untried), or put both containers on one Podman network and use the hub container's name and port 8787). Because the unit publishes `127.0.0.1:8787` only, a Caddy container that must reach the hub over the host's LAN address needs `PublishPort=<host address>:8787:8787` in the unit instead; keep it off any address that is reachable from outside the home network, because the hub itself speaks plain HTTP.
 
-fernjo only talks HTTPS (plain `http://` is accepted for loopback only), so each device must trust Caddy's internal root certificate. Get it on the Caddy host with either of:
+fernjo only talks HTTPS (a release build refuses plain `http://` also to `127.0.0.1`; only debug builds accept it there, for the tests), so each device must trust Caddy's internal root certificate. Get it on the Caddy host with either of:
 
 - `caddy trust` (installs it on that host only), or
 - copy `/data/caddy/pki/authorities/local/root.crt` out of the Caddy container (the path inside the official image; on a bare install it is under `~/.local/share/caddy/pki/authorities/local/root.crt`).
@@ -96,7 +96,7 @@ If the hub's data is lost, restored from an older backup, or the volume is recre
 
 ## History files
 
-Each replaced head is kept as `history/<seq>.env`, the newest ten. They are encrypted envelopes, so reading one needs the sync key; to roll back, copy one over `head.env` while the hub is stopped, and use "Re-seed" afterwards if devices complain. Writes are atomic (random temp name, fsync, rename), and a stale write (HTTP 412) leaves head and history untouched.
+Each replaced head is kept as `history/<seq>.env`, the newest ten. They are encrypted envelopes, so reading one needs the sync key; to roll back, copy one over `head.env` while the hub is stopped (a copy, not a symbolic link: the hub refuses a `head.env` that is a link or larger than 64 MiB), and use "Re-seed" afterwards if devices complain. Writes are atomic (random temp name, fsync, rename), and a stale write (HTTP 412) leaves head and history untouched.
 
 ## API (protocol 1)
 

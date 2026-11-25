@@ -2,6 +2,7 @@
 
 pub mod conflicts;
 pub mod error;
+pub mod json;
 pub mod model;
 pub mod paths;
 pub mod persist;
@@ -25,7 +26,7 @@ pub use paths::{
 };
 pub use persist::{
     CURRENT_VERSION, FILE_NAME, Loaded, MAX_DATA_FILE_LEN, Notice, document, load, migrate_with,
-    parse_document, save, write_exact,
+    parse_document, parse_document_bytes, save, write_exact,
 };
 pub use quick::{QuickError, QuickTarget, parse_quick, validate_quick};
 pub use resolve::resolve;

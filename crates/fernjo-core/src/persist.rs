@@ -1,17 +1,18 @@
 //! `connections.json`: format, atomic write, backup and load fallback.
 
 use std::collections::HashSet;
-use std::ffi::OsString;
 use std::fs;
-use std::io::{self, Read as _, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use fernjo_fs::{FileMode, Parent, WriteOptions};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::error::{DocumentError, LoadError, SaveError};
+use crate::json;
 use crate::model::{Node, NodeId, NodeKind, RDP_COLOR_DEPTHS, Settings, is_valid_domain};
 use crate::tree::Tree;
 
@@ -46,6 +47,11 @@ pub enum Notice {
 pub struct Loaded {
     pub tree: Tree,
     pub notice: Option<Notice>,
+    /// SHA-256 of the exact bytes of the main file that `tree` was parsed from (M11 review #34);
+    /// `None` when the tree did not come from the main file (it was missing or the backup was
+    /// used). The store takes its change-detection fingerprint from here instead of reading the
+    /// file a second time, so a file replaced between two reads cannot pair tree A with bytes B.
+    pub fingerprint: Option<Fingerprint>,
 }
 
 #[derive(Serialize)]
@@ -55,17 +61,14 @@ struct FileOut<'a> {
     children: &'a [Node],
 }
 
-#[derive(Deserialize)]
+/// What a `connections.json` document is read into. Only `children` is read; `schemaVersion` is
+/// read before by `json::head`, unknown keys are skipped without being kept.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct FileIn {
     children: Vec<Node>,
 }
 
-/// `<path>.<suffix>` (for example `connections.json.bak`).
-pub(crate) fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
-    let mut name: OsString = path.as_os_str().to_owned();
-    name.push(suffix);
-    PathBuf::from(name)
-}
+pub(crate) use fernjo_fs::with_suffix;
 
 /// The JSON document `save` writes for `tree`: `schemaVersion` and `children`.
 fn file_out(tree: &Tree) -> FileOut<'_> {
@@ -108,78 +111,32 @@ pub fn fingerprint(path: &Path) -> io::Result<Option<Fingerprint>> {
     }
 }
 
-/// Shared by every file in the data and config folders: creates the parent folder, writes a
-/// temp file next to `path`, flushes it to disk, copies the current file to `.bak`, then
-/// renames the temp file over `path`. `contents` gets a trailing newline.
+/// Shared by every file in the data and config folders: creates the parent folder (private on
+/// Unix), writes a temp file next to `path` under a random name, flushes it to disk, keeps the
+/// current file as `.bak`, then renames the temp file over `path` (all in `fernjo_fs`).
+/// `contents` gets a trailing newline. Afterwards a fixed-name `<path>.tmp` left by an older
+/// build is removed (a regular file only; a failure never fails the save).
 pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), SaveError> {
-    let fail = |source: io::Error| SaveError {
-        path: path.to_path_buf(),
-        source,
-    };
-    let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
-    if let Some(dir) = dir {
-        create_private_dir_all(dir).map_err(fail)?;
-    }
-    let tmp = with_suffix(path, ".tmp");
-    let result = (|| -> io::Result<()> {
-        let mut file = create_private_file(&tmp)?;
-        file.write_all(contents)?;
-        file.write_all(b"\n")?;
-        file.flush()?;
-        file.sync_all()?;
-        drop(file);
-        if path.exists() {
-            let bak = with_suffix(path, ".bak");
-            fs::copy(path, &bak)?;
-            owner_only(&bak)?;
+    let mut bytes = Vec::with_capacity(contents.len() + 1);
+    bytes.extend_from_slice(contents);
+    bytes.push(b'\n');
+    fernjo_fs::write_atomic(path, &bytes, WriteOptions::data_file()).map_err(|source| {
+        SaveError {
+            path: path.to_path_buf(),
+            source,
         }
-        fs::rename(&tmp, path)
-    })();
-    if let Err(source) = result {
-        let _ = fs::remove_file(&tmp);
-        return Err(fail(source));
-    }
+    })?;
+    remove_legacy_temp(path);
     Ok(())
 }
 
-/// Creates (truncating) `path` readable and writable by its owner only on Unix (mode 0600, also
-/// when a stale file of that name already exists); elsewhere the folder's inherited ACL applies.
-fn create_private_file(path: &Path) -> io::Result<fs::File> {
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+/// Removes `<path>.tmp`, the fixed temp name older builds used, when it is a regular file.
+/// A symlink or a folder at that name is never followed or touched; errors are ignored.
+fn remove_legacy_temp(path: &Path) {
+    let legacy = with_suffix(path, ".tmp");
+    if fs::symlink_metadata(&legacy).is_ok_and(|m| m.file_type().is_file()) {
+        let _ = fs::remove_file(&legacy);
     }
-    let file = options.open(path)?;
-    owner_only(path)?;
-    Ok(file)
-}
-
-/// Creates `dir` and its missing parents; on Unix with mode 0700 (folders that already exist
-/// keep theirs).
-fn create_private_dir_all(dir: &Path) -> io::Result<()> {
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder.create(dir)
-}
-
-/// Unix: mode 0600. Other platforms: no change.
-fn owner_only(path: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-    }
-    #[cfg(not(unix))]
-    let _ = path;
-    Ok(())
 }
 
 /// Renames an unreadable `path` to `<path>.corrupt-<unix seconds>` so a later save cannot
@@ -196,18 +153,21 @@ pub(crate) fn move_aside(path: &Path) -> io::Result<PathBuf> {
 
 /// Upgrades a parsed file from version `from` using `steps` (step `i` upgrades
 /// version `i + 1` to `i + 2`).
-pub fn migrate_with(value: Value, from: u32, steps: &[fn(Value) -> Value]) -> Value {
+pub fn migrate_with<T>(value: T, from: u32, steps: &[fn(T) -> T]) -> T {
     let skip = from.saturating_sub(1) as usize;
     steps.iter().skip(skip).fold(value, |v, step| step(v))
 }
 
-/// Upgrade steps; step `i` upgrades version `i + 1` to `i + 2`.
-const MIGRATIONS: [fn(Value) -> Value; 2] = [one_to_two, two_to_three];
+/// Upgrade steps; step `i` upgrades version `i + 1` to `i + 2`. They run on the typed document:
+/// every schema so far only added optional fields, which the typed read fills with their defaults
+/// for an older file. A future step that has to rewrite data reads the old shape into its own
+/// typed struct; it must not go back to a `serde_json::Value` (M11 review #28, `crate::json`).
+const MIGRATIONS: [fn(FileIn) -> FileIn; 2] = [one_to_two, two_to_three];
 
 /// 1 -> 2: schema 2 adds the optional `credential` setting, so nothing is rewritten. The
 /// version still has to change: an older build would silently drop `credential` on its next
 /// save, so it must refuse the file as a newer schema instead.
-fn one_to_two(value: Value) -> Value {
+fn one_to_two(value: FileIn) -> FileIn {
     value
 }
 
@@ -215,17 +175,17 @@ fn one_to_two(value: Value) -> Value {
 /// `rdpColorDepth`, `rdpClipboard`), so nothing is rewritten. The version still has to change: an
 /// older build would silently drop them on its next save, so it must refuse the file as a newer
 /// schema instead.
-fn two_to_three(value: Value) -> Value {
+fn two_to_three(value: FileIn) -> FileIn {
     value
 }
 
-fn migrate(value: Value, from: u32) -> Value {
+fn migrate(value: FileIn, from: u32) -> FileIn {
     migrate_with(value, from, &MIGRATIONS)
 }
 
 enum Read {
     Missing,
-    Parsed(Tree),
+    Parsed(Tree, Fingerprint),
     Bad(String),
 }
 
@@ -233,30 +193,10 @@ enum Read {
 /// any real tree. A larger file is refused as unreadable and left untouched.
 pub const MAX_DATA_FILE_LEN: u64 = 64 * 1024 * 1024;
 
-/// Reads `path` unless it is longer than [`MAX_DATA_FILE_LEN`] (`InvalidData`). The length is
-/// checked before reading, and the read itself is bounded in case the file grows meanwhile.
+/// Reads `path` unless it is longer than [`MAX_DATA_FILE_LEN`] (`InvalidData`); see
+/// `fernjo_fs::read_capped`.
 pub(crate) fn read_capped(path: &Path) -> io::Result<Vec<u8>> {
-    let too_large = || {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "the file is larger than {} MiB",
-                MAX_DATA_FILE_LEN / (1024 * 1024)
-            ),
-        )
-    };
-    let file = fs::File::open(path)?;
-    let len = file.metadata()?.len();
-    if len > MAX_DATA_FILE_LEN {
-        return Err(too_large());
-    }
-    let mut bytes = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
-    file.take(MAX_DATA_FILE_LEN.saturating_add(1))
-        .read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_DATA_FILE_LEN {
-        return Err(too_large());
-    }
-    Ok(bytes)
+    fernjo_fs::read_capped(path, MAX_DATA_FILE_LEN)
 }
 
 fn read_file(path: &Path) -> Result<Read, LoadError> {
@@ -270,14 +210,12 @@ fn read_file(path: &Path) -> Result<Read, LoadError> {
             });
         }
     };
+    // the fingerprint covers the raw bytes, exactly what was read (BOM included)
+    let fingerprint: Fingerprint = Sha256::digest(&bytes).into();
     // editors on Windows may add a UTF-8 byte order mark; that is not corruption
     let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
-    let value: Value = match serde_json::from_slice(bytes) {
-        Ok(v) => v,
-        Err(e) => return Ok(Read::Bad(e.to_string())),
-    };
-    match parse_document(value) {
-        Ok(tree) => Ok(Read::Parsed(tree)),
+    match parse_document_bytes(bytes) {
+        Ok(tree) => Ok(Read::Parsed(tree, fingerprint)),
         Err(DocumentError::NewerSchema { found, supported }) => Err(LoadError::NewerSchema {
             found,
             supported,
@@ -287,10 +225,14 @@ fn read_file(path: &Path) -> Result<Read, LoadError> {
     }
 }
 
-/// Turns a parsed `connections.json` document into a tree: checks `schemaVersion`, migrates
-/// older versions and runs `sanitize`. Shared by loading a file and by importing a document.
-pub fn parse_document(value: Value) -> Result<Tree, DocumentError> {
-    let Some(version) = value.get("schemaVersion").and_then(Value::as_u64) else {
+/// Turns the bytes of a `connections.json` document into a tree: checks that it is JSON and its
+/// `schemaVersion`, migrates older versions and runs `sanitize`. Shared by loading a file and by
+/// importing a document. The document is never built as a `serde_json::Value` (`crate::json`):
+/// the first pass validates it and reads `schemaVersion`, the second reads it into `FileIn`.
+pub fn parse_document_bytes(bytes: &[u8]) -> Result<Tree, DocumentError> {
+    let [version] =
+        json::head(bytes, ["schemaVersion"]).map_err(|e| DocumentError::Invalid(e.to_string()))?;
+    let Some(version) = version.as_u64() else {
         return Err(DocumentError::Invalid(
             "missing or invalid schemaVersion".to_string(),
         ));
@@ -307,38 +249,34 @@ pub fn parse_document(value: Value) -> Result<Tree, DocumentError> {
             "invalid schemaVersion 0".to_string(),
         ));
     }
-    let mut file: FileIn = serde_json::from_value(migrate(value, version))
-        .map_err(|e| DocumentError::Invalid(e.to_string()))?;
+    let file: FileIn =
+        serde_json::from_slice(bytes).map_err(|e| DocumentError::Invalid(e.to_string()))?;
+    let mut file = migrate(file, version);
     sanitize(&mut file.children, &mut HashSet::new()).map_err(DocumentError::Invalid)?;
     Ok(Tree::from_children(file.children))
 }
 
-/// Writes `bytes` to `path` exactly as given (no trailing newline, no `.bak`): temp file in
-/// the same folder, flushed to disk, renamed over the target. The temp file is removed on
-/// failure.
+/// [`parse_document_bytes`] for a document that is already in memory as a `serde_json::Value`
+/// (tests, a document fernjo built itself). A file or anything from another device goes through
+/// [`parse_document_bytes`], never through a `Value`.
+pub fn parse_document(value: Value) -> Result<Tree, DocumentError> {
+    let bytes = serde_json::to_vec(&value).expect("a Value always serialises");
+    parse_document_bytes(&bytes)
+}
+
+/// Writes `bytes` to `path` exactly as given (no trailing newline, no `.bak`): random temp
+/// file in the same folder, flushed to disk, renamed over the target. The temp file is removed
+/// on failure. Missing folders and the file get the default mode (export files).
 pub fn write_exact(path: &Path, bytes: &[u8]) -> Result<(), SaveError> {
-    let fail = |source: io::Error| SaveError {
+    let options = WriteOptions {
+        parent: Parent::CreateDefault,
+        backup: false,
+        file_mode: FileMode::Default,
+    };
+    fernjo_fs::write_atomic(path, bytes, options).map_err(|source| SaveError {
         path: path.to_path_buf(),
         source,
-    };
-    let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
-    if let Some(dir) = dir {
-        fs::create_dir_all(dir).map_err(fail)?;
-    }
-    let tmp = with_suffix(path, ".tmp");
-    let result = (|| -> io::Result<()> {
-        let mut file = fs::File::create(&tmp)?;
-        file.write_all(bytes)?;
-        file.flush()?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&tmp, path)
-    })();
-    if let Err(source) = result {
-        let _ = fs::remove_file(&tmp);
-        return Err(fail(source));
-    }
-    Ok(())
+    })
 }
 
 /// Checks what hand-edited files can get wrong. A repeated id (a copied block) gets a fresh
@@ -385,17 +323,32 @@ fn drop_invalid_rdp_settings(settings: &mut Settings) {
 /// Writes nothing except renaming a corrupt main file out of the way after a successful
 /// fallback.
 pub fn load(path: &Path) -> Result<Loaded, LoadError> {
+    load_with(path, &mut || {})
+}
+
+/// [`load`] with a hook that runs right after the main file was read (tests change the file
+/// there to prove the fingerprint belongs to the bytes that were parsed).
+pub(crate) fn load_with(
+    path: &Path,
+    after_main_read: &mut dyn FnMut(),
+) -> Result<Loaded, LoadError> {
     let bak = with_suffix(path, ".bak");
-    let reason = match read_file(path)? {
-        Read::Parsed(tree) => {
-            return Ok(Loaded { tree, notice: None });
+    let main = read_file(path)?;
+    after_main_read();
+    let reason = match main {
+        Read::Parsed(tree, fingerprint) => {
+            return Ok(Loaded {
+                tree,
+                notice: None,
+                fingerprint: Some(fingerprint),
+            });
         }
         Read::Missing => None,
         Read::Bad(reason) => Some(reason),
     };
 
     match read_file(&bak)? {
-        Read::Parsed(tree) => {
+        Read::Parsed(tree, _) => {
             let bad_file = if reason.is_some() {
                 let target = move_aside(path).map_err(|e| LoadError::Unreadable {
                     path: path.to_path_buf(),
@@ -408,12 +361,14 @@ pub fn load(path: &Path) -> Result<Loaded, LoadError> {
             Ok(Loaded {
                 tree,
                 notice: Some(Notice::RestoredFromBackup { bad_file }),
+                fingerprint: None,
             })
         }
         Read::Missing => match reason {
             None => Ok(Loaded {
                 tree: Tree::new(),
                 notice: None,
+                fingerprint: None,
             }),
             Some(reason) => Err(LoadError::Unreadable {
                 path: path.to_path_buf(),
@@ -482,7 +437,7 @@ mod tests {
         file.set_len(MAX_DATA_FILE_LEN + 1).unwrap();
         drop(file);
         match load(&main) {
-            Err(LoadError::Unreadable { reason, .. }) => assert!(reason.contains("larger than")),
+            Err(LoadError::Unreadable { reason, .. }) => assert!(reason.contains("too large")),
             other => panic!("expected Unreadable, got {other:?}"),
         }
         assert_eq!(fs::metadata(&main).unwrap().len(), MAX_DATA_FILE_LEN + 1);
@@ -885,15 +840,16 @@ mod tests {
     #[test]
     fn migration_chain_has_a_one_to_two_and_a_two_to_three_step() {
         assert_eq!(MIGRATIONS.len(), CURRENT_VERSION as usize - 1);
-        let v1 = json!({ "schemaVersion": 1, "children": [{ "name": "a" }] });
+        // the steps run on the typed document (M11 review #28: no `Value` on the load path)
+        let file = FileIn {
+            children: sample_tree("a").children().to_vec(),
+        };
         // the 1 -> 2 step only exists to make older builds refuse the file: nothing is rewritten
-        assert_eq!(migrate_with(v1.clone(), 1, &MIGRATIONS), v1);
-        let v2 = json!({ "schemaVersion": 2, "children": [] });
-        assert_eq!(migrate_with(v2.clone(), 2, &MIGRATIONS), v2);
+        assert_eq!(migrate_with(file.clone(), 1, &MIGRATIONS), file);
+        assert_eq!(migrate_with(file.clone(), 2, &MIGRATIONS), file);
         // the 2 -> 3 step only exists so that v0.1.1 refuses the file instead of dropping the
         // RDP settings on its next save
-        let v3 = json!({ "schemaVersion": 3, "children": [] });
-        assert_eq!(migrate_with(v3.clone(), 3, &MIGRATIONS), v3);
+        assert_eq!(migrate_with(file.clone(), 3, &MIGRATIONS), file);
     }
 
     #[test]
@@ -1029,6 +985,58 @@ mod tests {
         ];
         let positions: Vec<_> = order.iter().map(|k| pos(k)).collect();
         assert!(positions.windows(2).all(|w| w[0] < w[1]), "{text}");
+    }
+
+    #[test]
+    fn a_leftover_fixed_name_temp_file_is_removed_after_a_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = main_path(dir.path());
+        let leftover = with_suffix(&main, ".tmp");
+        fs::write(&leftover, "old build leftover").unwrap();
+        save(&main, &sample_tree("dc01")).unwrap();
+        assert!(!leftover.exists());
+        let names: Vec<_> = files(dir.path()).into_iter().map(|(n, _)| n).collect();
+        assert_eq!(names, [FILE_NAME]);
+    }
+
+    #[test]
+    fn a_directory_at_the_fixed_temp_name_is_left_alone_by_a_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = main_path(dir.path());
+        let planted = with_suffix(&main, ".tmp");
+        fs::create_dir(&planted).unwrap();
+        save(&main, &sample_tree("dc01")).unwrap();
+        assert!(planted.is_dir());
+        assert!(main.is_file());
+    }
+
+    #[test]
+    fn write_exact_uses_a_random_temp_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.json");
+        // a directory at the old fixed temp name would have made the write fail
+        fs::create_dir(with_suffix(&path, ".tmp")).unwrap();
+        write_exact(&path, b"data").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"data");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_at_the_bak_name_is_not_followed_by_a_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = main_path(dir.path());
+        save(&main, &sample_tree("one")).unwrap();
+        let victim = dir.path().join("victim");
+        fs::write(&victim, "precious").unwrap();
+        std::os::unix::fs::symlink(&victim, bak_path(dir.path())).unwrap();
+        save(&main, &sample_tree("two")).unwrap();
+        assert_eq!(fs::read(&victim).unwrap(), b"precious");
+        assert!(
+            !fs::symlink_metadata(bak_path(dir.path()))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 
     #[test]

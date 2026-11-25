@@ -1,10 +1,10 @@
 //! The blocking HTTP client for the sync hub.
 //!
-//! HTTPS only (plain `http://` only to the literal loopback addresses), trust is the system roots
-//! or exactly one pinned CA from the pairing code, redirects are never followed, every call has a
-//! connect and a total timeout, and a response body is read in bounded steps: more than
-//! [`MAX_ENVELOPE_LEN`] bytes is `hub_too_large` and the rest is never pulled from the socket.
-//! The hub secret is held as a `SecretString` and only ever sent as the bearer header.
+//! HTTPS only (plain `http://` only to the literal loopback addresses, and only in debug builds),
+//! trust is the system roots or exactly one pinned CA from the pairing code, redirects are never
+//! followed, every call has a connect and a total timeout, and a response body is read in bounded
+//! steps: more than [`MAX_ENVELOPE_LEN`] bytes is `hub_too_large` and the rest is never pulled from
+//! the socket. The hub secret is held as a `SecretString` and only ever sent as the bearer header.
 
 use std::fmt;
 use std::io::Read;
@@ -55,9 +55,20 @@ pub struct HubInfo {
     pub max_bytes: u64,
 }
 
-/// Accepts `https://...`, and `http://` only for the literal addresses `127.0.0.1` and `[::1]`.
-/// `localhost` is not accepted, and neither is a user name, a query or a fragment in the address.
+/// Whether plain `http://` to a literal loopback address is accepted: in debug builds only, which
+/// is what the tests run (the in-process hub speaks plain HTTP on loopback). A release build
+/// talks HTTPS only, so another local user who binds the port while a loopback hub is down never
+/// receives the hub secret.
+const ALLOW_PLAIN_LOOPBACK: bool = cfg!(debug_assertions);
+
+/// Accepts `https://...`, and, in debug builds, `http://` for the literal addresses `127.0.0.1`
+/// and `[::1]`. `localhost` is not accepted, and neither is a user name, a query or a fragment in
+/// the address.
 pub(crate) fn check_hub_url(url: &str) -> Result<(), SyncError> {
+    check_hub_url_with(url, ALLOW_PLAIN_LOOPBACK)
+}
+
+fn check_hub_url_with(url: &str, allow_plain_loopback: bool) -> Result<(), SyncError> {
     let refuse = |why: &str| Err(SyncError::InvalidHubUrl(why.to_owned()));
     let (secure, rest) = if let Some(rest) = url.strip_prefix("https://") {
         (true, rest)
@@ -97,6 +108,9 @@ pub(crate) fn check_hub_url(url: &str) -> Result<(), SyncError> {
     if host.is_empty() || host == "[]" {
         return refuse("the address needs a host");
     }
+    if !secure && !allow_plain_loopback {
+        return refuse("the address must start with https://");
+    }
     if !secure && host != "127.0.0.1" && host != "[::1]" {
         return refuse("plain http is only allowed to 127.0.0.1 and ::1; use https");
     }
@@ -112,7 +126,8 @@ fn valid_port(port: &str) -> bool {
 
 /// A configured connection to one hub. Cheap to keep; methods block.
 pub struct HubClient {
-    agent: ureq::Agent,
+    /// `None` for [`HubClient::offline`]: every request fails as `hub_unreachable`.
+    agent: Option<ureq::Agent>,
     base: String,
     secret: SecretString,
 }
@@ -172,10 +187,27 @@ impl HubClient {
             .build()
             .into();
         Ok(HubClient {
-            agent,
+            agent: Some(agent),
             base: cfg.url.trim_end_matches('/').to_owned(),
             secret: cfg.secret.clone(),
         })
+    }
+
+    /// A client that never talks: no address, no TLS roots, and every request fails as
+    /// `hub_unreachable` without touching the network. For the engine calls that use only the
+    /// local side (`Engine::pending_changes`) or build their own client (`setup`, `join`), so no
+    /// placeholder address has to pass [`check_hub_url`].
+    #[must_use]
+    pub fn offline() -> HubClient {
+        HubClient {
+            agent: None,
+            base: String::new(),
+            secret: SecretString::from(String::new()),
+        }
+    }
+
+    fn agent(&self) -> Result<&ureq::Agent, SyncError> {
+        self.agent.as_ref().ok_or(SyncError::HubUnreachable)
     }
 
     fn bearer(&self) -> String {
@@ -185,7 +217,7 @@ impl HubClient {
     /// `GET /v1/info`.
     pub fn info(&self) -> Result<HubInfo, SyncError> {
         let resp = self
-            .agent
+            .agent()?
             .get(format!("{}/v1/info", self.base))
             .header("Authorization", self.bearer())
             .call()
@@ -202,7 +234,7 @@ impl HubClient {
     /// `GET /v1/head`: `None` when the hub holds nothing yet, otherwise the `seq` and the envelope.
     pub fn get_head(&self) -> Result<Option<(u64, Vec<u8>)>, SyncError> {
         let resp = self
-            .agent
+            .agent()?
             .get(format!("{}/v1/head", self.base))
             .header("Authorization", self.bearer())
             .call()
@@ -257,7 +289,7 @@ impl HubClient {
             }
         }
         let request = self
-            .agent
+            .agent()?
             .put(format!("{}/v1/head", self.base))
             .header("Authorization", self.bearer())
             .header("Content-Type", "application/octet-stream");
@@ -400,13 +432,38 @@ mod tests {
             let err = HubClient::new(&config(url)).unwrap_err();
             assert_eq!(err.code(), "invalid_hub_url", "{url}");
         }
-        for url in [
-            "http://127.0.0.1:8787",
-            "http://[::1]:8787/",
-            "https://hub.example.test",
-        ] {
-            assert!(HubClient::new(&config(url)).is_ok(), "{url}");
+        assert!(HubClient::new(&config("https://hub.example.test")).is_ok());
+        for url in ["http://127.0.0.1:8787", "http://[::1]:8787/"] {
+            assert_eq!(
+                HubClient::new(&config(url)).is_ok(),
+                ALLOW_PLAIN_LOOPBACK,
+                "{url}"
+            );
         }
+    }
+
+    #[test]
+    fn an_offline_client_needs_no_address_and_never_talks() {
+        let client = HubClient::offline();
+        assert_eq!(client.info().unwrap_err(), SyncError::HubUnreachable);
+        assert_eq!(client.get_head().unwrap_err(), SyncError::HubUnreachable);
+        let bytes = envelope(1);
+        assert_eq!(
+            client.put_head(Expected::Empty, 1, &bytes).unwrap_err(),
+            SyncError::HubUnreachable
+        );
+    }
+
+    #[test]
+    fn plain_http_to_loopback_is_refused_where_it_is_not_allowed() {
+        for url in ["http://127.0.0.1:8787", "http://[::1]:8787/"] {
+            let err = check_hub_url_with(url, false).unwrap_err();
+            assert_eq!(err.code(), "invalid_hub_url", "{url}");
+            check_hub_url_with(url, true).unwrap();
+        }
+        check_hub_url_with("https://127.0.0.1:8787", false).unwrap();
+        // debug builds (the tests) allow it, release builds do not
+        assert_eq!(ALLOW_PLAIN_LOOPBACK, cfg!(debug_assertions));
     }
 
     #[test]

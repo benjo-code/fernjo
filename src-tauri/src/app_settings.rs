@@ -128,11 +128,15 @@ pub fn set_vault_auto_lock(
     Ok(auto_lock_info(state, minutes))
 }
 
-/// The UI saw user input (a throttled heartbeat): restarts the idle clock.
-pub fn note_activity(state: &AppState) {
-    state
-        .idle
-        .note(std::time::Instant::now(), std::time::SystemTime::now());
+/// The UI saw user input (a throttled heartbeat): restarts the idle clock, unless the idle
+/// limit had already run out, in which case the vault is locked first (see
+/// `idle_lock::note_activity_at`). Returns the new status when it locked.
+pub fn note_activity(state: &AppState) -> Option<crate::vault_commands::VaultStatus> {
+    crate::idle_lock::note_activity_at(
+        state,
+        std::time::Instant::now(),
+        std::time::SystemTime::now(),
+    )
 }
 
 pub mod handlers {
@@ -165,8 +169,11 @@ pub mod handlers {
     }
 
     #[tauri::command]
-    pub fn note_activity(state: State<'_, AppState>) {
-        super::note_activity(&state);
+    pub fn note_activity(app: tauri::AppHandle, state: State<'_, AppState>) {
+        use tauri::Emitter;
+        if let Some(status) = super::note_activity(&state) {
+            let _ = app.emit("vault-status", status);
+        }
     }
 }
 

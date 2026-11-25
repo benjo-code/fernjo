@@ -31,6 +31,7 @@ fn ki_prompts_are_capped_in_count_and_length() {
     use fernjo_ssh::KiPrompt;
     let long = |n: usize| "\u{e9}".repeat(n);
     let round = KiRound {
+        host: "bastion.example.org".into(),
         name: long(5000),
         instructions: long(5000),
         prompts: (0..40)
@@ -41,6 +42,7 @@ fn ki_prompts_are_capped_in_count_and_length() {
             .collect(),
     };
     let PromptView::KeyboardInteractive {
+        host,
         name,
         instructions,
         prompts,
@@ -48,6 +50,8 @@ fn ki_prompts_are_capped_in_count_and_length() {
     else {
         panic!("wrong view");
     };
+    // M11 review #39: the view names the host, so the UI can say who asks
+    assert_eq!(host, "bastion.example.org");
     assert_eq!(prompts.len(), 16);
     assert_eq!(
         prompts[0].text.chars().count(),
@@ -61,6 +65,7 @@ fn ki_prompts_are_capped_in_count_and_length() {
     assert_eq!(name.chars().count(), 1025);
     // a round within the limits passes unchanged
     let small = KiRound {
+        host: "h".into(),
         name: "n".into(),
         instructions: "i".into(),
         prompts: vec![KiPrompt {
@@ -71,6 +76,7 @@ fn ki_prompts_are_capped_in_count_and_length() {
     assert_eq!(
         cap_ki_round(small),
         PromptView::KeyboardInteractive {
+            host: "h".into(),
             name: "n".into(),
             instructions: "i".into(),
             prompts: vec![KiPromptView {
@@ -196,6 +202,7 @@ async fn interaction_maps_answers_and_falls_back_to_the_safe_answer() {
     });
     assert_eq!(p.unwrap().expose_secret(), "pw");
     let round = KiRound {
+        host: "h".into(),
         name: "n".into(),
         instructions: "i".into(),
         prompts: vec![
@@ -378,6 +385,7 @@ fn session_event_json_has_no_secret_field() {
         UiEvent::Prompt {
             id: 3,
             prompt: PromptView::KeyboardInteractive {
+                host: "h".into(),
                 name: "n".into(),
                 instructions: "i".into(),
                 prompts: vec![KiPromptView {
@@ -408,7 +416,6 @@ fn session_event_json_has_no_secret_field() {
                 port: 22,
                 key_type: "ssh-ed25519".into(),
                 fingerprint: "SHA256:x".into(),
-                previous: vec!["SHA256:a".into()],
             },
         },
     ];
@@ -432,6 +439,7 @@ fn session_event_json_has_no_secret_field() {
     assert_eq!(json[5]["prompt"]["old"], json!(["SHA256:a"]));
     assert_eq!(json[5]["prompt"]["new"], "SHA256:b");
     assert_eq!(json[6]["prompt"]["prompts"][0]["echo"], false);
+    assert_eq!(json[6]["prompt"]["host"], "h");
     assert_eq!(
         json[7]["prompt"],
         json!({"kind": "password", "user": "u", "host": "h"})
@@ -441,7 +449,7 @@ fn session_event_json_has_no_secret_field() {
     assert_eq!(
         json[10]["prompt"],
         json!({"kind": "hostKeySynced", "host": "h", "port": 22, "keyType": "ssh-ed25519",
-            "fingerprint": "SHA256:x", "previous": ["SHA256:a"]})
+            "fingerprint": "SHA256:x"})
     );
     // no key anywhere in the serialised events names a secret
     fn keys(v: &Value, out: &mut Vec<String>) {
@@ -868,10 +876,13 @@ async fn a_malformed_hand_built_quick_target_opens_no_session() {
     let bad_port = quick_target_with(|t| t.port = 0);
     let bad_user = quick_target_with(|t| t.user = Some("u\nx".into()));
     let long_user = quick_target_with(|t| t.user = Some("u".repeat(300)));
+    // M11 review #60: a password typed into the user never reaches a session or open-tabs.json
+    let password_user = quick_target_with(|t| t.user = Some("root:secret".into()));
     for (target, expected) in [
         (bad_port, "quick_bad_port"),
         (bad_user, "quick_bad_target"),
         (long_user, "quick_bad_target"),
+        (password_user, "quick_user_password"),
     ] {
         let (ch, _rec) = recorder();
         assert_eq!(
@@ -989,6 +1000,24 @@ async fn open_session_password_round_trip() {
     assert_eq!(rec.prompt_kinds(), ["hostKey"]);
     session_input(&r.st, &id, b"echo fernjo$((20+22))\n".to_vec()).unwrap();
     let out = rec.read_until(&r.st, &id, "fernjo42").await;
+    assert!(!out.is_empty());
+    close_session(&r.st, &id).unwrap();
+}
+
+#[tokio::test]
+async fn a_resize_burst_reaches_the_shell_with_the_last_size() {
+    let Some(s) = server() else { return };
+    let r = rig_for(&s, false);
+    let (ch, mut rec) = recorder();
+    let id = open_session(&r.st, r.node, ch, 80, 24).unwrap();
+    drive(&r, &mut rec, &id, &s, false).await;
+    // dragging the window edge: many sizes in a row, coalesced into few resize ops
+    for i in 0..300u32 {
+        session_resize(&r.st, &id, 60 + i % 90, 20 + i % 30).unwrap();
+    }
+    session_resize(&r.st, &id, 123, 45).unwrap();
+    session_input(&r.st, &id, b"echo sz$(stty size | tr ' ' x)\n".to_vec()).unwrap();
+    let out = rec.read_until(&r.st, &id, "sz45x123").await;
     assert!(!out.is_empty());
     close_session(&r.st, &id).unwrap();
 }
@@ -1285,7 +1314,6 @@ async fn synced_host_key_prompt_maps_answers_and_falls_back_to_reject() {
         port: 22,
         key_type: "ssh-ed25519".into(),
         fingerprint: "SHA256:x".into(),
-        previous: vec!["SHA256:a".into()],
     };
     for (wire, expected) in [
         (
@@ -1309,7 +1337,6 @@ async fn synced_host_key_prompt_maps_answers_and_falls_back_to_reject() {
         let (d, _) = tokio::join!(ia.host_key_synced(prompt()), async {
             let (id, p) = rec.wait_prompt().await;
             assert_eq!(p["kind"], "hostKeySynced");
-            assert_eq!(p["previous"], json!(["SHA256:a"]));
             hub.answer(id, answer(wire)).unwrap();
         });
         assert_eq!(d, expected);
@@ -1352,7 +1379,9 @@ fn entry_in(phase: Phase) -> Arc<Entry> {
             phase: Mutex::new(phase),
             size: Mutex::new((80, 24)),
             ops: Mutex::new(None),
+            closed: std::sync::atomic::AtomicBool::new(false),
             input_budget: InputBudget::default(),
+            resize_queued: std::sync::atomic::AtomicBool::new(false),
         }),
         task: Mutex::new(None),
     })
@@ -1406,6 +1435,52 @@ fn a_second_request_while_the_dialog_is_open_prevents_without_a_second_dialog() 
     assert_eq!(exit_action(None, 2, true), ExitAction::Prevent);
 }
 
+#[test]
+fn a_restart_asks_like_a_close_while_a_session_is_connected() {
+    // M11 review #65: `restart_app` replaced the process without the close confirmation
+    let manager = SessionManager::default();
+    assert_eq!(manager.restart_action(false), ExitAction::Allow);
+    for (id, phase) in [
+        ("connecting", Phase::Connecting),
+        ("vault", Phase::NeedsVault),
+        ("gone", Phase::Disconnected),
+    ] {
+        manager
+            .entries
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), entry_in(phase));
+    }
+    // nothing connected: nothing to lose, the restart goes ahead
+    assert_eq!(manager.restart_action(false), ExitAction::Allow);
+    manager
+        .entries
+        .lock()
+        .unwrap()
+        .insert("live".to_string(), entry_in(Phase::Connected));
+    assert_eq!(manager.restart_action(false), ExitAction::Ask);
+    // one dialog at a time, shared with the window close and Cmd+Q
+    assert_eq!(manager.restart_action(true), ExitAction::Prevent);
+}
+
+#[test]
+fn the_restart_dialog_says_restart_and_the_close_dialog_says_close() {
+    let close = close_prompt(1, CloseThen::Exit);
+    assert_eq!(close.title, "Close fernjo?");
+    assert_eq!(
+        close.message,
+        "1 session is still connected. Closing fernjo ends them."
+    );
+    assert_eq!(close.confirm, "Close");
+    let restart = close_prompt(2, CloseThen::Restart);
+    assert_eq!(restart.title, "Restart fernjo?");
+    assert_eq!(
+        restart.message,
+        "2 sessions are still connected. Restarting fernjo ends them."
+    );
+    assert_eq!(restart.confirm, "Restart");
+}
+
 // ---------- input queue cap ----------
 
 #[test]
@@ -1420,7 +1495,9 @@ fn input_over_the_cap_is_refused_with_input_queue_full() {
         .unwrap()
         .insert("a".to_string(), Arc::clone(&entry));
     let budget = &entry.shared.input_budget;
-    assert!(budget.try_reserve(crate::session_flow::MAX_QUEUED_INPUT - 4));
+    let min = crate::session_flow::MIN_OP_WEIGHT;
+    assert!(budget.try_reserve(crate::session_flow::MAX_QUEUED_INPUT - min));
+    // a short input weighs the minimum
     manager.input("a", b"abcd".to_vec()).unwrap();
     let refused = manager.input("a", b"e".to_vec()).unwrap_err();
     assert_eq!(refused.code, "input_queue_full");
@@ -1430,7 +1507,7 @@ fn input_over_the_cap_is_refused_with_input_queue_full() {
     assert!(matches!(ops.try_recv().unwrap(), Op::Data(d) if d == b"abcd"));
     assert!(ops.try_recv().is_err(), "the refused input was not queued");
     // once the writer released what it handled, input is accepted again
-    budget.release(4);
+    budget.release(min);
     manager.input("a", b"e".to_vec()).unwrap();
 }
 
@@ -1458,16 +1535,148 @@ fn unhandled_ops_release_their_budget_when_the_writer_stops() {
     let shared = entry_in(Phase::Connected).shared.clone();
     let (tx, mut ops) = unbounded_channel();
     for op in [
-        Op::Data(vec![0; 10]),
+        Op::Data(vec![0; 100]),
         Op::Clipboard("abc".into()),
+        Op::Resize,
         Op::Close,
     ] {
         assert!(shared.input_budget.try_reserve(op.weight()));
         tx.send(op).unwrap();
     }
-    assert_eq!(shared.input_budget.queued(), 13);
+    // 100 bytes, a short text at the minimum weight, resize and close at 0
+    assert_eq!(
+        shared.input_budget.queued(),
+        100 + crate::session_flow::MIN_OP_WEIGHT
+    );
     release_unhandled(&mut ops, &shared);
     assert_eq!(shared.input_budget.queued(), 0);
+}
+
+#[test]
+fn a_flood_of_one_byte_writes_hits_the_cap_by_weight() {
+    use crate::session_flow::{MAX_QUEUED_INPUT, MIN_OP_WEIGHT};
+    let manager = SessionManager::default();
+    let entry = entry_in(Phase::Connected);
+    // no writer runs: nothing is ever released
+    let (tx, _ops) = unbounded_channel();
+    *entry.shared.ops.lock().unwrap() = Some(tx);
+    manager
+        .entries
+        .lock()
+        .unwrap()
+        .insert("a".to_string(), Arc::clone(&entry));
+    for _ in 0..MAX_QUEUED_INPUT / MIN_OP_WEIGHT {
+        manager.input("a", b"x".to_vec()).unwrap();
+    }
+    let refused = manager.input("a", b"x".to_vec()).unwrap_err();
+    assert_eq!(refused.code, "input_queue_full");
+    assert_eq!(entry.shared.input_budget.queued(), MAX_QUEUED_INPUT);
+}
+
+#[test]
+fn a_resize_burst_queues_one_op_and_applies_the_last_size() {
+    let manager = SessionManager::default();
+    let entry = entry_in(Phase::Connected);
+    let (tx, mut ops) = unbounded_channel();
+    *entry.shared.ops.lock().unwrap() = Some(tx);
+    manager
+        .entries
+        .lock()
+        .unwrap()
+        .insert("a".to_string(), Arc::clone(&entry));
+    // the writer is paused: nothing is taken from the queue
+    for i in 0..1_000u32 {
+        manager.resize("a", 80 + i, 24 + i).unwrap();
+    }
+    assert!(matches!(ops.try_recv().unwrap(), Op::Resize));
+    assert!(ops.try_recv().is_err(), "a burst queues a single resize");
+    // the writer applies the latest size, not the one of the first call
+    assert_eq!(take_resize(&entry.shared), (80 + 999, 24 + 999));
+    // a resize that arrives while the writer applies the previous one queues a new op, so the
+    // final size always reaches the session
+    manager.resize("a", 100, 30).unwrap();
+    assert!(matches!(ops.try_recv().unwrap(), Op::Resize));
+    assert!(ops.try_recv().is_err());
+    assert_eq!(take_resize(&entry.shared), (100, 30));
+    // resizes never touch the input budget
+    assert_eq!(entry.shared.input_budget.queued(), 0);
+}
+
+#[test]
+fn a_resize_without_a_shell_queues_nothing_and_does_not_block_later_resizes() {
+    let manager = SessionManager::default();
+    let entry = entry_in(Phase::Disconnected);
+    manager
+        .entries
+        .lock()
+        .unwrap()
+        .insert("a".to_string(), Arc::clone(&entry));
+    manager.resize("a", 90, 30).unwrap();
+    assert_eq!(*entry.shared.size.lock().unwrap(), (90, 30));
+    // a shell appears (what `install_ops` does at connect)
+    let (tx, mut ops) = unbounded_channel();
+    install_ops(&entry.shared, tx, |size| size != (90, 30));
+    assert!(
+        ops.try_recv().is_err(),
+        "the size the connect used needs no resize"
+    );
+    manager.resize("a", 91, 31).unwrap();
+    assert!(matches!(ops.try_recv().unwrap(), Op::Resize));
+    assert_eq!(take_resize(&entry.shared), (91, 31));
+}
+
+#[test]
+fn a_resize_during_the_connect_is_queued_when_the_shell_starts() {
+    let entry = entry_in(Phase::Connecting);
+    // a stale flag from a writer that stopped with a resize still queued
+    entry.shared.resize_queued.store(true, Ordering::SeqCst);
+    *entry.shared.size.lock().unwrap() = (120, 40);
+    let (tx, mut ops) = unbounded_channel();
+    install_ops(&entry.shared, tx, |size| size != (80, 24));
+    assert!(matches!(ops.try_recv().unwrap(), Op::Resize));
+    assert_eq!(take_resize(&entry.shared), (120, 40));
+}
+
+#[tokio::test]
+async fn a_session_that_connects_after_its_tab_was_closed_is_torn_down() {
+    // M11 review #59: `shut_down` found no op queue yet, then the connect task finished and
+    // installed one. The writer must still get the close and end, or it keeps the live session
+    // (and the shared state) with no entry left to close it.
+    let manager = SessionManager::default();
+    let entry = entry_in(Phase::Connecting);
+    manager
+        .entries
+        .lock()
+        .unwrap()
+        .insert("a".to_string(), Arc::clone(&entry));
+    let weak = manager.weak_shared("a").unwrap();
+    // the connect task's own handle on the shared state
+    let shared = Arc::clone(&entry.shared);
+    manager.close("a").unwrap();
+    drop(entry);
+    // what `run` does once `Session::connect` returned
+    let (tx, mut ops) = unbounded_channel();
+    install_ops(&shared, tx, |_| false);
+    let writer_shared = Arc::clone(&shared);
+    // the writer loop of `write_ops`, without a session
+    let writer = tokio::spawn(async move {
+        let _shared = writer_shared;
+        while let Some(op) = ops.recv().await {
+            if matches!(op, Op::Close) {
+                break;
+            }
+        }
+    });
+    // `abort` stopped `run` at its next await: its handle goes away
+    drop(shared);
+    timeout(Duration::from_secs(2), writer)
+        .await
+        .expect("the writer of a closed tab must end")
+        .unwrap();
+    assert!(
+        weak.upgrade().is_none(),
+        "nothing may keep the session of a closed tab"
+    );
 }
 
 // ---------- restored tabs (no server needed) ----------

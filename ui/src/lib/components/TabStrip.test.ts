@@ -134,7 +134,6 @@ describe("TabStrip", () => {
         port: 22,
         keyType: "ssh-ed25519",
         fingerprint: "SHA256:x",
-        previous: [],
       },
     });
     flushSync();
@@ -333,5 +332,35 @@ describe("TabStrip", () => {
     sessions.tabs.find((t) => t.restored)!.state = "connecting";
     flushSync();
     expect(all()).toBeNull();
+  });
+
+  describe("clipboard marker", () => {
+    const marker = (t: Tab) => tabOf(t).querySelector(".clip");
+
+    test("an_rdp_tab_sharing_the_clipboard_shows_the_marker_with_the_host_in_its_tooltip", () => {
+      const { sessions } = setup(["connected"]);
+      const tab = sessions.tabs[0]!;
+      tab.protocol = "rdp";
+      tab.clipboard = true;
+      tab.host = "srv.lab";
+      flushSync();
+      const m = marker(tab)!;
+      expect(m).not.toBeNull();
+      expect(m.getAttribute("title")).toBe("Clipboard shared with srv.lab");
+      expect(m.getAttribute("aria-label")).toBe("Clipboard shared with srv.lab");
+    });
+
+    test("no_marker_on_an_ssh_tab_or_an_rdp_tab_with_the_clipboard_off", () => {
+      const { sessions } = setup(["connected", "connected"]);
+      const [ssh, rdp] = sessions.tabs as [Tab, Tab];
+      ssh.clipboard = true;
+      ssh.host = "a.lab";
+      rdp.protocol = "rdp";
+      rdp.clipboard = false;
+      rdp.host = "b.lab";
+      flushSync();
+      expect(marker(ssh)).toBeNull();
+      expect(marker(rdp)).toBeNull();
+    });
   });
 });

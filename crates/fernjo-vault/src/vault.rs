@@ -1,12 +1,10 @@
 //! The `Vault`: create, open, unlock, lock, and the encrypted atomic save.
 
-use std::ffi::OsString;
 use std::fmt;
-use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -89,12 +87,6 @@ pub(crate) fn normalise(password: &SecretString) -> Zeroizing<String> {
     Zeroizing::new(password.expose_secret().nfc().collect::<String>())
 }
 
-fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
-    let mut name: OsString = path.as_os_str().to_owned();
-    name.push(suffix);
-    PathBuf::from(name)
-}
-
 /// AAD of the key wrap: everything before the wrapped key. The wrapped key is covered by
 /// its own tag and, together with every other header byte, by the body's AAD.
 fn key_wrap_aad(header_bytes: &[u8]) -> &[u8] {
@@ -166,7 +158,7 @@ impl Vault {
     /// # Errors
     /// `unreadable`, `newer_format`, `invalid_kdf_params`.
     pub fn open(path: &Path) -> Result<Option<Self>, VaultError> {
-        sweep_stale_temp_files(path, STALE_TEMP_AGE);
+        fernjo_fs::sweep_stale_temps(path, STALE_TEMP_AGE);
         let bytes = match read_capped(path, MAX_FILE_LEN) {
             Ok(b) => b,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -532,12 +524,21 @@ impl Vault {
         })
     }
 
-    /// The current vault file, read with the size cap (for sync: the local side of a merge).
+    /// The vault file as this handle last read or wrote it, read from disk with the size cap
+    /// (for sync: the local side of a merge and what is pushed). A file that no longer starts
+    /// with the header this handle knows (an older copy, another vault's file or anything else
+    /// a writer of the data folder put there) is `changed_on_disk`, the same rule the save guard
+    /// applies: such a file is never handed out to be pushed. Lock and unlock to load it.
     ///
     /// # Errors
-    /// `unreadable` (missing, unreadable or larger than `MAX_FILE_LEN`).
+    /// `unreadable` (missing, unreadable or larger than `MAX_FILE_LEN`), `changed_on_disk`.
     pub fn file_bytes(&self) -> Result<Vec<u8>, VaultError> {
-        read_capped(&self.path, MAX_FILE_LEN).map_err(|e| VaultError::Unreadable(e.to_string()))
+        let bytes = read_capped(&self.path, MAX_FILE_LEN)
+            .map_err(|e| VaultError::Unreadable(e.to_string()))?;
+        if bytes.get(..HEADER_LEN) != Some(self.disk_header.as_slice()) {
+            return Err(VaultError::ChangedOnDisk);
+        }
+        Ok(bytes)
     }
 
     /// Parses `bytes` as a file of this vault: size cap, header (KDF bounds, newer-format rule)
@@ -670,18 +671,30 @@ impl Vault {
     /// vault): `entries` under the held data key, with the header of `head_bytes` (its
     /// password wrap and KDF cost) and a generation above both this handle's and the head's.
     /// `head_bytes` must belong to this vault and open with the held key, otherwise nothing is
-    /// written (`unreadable`). Entries are validated like [`Vault::replace_entries`]. On any
-    /// error the handle and the file stay as they were.
+    /// written (`unreadable`). `base_generation` is the generation of the base file both sides
+    /// started from (0 without one): a head below it is an older file of this vault played back
+    /// (every save since the base raised the generation), so nothing is written (`rolled_back`).
+    /// The head is not compared with this handle's floor or the device mark: those include this
+    /// device's own saves since the base, so a head that saved fewer times is still newer than
+    /// the base. Entries are validated like [`Vault::replace_entries`]. On any error the handle
+    /// and the file stay as they were.
     ///
     /// # Errors
-    /// `vault_locked`, `unreadable`, `newer_format`, `invalid_kdf_params`, `empty_name`,
-    /// `duplicate_entry`, `changed_on_disk`, `save_failed`.
+    /// `vault_locked`, `unreadable`, `newer_format`, `invalid_kdf_params`, `rolled_back`,
+    /// `empty_name`, `duplicate_entry`, `changed_on_disk`, `save_failed`.
     pub fn adopt_merged(
         &mut self,
         head_bytes: &[u8],
+        base_generation: u64,
         entries: Vec<(EntryId, NewEntry)>,
     ) -> Result<(), VaultError> {
         let (head_header, head_body) = self.open_foreign(head_bytes)?;
+        if head_body.generation < base_generation {
+            return Err(VaultError::RolledBack {
+                found: head_body.generation,
+                seen: base_generation,
+            });
+        }
         let mut seen = std::collections::HashSet::new();
         let mut list = Vec::with_capacity(entries.len());
         for (id, new) in entries {
@@ -793,7 +806,8 @@ impl Vault {
     /// This is a check, then a write, not a lock: a sync tool can still win the race in
     /// the instant between the check and the rename.
     fn check_unchanged_on_disk(&self) -> Result<(), VaultError> {
-        let file = match fs::File::open(&self.path) {
+        // never through a symlink, never a FIFO or device (a save would block on it)
+        let file = match fernjo_fs::open_regular(&self.path) {
             Ok(f) => f,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
             Err(e) => return Err(VaultError::SaveFailed(e.to_string())),
@@ -810,7 +824,7 @@ impl Vault {
     }
 
     /// Encrypts the body with a fresh nonce and writes the file atomically: temp file in
-    /// the same folder, `sync_all`, current file copied to `.bak`, rename. Refuses with
+    /// the same folder, `sync_all`, current file kept as `.bak`, rename. Refuses with
     /// `changed_on_disk` when the file was changed since this handle read or wrote it.
     pub(crate) fn save(&mut self) -> Result<(), VaultError> {
         let unlocked = self.unlocked.as_ref().ok_or(VaultError::VaultLocked)?;
@@ -983,154 +997,15 @@ fn check_foreign_len(bytes: &[u8]) -> Result<(), VaultError> {
 }
 
 /// A temp file of an interrupted save older than this is left over and gets removed by
-/// [`Vault::open`].
-pub const STALE_TEMP_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+/// [`Vault::open`] (`fernjo_fs::sweep_stale_temps`, which the other data files share).
+pub const STALE_TEMP_AGE: Duration = fernjo_fs::STALE_TEMP_AGE;
 
-/// Whether `name` is `<file name>.<16 lowercase hex>.tmp`, the temp name `write_atomic` uses.
-fn is_temp_name(file_name: &str, name: &str) -> bool {
-    let Some(rest) = name.strip_prefix(file_name) else {
-        return false;
-    };
-    let Some(hex) = rest.strip_prefix('.').and_then(|r| r.strip_suffix(".tmp")) else {
-        return false;
-    };
-    hex.len() == 16 && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
-}
-
-/// Removes regular files named like a vault temp file next to `path` that were last modified
-/// more than `age` ago. Symlinks, directories and every other name stay; errors are ignored.
-fn sweep_stale_temp_files(path: &Path, age: Duration) {
-    let (Some(dir), Some(file_name)) = (
-        path.parent().filter(|p| !p.as_os_str().is_empty()),
-        path.file_name().and_then(|n| n.to_str()),
-    ) else {
-        return;
-    };
-    let Ok(read) = fs::read_dir(dir) else {
-        return;
-    };
-    let now = SystemTime::now();
-    for entry in read.flatten() {
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            continue;
-        };
-        if !is_temp_name(file_name, name) {
-            continue;
-        }
-        let candidate = entry.path();
-        let Ok(meta) = fs::symlink_metadata(&candidate) else {
-            continue;
-        };
-        if !meta.file_type().is_file() {
-            continue;
-        }
-        let stale = meta
-            .modified()
-            .ok()
-            .and_then(|m| now.duration_since(m).ok())
-            .is_some_and(|d| d > age);
-        if stale {
-            let _ = fs::remove_file(&candidate);
-        }
-    }
-}
-
-/// Creates `dir` and its missing parents; on Unix with mode 0700 (folders that already exist
-/// keep theirs).
-fn create_private_dir_all(dir: &Path) -> io::Result<()> {
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder.create(dir)
-}
-
-/// Unix: mode 0600. Other platforms: no change.
-fn owner_only(path: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-    }
-    #[cfg(not(unix))]
-    let _ = path;
-    Ok(())
-}
-
-/// Creates a new file (`create_new`: never an existing file, never through a symlink at that
-/// name) readable and writable by its owner only on Unix (mode 0600); elsewhere the folder's
-/// inherited ACL applies.
-fn create_new_private_file(path: &Path) -> io::Result<fs::File> {
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    options.open(path)
-}
-
-/// A temp file next to `path` under a random name, so nobody can plant the name beforehand;
-/// a name that is taken anyway is never reused.
-fn create_temp_file(path: &Path) -> io::Result<(PathBuf, fs::File)> {
-    let mut last = None;
-    for _ in 0..8 {
-        let mut random = [0u8; 8];
-        getrandom::fill(&mut random).map_err(|e| io::Error::other(e.to_string()))?;
-        let hex: String = random.iter().map(|b| format!("{b:02x}")).collect();
-        let tmp = with_suffix(path, &format!(".{hex}.tmp"));
-        match create_new_private_file(&tmp) {
-            Ok(file) => return Ok((tmp, file)),
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => last = Some(e),
-            Err(e) => return Err(e),
-        }
-    }
-    Err(last.unwrap_or_else(|| io::Error::other("no free temp file name")))
-}
-
-/// Unix: flushes the folder entry of the rename to disk. Elsewhere nothing to do.
-fn sync_dir(dir: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        fs::File::open(dir)?.sync_all()?;
-    }
-    #[cfg(not(unix))]
-    let _ = dir;
-    Ok(())
-}
-
+/// Writes `bytes` to `path` through `fernjo_fs::write_atomic` with the data-file options:
+/// missing folders created private, a random `<file>.<16 hex>.tmp` (the name
+/// `fernjo_fs::sweep_stale_temps` looks for), owner-only modes on Unix, the previous file kept as
+/// `.bak` (never written through a symlink at that name), rename, folder sync on Unix.
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
-    if let Some(dir) = dir {
-        create_private_dir_all(dir)?;
-    }
-    let (tmp, mut file) = create_temp_file(path)?;
-    let result = (|| -> io::Result<()> {
-        file.write_all(bytes)?;
-        file.flush()?;
-        file.sync_all()?;
-        drop(file);
-        if path.exists() {
-            let bak = with_suffix(path, ".bak");
-            fs::copy(path, &bak)?;
-            owner_only(&bak)?;
-        }
-        fs::rename(&tmp, path)
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&tmp);
-        return result;
-    }
-    // the file is in place; a failed folder sync must not report the save as failed
-    if let Some(dir) = dir {
-        let _ = sync_dir(dir);
-    }
-    result
+    fernjo_fs::write_atomic(path, bytes, fernjo_fs::WriteOptions::data_file())
 }
 
 #[cfg(test)]
@@ -1142,11 +1017,12 @@ mod tests {
     use secrecy::SecretString;
     use tempfile::TempDir;
 
+    use fernjo_fs::with_suffix;
+
     use crate::format::{
         HEADER_LEN, MAX_FILE_LEN, OFF_KDF_ITERATIONS, OFF_KDF_MEMORY, OFF_KDF_PARALLELISM,
         OFF_VERSION, read_capped,
     };
-    use crate::vault::{with_suffix, write_atomic};
     use crate::{DataKey, FILE_NAME, KdfParams, Vault, VaultError};
 
     const PW: &str = "correct horse battery";
@@ -1406,19 +1282,27 @@ mod tests {
         reopened.unlock(&secret(PW)).unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
-    fn write_atomic_uses_a_fresh_temp_name_and_leaves_none_behind() {
+    fn a_symlink_at_the_vault_bak_is_not_followed() {
         let dir = TempDir::new().unwrap();
-        let path = dir.path().join("file.bin");
-        write_atomic(&path, b"one").unwrap();
-        write_atomic(&path, b"two").unwrap();
-        assert_eq!(fs::read(&path).unwrap(), b"two");
-        let mut names: Vec<_> = fs::read_dir(dir.path())
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-        names.sort();
-        assert_eq!(names, ["file.bin", "file.bin.bak"]);
+        let (mut vault, path) = new_vault(&dir);
+        let victim = dir.path().join("victim");
+        fs::write(&victim, b"victim data").unwrap();
+        // a sync tool (or another local user) planted a link at the backup name
+        std::os::unix::fs::symlink(&victim, bak(&path)).unwrap();
+        let before = fs::read(&path).unwrap();
+        vault.save().unwrap();
+        assert_eq!(
+            fs::read(&victim).unwrap(),
+            b"victim data",
+            "target untouched"
+        );
+        let meta = fs::symlink_metadata(bak(&path)).unwrap();
+        assert!(meta.file_type().is_file(), "the link was replaced");
+        assert_eq!(fs::read(bak(&path)).unwrap(), before);
+        let mut reopened = Vault::open(&path).unwrap().unwrap();
+        reopened.unlock(&secret(PW)).unwrap();
     }
 
     #[test]
@@ -1513,7 +1397,8 @@ mod tests {
     }
 
     #[test]
-    fn read_capped_accepts_up_to_the_cap_and_refuses_one_byte_more() {
+    fn read_capped_names_the_cap_in_the_oversize_text_and_keeps_not_found() {
+        // the cap itself is tested in fernjo-fs; this guards the vault's visible text
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("f");
         fs::write(&path, [7u8; 10]).unwrap();

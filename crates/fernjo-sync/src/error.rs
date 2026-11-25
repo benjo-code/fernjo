@@ -31,7 +31,8 @@ pub enum SyncError {
     HubProtocol(String),
     /// The hub's answer is larger than an envelope may be.
     HubTooLarge,
-    /// The hub address is not allowed (not https, and not plain http to a loopback address).
+    /// The hub address is not allowed (not https; plain http only to a loopback address, and only
+    /// in debug builds).
     InvalidHubUrl(String),
     /// The pinned CA certificate is not valid PEM.
     InvalidCa,
@@ -62,6 +63,9 @@ pub enum SyncError {
     /// The local side (the store or the vault, behind a `LocalPort`) refused or failed; the
     /// text is the stable code of that error, never a value.
     LocalFailed(String),
+    /// The hub's head is at the highest sequence number (`u64::MAX`), so nothing can be pushed
+    /// above it, not even by a re-seed; only the hub's admin can clear it (remove `head.env`).
+    SeqExhausted,
 }
 
 impl SyncError {
@@ -96,6 +100,7 @@ impl SyncError {
             Self::VaultConflictDifferentVaults => "vault_conflict_different_vaults",
             Self::LocalChanged => "local_changed",
             Self::LocalFailed(_) => "local_failed",
+            Self::SeqExhausted => "seq_exhausted",
         }
     }
 }
@@ -143,8 +148,43 @@ impl fmt::Display for SyncError {
             ),
             Self::LocalChanged => f.write_str("the local data changed while syncing"),
             Self::LocalFailed(code) => write!(f, "the local data could not be updated ({code})"),
+            Self::SeqExhausted => f.write_str(
+                "the hub's sequence number is at its maximum; nothing can be pushed until the hub's admin removes its head",
+            ),
         }
     }
 }
 
 impl std::error::Error for SyncError {}
+
+/// The most characters of a reason `SnapshotInvalid` keeps. A reason can quote peer content
+/// (serde quotes the offending value, a node name names the node), and the message reaches the
+/// webview with every `sync-status`.
+pub(crate) const MAX_REASON_CHARS: usize = 200;
+
+/// `SnapshotInvalid` with `reason` cut to [`MAX_REASON_CHARS`] characters (an ellipsis marks the
+/// cut).
+pub(crate) fn snapshot_invalid(reason: impl fmt::Display) -> SyncError {
+    let reason = reason.to_string();
+    let mut chars = reason.char_indices();
+    match chars.nth(MAX_REASON_CHARS) {
+        Some((cut, _)) => SyncError::SnapshotInvalid(format!("{}…", &reason[..cut])),
+        None => SyncError::SnapshotInvalid(reason),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_snapshot_invalid_reason_is_cut_at_200_characters() {
+        let short = "ä".repeat(MAX_REASON_CHARS);
+        assert_eq!(snapshot_invalid(&short), SyncError::SnapshotInvalid(short));
+        let long = format!("{}tail", "ä".repeat(MAX_REASON_CHARS));
+        assert_eq!(
+            snapshot_invalid(long),
+            SyncError::SnapshotInvalid(format!("{}…", "ä".repeat(MAX_REASON_CHARS)))
+        );
+    }
+}

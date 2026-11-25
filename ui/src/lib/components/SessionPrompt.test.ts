@@ -56,7 +56,6 @@ test("session_prompt_picks_the_variant", async () => {
       port: 22,
       keyType: "ssh-ed25519",
       fingerprint: "SHA256:x",
-      previous: [],
     },
   });
   expect(title()).toBe("Confirm this host key?");
@@ -105,12 +104,13 @@ test("session_prompt_picks_the_variant", async () => {
     id: 6,
     prompt: {
       kind: "keyboardInteractive",
+      host: "h",
       name: "",
       instructions: "",
       prompts: [{ text: "Code:", echo: true }],
     },
   });
-  expect(title()).toBe("Authentication required");
+  expect(title()).toBe("Sign-in question from the server");
 
   t.tab.prompt = null;
   await show({
@@ -143,6 +143,7 @@ test("a_new_prompt_id_remounts_so_typed_text_does_not_carry_over", async () => {
     id,
     prompt: {
       kind: "keyboardInteractive",
+      host: "h",
       name: "",
       instructions: "",
       prompts: [{ text: "Code:", echo: true }],

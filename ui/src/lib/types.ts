@@ -229,6 +229,11 @@ export interface Api {
   getDataFolder(): Promise<DataFolderInfo>;
   /** Opens the folder picker; `null` when it was cancelled. */
   chooseDataFolder(): Promise<DataFolderInfo | null>;
+  /**
+   * Restarts the app like a close: with a connected session Rust asks first ("Restart fernjo?").
+   * No sync push runs first: sync is paused while a data folder change waits for the restart.
+   * Resolves at once, also when the user keeps the app open.
+   */
   restartApp(): Promise<void>;
   /**
    * Starts a session. Terminal output reaches `onEvent` as an `ArrayBuffer`, events as parsed
@@ -445,7 +450,6 @@ export type Prompt =
       port: number;
       keyType: string;
       fingerprint: string;
-      previous: string[];
     }
   | {
       kind: "hostKeyChanged";
@@ -457,6 +461,8 @@ export type Prompt =
     }
   | {
       kind: "keyboardInteractive";
+      /** The host the connection goes to: the prompt names it as the one asking. */
+      host: string;
       name: string;
       instructions: string;
       prompts: { text: string; echo: boolean }[];
@@ -482,7 +488,12 @@ export type SessionEvent =
   /** RDP: the remote desktop has this size in pixels (before the first region and on a change). */
   | { kind: "desktop"; width: number; height: number }
   /** RDP: the remote side copied this text. */
-  | { kind: "clipboard"; text: string };
+  | { kind: "clipboard"; text: string }
+  /**
+   * RDP: the effective settings of the plan this attempt uses (first event of every attempt). The
+   * clipboard marker and the clipboard sync follow `clipboard`; `host` is named in the marker.
+   */
+  | { kind: "rdpSettings"; clipboard: boolean; host: string };
 
 /** One keyboard or mouse event for an RDP session; coordinates are desktop pixels. */
 export type RdpInputEvent =

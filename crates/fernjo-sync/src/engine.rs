@@ -139,6 +139,40 @@ fn same_version(a: &[u8], b: &[u8]) -> bool {
     }
 }
 
+/// The sequence number above `seq`; at `u64::MAX` there is none (`seq_exhausted`), never a wrap.
+fn next_seq(seq: u64) -> Result<u64, SyncError> {
+    seq.checked_add(1).ok_or(SyncError::SeqExhausted)
+}
+
+/// The error for a head vault that was refused as older than this device has seen (V5), by the
+/// engine (below the base) or by the vault (below the device mark). `rolled_back` only when the
+/// head is older than the local vault file, so a re-seed (which pushes the local file) keeps
+/// the newer vault. Otherwise the local file itself is behind (for example after "open the older
+/// version" whose re-stamp save failed) and a re-seed would push it over a newer head:
+/// `vault_below_mark`. A save of the vault on this device writes a generation above the mark;
+/// the next run then merges the head (the head was saved from the base, the `adopt_file` corner)
+/// or, when the head is also older than the base (the engine's V5 corner), refuses it again, as
+/// `rolled_back` with the Re-seed offer, because the local file is then the newer one.
+#[must_use]
+pub fn refused_head(head_generation: u64, local_generation: u64) -> SyncError {
+    let code = if head_generation < local_generation {
+        "rolled_back"
+    } else {
+        "vault_below_mark"
+    };
+    SyncError::LocalFailed(code.to_owned())
+}
+
+/// A local vault file that would be pushed or merged must parse (size cap, header, KDF bounds):
+/// one that does not is `local_failed` with `vault_unreadable` and never leaves the device.
+fn check_local_vault(local: &LocalState) -> Result<(), SyncError> {
+    if let Some(side) = &local.vault {
+        inspect_file(&side.file)
+            .map_err(|_| SyncError::LocalFailed("vault_unreadable".to_owned()))?;
+    }
+    Ok(())
+}
+
 /// Whether `side` differs from `base` (a missing file against a present one is a change).
 fn vault_changed(side: Option<&[u8]>, base: Option<&[u8]>) -> bool {
     match (side, base) {
@@ -330,36 +364,50 @@ impl Engine<'_> {
             .then_some(local.id)
     }
 
-    /// The merged entries and findings, or `None` when the vault is locked.
+    /// The merged entries, the base file's generation and the findings, or `None` when the vault
+    /// is locked. A head whose generation is below the base's is an older file of the vault
+    /// played back (every save since the base raised the generation): nothing merged (V5),
+    /// `local_failed` with `rolled_back` when the head is also older than the local file (a
+    /// re-seed keeps the newer local vault), else with `vault_below_mark` (the local file itself
+    /// is behind, see [`refused_head`]).
     fn merge_vault(
         &self,
         base: Option<&[u8]>,
         side: &VaultSide,
         head: &[u8],
-    ) -> Result<Option<MergedEntries>, SyncError> {
+    ) -> Result<Option<(MergedEntries, u64)>, SyncError> {
         let (Some(key), Some(local_entries)) = (&side.key, &side.entries) else {
             return Ok(None);
         };
         if !self.local.vault_unlocked() {
             return Ok(None);
         }
-        let base_entries = match base {
+        let (base_generation, base_entries) = match base {
             Some(bytes) => {
-                read_entries(bytes, key)
-                    .map_err(|_| {
-                        SyncError::StateUnusable(
-                            "the base vault does not open with this device's key".to_owned(),
-                        )
-                    })?
-                    .entries
+                let contents = read_entries(bytes, key).map_err(|_| {
+                    SyncError::StateUnusable(
+                        "the base vault does not open with this device's key".to_owned(),
+                    )
+                })?;
+                (contents.generation, contents.entries)
             }
-            None => Vec::new(),
+            None => (0, Vec::new()),
         };
-        let head_entries = read_entries(head, key)
-            .map_err(|_| invalid("the vault in the snapshot does not open with this key"))?
-            .entries;
-        let merged = merge_entries(&base_entries, local_entries, &head_entries, &self.ctx);
-        Ok(Some((merged.entries, merged.findings)))
+        let head_contents = read_entries(head, key)
+            .map_err(|_| invalid("the vault in the snapshot does not open with this key"))?;
+        if head_contents.generation < base_generation {
+            let local_generation = read_entries(&side.file, key)
+                .map_err(|_| SyncError::LocalFailed("vault_unreadable".to_owned()))?
+                .generation;
+            return Err(refused_head(head_contents.generation, local_generation));
+        }
+        let merged = merge_entries(
+            &base_entries,
+            local_entries,
+            &head_contents.entries,
+            &self.ctx,
+        );
+        Ok(Some(((merged.entries, merged.findings), base_generation)))
     }
 
     /// Writes the new base, then the state with `last_seq` (see the module comment for why).
@@ -411,7 +459,7 @@ impl Engine<'_> {
     /// # Errors
     /// Hub errors other than "unreachable" (`hub_unauthorized`, `hub_tls_untrusted`,
     /// `hub_protocol`, ...), `wrong_group`, `wrong_key_or_damaged`, `snapshot_invalid`,
-    /// `newer_format`, `snapshot_too_large` (decided before anything is applied),
+    /// `newer_format`, `snapshot_too_large` and `seq_exhausted` (decided before anything is applied),
     /// `vault_conflict_different_vaults`, `not_paired`, `state_unusable`, `local_failed` (also
     /// `vault_unreadable` for a local vault file that does not parse: it is never pushed), and
     /// `local_changed` or `hub_conflict` when a run had to start over more than five times
@@ -522,13 +570,14 @@ impl Engine<'_> {
                 match self.merge_vault(base.vault.as_deref(), side, head_file)? {
                     // V2: locked, so the whole run waits: nothing applied, nothing pushed
                     None => return Ok(Planned::Stop(Outcome::WaitingForUnlock)),
-                    Some((entries, entry_findings)) => {
+                    Some(((entries, entry_findings), base_generation)) => {
                         findings.extend(entry_findings);
                         if let Some(vault) = dropped_password {
                             findings.push(Finding::PasswordChangeDropped { vault });
                         }
                         VaultChange::Merged {
                             head: head_file.to_vec(),
+                            base_generation,
                             entries,
                         }
                     }
@@ -575,7 +624,7 @@ impl Engine<'_> {
         };
         let snapshot = Self::build_snapshot(
             w.st.group,
-            w.head_seq + 1,
+            next_seq(w.head_seq)?,
             &w.st.device,
             &self.ctx.date,
             w.merged_tree.clone(),
@@ -604,10 +653,7 @@ impl Engine<'_> {
         } else {
             None
         };
-        if let Some(side) = &work.local.vault {
-            inspect_file(&side.file)
-                .map_err(|_| SyncError::LocalFailed("vault_unreadable".to_owned()))?;
-        }
+        check_local_vault(&work.local)?;
         let merged_vault = matches!(work.vault_change, VaultChange::Merged { .. });
         let apply = work.tree_change.is_some() || !matches!(work.vault_change, VaultChange::Keep);
         let Work {
@@ -659,7 +705,7 @@ impl Engine<'_> {
             let current = self.local.read()?;
             snapshot = Self::build_snapshot(
                 st.group,
-                head_seq + 1,
+                next_seq(head_seq)?,
                 &st.device,
                 &self.ctx.date,
                 current.tree,
@@ -705,7 +751,8 @@ impl Engine<'_> {
     /// the secrets and the state, and returns the pairing code.
     ///
     /// # Errors
-    /// `already_paired`, the hub errors, `hub_not_empty`, `snapshot_too_large`,
+    /// `already_paired`, the hub errors, `hub_not_empty`, `snapshot_too_large`, `local_failed`
+    /// (also `vault_unreadable`: a local vault file that does not parse is never uploaded),
     /// `keychain_unavailable` (nothing is uploaded then), `state_write_failed`.
     pub fn setup(&self, cfg: &HubConfig, device_name: &str) -> Result<PairingCode, SyncError> {
         if self.state.load()?.is_some() {
@@ -723,6 +770,7 @@ impl Engine<'_> {
             name: device_name.to_owned(),
         };
         let local = self.local.read()?;
+        check_local_vault(&local)?;
         let snapshot = Self::snapshot(group, 1, &device, &self.ctx.date, local);
         let plaintext = Zeroizing::new(snapshot.to_plaintext()?);
         let envelope = seal(&key, group, 1, &plaintext)?;
@@ -825,7 +873,8 @@ impl Engine<'_> {
     ///
     /// # Errors
     /// `not_paired`, `keychain_unavailable`, the hub errors (`hub_conflict` when another device
-    /// pushed meanwhile), `wrong_group`, `snapshot_too_large`, `state_write_failed`.
+    /// pushed meanwhile), `wrong_group`, `snapshot_too_large`, `seq_exhausted` (the head or `last_seq`
+    /// is at `u64::MAX`), `local_failed` (also `vault_unreadable`), `state_write_failed`.
     pub fn reseed(&self) -> Result<(), SyncError> {
         let st = self.state.load()?.ok_or(SyncError::NotPaired)?;
         let (_, key) = self.keys(st.group)?;
@@ -835,11 +884,15 @@ impl Engine<'_> {
                 if group != st.group {
                     return Err(SyncError::WrongGroup);
                 }
-                (Expected::Seq(head_seq), st.last_seq.max(head_seq) + 1)
+                (
+                    Expected::Seq(head_seq),
+                    next_seq(st.last_seq.max(head_seq))?,
+                )
             }
-            None => (Expected::Empty, st.last_seq + 1),
+            None => (Expected::Empty, next_seq(st.last_seq)?),
         };
         let local = self.local.read()?;
+        check_local_vault(&local)?;
         let snapshot = Self::snapshot(st.group, new_seq, &st.device, &self.ctx.date, local);
         let plaintext = Zeroizing::new(snapshot.to_plaintext()?);
         let envelope = seal(&key, st.group, new_seq, &plaintext)?;

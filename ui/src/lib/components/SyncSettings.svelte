@@ -2,7 +2,7 @@
   import { onDestroy, onMount, tick } from "svelte";
   import type { SyncStore } from "../sync.svelte";
   import { syncErrorText } from "../sync-errors";
-  import { RESEED_CONFIRM, syncLine } from "../sync-line";
+  import { RESEED_CONFIRM, rolledBackText, syncLine } from "../sync-line";
   import type { SyncConfirmation } from "../types";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import PasswordField from "./PasswordField.svelte";
@@ -293,10 +293,7 @@
   {#if status.state === "error" && status.error}
     <p class="error">{syncErrorText(status.error).text}</p>
   {:else if status.state === "rolled_back"}
-    <p class="warning-text">
-      The hub shows an older state than this device has seen. If you know the hub was restored on
-      purpose, re-seed it from this device.
-    </p>
+    <p class="warning-text">{rolledBackText(status)}</p>
   {/if}
 
   {@render failureNote()}
@@ -331,6 +328,7 @@
         readonly
         rows="4"
         aria-label="Pairing code"
+        autocomplete="off"
         spellcheck="false"
         value={sync.pairingCode}></textarea>
       <div class="actions">

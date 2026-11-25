@@ -12,13 +12,17 @@
 //! call in `lib.rs` is Linux-only.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
+
+use fernjo_fs::{FileMode, Parent, WriteOptions};
 
 /// The app id the window gets (the program name), so the entry must be called `fernjo.desktop`.
 const ENTRY_NAME: &str = "fernjo.desktop";
 const ICON_NAME: &str = "fernjo.png";
 const ICON_BYTES: &[u8] = include_bytes!("../icons/128x128.png");
+/// The largest existing menu entry that is compared with the one fernjo would write (the real one
+/// is well under 1 KiB); a larger file, like a missing or unreadable one, is offered again.
+const MAX_ENTRY_LEN: u64 = 64 * 1024;
 /// Marker in the device-local folder: the user chose "Never".
 pub const NEVER_FILE: &str = "appmenu-never";
 
@@ -87,11 +91,17 @@ pub fn desktop_entry(appimage: &str) -> Option<String> {
     ))
 }
 
-/// Whether to show the dialog: only for an AppImage, never after "Never", and not when the entry
-/// already says exactly what it would say now (an entry that points to a moved file is asked
-/// about again).
+/// Whether to show the dialog: only for an AppImage with an absolute path, never after "Never",
+/// and not when the entry already says exactly what it would say now (an entry that points to a
+/// moved file is asked about again). An entry that is a symbolic link (checked with
+/// `symlink_metadata`, never followed) is managed by the user, for example by a dotfile manager:
+/// no dialog, since "Add" could not replace it anyway (`write_atomic` refuses a non-regular
+/// target). Otherwise the entry is read through `fernjo_fs::read_capped` (a regular file of at
+/// most `MAX_ENTRY_LEN`); any read failure means "no current entry".
 pub fn should_offer(appimage: Option<&str>, data_home: &Path, never: bool) -> bool {
-    let Some(appimage) = appimage.filter(|a| !a.is_empty()) else {
+    // a plain '/' test like `data_home`: a relative path would resolve against whatever the
+    // working directory is when the desktop starts the entry
+    let Some(appimage) = appimage.filter(|a| a.starts_with('/')) else {
         return false;
     };
     if never {
@@ -101,30 +111,24 @@ pub fn should_offer(appimage: Option<&str>, data_home: &Path, never: bool) -> bo
         return false;
     };
     let (entry, _) = entry_paths(data_home);
-    std::fs::read_to_string(entry).map_or(true, |have| have != wanted)
+    if std::fs::symlink_metadata(&entry).is_ok_and(|m| m.file_type().is_symlink()) {
+        return false;
+    }
+    fernjo_fs::read_capped(&entry, MAX_ENTRY_LEN).map_or(true, |have| have != wanted.as_bytes())
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let dir = path
-        .parent()
-        .ok_or_else(|| std::io::Error::other("no parent folder"))?;
-    std::fs::create_dir_all(dir)?;
-    let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
-    tmp_name.push(format!(".{}.tmp", std::process::id()));
-    let tmp = dir.join(tmp_name);
-    let result = (|| {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        std::fs::rename(&tmp, path)
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    result
+    // default folder and file modes (the menu entry is meant to be read by the desktop); the
+    // temp name is random and never reused, so nothing planted at a fixed name matters
+    fernjo_fs::write_atomic(
+        path,
+        bytes,
+        WriteOptions {
+            parent: Parent::CreateDefault,
+            backup: false,
+            file_mode: FileMode::Default,
+        },
+    )
 }
 
 /// Writes the icon and the entry (icon first, so the entry never names a missing icon).
@@ -296,6 +300,35 @@ mod tests {
     }
 
     #[test]
+    fn an_oversized_entry_is_offered_again_without_being_read_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        install(APP, home).unwrap();
+        let (entry, _) = entry_paths(home);
+        let mut text = desktop_entry(APP).unwrap().into_bytes();
+        text.resize(usize::try_from(MAX_ENTRY_LEN).unwrap() + 1, b'\n');
+        std::fs::write(&entry, text).unwrap();
+        assert!(should_offer(Some(APP), home, false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_entry_is_managed_by_the_user_and_never_offered() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        // an entry elsewhere (a dotfile manager's), linked at the entry's name: whatever it
+        // says, and also when the link is dangling, the user manages it, so no dialog
+        let real = home.join("elsewhere.desktop");
+        std::fs::write(&real, "[Desktop Entry]\nName=other\n").unwrap();
+        let (entry, _) = entry_paths(home);
+        std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&real, &entry).unwrap();
+        assert!(!should_offer(Some(APP), home, false));
+        std::fs::remove_file(&real).unwrap();
+        assert!(!should_offer(Some(APP), home, false), "dangling link");
+    }
+
+    #[test]
     fn install_writes_the_icon_and_the_entry_and_leaves_no_temp_file() {
         let dir = tempfile::tempdir().unwrap();
         install(APP, dir.path()).unwrap();
@@ -320,6 +353,50 @@ mod tests {
                 .unwrap()
                 .contains("/new/place.AppImage")
         );
+    }
+
+    #[test]
+    fn the_appimage_path_must_be_absolute() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!should_offer(Some("fernjo.AppImage"), dir.path(), false));
+        assert!(!should_offer(Some("./fernjo.AppImage"), dir.path(), false));
+        assert!(should_offer(
+            Some("/opt/fernjo.AppImage"),
+            dir.path(),
+            false
+        ));
+    }
+
+    #[test]
+    fn install_leaves_no_pid_named_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (entry, icon) = entry_paths(dir.path());
+        // a file at the old fixed `<name>.<pid>.tmp` name must neither block the install nor be
+        // touched by it
+        let mut planted = Vec::new();
+        for target in [&entry, &icon] {
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            let mut name = target.file_name().unwrap().to_os_string();
+            name.push(format!(".{}.tmp", std::process::id()));
+            let path = target.with_file_name(name);
+            std::fs::write(&path, b"planted").unwrap();
+            planted.push(path);
+        }
+        install(APP, dir.path()).unwrap();
+        for path in &planted {
+            assert_eq!(std::fs::read(path).unwrap(), b"planted");
+        }
+        let planted_paths = planted;
+        assert!(entry.exists() && icon.exists());
+        // nothing else is left: the random temp names of the writer are renamed away
+        for d in [entry.parent().unwrap(), icon.parent().unwrap()] {
+            for e in std::fs::read_dir(d).unwrap() {
+                let name = e.unwrap().path();
+                if name.extension().is_some_and(|x| x == "tmp") {
+                    assert!(planted_paths.contains(&name), "left over: {name:?}");
+                }
+            }
+        }
     }
 
     #[test]

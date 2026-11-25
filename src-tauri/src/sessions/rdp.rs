@@ -11,15 +11,16 @@ use std::sync::Arc;
 use fernjo_core::RdpResolution;
 use fernjo_rdp::{
     CertChangedDecision, CertChangedPrompt, CertDecision, CertPrompt, CertStore, CloseReason,
-    ConnectParams, Framebuffer, InputEvent, Interaction, MAX_DESKTOP_DIMENSION, MAX_INPUT_EVENTS,
-    Rect, Session, SessionEvent,
+    ConnectParams, Framebuffer, InputEvent, Interaction, MAX_DESKTOP_DIMENSION, MAX_DESKTOP_PIXELS,
+    MAX_INPUT_EVENTS, Rect, Session, SessionEvent,
 };
 use secrecy::SecretString;
 use tokio::sync::mpsc::{Receiver, UnboundedReceiver, unbounded_channel};
 
 use super::{
     ConnState, Ended, Entry, HostKeyAnswer, HostKeyChangedAnswer, Op, Phase, PromptAnswer,
-    PromptView, SessionManager, Shared, TauriInteraction, UiEvent, error, release_unhandled,
+    PromptView, SessionManager, Shared, TauriInteraction, UiEvent, error, install_ops,
+    release_unhandled, take_resize,
 };
 use crate::commands::CommandError;
 use crate::connect_plan::{RdpCredentialPlan, RdpPlan};
@@ -36,21 +37,43 @@ const DEFAULT_SIZE: (u16, u16) = (1280, 800);
 /// Smallest desktop a resize or a fit-to-tab connect asks for.
 const MIN_DIMENSION: u32 = 200;
 
+/// The shortest time between two remote clipboard events towards the UI. Clipboard events carry
+/// no credit (unlike region messages), and Tauri parks a large event body until the webview
+/// fetches it, so a server that streams clipboard text must not turn into an event per message:
+/// [`forward`] sends the first text at once and, within the gap, keeps only the latest one.
+pub(crate) const CLIPBOARD_EVENT_GAP: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// Bytes of a region message header.
 pub(crate) const HEADER_LEN: usize = 8;
 
-/// A desktop size the server can be asked for: both sides clamped to 200..=8192 and rounded down
-/// to an even number (some servers refuse an odd width). `None` for a zero side, which a hidden or
+/// A desktop size the server can be asked for: both sides clamped to 200..=8192, the area scaled
+/// down (keeping the aspect) to at most [`MAX_DESKTOP_PIXELS`], and each side rounded down to an
+/// even number (some servers refuse an odd width). `None` for a zero side, which a hidden or
 /// collapsed tab reports and which is never sent.
 pub(crate) fn desktop_size(width: u32, height: u32) -> Option<(u16, u16)> {
     if width == 0 || height == 0 {
         return None;
     }
-    let side = |v: u32| {
-        let even = v.clamp(MIN_DIMENSION, u32::from(MAX_DESKTOP_DIMENSION)) & !1;
-        u16::try_from(even).unwrap_or(MAX_DESKTOP_DIMENSION)
-    };
-    Some((side(width), side(height)))
+    let clamp = |v: u32| v.clamp(MIN_DIMENSION, u32::from(MAX_DESKTOP_DIMENSION));
+    let (mut w, mut h) = (clamp(width), clamp(height));
+    let limit = u64::from(MAX_DESKTOP_PIXELS);
+    if u64::from(w) * u64::from(h) > limit {
+        // both sides are in 200..=8192 here, so the area is finite and the factor in (0, 1)
+        let scale = (limit as f64 / (f64::from(w) * f64::from(h))).sqrt();
+        w = clamp((f64::from(w) * scale) as u32);
+        h = clamp((f64::from(h) * scale) as u32);
+    }
+    let even = |v: u32| u16::try_from(v & !1).unwrap_or(MAX_DESKTOP_DIMENSION);
+    let (mut w, mut h) = (even(w), even(h));
+    // the float rounding must never leave the area above the limit
+    while u64::from(w) * u64::from(h) > limit {
+        if w >= h {
+            w -= 2;
+        } else {
+            h -= 2;
+        }
+    }
+    Some((w, h))
 }
 
 /// The credit for region messages of a desktop of this size: sending stops once more than
@@ -113,6 +136,10 @@ pub(crate) fn classify_rdp_end(reason: CloseReason) -> Ended {
         CloseReason::ServerClosed => "The remote desktop session ended.",
         CloseReason::ConnectionLost => "The connection was lost.",
         CloseReason::ClosedByUser => "The session was closed.",
+        CloseReason::ChannelTooLarge => "The server sent a channel message that is too large.",
+        CloseReason::UpdateOutOfLimits => {
+            "The server sent a display update beyond the limits of this client."
+        }
     };
     Ended {
         text: text.to_string(),
@@ -202,6 +229,11 @@ pub(crate) fn build_params(plan: RdpPlan, size: (u32, u32), certs: CertStore) ->
 /// is unlocked.
 pub(super) fn start(entry: &Arc<Entry>, plan: RdpPlan, certs: CertStore) {
     let shared = &entry.shared;
+    // The UI's clipboard marker and sync follow the setting this attempt really uses.
+    shared.sink.event(&UiEvent::RdpSettings {
+        clipboard: plan.clipboard,
+        host: plan.host.clone(),
+    });
     let note = match &plan.credential {
         RdpCredentialPlan::NeedsVault => {
             shared.set_phase(Phase::NeedsVault);
@@ -239,16 +271,9 @@ async fn run(shared: Arc<Shared>, params: ConnectParams) {
     let framebuffer = session.framebuffer();
     let (tx, ops) = unbounded_channel();
     // A resize that arrived while connecting is applied now.
-    if dynamic
-        && let Ok(size) = shared.size.lock()
-        && let Some(wanted) = desktop_size(size.0, size.1)
-        && wanted != started
-    {
-        let _ = tx.send(Op::Resize(size.0, size.1));
-    }
-    if let Ok(mut slot) = shared.ops.lock() {
-        *slot = Some(tx);
-    }
+    install_ops(&shared, tx, |size| {
+        dynamic && desktop_size(size.0, size.1).is_some_and(|wanted| wanted != started)
+    });
     tauri::async_runtime::spawn(write_ops(session, ops, Arc::clone(&shared)));
     let (width, height) = framebuffer.size();
     if let Ok(mut flow) = shared.flow.lock() {
@@ -272,7 +297,8 @@ async fn write_ops(session: Session, mut ops: UnboundedReceiver<Op>, shared: Arc
         let stop = match op {
             Op::Rdp(events) => session.input(events).await.is_err(),
             Op::Clipboard(text) => session.set_clipboard_text(text).await.is_err(),
-            Op::Resize(width, height) => {
+            Op::Resize => {
+                let (width, height) = take_resize(&shared);
                 if let Some((width, height)) = desktop_size(width, height) {
                     let _ = session.resize(width, height).await;
                 }
@@ -295,7 +321,8 @@ async fn write_ops(session: Session, mut ops: UnboundedReceiver<Op>, shared: Arc
 
 /// Sends the pending damage as one region message once the flow control has credit; until then
 /// the events keep being read and merged, so the newest pixels are what goes out and the queue
-/// towards the session never backs up. Ends with the session.
+/// towards the session never backs up. Remote clipboard text goes out at most once per
+/// [`CLIPBOARD_EVENT_GAP`], the latest text winning. Ends with the session.
 pub(crate) async fn forward(
     shared: &Shared,
     mut rx: Receiver<SessionEvent>,
@@ -305,7 +332,20 @@ pub(crate) async fn forward(
     let (width, height) = framebuffer.size();
     shared.sink.event(&UiEvent::Desktop { width, height });
     let mut damage = Damage::default();
+    // remote clipboard text waiting for its gap (only the latest is kept), and when it may go
+    let mut clip: Option<String> = None;
+    let mut clip_due = tokio::time::Instant::now();
+    let flush_clip = |clip: &mut Option<String>| {
+        if let Some(text) = clip.take() {
+            shared.sink.event(&UiEvent::Clipboard { text });
+        }
+    };
     loop {
+        if clip.is_some() && tokio::time::Instant::now() >= clip_due {
+            flush_clip(&mut clip);
+            clip_due = tokio::time::Instant::now() + CLIPBOARD_EVENT_GAP;
+            continue;
+        }
         if !damage.is_empty() && shared.flow.lock().map_or(true, |f| f.should_send()) {
             if let Some(rect) = damage.take()
                 && let Some(message) = region_message(&framebuffer, rect)
@@ -317,14 +357,12 @@ pub(crate) async fn forward(
             }
             continue;
         }
-        let event = if damage.is_empty() {
-            rx.recv().await
-        } else {
-            // out of credit: an acknowledgement wakes this up, a damage event is merged
-            tokio::select! {
-                event = rx.recv() => event,
-                () = shared.wake.notified() => continue,
-            }
+        // with damage pending the UI is out of credit: an acknowledgement wakes this up, a damage
+        // event is merged; waiting clipboard text wakes it up when its gap is over
+        let event = tokio::select! {
+            event = rx.recv() => event,
+            () = shared.wake.notified(), if !damage.is_empty() => continue,
+            () = tokio::time::sleep_until(clip_due), if clip.is_some() => continue,
         };
         match event {
             Some(SessionEvent::Damage(rect)) => damage.add(rect),
@@ -336,11 +374,17 @@ pub(crate) async fn forward(
                 }
                 shared.sink.event(&UiEvent::Desktop { width, height });
             }
-            Some(SessionEvent::Clipboard(text)) => {
-                shared.sink.event(&UiEvent::Clipboard { text });
+            // sent at the top of the loop once its gap is over; a newer text replaces it
+            Some(SessionEvent::Clipboard(text)) => clip = Some(text),
+            // the last text the remote side copied is still worth delivering
+            Some(SessionEvent::Closed(reason)) => {
+                flush_clip(&mut clip);
+                return classify_rdp_end(reason);
             }
-            Some(SessionEvent::Closed(reason)) => return classify_rdp_end(reason),
-            None => return classify_rdp_end(CloseReason::ConnectionLost),
+            None => {
+                flush_clip(&mut clip);
+                return classify_rdp_end(CloseReason::ConnectionLost);
+            }
         }
     }
 }

@@ -10,7 +10,9 @@ use std::fs;
 use std::io;
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
+use fernjo_core::json;
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::value::RawValue;
 
 use crate::envelope::GroupId;
 use crate::error::SyncError;
@@ -48,9 +50,22 @@ struct StateFile {
 }
 
 #[derive(Serialize)]
-struct BaseOut {
+struct BaseOut<'a> {
     schema: u32,
-    snapshot: serde_json::Value,
+    snapshot: &'a RawValue,
+}
+
+/// `sync-base.json` as it is read: the snapshot stays the borrowed JSON text until
+/// `Snapshot::from_plaintext` reads it (M11 review #28: never a `serde_json::Value`).
+#[derive(Deserialize)]
+struct BaseIn<'a> {
+    #[serde(default, borrow, deserialize_with = "present_raw")]
+    snapshot: Option<&'a RawValue>,
+}
+
+/// A present `snapshot` key, also `null`, is `Some` (a `null` snapshot is damaged, not absent).
+fn present_raw<'de, D: Deserializer<'de>>(d: D) -> Result<Option<&'de RawValue>, D::Error> {
+    <&RawValue>::deserialize(d).map(Some)
 }
 
 fn unusable(reason: impl ToString) -> SyncError {
@@ -61,20 +76,18 @@ fn write_failed(e: &io::Error) -> SyncError {
     SyncError::StateWriteFailed(e.to_string())
 }
 
-/// Parses `bytes` as JSON, refuses a newer `schema` and returns the value.
-fn checked_value(bytes: &[u8]) -> Result<serde_json::Value, SyncError> {
-    let value: serde_json::Value =
-        serde_json::from_slice(bytes).map_err(|e| unusable(format!("not valid JSON ({e})")))?;
-    let schema = value
-        .get("schema")
-        .and_then(serde_json::Value::as_u64)
-        .ok_or_else(|| unusable("missing schema"))?;
+/// Checks that `bytes` is JSON and refuses a newer `schema`, without building a
+/// `serde_json::Value` (M11 review #28); the caller then reads the bytes into its typed struct.
+fn check_schema(bytes: &[u8]) -> Result<(), SyncError> {
+    let [schema] =
+        json::head(bytes, ["schema"]).map_err(|e| unusable(format!("not valid JSON ({e})")))?;
+    let schema = schema.as_u64().ok_or_else(|| unusable("missing schema"))?;
     if schema > u64::from(SCHEMA) {
         return Err(unusable(format!(
             "schema {schema} is newer than the supported {SCHEMA}"
         )));
     }
-    Ok(value)
+    Ok(())
 }
 
 /// The device-local sync files in one folder.
@@ -106,8 +119,8 @@ impl StateStore {
         let Some(bytes) = self.read(STATE_FILE)? else {
             return Ok(None);
         };
-        let value = checked_value(&bytes)?;
-        let file: StateFile = serde_json::from_value(value)
+        check_schema(&bytes)?;
+        let file: StateFile = serde_json::from_slice(&bytes)
             .map_err(|e| unusable(format!("{STATE_FILE} is damaged ({e})")))?;
         Ok(Some(SyncState {
             url: file.url,
@@ -151,12 +164,13 @@ impl StateStore {
         let Some(bytes) = self.read(BASE_FILE)? else {
             return Ok(None);
         };
-        let value = checked_value(&bytes)?;
-        let snapshot = value
-            .get("snapshot")
+        check_schema(&bytes)?;
+        let base: BaseIn<'_> = serde_json::from_slice(&bytes)
+            .map_err(|e| unusable(format!("{BASE_FILE} is damaged ({e})")))?;
+        let snapshot = base
+            .snapshot
             .ok_or_else(|| unusable(format!("{BASE_FILE} has no snapshot")))?;
-        let plain = serde_json::to_vec(snapshot).map_err(unusable)?;
-        let snapshot = Snapshot::from_plaintext(&plain)
+        let snapshot = Snapshot::from_plaintext(snapshot.get().as_bytes())
             .map_err(|e| unusable(format!("{BASE_FILE} is damaged ({e})")))?;
         Ok(Some(snapshot))
     }
@@ -169,7 +183,7 @@ impl StateStore {
     pub fn save_base(&self, base: &Snapshot) -> Result<(), SyncError> {
         self.load_base()?;
         let plain = base.to_plaintext()?;
-        let snapshot: serde_json::Value = serde_json::from_slice(&plain).map_err(unusable)?;
+        let snapshot: &RawValue = serde_json::from_slice(&plain).map_err(unusable)?;
         let bytes = serde_json::to_vec(&BaseOut {
             schema: SCHEMA,
             snapshot,

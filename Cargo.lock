@@ -1706,6 +1706,7 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "fernjo-core",
+ "fernjo-fs",
  "fernjo-hub",
  "fernjo-import",
  "fernjo-rdp",
@@ -1730,6 +1731,7 @@ name = "fernjo-core"
 version = "0.2.0"
 dependencies = [
  "directories",
+ "fernjo-fs",
  "serde",
  "serde_json",
  "sha2 0.11.1",
@@ -1739,11 +1741,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "fernjo-fs"
+version = "0.2.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "libc",
+ "tempfile",
+]
+
+[[package]]
 name = "fernjo-hub"
 version = "0.2.0"
 dependencies = [
  "axum",
  "base64 0.23.1",
+ "fernjo-fs",
  "getrandom 0.4.3",
  "http-body-util",
  "serde",
@@ -1779,7 +1791,7 @@ dependencies = [
 name = "fernjo-rdp"
 version = "0.2.0"
 dependencies = [
- "getrandom 0.4.3",
+ "fernjo-fs",
  "ironrdp-cliprdr",
  "ironrdp-connector",
  "ironrdp-core",
@@ -1789,9 +1801,10 @@ dependencies = [
  "ironrdp-input",
  "ironrdp-pdu",
  "ironrdp-session",
- "ironrdp-tls",
  "ironrdp-tokio",
+ "log",
  "rcgen",
+ "rustls",
  "secrecy",
  "serde",
  "serde_json",
@@ -1808,7 +1821,7 @@ name = "fernjo-ssh"
 version = "0.2.0"
 dependencies = [
  "data-encoding",
- "getrandom 0.4.3",
+ "fernjo-fs",
  "hmac 0.13.0",
  "russh",
  "secrecy",
@@ -1825,6 +1838,7 @@ dependencies = [
  "base64 0.23.1",
  "chacha20poly1305",
  "fernjo-core",
+ "fernjo-fs",
  "fernjo-hub",
  "fernjo-vault",
  "getrandom 0.4.3",
@@ -1851,6 +1865,7 @@ version = "0.2.0"
 dependencies = [
  "argon2",
  "chacha20poly1305",
+ "fernjo-fs",
  "getrandom 0.4.3",
  "keyring",
  "keyring-core",
@@ -3042,18 +3057,6 @@ dependencies = [
  "bitflags 2.13.2",
  "ironrdp-core",
  "ironrdp-pdu",
-]
-
-[[package]]
-name = "ironrdp-tls"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63dcf5982519d8bd18eb102ffbba1933d25744f3e0f2c59f794b4b7fe0ef0f84"
-dependencies = [
- "rustls-native-certs",
- "tokio",
- "tokio-rustls",
- "x509-cert",
 ]
 
 [[package]]

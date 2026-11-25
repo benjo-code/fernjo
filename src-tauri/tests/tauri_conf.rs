@@ -171,3 +171,31 @@ fn lib_registers_the_navigation_guard_after_single_instance() {
     );
     assert!(text.contains("mod nav_guard;"));
 }
+
+/// `form-action`, `base-uri` and `object-src` do not fall back to `default-src`; M11 review #64.
+#[test]
+fn csp_closes_the_directives_default_src_does_not_cover() {
+    let conf = load("tauri.conf.json");
+    let csp = conf["app"]["security"]["csp"].as_str().unwrap();
+    let directives: Vec<&str> = csp.split(';').map(str::trim).collect();
+    for wanted in [
+        "form-action 'none'",
+        "base-uri 'self'",
+        "object-src 'none'",
+        "frame-ancestors 'none'",
+    ] {
+        assert!(directives.contains(&wanted), "csp lacks {wanted}: {csp}");
+    }
+}
+
+/// WebView2's general autofill ("Suggestions") stays off so no typed or revealed value is
+/// offered back from, or saved into, the profile; M11 review #63.
+#[test]
+fn main_window_turns_general_autofill_off() {
+    let conf = load("tauri.conf.json");
+    assert_eq!(
+        conf["app"]["windows"][0]["generalAutofillEnabled"],
+        Value::Bool(false),
+        "app.windows[0].generalAutofillEnabled must be false"
+    );
+}

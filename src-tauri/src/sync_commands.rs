@@ -27,7 +27,11 @@
 //! `SyncStatus` (camelCase):
 //! - `state`: `"off"` (not set up), `"ok"`, `"offline"` (hub unreachable, `pendingChanges` wait),
 //!   `"waiting_for_unlock"` (both sides changed the vault and it is locked), `"rolled_back"` (the
-//!   hub shows an older state than this device saw; `error` says which, "Re-seed" repairs it),
+//!   hub shows an older state than this device saw; `error` says which: `hub_rolled_back` for
+//!   the sequence, `vault_rolled_back` when the run refused the head's vault as older than the
+//!   base or this device's rollback mark and older than the local vault file, V5; "Re-seed"
+//!   repairs both; a refused head that is not older than the local file is the plain error
+//!   `vault_below_mark`, because a re-seed would push the older local vault over it),
 //!   `"error"` (the last run failed, `error` names the code) or `"needs_confirmation"` (only the
 //!   answer of `sync_join` without `confirmReplace`).
 //! - `lastSyncedAt`: RFC 3339 UTC of the last successful run since the app started, else `null`.
@@ -106,6 +110,12 @@ enum LastOutcome {
         found: u64,
         seen: u64,
     },
+    /// The run refused the head's vault as older than this device has seen (V5: a head below the
+    /// base's generation, or a file below this device's rollback mark) and older than the local
+    /// vault file (`engine::refused_head` gives `rolled_back` only then). Shown like a
+    /// rolled-back hub, so the user is offered Re-seed, which pushes this device's newer vault
+    /// instead of merging the older one. The other case, `vault_below_mark`, stays a plain error.
+    VaultRolledBack,
 }
 
 impl SyncRuntime {
@@ -257,19 +267,16 @@ fn state_store(state: &AppState) -> Result<StateStore, CommandError> {
         })
 }
 
-/// A client that never talks: `Engine::pending_changes` and `setup` need a `HubClient` in the
-/// struct but use only the local side (setup builds its own client). Loopback `http` needs no
-/// certificate roots, so this is cheap.
-fn idle_hub() -> Result<HubClient, SyncError> {
-    HubClient::new(&HubConfig {
-        url: "http://127.0.0.1:9".to_owned(),
-        secret: SecretString::from(String::new()),
-        ca_pem: None,
-    })
+/// A client that never talks: `Engine::pending_changes`, `setup` and `join` need a `HubClient`
+/// in the struct but use only the local side (setup and join build their own client).
+/// `HubClient::offline` has no address, so it does not depend on which addresses this build
+/// accepts (release builds refuse plain `http://`), and loads no certificate roots.
+fn idle_hub() -> HubClient {
+    HubClient::offline()
 }
 
 fn pending_changes(state: &AppState, store: &StateStore) -> Result<usize, SyncError> {
-    let hub = idle_hub()?;
+    let hub = idle_hub();
     let port = AppPort(state);
     Engine {
         hub: &hub,
@@ -321,6 +328,17 @@ pub fn build_status(state: &AppState) -> SyncStatus {
                             "the hub shows state {found} but this device has seen {seen}; \
                              re-seed the hub from this device if that is expected"
                         ),
+                    });
+                }
+                "rolled_back"
+            }
+            LastOutcome::VaultRolledBack => {
+                if error_now.is_none() {
+                    error_now = Some(StatusError {
+                        code: "vault_rolled_back".to_owned(),
+                        message: "the hub holds an older vault than this device has seen; \
+                                  re-seed the hub from this device if that is expected"
+                            .to_owned(),
                     });
                 }
                 "rolled_back"
@@ -447,6 +465,20 @@ fn record(state: &AppState, result: Result<Outcome, SyncError>) {
             rt.last = LastOutcome::RolledBack { found, seen };
             rt.error = None;
         }
+        // the vault refusal of V5 repeats on every run until the hub is re-seeded: give it the
+        // rolled-back state (and its Re-seed action), not a plain error. `vault_below_mark` (the
+        // head is not older than the local file) is a plain error: Re-seed would lose the head.
+        Err(SyncError::LocalFailed(code)) if code == "rolled_back" => {
+            rt.last = LastOutcome::VaultRolledBack;
+            rt.error = None;
+        }
+        // `build_status` derives the rolled-back state (and its Re-seed offer) from `rt.last`
+        // before it looks at `rt.error`: an earlier rolled-back outcome must not survive this
+        // refusal, or Re-seed would push the older local vault over the head
+        Err(e @ SyncError::LocalFailed(_)) if code_of(&e) == "vault_below_mark" => {
+            rt.last = LastOutcome::Unknown;
+            rt.error = Some(status_error(&e));
+        }
         Err(e) => rt.error = Some(status_error(&e)),
     }
 }
@@ -536,7 +568,7 @@ pub fn sync_setup(
     let store = state_store(state)?;
     let device_name = check_device_name(&device_name)?;
     let _guard = begin(state)?;
-    let hub = idle_hub()?;
+    let hub = idle_hub();
     let port = AppPort(state);
     Engine {
         hub: &hub,
@@ -629,7 +661,7 @@ pub fn sync_join(
     }
     let _guard = begin(state)?;
     state.sessions.close_all();
-    let hub = idle_hub()?;
+    let hub = idle_hub();
     let port = AppPort(state);
     Engine {
         hub: &hub,

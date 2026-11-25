@@ -179,7 +179,7 @@ pub fn restore_session(
 ///
 /// # Errors
 /// `quick_empty`, `quick_user_required`, `quick_bad_scheme`, `quick_bad_port`, `quick_bad_target`,
-/// `invalid_host`.
+/// `quick_user_password`, `invalid_host`.
 pub fn quick_parse(input: &str) -> Result<QuickTarget, CommandError> {
     let target = fernjo_core::parse_quick(input).map_err(|e| error(e.code, e.message()))?;
     // the plan is dropped: only the host check (and the structure check) matter here

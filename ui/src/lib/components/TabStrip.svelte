@@ -201,6 +201,12 @@
             <Icon name={tab.nodeId === null ? tab.protocol : protocolOf(tab.nodeId)} />
           </span>
           <span class="title">{tab.title}</span>
+          {#if tab.protocol === "rdp" && tab.clipboard}
+            {@const shared = `Clipboard shared with ${tab.host ?? tab.title}`}
+            <span class="clip" title={shared} aria-label={shared} role="img">
+              <Icon name="clipboard" size={12} />
+            </span>
+          {/if}
           {#if text}<span class="caption">{text}</span>{/if}
         </button>
         {#if tab.state === "disconnected"}
@@ -401,6 +407,12 @@
     display: flex;
     flex: none;
     color: var(--color-ssh);
+  }
+
+  .clip {
+    display: flex;
+    flex: none;
+    color: var(--color-text-muted);
   }
 
   .title {

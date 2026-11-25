@@ -3,13 +3,15 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use fernjo_core::persist::{document, parse_document};
+use fernjo_core::json;
+use fernjo_core::persist::{document, parse_document_bytes};
 use fernjo_core::{DocumentError, MAX_TREE_DEPTH, Tree};
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 use uuid::Uuid;
 
 use crate::envelope::GroupId;
-use crate::error::SyncError;
+use crate::error::{SyncError, snapshot_invalid};
 
 /// The snapshot format version this build writes and understands.
 pub const SNAPSHOT_FORMAT_VERSION: u32 = 1;
@@ -47,21 +49,24 @@ struct WireOut<'a> {
     vault: Option<String>,
 }
 
+/// The snapshot as it is read: `connections` stays the borrowed JSON text until
+/// `parse_document_bytes` reads it, so no part is built as a `serde_json::Value` (M11 review #28).
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct WireIn {
+struct WireIn<'a> {
     format_version: u32,
     group_id: GroupId,
     seq: u64,
     writer: DeviceInfo,
     written_at: String,
-    connections: serde_json::Value,
+    #[serde(borrow)]
+    connections: &'a RawValue,
     #[serde(default)]
     vault: Option<String>,
 }
 
-fn invalid(reason: impl ToString) -> SyncError {
-    SyncError::SnapshotInvalid(reason.to_string())
+fn invalid(reason: impl std::fmt::Display) -> SyncError {
+    snapshot_invalid(reason)
 }
 
 impl Snapshot {
@@ -82,10 +87,10 @@ impl Snapshot {
     /// Parses a decrypted snapshot. A newer `formatVersion` is `newer_format`; a tree deeper
     /// than `MAX_TREE_DEPTH`, a bad document or bad base64 is `snapshot_invalid`.
     pub fn from_plaintext(bytes: &[u8]) -> Result<Snapshot, SyncError> {
-        let value: serde_json::Value = serde_json::from_slice(bytes).map_err(invalid)?;
-        let version = value
-            .get("formatVersion")
-            .and_then(serde_json::Value::as_u64)
+        // validated and `formatVersion` read without building a `serde_json::Value`
+        let [version] = json::head(bytes, ["formatVersion"]).map_err(invalid)?;
+        let version = version
+            .as_u64()
             .ok_or_else(|| invalid("missing formatVersion"))?;
         let version = u32::try_from(version).unwrap_or(u32::MAX);
         if version > SNAPSHOT_FORMAT_VERSION {
@@ -94,13 +99,14 @@ impl Snapshot {
                 supported: SNAPSHOT_FORMAT_VERSION,
             });
         }
-        let wire: WireIn = serde_json::from_value(value).map_err(invalid)?;
-        let connections = parse_document(wire.connections).map_err(|e| match e {
-            DocumentError::NewerSchema { found, supported } => invalid(format!(
-                "connections schema {found} is newer than {supported}"
-            )),
-            DocumentError::Invalid(reason) => invalid(reason),
-        })?;
+        let wire: WireIn<'_> = serde_json::from_slice(bytes).map_err(invalid)?;
+        let connections =
+            parse_document_bytes(wire.connections.get().as_bytes()).map_err(|e| match e {
+                DocumentError::NewerSchema { found, supported } => invalid(format!(
+                    "connections schema {found} is newer than {supported}"
+                )),
+                DocumentError::Invalid(reason) => invalid(reason),
+            })?;
         if connections.depth() > MAX_TREE_DEPTH {
             return Err(invalid("the tree is nested too deeply"));
         }
@@ -239,5 +245,24 @@ mod tests {
         value["vault"] = serde_json::json!("!!!");
         let err = Snapshot::from_plaintext(&serde_json::to_vec(&value).unwrap()).unwrap_err();
         assert_eq!(err.code(), "snapshot_invalid");
+    }
+    #[test]
+    fn peer_text_in_a_snapshot_invalid_message_is_cut() {
+        let big = "x".repeat(1024 * 1024);
+        let tree = Tree::from_children(vec![connection("c")]);
+        let mut bad_protocol = as_value(&snapshot(tree.clone(), None));
+        bad_protocol["connections"]["children"][0]["protocol"] = serde_json::json!(big);
+        let mut bad_port = as_value(&snapshot(tree, None));
+        bad_port["connections"]["children"][0]["name"] = serde_json::json!(big);
+        bad_port["connections"]["children"][0]["settings"]["port"] = serde_json::json!(0);
+        let mut bad_type = as_value(&snapshot(Tree::new(), None));
+        bad_type["seq"] = serde_json::json!(big);
+        for value in [bad_protocol, bad_port, bad_type] {
+            let err = Snapshot::from_plaintext(&serde_json::to_vec(&value).unwrap()).unwrap_err();
+            assert_eq!(err.code(), "snapshot_invalid");
+            let message = err.to_string();
+            assert!(message.len() < 1024, "{} bytes", message.len());
+            assert!(format!("{err:?}").len() < 1024);
+        }
     }
 }

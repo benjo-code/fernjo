@@ -3,6 +3,7 @@
   import type { ImportStore } from "../import.svelte";
   import { collectIds } from "../rows";
   import type { TreeStore } from "../store.svelte";
+  import type { SyncStore } from "../sync.svelte";
   import type { ImportKind } from "../types";
   import type { VaultStore } from "../vault.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
@@ -13,12 +14,15 @@
     store,
     vault,
     tree,
+    sync,
     onclose,
   }: {
     store: ImportStore;
     vault: VaultStore;
     /** Only read for the number of nodes a restore replaces. */
     tree: TreeStore;
+    /** Only read: with sync set up a restore reaches every device. */
+    sync?: SyncStore;
     onclose: () => void;
   } = $props();
 
@@ -92,7 +96,8 @@
       !credentialsKnown && vaultState !== "none"
         ? " The credentials in the vault are replaced too."
         : "";
-    return `This replaces your current ${current} with the backup from ${dateOf(b.createdAt)}, which has ${nodes(b.folders + b.connections)} and ${creds(b.credentials)}.${unknown} Open sessions are closed. Kept: the vault password, known hosts, settings and sync setup.`;
+    const syncOn = !!sync?.status && sync.status.state !== "off";
+    return `This replaces your current ${current} with the backup from ${dateOf(b.createdAt)}, which has ${nodes(b.folders + b.connections)} and ${creds(b.credentials)}.${unknown} Open sessions are closed. Kept: the vault password, known hosts, settings and sync setup.${syncOn ? " With sync on, the restore also replaces the data on every device in the sync group." : ""}`;
   });
 
   /** The backup preview must unlock (or create) the vault before the confirmation can be exact. */

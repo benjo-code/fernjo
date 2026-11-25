@@ -239,6 +239,31 @@ fn sync_status_is_off_without_setup() {
 }
 
 #[test]
+fn the_status_of_a_paired_device_never_builds_a_hub_address() {
+    // a device paired with an https hub (state written directly, no hub runs): the status and
+    // the pending count use only local data, in debug and in release builds alike
+    let d = dev();
+    conn(&d, "web");
+    StateStore::new(d.device.clone())
+        .save(&fernjo_sync::state::SyncState {
+            url: "https://hub.example.test".to_owned(),
+            ca_pem: None,
+            device: fernjo_sync::DeviceInfo {
+                id: uuid::Uuid::from_u128(1),
+                name: "d".to_owned(),
+            },
+            group: uuid::Uuid::from_u128(2),
+            last_seq: 1,
+        })
+        .unwrap();
+    let s = sync_status(&d.st).unwrap();
+    assert_eq!(s.state, "ok", "{:?}", s.error);
+    assert_eq!(s.error, None);
+    assert_eq!(s.pending_changes, 1, "no base yet: the one node waits");
+    assert!(has_pending_changes(&d.st));
+}
+
+#[test]
 fn setup_without_a_device_folder_or_while_a_restart_waits_is_refused() {
     let hub = start_hub();
     let dir = TempDir::new().unwrap();
@@ -898,6 +923,167 @@ fn a_rolled_back_hub_is_reported_and_reseed_repairs_it() {
     assert_eq!(now(&a).state, "ok");
 }
 
+/// Final M11 review I2: a head whose vault is older than this device's base (another device
+/// re-seeded the hub with an older vault) is refused (V5) and must not leave a dead end: the status
+/// is the rolled-back one with its Re-seed action, and Re-seed pushes this device's newer vault.
+#[test]
+fn an_older_vault_in_the_head_offers_reseed_and_reseed_keeps_the_newer_local_vault() {
+    let hub = start_hub();
+    let (a, b) = (dev(), dev());
+    vault_create(&a.st, sec(MASTER), false).unwrap();
+    credential(&a, "one");
+    setup(&a, &hub, "a");
+    join(&b, &a, "b");
+    // A saves the vault twice more and syncs once in between; B never syncs again
+    credential(&a, "two");
+    assert_eq!(now(&a).state, "ok");
+    credential(&a, "three");
+    // B re-seeds the hub with its older vault, above A's last seq
+    assert_eq!(sync_reseed(&b.st).unwrap().state, "ok");
+
+    let s = now(&a);
+    assert_eq!(s.state, "rolled_back", "{:?}", s.error);
+    let error = s.error.as_ref().unwrap();
+    assert_eq!(error.code, "vault_rolled_back");
+    assert!(!error.message.contains(MASTER));
+    // the refusal stays until the hub is repaired, and the local vault is untouched
+    assert_eq!(now(&a).state, "rolled_back");
+    assert_eq!(credential_names(&a), ["one", "three", "two"]);
+
+    let s = sync_reseed(&a.st).unwrap();
+    assert_eq!(s.state, "ok", "{:?}", s.error);
+    assert_eq!(s.error, None);
+    assert_eq!(credential_names(&a), ["one", "three", "two"]);
+    assert_eq!(now(&a).state, "ok");
+    // the other device follows the re-seeded, newer vault
+    assert_eq!(now(&b).state, "ok");
+    vault_unlock(&b.st, sec(MASTER), false).unwrap();
+    assert_eq!(credential_names(&b), ["one", "three", "two"]);
+}
+
+/// Re-review N2: the vault refuses a head below this device's mark, but here the local file is
+/// itself below the mark (an "open the older version" whose re-stamp save failed) and the head is
+/// newer than the local file. Re-seed would push the older local vault over it, so the status
+/// is a plain error with its own code and no Re-seed offer; a save of the vault on this device
+/// raises the local generation above the mark, and the next run merges the head.
+#[test]
+fn a_head_newer_than_a_local_vault_below_the_mark_is_not_offered_reseed() {
+    let hub = start_hub();
+    let (a, b) = (dev(), dev());
+    vault_create(&a.st, sec(MASTER), false).unwrap();
+    credential(&a, "one");
+    setup(&a, &hub, "a");
+    join(&b, &a, "b");
+    // A's handle ends up as after a failed re-stamp: unlocked, its file (still the base) below
+    // the device mark. Raising the mark and attaching the store again is that state without
+    // having to make a save fail.
+    {
+        let mut slot = a.st.vault.lock().unwrap();
+        let VaultState::Open(v) = &mut *slot else {
+            panic!("A has a vault");
+        };
+        let generation = v.generation().unwrap();
+        a.st.generations.raise(v.id(), generation + 10);
+        v.attach_generation_store(Arc::clone(&a.st.generations));
+    }
+    // B saves the vault once (a generation between A's file and A's mark) and pushes it
+    vault_unlock(&b.st, sec(MASTER), false).unwrap();
+    credential(&b, "two");
+    assert_eq!(now(&b).state, "ok");
+    let before = vault_file(&a);
+
+    let s = now(&a);
+    assert_eq!(s.state, "error", "{:?}", s.error);
+    assert_eq!(s.error.as_ref().unwrap().code, "vault_below_mark");
+    assert_ne!(s.state, "rolled_back", "no Re-seed offer");
+    assert_eq!(vault_file(&a), before, "nothing was adopted");
+    assert_eq!(credential_names(&a), ["one"]);
+
+    // any save on this device lifts the local file above the mark; the next run merges
+    credential(&a, "three");
+    let s = now(&a);
+    assert_eq!(s.state, "ok", "{:?}", s.error);
+    assert_eq!(credential_names(&a), ["one", "three", "two"]);
+}
+
+/// N1-N4 review, minor 2: a rolled-back outcome of an earlier run (vault or hub sequence) must not
+/// survive a later `vault_below_mark`, or the status would still offer Re-seed for it.
+#[test]
+fn vault_below_mark_after_a_rolled_back_run_offers_no_reseed() {
+    let hub = start_hub();
+    let a = dev();
+    setup(&a, &hub, "a");
+    let below_mark = || Err(SyncError::LocalFailed("vault_below_mark".to_owned()));
+    for earlier in [
+        Err(SyncError::LocalFailed("rolled_back".to_owned())),
+        Ok(Outcome::HubRolledBack { found: 1, seen: 2 }),
+    ] {
+        record(&a.st, earlier);
+        assert_eq!(build_status(&a.st).state, "rolled_back");
+        record(&a.st, below_mark());
+        let s = build_status(&a.st);
+        assert_eq!(s.state, "error", "{:?}", s.error);
+        assert_eq!(s.error.as_ref().unwrap().code, "vault_below_mark");
+    }
+}
+
+fn head_seq(hub: &Hub) -> Option<u64> {
+    HubClient::new(&HubConfig {
+        url: hub.url(),
+        secret: sec(HUB_SECRET),
+        ca_pem: None,
+    })
+    .unwrap()
+    .get_head()
+    .unwrap()
+    .map(|(seq, _)| seq)
+}
+
+#[test]
+fn a_vault_file_planted_behind_the_vault_is_never_pushed() {
+    let hub = start_hub();
+    let (a, b) = (dev(), dev());
+    vault_create(&a.st, sec(MASTER), false).unwrap();
+    credential(&a, "one");
+    let older = vault_file(&a);
+    setup(&a, &hub, "a");
+    join(&b, &a, "b");
+    credential(&a, "two");
+    assert_eq!(now(&a).state, "ok");
+    assert_eq!(head_seq(&hub), Some(2));
+
+    // a writer of the data folder puts the older copy back while fernjo runs
+    let path = a.data.join(fernjo_vault::FILE_NAME);
+    fs::write(&path, &older).unwrap();
+    let s = now(&a);
+    assert_eq!(s.state, "error");
+    assert_eq!(s.error.as_ref().unwrap().code, "changed_on_disk");
+    assert_eq!(codes(sync_reseed(&a.st)), "changed_on_disk");
+    assert_eq!(head_seq(&hub), Some(2), "nothing was pushed");
+    assert_eq!(vault_file(&a), older, "the planted file is left alone");
+    // the other device still gets the real vault
+    assert_eq!(now(&b).state, "ok");
+    vault_unlock(&b.st, sec(MASTER), false).unwrap();
+    assert_eq!(credential_names(&b), ["one", "two"]);
+
+    // set-up refuses a planted file too and uploads nothing
+    let (c, empty_hub) = (dev(), start_hub());
+    vault_create(&c.st, sec(MASTER), false).unwrap();
+    let first = vault_file(&c);
+    credential(&c, "x");
+    fs::write(c.data.join(fernjo_vault::FILE_NAME), &first).unwrap();
+    let r = sync_setup(
+        &c.st,
+        empty_hub.url(),
+        sec(HUB_SECRET),
+        None,
+        "c".to_owned(),
+    );
+    assert_eq!(codes(r), "changed_on_disk");
+    assert_eq!(head_seq(&empty_hub), None, "nothing was uploaded");
+    assert_eq!(sync_status(&c.st).unwrap().state, "off");
+}
+
 #[test]
 fn leave_removes_state_base_and_keychain_items_and_keeps_local_data() {
     let hub = start_hub();
@@ -1147,7 +1333,8 @@ fn a_vault_file_that_cannot_be_read_ends_the_run_and_is_never_replaced() {
     fs::write(a.data.join(fernjo_vault::FILE_NAME), b"garbage").unwrap();
     let s = now(&a);
     assert_eq!(s.state, "error");
-    assert_eq!(s.error.as_ref().unwrap().code, "vault_unreadable");
+    // the file is not the one the vault handle knows (since M11 review #30)
+    assert_eq!(s.error.as_ref().unwrap().code, "changed_on_disk");
     assert_eq!(
         fs::read(a.data.join(fernjo_vault::FILE_NAME)).unwrap(),
         b"garbage"
@@ -1192,6 +1379,7 @@ fn a_foreign_connections_file_refuses_an_apply_with_a_vault_change_before_any_va
         let vault = if merged {
             VaultChange::Merged {
                 head: vault_before.clone(),
+                base_generation: 0,
                 entries: Vec::new(),
             }
         } else {

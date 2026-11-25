@@ -10,7 +10,7 @@ use std::fmt;
 use fernjo_core::{CredentialId, NodeKind};
 use fernjo_vault::{
     EntrySummary, EntryUpdate, FILE_NAME as VAULT_FILE_NAME, NewEntry, Secret, SecretKind, Vault,
-    VaultError,
+    VaultError, VaultId,
 };
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -72,8 +72,7 @@ fn view(state: &AppState, vault: &VaultState) -> VaultStatus {
             },
             reason: None,
             path: Some(v.path().display().to_string()),
-            // A keychain error reads as "not stored".
-            auto_unlock: matches!(state.keystore.get(v.id()), Ok(Some(_))),
+            auto_unlock: auto_unlock_flag(state, v.id()),
             auto_unlock_issue: if v.is_unlocked() {
                 None
             } else {
@@ -92,6 +91,38 @@ fn view(state: &AppState, vault: &VaultState) -> VaultStatus {
             auto_unlock_issue: None,
         },
     }
+}
+
+/// Whether the key store holds this vault's key. Answered from `AppState.auto_unlock_known`;
+/// only a vault that is not known yet (another id, or an unavailable store at startup) asks the
+/// key store, and a keychain error reads as "not stored" without being remembered.
+fn auto_unlock_flag(state: &AppState, id: VaultId) -> bool {
+    let mut known = state
+        .auto_unlock_known
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((known_id, flag)) = *known
+        && known_id == id
+    {
+        return flag;
+    }
+    match state.keystore.get(id) {
+        Ok(found) => {
+            let flag = found.is_some();
+            *known = Some((id, flag));
+            flag
+        }
+        Err(_) => false,
+    }
+}
+
+/// Records what the key store holds for `id` after an operation that changed it (`None`: the
+/// operation failed, so the item is unknown again).
+fn note_auto_unlock(state: &AppState, id: VaultId, flag: Option<bool>) {
+    *state
+        .auto_unlock_known
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = flag.map(|f| (id, f));
 }
 
 fn clear_auto_unlock_issue(state: &AppState) {
@@ -120,7 +151,8 @@ pub(crate) fn with_vault<T>(
 /// operation succeeded, and the status then reports `autoUnlock: false`.
 fn remember_key(state: &AppState, vault: &Vault) {
     if let Ok(key) = vault.data_key() {
-        let _ = state.keystore.set(vault.id(), &key);
+        let stored = state.keystore.set(vault.id(), &key).is_ok();
+        note_auto_unlock(state, vault.id(), stored.then_some(true));
     }
 }
 
@@ -150,6 +182,8 @@ pub fn vault_create(
     }
     let mut vault = Vault::create_with(&path, &password, state.kdf)?;
     vault.attach_generation_store(std::sync::Arc::clone(&state.generations));
+    // a new vault has a new id, so there is no item for it yet
+    note_auto_unlock(state, vault.id(), Some(false));
     if remember {
         remember_key(state, &vault);
     }
@@ -202,12 +236,28 @@ pub fn vault_unlock_older(
 }
 
 /// Forgets the key in memory. Never touches the keychain item.
+/// Locks the vault. Unlike every other vault command this recovers from a poisoned mutex (a
+/// panic elsewhere while the guard was held): locking only drops the key, so it is safe on a
+/// possibly inconsistent `Vault`, and it must stay possible (the idle auto-lock uses it).
 pub fn vault_lock(state: &AppState) -> Result<VaultStatus, CommandError> {
-    with_vault(state, |v| {
-        v.lock();
-        Ok(())
-    })?;
-    vault_status(state)
+    // decrypted import secrets leave memory with the key; the pending lock comes first (lock
+    // order: pending, vault, store)
+    crate::import_commands::clear_secret_pending(state);
+    let mut guard = state
+        .vault
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    match &mut *guard {
+        VaultState::Open(v) => v.lock(),
+        VaultState::None => return Err(error("no_vault", "there is no vault yet")),
+        VaultState::Unusable { reason, path } => {
+            return Err(error(
+                "vault_unusable",
+                format!("the vault file {} cannot be used: {reason}", path.display()),
+            ));
+        }
+    }
+    Ok(view(state, &guard))
 }
 
 pub fn vault_change_password(
@@ -232,6 +282,7 @@ pub fn vault_set_auto_unlock(state: &AppState, enabled: bool) -> Result<VaultSta
         } else {
             state.keystore.delete(v.id())
         };
+        note_auto_unlock(state, v.id(), outcome.is_ok().then_some(enabled));
         outcome.map_err(|e| error("keychain_unavailable", e.message()))
     })?;
     vault_status(state)
@@ -699,6 +750,12 @@ mod tests {
     const PASS: &str = "SENTINEL-passphrase-4d2e8f";
     // the hub secret typed into the sync commands
     const SYNC_SECRET: &str = "SENTINEL-hubsecret-3e8d52";
+    // The RDP user and domain are connection fields (shown in the UI, saved in connections.json), so
+    // they are not in SENTINELS; they must still stay out of every RDP command response and session
+    // event (`no_response_contains_a_secret`) and out of the `Debug` output of the RDP connect plan
+    // (`rdp_plan_debug_hides_password_user_and_domain`; `AppState`'s own `Debug` prints neither).
+    const RDP_USER: &str = "SENTINEL-RDP-USER";
+    const RDP_DOMAIN: &str = "SENTINEL-RDP-DOMAIN";
     const SENTINELS: [&str; 6] = [MASTER, NEW_MASTER, PW, KEY, PASS, SYNC_SECRET];
     // Import and export: the passwords inside the mRemoteNG fixtures (stored encrypted in the
     // files), the custom file key and the backup password.
@@ -1137,6 +1194,66 @@ mod tests {
         // a current file: a plain unlock
         let status = vault_unlock_older(&st, sec(MASTER), false).unwrap();
         assert_eq!(status.state, "unlocked");
+    }
+
+    /// A key store that counts its `get` calls (the data key read).
+    #[derive(Default)]
+    struct GetCountingKeyStore {
+        inner: fernjo_vault::MemoryKeyStore,
+        gets: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl KeyStore for GetCountingKeyStore {
+        fn get(&self, id: VaultId) -> Result<Option<DataKey>, KeyStoreError> {
+            self.gets.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.inner.get(id)
+        }
+        fn set(&self, id: VaultId, key: &DataKey) -> Result<(), KeyStoreError> {
+            self.inner.set(id, key)
+        }
+        fn delete(&self, id: VaultId) -> Result<(), KeyStoreError> {
+            self.inner.delete(id)
+        }
+    }
+
+    #[test]
+    fn lock_and_status_do_not_read_the_data_key_from_the_keychain() {
+        use std::sync::atomic::Ordering;
+        let dir = tempfile::tempdir().unwrap();
+        let keys = GetCountingKeyStore::default();
+        let gets = std::sync::Arc::clone(&keys.gets);
+        let st = AppState::open_with_keystore(dir.path().to_path_buf(), Box::new(keys));
+        assert!(vault_create(&st, sec(MASTER), true).unwrap().auto_unlock);
+        assert!(vault_status(&st).unwrap().auto_unlock);
+        assert!(vault_lock(&st).unwrap().auto_unlock);
+        assert!(vault_status(&st).unwrap().auto_unlock);
+        assert_eq!(gets.load(Ordering::SeqCst), 0, "no keychain read");
+        // the flag follows the operations that change the item
+        assert!(vault_unlock(&st, sec(MASTER), false).unwrap().auto_unlock);
+        assert!(!vault_set_auto_unlock(&st, false).unwrap().auto_unlock);
+        assert!(!vault_lock(&st).unwrap().auto_unlock);
+        assert!(vault_unlock(&st, sec(MASTER), true).unwrap().auto_unlock);
+        assert_eq!(gets.load(Ordering::SeqCst), 0, "still no keychain read");
+    }
+
+    #[test]
+    fn a_restart_asks_the_keychain_at_most_once_and_the_status_reports_the_item() {
+        use std::sync::atomic::Ordering;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(fernjo_vault::FILE_NAME);
+        let vault = Vault::create_with(&path, &sec(MASTER), fernjo_vault::KdfParams::TEST).unwrap();
+        let keys = GetCountingKeyStore::default();
+        keys.inner
+            .set(vault.id(), &vault.data_key().unwrap())
+            .unwrap();
+        let gets = std::sync::Arc::clone(&keys.gets);
+        drop(vault);
+        let st = AppState::open_with_keystore(dir.path().to_path_buf(), Box::new(keys));
+        let after_startup = gets.load(Ordering::SeqCst);
+        assert_eq!(after_startup, 1, "the startup auto-unlock reads it once");
+        assert!(vault_status(&st).unwrap().auto_unlock);
+        assert!(vault_lock(&st).unwrap().auto_unlock);
+        assert_eq!(gets.load(Ordering::SeqCst), after_startup);
     }
 
     /// A key store whose reads fail (no Secret Service, locked keyring).
@@ -1706,7 +1823,7 @@ mod tests {
         commands::update_node(
             &w.st,
             node,
-            patch(json!({"port": 1, "credential": w.pw_id, "domain": "SENTINEL-domain"})),
+            patch(json!({"port": 1, "credential": w.pw_id, "domain": RDP_DOMAIN, "username": RDP_USER})),
         )
         .unwrap();
         let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1842,7 +1959,7 @@ mod tests {
                 j(crate::app_settings::set_vault_auto_lock(&w.st, Some(15)))
             }),
             entry("note_activity", |w| {
-                crate::app_settings::note_activity(&w.st);
+                let _ = crate::app_settings::note_activity(&w.st);
                 String::new()
             }),
             entry("open_session", |w| {
@@ -2083,6 +2200,55 @@ mod tests {
         }
     }
 
+    /// The `Debug` output of what the RDP path builds from a connection (the plan) holds neither
+    /// the password nor the user name nor the domain. M11 review #79: the old check formatted
+    /// `AppState`, whose `Debug` prints three fields and never a plan, so it could not fail.
+    #[test]
+    fn rdp_plan_debug_hides_password_user_and_domain() {
+        let w = world(true);
+        let node = commands::create_connection(
+            &w.st,
+            None,
+            None,
+            "rdp".into(),
+            fernjo_core::Protocol::Rdp,
+            "dc01.example.net".into(),
+        )
+        .unwrap()
+        .id
+        .unwrap();
+        commands::update_node(
+            &w.st,
+            node,
+            patch(json!({"credential": w.pw_id, "domain": RDP_DOMAIN, "username": RDP_USER})),
+        )
+        .unwrap();
+        let plan = crate::connect_plan::resolve_session(&w.st, node, false).unwrap();
+        let crate::connect_plan::Plan::Rdp(rdp) = &plan else {
+            panic!("an RDP connection resolves to an RDP plan: {plan:?}");
+        };
+        // the fixture really carries all three values, so absence below means redaction
+        {
+            use secrecy::ExposeSecret;
+            assert_eq!(rdp.username.as_deref(), Some(RDP_USER));
+            assert_eq!(rdp.domain.as_deref(), Some(RDP_DOMAIN));
+            let crate::connect_plan::RdpCredentialPlan::Ready(secret) = &rdp.credential else {
+                panic!("the vault is unlocked, the password must be ready");
+            };
+            assert_eq!(secret.expose_secret(), PW);
+        }
+        for text in [format!("{plan:?}"), format!("{rdp:?}")] {
+            assert!(
+                text.contains("dc01.example.net"),
+                "the host stays visible: {text}"
+            );
+            for s in [PW, RDP_USER, RDP_DOMAIN] {
+                assert!(!text.contains(s), "RDP plan Debug leaked {s}: {text}");
+            }
+            assert_no_sentinel("RDP plan Debug", &text);
+        }
+    }
+
     #[test]
     fn no_response_contains_a_secret() {
         for unlocked in [true, false] {
@@ -2107,6 +2273,11 @@ mod tests {
                     }
                 } else {
                     assert_no_sentinel(&label, &out);
+                }
+                if name.starts_with("rdp_") {
+                    for s in [RDP_USER, RDP_DOMAIN] {
+                        assert!(!out.contains(s), "{label} leaked {s}: {out}");
+                    }
                 }
                 // the saved tree, the Debug output of state and status never hold a secret
                 let tree = fs::read_to_string(w._dir.path().join(fernjo_core::FILE_NAME)).unwrap();
@@ -2244,13 +2415,14 @@ mod tests {
 
     /// Commands that need an `AppHandle` cannot be called without a running app, so they have
     /// no `table()` entry. Each is exempt for the stated reason: no secret type appears in
-    /// its signature (`choose_data_folder` returns `DataFolderInfo`, `restart_app` nothing).
+    /// its signature (`choose_data_folder` returns `DataFolderInfo`, `restart_app` nothing; it
+    /// takes the `Window`, which needs the running app just the same).
     const APP_HANDLE_EXEMPT: [(&str, &str); 6] = [
         (
             "choose_data_folder",
             "takes an AppHandle; returns only DataFolderInfo",
         ),
-        ("restart_app", "takes an AppHandle; returns nothing"),
+        ("restart_app", "takes the Window; returns nothing"),
         ("open_external_url", "takes an AppHandle; returns nothing"),
         (
             "import_pick",

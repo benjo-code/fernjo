@@ -33,10 +33,13 @@ export interface Tab {
    */
   fixedSize: boolean;
   /**
-   * RDP: the effective clipboard setting is on. Off until the connection has been read, so a
-   * tab never touches the local clipboard on a guess.
+   * RDP: the clipboard setting of the plan the session really uses is on, from its `rdpSettings`
+   * event (never from a separate read of the connection, M11 review #61). Off until that event,
+   * so a tab never touches the local clipboard on a guess.
    */
   clipboard: boolean;
+  /** RDP: the session's host, from the same event as `clipboard` (for the clipboard marker). */
+  host: string | null;
   title: string;
   state: SessionState;
   detail: string | null;
@@ -206,6 +209,7 @@ export class SessionStore {
       protocol,
       fixedSize: false,
       clipboard: false,
+      host: null,
       title,
       // a restored tab waits for the user; Rust sends the reason when its view attaches
       state: restore ? "disconnected" : "connecting",
@@ -476,17 +480,16 @@ export class SessionStore {
   }
 
   /**
-   * Reads the connection's effective RDP settings that the view needs: whether the resolution is
-   * fixed (on any failure the tab fits) and whether the clipboard is shared (on any failure not).
+   * Reads whether the connection's effective resolution is fixed (on any failure the tab fits).
+   * The clipboard setting is not read here: it comes with the session's `rdpSettings` event.
    */
   #loadMode(tab: Tab): void {
-    // a quick connect tab has no connection to read: fit, clipboard off
+    // a quick connect tab has no connection to read: it fits
     if (tab.nodeId === null) return;
     this.#api
       .getNode(tab.nodeId)
       .then((node) => {
         tab.fixedSize = node.rdpResolution?.effective?.mode === "fixed";
-        tab.clipboard = node.rdpClipboard?.effective ?? true;
       })
       // a failed read or an unexpected answer leaves the safe defaults
       .catch(() => {});
@@ -553,6 +556,9 @@ export class SessionStore {
       rt.remote?.setDesktop(e.width, e.height);
     } else if (e.kind === "clipboard") {
       rt.remote?.clipboard(e.text);
+    } else if (e.kind === "rdpSettings") {
+      tab.clipboard = e.clipboard;
+      tab.host = e.host;
     } else if (e.kind === "state") {
       tab.state = e.state;
       tab.detail = e.detail;

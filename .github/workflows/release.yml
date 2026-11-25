@@ -28,6 +28,12 @@ on:
 permissions:
   contents: read
 
+# The release tag, empty on a pull request (and on a manual run without a tag). The checkouts below
+# use the full `refs/tags/<tag>`: a bare tag name lets actions/checkout prefer a branch of the same
+# name (M11 review #70).
+env:
+  RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
 concurrency:
   group: release-${{ github.event.release.tag_name || inputs.tag || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -68,7 +74,7 @@ jobs:
       # Empty on a pull request, which then builds the merge commit.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          ref: ${{ env.RELEASE_TAG && format('refs/tags/{0}', env.RELEASE_TAG) || '' }}
           persist-credentials: false
 
       - name: Check that the tag matches the app version
@@ -201,7 +207,10 @@ jobs:
         shell: pwsh
         run: ./tools/smoke-installed.ps1 -Installers installers
 
+      # A pull request from a fork still builds (the dry run), but its installers are not offered for
+      # download from this repository's run page (M11 review #73).
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         with:
           name: installers-${{ matrix.name }}
           path: installers/
@@ -216,25 +225,40 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          ref: ${{ format('refs/tags/{0}', env.RELEASE_TAG) }}
           persist-credentials: false
 
+      # One folder per artifact (not merged into one), so one build job cannot overwrite another
+      # platform's installer. verify-installers.sh --artifacts refuses any other or extra artifact and
+      # any file outside its own platform's folder, then collects the five into installers/
+      # (M11 review #72).
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: installers-*
-          merge-multiple: true
-          path: installers
+          path: artifacts
 
       - name: Verify the installer set
         env:
           TAG: ${{ github.event.release.tag_name || inputs.tag }}
-        run: bash tools/verify-installers.sh "${TAG#v}" installers
+        run: bash tools/verify-installers.sh "${TAG#v}" --artifacts artifacts installers
 
       - name: Write SHA256SUMS
         run: (cd installers && sha256sum -- *) > SHA256SUMS
+
+      # Build provenance (M11 review #71): SHA256SUMS sits in the same mutable release as the
+      # installers, so it proves integrity, not origin. The attestation ties each installer to a run
+      # of this workflow and its ref (the tag for a release event); check it with `gh attestation
+      # verify <file> --repo benjo-code/fernjo --signer-workflow
+      # benjo-code/fernjo/.github/workflows/release.yml --source-ref refs/tags/<tag>` (see the
+      # README; the tag pin holds while tags cannot be moved).
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: installers/*
 
       - name: Attach the installers to the release
         env:

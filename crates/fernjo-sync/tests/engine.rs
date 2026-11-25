@@ -394,11 +394,15 @@ impl LocalPort for Port {
                     *guard = Vault::open(&self.vault_path()).unwrap();
                 }
             }
-            VaultChange::Merged { head, entries } => {
+            VaultChange::Merged {
+                head,
+                base_generation,
+                entries,
+            } => {
                 guard
                     .as_mut()
                     .ok_or_else(|| local_failed("no_vault"))?
-                    .adopt_merged(&head, entries)
+                    .adopt_merged(&head, base_generation, entries)
                     .map_err(|e| local_failed(e.code()))?;
             }
         }
@@ -566,6 +570,19 @@ fn nested(levels: usize) -> Tree {
 /// A head on `hub` sealed for `group` with `key` as envelope `seq`; the snapshot inside says
 /// `inner_seq` and holds `tree`.
 fn put_head(hub: &Hub, key: &SyncKey, group: GroupId, seq: u64, inner_seq: u64, tree: Tree) {
+    put_head_with_vault(hub, key, group, seq, inner_seq, tree, None);
+}
+
+/// Like `put_head`, with `vault` as the snapshot's vault file.
+fn put_head_with_vault(
+    hub: &Hub,
+    key: &SyncKey,
+    group: GroupId,
+    seq: u64,
+    inner_seq: u64,
+    tree: Tree,
+    vault: Option<Vec<u8>>,
+) {
     let snapshot = Snapshot {
         format_version: 1,
         group_id: group,
@@ -576,7 +593,7 @@ fn put_head(hub: &Hub, key: &SyncKey, group: GroupId, seq: u64, inner_seq: u64, 
         },
         written_at: DATE.to_owned(),
         connections: tree,
-        vault: None,
+        vault,
     };
     let bytes = seal(key, group, seq, &snapshot.to_plaintext().unwrap()).unwrap();
     let expected = match hub.client().get_head().unwrap() {
@@ -821,6 +838,108 @@ fn a_password_change_that_only_the_head_made_gives_no_finding_and_is_taken() {
 }
 
 #[test]
+fn a_head_with_an_older_vault_than_the_base_is_rolled_back_when_both_changed_it() {
+    let hub = start();
+    let (a, b) = pair_with_vault(&hub);
+    // an older genuine file of the group's vault (the old password, no entries)
+    let old = a.port.vault_file().unwrap();
+    a.port.change_password(NEW_PW);
+    a.port.add_entry("a1");
+    assert!(matches!(a.run(), Outcome::Synced { seq: 2, .. }));
+    b.port.unlock();
+    assert!(matches!(b.run(), Outcome::Synced { seq: 2, .. }));
+    // B edits its vault; a peer with the sync key plays the old file back as the head
+    b.port.add_entry("b-local");
+    let group = group_of(&a);
+    put_head_with_vault(
+        &hub,
+        &key_of(&a, group),
+        group,
+        3,
+        3,
+        Tree::new(),
+        Some(old),
+    );
+
+    let before = b.untouched();
+    let err = b.run_err();
+    assert_eq!(err, local_failed("rolled_back"));
+    b.assert_untouched(&before);
+    assert_eq!(head_seq(&hub), Some(3), "nothing was pushed");
+    assert_eq!(b.port.entry_names(), ["a1", "b-local"]);
+    assert!(b.port.file_opens_with(NEW_PW), "the current password stays");
+    assert!(!b.port.file_opens_with(PW));
+}
+
+/// Re-review N2: the head is below the base (V5), but the local file is older still (an older
+/// copy of the vault put back on this device and opened). A re-seed would push that older file
+/// over the head, so the refusal is `vault_below_mark`, not `rolled_back`.
+#[test]
+fn a_head_below_the_base_but_newer_than_the_local_file_is_vault_below_mark() {
+    let hub = start();
+    let (a, b) = pair_with_vault(&hub);
+    let oldest = a.port.vault_file().unwrap();
+    a.port.add_entry("a1");
+    let middle = a.port.vault_file().unwrap();
+    a.port.add_entry("a2");
+    assert!(matches!(a.run(), Outcome::Synced { seq: 2, .. }));
+    b.port.unlock();
+    assert!(matches!(b.run(), Outcome::Synced { seq: 2, .. }));
+    // B's base is the newest file; its own file goes back to the oldest and is opened again
+    b.port.force_vault_file(&oldest);
+    b.port.unlock();
+    let group = group_of(&a);
+    put_head_with_vault(
+        &hub,
+        &key_of(&a, group),
+        group,
+        3,
+        3,
+        Tree::new(),
+        Some(middle),
+    );
+
+    let before = b.untouched();
+    assert_eq!(b.run_err(), local_failed("vault_below_mark"));
+    b.assert_untouched(&before);
+    assert_eq!(head_seq(&hub), Some(3), "nothing was pushed");
+    assert!(b.port.entry_names().is_empty());
+
+    // Once the local file is above the head again (in the app one save does it, because the save
+    // goes above the device mark; this port has no mark, so two saves), the head below the base
+    // is refused again, now as `rolled_back`: Re-seed is offered, not a merge.
+    b.port.add_entry("b1");
+    b.port.add_entry("b2");
+    assert_eq!(b.run_err(), local_failed("rolled_back"));
+    assert_eq!(head_seq(&hub), Some(3), "nothing was pushed");
+}
+
+#[test]
+fn only_a_head_older_than_the_local_file_is_rolled_back() {
+    use fernjo_sync::engine::refused_head;
+    assert_eq!(refused_head(3, 4), local_failed("rolled_back"));
+    // the same generation is not older: a re-seed would drop the head's own saves
+    assert_eq!(refused_head(4, 4), local_failed("vault_below_mark"));
+    assert_eq!(refused_head(5, 4), local_failed("vault_below_mark"));
+}
+
+#[test]
+fn a_both_changed_merge_where_this_device_saved_more_often_than_the_head_still_merges() {
+    let hub = start();
+    let (a, b) = pair_with_vault(&hub);
+    b.port.unlock();
+    a.port.add_entry("from A");
+    assert!(matches!(a.run(), Outcome::Synced { seq: 2, .. }));
+    // B saved three times since the base, A once: the head's generation is below B's
+    for n in ["b1", "b2", "b3"] {
+        b.port.add_entry(n);
+    }
+    assert!(a.port.generation() < b.port.generation());
+    assert!(matches!(b.run(), Outcome::Synced { seq: 3, .. }));
+    assert_eq!(b.port.entry_names(), ["b1", "b2", "b3", "from A"]);
+}
+
+#[test]
 fn a_head_vault_equal_to_the_local_file_is_not_adopted() {
     let hub = start();
     let (a, b) = pair_with_vault(&hub);
@@ -1005,6 +1124,33 @@ fn a_push_conflict_restarts_the_run_and_a_notice_is_not_shown_twice() {
 }
 
 // ---- hub misbehaviour -------------------------------------------------------------------------
+
+#[test]
+fn a_head_at_the_highest_sequence_number_ends_runs_and_reseed_with_a_clean_error() {
+    let hub = start();
+    let (a, b) = pair(&hub);
+    // a peer pushes a valid head at u64::MAX
+    let group = group_of(&a);
+    put_head(
+        &hub,
+        &key_of(&a, group),
+        group,
+        u64::MAX,
+        u64::MAX,
+        Tree::new(),
+    );
+    assert!(matches!(b.run(), Outcome::NothingToDo));
+    assert_eq!(b.last_seq(), u64::MAX);
+
+    // nothing can go above it: no wrap to 0, no panic, nothing written or pushed
+    b.port.add_connection("local edit");
+    let before = b.untouched();
+    assert_eq!(b.run_err(), SyncError::SeqExhausted);
+    b.assert_untouched(&before);
+    assert_eq!(b.engine().reseed().unwrap_err(), SyncError::SeqExhausted);
+    b.assert_untouched(&before);
+    assert_eq!(head_seq(&hub), Some(u64::MAX));
+}
 
 #[test]
 fn a_stale_head_below_last_seq_is_hub_rolled_back_and_nothing_is_written() {
@@ -1208,6 +1354,28 @@ fn a_merged_result_over_64_mib_is_snapshot_too_large() {
     a.assert_untouched(&before);
     assert!(names(&a.port.tree()).is_empty(), "nothing was applied");
     assert_eq!(head_seq(&hub), Some(2));
+}
+
+#[test]
+fn reseed_and_setup_never_push_a_local_vault_file_that_does_not_parse() {
+    let hub = start();
+    let (a, _b) = pair(&hub);
+    *a.port.fake_vault.lock().unwrap() = Some(vec![1, 2, 3, 4]);
+    let before = a.untouched();
+    assert_eq!(
+        a.engine().reseed().unwrap_err(),
+        local_failed("vault_unreadable")
+    );
+    a.assert_untouched(&before);
+    assert_eq!(head_seq(&hub), Some(1), "nothing was pushed");
+
+    let fresh = start();
+    let c = Device::new("C", &fresh.url());
+    *c.port.fake_vault.lock().unwrap() = Some(vec![1, 2, 3, 4]);
+    let err = c.engine().setup(&cfg(&fresh.url()), "C").unwrap_err();
+    assert_eq!(err, local_failed("vault_unreadable"));
+    assert_eq!(head_seq(&fresh), None, "nothing was uploaded");
+    assert!(c.state.load().unwrap().is_none());
 }
 
 #[test]

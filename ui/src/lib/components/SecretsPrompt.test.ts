@@ -50,6 +50,7 @@ async function type(el: HTMLInputElement, text: string) {
 
 const keyboardInteractive: Secretish = {
   kind: "keyboardInteractive",
+  host: "bastion.example.org",
   name: "Two-factor",
   instructions: "Use your authenticator app.",
   prompts: [
@@ -123,4 +124,37 @@ test("username_prompt_sends_text", async () => {
   await type(field!, "alice");
   field!.form!.requestSubmit();
   expect(t.calls.answerPrompt).toEqual([["sid", 5, { kind: "text", value: "alice" }]]);
+});
+
+// M11 review #39: a server's keyboard-interactive round must not pass for fernjo's own prompt.
+test("keyboard_interactive_names_the_server_and_marks_its_text_as_the_servers", async () => {
+  // a server that copies fernjo's own vault prompt word for word
+  await setup({
+    kind: "keyboardInteractive",
+    host: "bastion.example.org",
+    name: "Vault locked",
+    instructions: "Enter your vault master password to continue.",
+    prompts: [{ text: "Master password: ", echo: false }],
+  });
+  const title = document.querySelector("h2")!.textContent!;
+  expect(title).not.toContain("Vault");
+  expect(title).toMatch(/server/i);
+  expect(document.body.textContent).toContain("The server bastion.example.org asks:");
+  // everything the server wrote, its field labels included, sits in the marked server block
+  const quoted = document.querySelector('[aria-label="Text from the server bastion.example.org"]')!;
+  expect(quoted).not.toBeNull();
+  expect(quoted.textContent).toContain("Vault locked");
+  expect(quoted.textContent).toContain("Enter your vault master password to continue.");
+  expect(quoted.querySelector("label")!.textContent).toContain("Master password");
+  expect(quoted.contains(inputs()[0]!)).toBe(true);
+  // fernjo's own buttons stay outside it
+  expect(quoted.contains(button("Continue"))).toBe(false);
+  // and fernjo says, in its own words, where the answer goes
+  expect(document.body.textContent).toContain("Your answer goes to bastion.example.org");
+});
+
+test("other_secret_prompts_have_no_server_block", async () => {
+  await setup({ kind: "password", user: "deploy", host: "files.example.org" });
+  expect(document.querySelector('[aria-label^="Text from the server"]')).toBeNull();
+  expect(document.body.textContent).not.toContain("asks:");
 });

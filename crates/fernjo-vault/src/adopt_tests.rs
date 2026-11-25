@@ -206,6 +206,32 @@ fn adopt_file_refuses_when_the_file_changed_on_disk() {
 }
 
 #[test]
+fn file_bytes_are_only_the_file_this_handle_knows() {
+    let dir = TempDir::new().unwrap();
+    let (mut vault, path) = new_vault(&dir);
+    let older = fs::read(&path).unwrap();
+    vault.add(new_entry("one")).unwrap();
+    let current = fs::read(&path).unwrap();
+    assert_eq!(vault.file_bytes().unwrap(), current);
+
+    // a writer of the data folder puts an older copy (or another vault's file) in place
+    fs::write(&path, &older).unwrap();
+    assert_eq!(code(vault.file_bytes()), "changed_on_disk");
+    let other_dir = TempDir::new().unwrap();
+    let (_other, other_path) = new_vault(&other_dir);
+    fs::write(&path, fs::read(other_path).unwrap()).unwrap();
+    assert_eq!(code(vault.file_bytes()), "changed_on_disk");
+    fs::write(&path, b"not a vault").unwrap();
+    assert_eq!(code(vault.file_bytes()), "changed_on_disk");
+    vault.lock();
+    assert_eq!(code(vault.file_bytes()), "changed_on_disk", "locked too");
+
+    // the file this handle wrote is back: readable again
+    fs::write(&path, &current).unwrap();
+    assert_eq!(vault.file_bytes().unwrap(), current);
+}
+
+#[test]
 fn adopt_file_with_a_lower_generation_is_rolled_back_and_writes_nothing() {
     let dir = TempDir::new().unwrap();
     let (mut vault, path) = new_vault(&dir);
@@ -259,7 +285,7 @@ fn adopt_merged_writes_a_generation_above_both_sides() {
     assert_eq!(remote.generation(), Some(4));
     let mut merged = remote.export_entries().unwrap();
     merged.push((uuid::Uuid::new_v4(), new_entry("local-only")));
-    local.adopt_merged(&head, merged).unwrap();
+    local.adopt_merged(&head, 1, merged).unwrap();
     assert_eq!(local.generation(), Some(5));
     assert_eq!(names(&local), ["a", "b", "c", "local-only"]);
 
@@ -272,8 +298,44 @@ fn adopt_merged_writes_a_generation_above_both_sides() {
     }
     assert_eq!(reopened.generation(), Some(8));
     let entries = reopened.export_entries().unwrap();
-    reopened.adopt_merged(&head, entries).unwrap();
+    // the head (4) is below this handle's floor (8) but not below the base (1): still a merge
+    reopened.adopt_merged(&head, 1, entries).unwrap();
     assert_eq!(reopened.generation(), Some(9));
+}
+
+#[test]
+fn adopt_merged_with_an_older_head_is_rolled_back_and_writes_nothing() {
+    // the review's probe: the head is an older genuine file of this vault (old password, one
+    // entry), played back after both sides changed the vault since the base
+    let dir = TempDir::new().unwrap();
+    let (mut vault, path) = new_vault(&dir);
+    let store = Arc::new(MemoryGenerationStore::default());
+    vault.attach_generation_store(store.clone());
+    vault.add(new_entry("a")).unwrap();
+    let old = fs::read(&path).unwrap();
+    vault.change_password(&secret(PW), &secret(PW2)).unwrap();
+    vault.add(new_entry("b")).unwrap();
+    let base_generation = vault.generation().unwrap();
+    vault.add(new_entry("c")).unwrap();
+    let before = fs::read(&path).unwrap();
+    let before_bak = fs::read(bak(&path)).unwrap();
+    let generation = vault.generation();
+    let merged = vault.export_entries().unwrap();
+
+    let err = vault
+        .adopt_merged(&old, base_generation, merged)
+        .unwrap_err();
+    assert_eq!(err.code(), "rolled_back");
+    assert_eq!(fs::read(&path).unwrap(), before, "the file is untouched");
+    assert_eq!(fs::read(bak(&path)).unwrap(), before_bak);
+    assert_eq!(vault.generation(), generation);
+    assert_eq!(store.get(vault.id()), generation, "the mark is unchanged");
+    assert_eq!(names(&vault), ["a", "b", "c"]);
+    // the current password still opens the file, the old one does not
+    let mut fresh = Vault::open(&path).unwrap().unwrap();
+    assert_eq!(code(fresh.unlock(&secret(PW))), "wrong_password");
+    fresh.unlock(&secret(PW2)).unwrap();
+    assert_eq!(names(&fresh), ["a", "b", "c"]);
 }
 
 #[test]
@@ -287,7 +349,7 @@ fn adopt_merged_takes_the_heads_password_wrap() {
     let head = fs::read(&remote_path).unwrap();
     let entries = remote.export_entries().unwrap();
 
-    local.adopt_merged(&head, entries).unwrap();
+    local.adopt_merged(&head, 1, entries).unwrap();
     assert!(local.is_unlocked());
     let mut fresh = Vault::open(&path).unwrap().unwrap();
     assert_eq!(code(fresh.unlock(&secret(PW))), "wrong_password");
@@ -307,10 +369,13 @@ fn adopt_merged_refuses_and_writes_nothing_on_bad_input() {
     let foreign = fs::read(&other_path).unwrap();
     let floor_before = local.generation();
 
-    assert_eq!(code(local.adopt_merged(&foreign, Vec::new())), "unreadable");
+    assert_eq!(
+        code(local.adopt_merged(&foreign, 0, Vec::new())),
+        "unreadable"
+    );
     let id = uuid::Uuid::new_v4();
     let dup = vec![(id, new_entry("x")), (id, new_entry("y"))];
-    assert_eq!(code(local.adopt_merged(&before, dup)), "duplicate_entry");
+    assert_eq!(code(local.adopt_merged(&before, 0, dup)), "duplicate_entry");
     assert_eq!(fs::read(&path).unwrap(), before);
     assert_eq!(fs::read(bak(&path)).unwrap(), before_bak);
     assert_eq!(local.generation(), floor_before);
@@ -318,7 +383,7 @@ fn adopt_merged_refuses_and_writes_nothing_on_bad_input() {
 
     local.lock();
     assert_eq!(
-        code(local.adopt_merged(&before, Vec::new())),
+        code(local.adopt_merged(&before, 0, Vec::new())),
         "vault_locked"
     );
     assert_eq!(fs::read(&path).unwrap(), before);
@@ -350,7 +415,10 @@ fn a_failed_adopt_merged_restores_header_floor_and_entries_and_a_later_save_work
     let on_disk = fs::read(&path).unwrap();
     let on_disk_bak = fs::read(bak(&path)).unwrap();
 
-    assert_eq!(code(local.adopt_merged(&head, merged)), "changed_on_disk");
+    assert_eq!(
+        code(local.adopt_merged(&head, 2, merged)),
+        "changed_on_disk"
+    );
     assert_eq!(fs::read(&path).unwrap(), on_disk, "the file is untouched");
     assert_eq!(fs::read(bak(&path)).unwrap(), on_disk_bak);
     assert_eq!(local.generation(), Some(2), "the generation is as before");

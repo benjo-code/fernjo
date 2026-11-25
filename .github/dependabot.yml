@@ -1,10 +1,14 @@
 version: 2
+# Version updates wait 7 days after a release (cooldown), so a compromised version has time to be
+# pulled before a PR proposes it; security updates are exempt and still arrive at once (M11 review #32).
 updates:
   - package-ecosystem: cargo
     directory: /
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "chore(deps)"
     # The Rust toolchain pin in rust-toolchain.toml is not managed by Dependabot; bump it by hand.
@@ -14,6 +18,8 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "chore(deps)"
     ignore:
@@ -26,5 +32,7 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "ci"

@@ -5,7 +5,15 @@
 //! (like `reveal_credential`); nothing here ever puts clipboard content into an error, a log or
 //! a `Debug` output.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
 use crate::commands::CommandError;
+
+/// How long a paste waits for the OS clipboard. A clipboard owner that never answers (a hung
+/// application, a stuck Wayland data source) must not hang the paste.
+pub const CLIPBOARD_READ_LIMIT: Duration = Duration::from_secs(2);
 
 /// Largest text a paste returns. A bigger clipboard is refused, not cut: half a paste into a
 /// shell is worse than none.
@@ -52,22 +60,72 @@ pub fn clipboard_read_text(clip: &dyn ClipboardText) -> Result<String, CommandEr
     Ok(text)
 }
 
+/// Clears the in-flight flag when the blocking read ends (or is dropped without running).
+struct InFlight(&'static AtomicBool);
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+/// Runs the blocking read off the async executor and gives up after `limit`: the answer is the
+/// fixed `clipboard_unavailable` error, never content. A read that really hangs keeps its
+/// blocking thread until the OS call returns, so at most one OS read runs at a time: while
+/// `in_flight` is set (an earlier read still hangs) a paste answers `clipboard_unavailable` at once
+/// instead of parking another thread in tokio's blocking pool, which sync, import, export and the
+/// native dialogs share.
+pub async fn read_with_limit(
+    clip: Arc<dyn ClipboardText + Send + Sync>,
+    limit: Duration,
+    in_flight: &'static AtomicBool,
+) -> Result<String, CommandError> {
+    let unavailable = || error("clipboard_unavailable", "The clipboard could not be read.");
+    if in_flight
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err(unavailable());
+    }
+    let guard = InFlight(in_flight);
+    let read = tokio::task::spawn_blocking(move || {
+        let _guard = guard;
+        clipboard_read_text(&*clip)
+    });
+    match tokio::time::timeout(limit, read).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) | Err(_) => Err(unavailable()),
+    }
+}
+
+/// Set while an OS clipboard read runs (see [`read_with_limit`]).
+static READ_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
 pub mod handlers {
     use crate::commands::CommandError;
 
-    /// A plain `async fn` command runs off the main thread; the read itself is a short blocking
-    /// call, so it goes through `spawn_blocking`.
+    /// A plain `async fn` command runs off the main thread; the read is a blocking call with a
+    /// time limit (`read_with_limit`).
     #[tauri::command]
     pub async fn clipboard_read_text() -> Result<String, CommandError> {
-        tauri::async_runtime::spawn_blocking(|| super::clipboard_read_text(&super::OsClipboard))
-            .await
-            .map_err(|_| CommandError::internal())?
+        super::read_with_limit(
+            std::sync::Arc::new(super::OsClipboard),
+            super::CLIPBOARD_READ_LIMIT,
+            &super::READ_IN_FLIGHT,
+        )
+        .await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    /// A flag of its own per test (the guard needs a `'static`, like the one in `handlers`).
+    fn fresh_flag() -> &'static AtomicBool {
+        Box::leak(Box::new(AtomicBool::new(false)))
+    }
 
     struct Fake(Result<String, String>);
     impl ClipboardText for Fake {
@@ -100,6 +158,102 @@ mod tests {
     fn an_unavailable_clipboard_is_clipboard_unavailable() {
         let err = clipboard_read_text(&Fake(Err("no display".into()))).unwrap_err();
         assert_eq!(err.code, "clipboard_unavailable");
+    }
+
+    struct Hanging;
+    impl ClipboardText for Hanging {
+        fn read_text(&self) -> Result<String, String> {
+            std::thread::sleep(Duration::from_millis(600));
+            Ok("SENTINEL-late".into())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_clipboard_read_that_hangs_ends_with_clipboard_unavailable() {
+        let err = read_with_limit(Arc::new(Hanging), Duration::from_millis(50), fresh_flag())
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, "clipboard_unavailable");
+        assert!(!err.message.contains("SENTINEL"));
+        assert!(!format!("{err:?}").contains("SENTINEL"));
+    }
+
+    #[tokio::test]
+    async fn a_prompt_read_passes_through_read_with_limit() {
+        let got = read_with_limit(
+            Arc::new(Fake(Ok("hi".into()))),
+            CLIPBOARD_READ_LIMIT,
+            fresh_flag(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(got, "hi");
+    }
+
+    /// Blocks every read until released and counts the reads that reached the OS call.
+    struct Stuck {
+        started: AtomicUsize,
+        release: std::sync::Mutex<bool>,
+        cv: std::sync::Condvar,
+    }
+    impl ClipboardText for Stuck {
+        fn read_text(&self) -> Result<String, String> {
+            self.started.fetch_add(1, Ordering::SeqCst);
+            let mut go = self.release.lock().unwrap();
+            while !*go {
+                go = self.cv.wait(go).unwrap();
+            }
+            Ok("late".into())
+        }
+    }
+    impl Stuck {
+        fn release(&self) {
+            *self.release.lock().unwrap() = true;
+            self.cv.notify_all();
+        }
+    }
+    /// Releases the stuck reads when the test ends, also on a failed assertion: the runtime's
+    /// drop waits for its blocking threads.
+    struct ReleaseOnDrop(Arc<Stuck>);
+    impl Drop for ReleaseOnDrop {
+        fn drop(&mut self) {
+            self.0.release();
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn only_one_os_read_is_in_flight_while_one_hangs() {
+        // M11 review #67: stuck reader threads must not pile up in the blocking pool
+        static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+        let stuck = Arc::new(Stuck {
+            started: AtomicUsize::new(0),
+            release: std::sync::Mutex::new(false),
+            cv: std::sync::Condvar::new(),
+        });
+        let _release = ReleaseOnDrop(stuck.clone());
+        for _ in 0..8 {
+            let err = read_with_limit(stuck.clone(), Duration::from_millis(30), &IN_FLIGHT)
+                .await
+                .unwrap_err();
+            assert_eq!(err.code, "clipboard_unavailable");
+        }
+        // give a wrongly started second reader time to show up
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(stuck.started.load(Ordering::SeqCst), 1);
+        // once the stuck read returns, the next paste reads again
+        stuck.release();
+        for _ in 0..100 {
+            if !IN_FLIGHT.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let got = read_with_limit(stuck.clone(), CLIPBOARD_READ_LIMIT, &IN_FLIGHT)
+            .await
+            .unwrap();
+        assert_eq!(got, "late");
+        assert_eq!(stuck.started.load(Ordering::SeqCst), 2);
+        assert!(!IN_FLIGHT.load(Ordering::SeqCst));
     }
 
     #[test]

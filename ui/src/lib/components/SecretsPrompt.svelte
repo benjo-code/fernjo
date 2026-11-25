@@ -28,12 +28,15 @@
     plain: boolean;
   }
 
-  // What the prompt asks for. Only labels live here, never an answer.
+  // What the prompt asks for. Only labels live here, never an answer. `server` is the host whose own
+  // text (`lead`, `detail` and the field labels) the prompt shows, so that text is marked as the
+  // server's and cannot pass for one of fernjo's own prompts; `null` when fernjo itself asks.
   const view = $derived.by(() => {
     switch (prompt.kind) {
       case "keyboardInteractive":
         return {
-          title: "Authentication required",
+          title: "Sign-in question from the server",
+          server: prompt.host,
           lead: prompt.name,
           detail: prompt.instructions,
           fields: prompt.prompts.map<Field>((p) => ({
@@ -44,6 +47,7 @@
       case "password":
         return {
           title: "Password required",
+          server: null,
           lead: `${prompt.user}@${prompt.host}`,
           detail: "",
           fields: [{ label: "Password", plain: false }],
@@ -51,6 +55,7 @@
       case "keyPassphrase":
         return {
           title: "Key passphrase required",
+          server: null,
           lead: "",
           detail: "The private key for this connection is protected by a passphrase.",
           fields: [{ label: "Key passphrase", plain: false }],
@@ -58,6 +63,7 @@
       case "username":
         return {
           title: "User name required",
+          server: null,
           lead: prompt.host,
           detail: "",
           fields: [{ label: "User name", plain: true }],
@@ -101,31 +107,55 @@
 </script>
 
 <PromptFrame bind:root title={view.title} icon="lock" {onkeydown}>
-  {#if view.lead}<p class="lead">{view.lead}</p>{/if}
-  {#if view.detail}<p class="body">{view.detail}</p>{/if}
+  {#if view.server === null}
+    {#if view.lead}<p class="lead">{view.lead}</p>{/if}
+    {#if view.detail}<p class="body">{view.detail}</p>{/if}
+  {:else}
+    <p class="asks">The server <span class="host">{view.server}</span> asks:</p>
+  {/if}
   <form onsubmit={submit}>
-    {#each view.fields as field, i (i)}
-      {#if field.plain}
-        <div class="field">
-          <label for="{uid}-f{i}">{field.label}</label>
-          <input
-            id="{uid}-f{i}"
-            type="text"
-            autocomplete="off"
-            spellcheck="false"
-            bind:value={values[i]}
-          />
-        </div>
-      {:else}
-        <PasswordField id="{uid}-f{i}" label={field.label} bind:value={values[i]!} />
+    <div
+      class="fields"
+      class:quoted={view.server !== null}
+      role={view.server === null ? undefined : "group"}
+      aria-label={view.server === null ? undefined : `Text from the server ${view.server}`}
+    >
+      {#if view.server !== null}
+        {#if view.lead}<p class="lead">{view.lead}</p>{/if}
+        {#if view.detail}<p class="body">{view.detail}</p>{/if}
       {/if}
-    {/each}
+      {@render inputs()}
+    </div>
+    {#if view.server !== null}
+      <p class="note">
+        Your answer goes to {view.server}. fernjo never asks for its vault password in this form.
+      </p>
+    {/if}
     <div class="actions">
       <button type="submit" class="btn primary">Continue</button>
       <button type="button" class="btn" onclick={cancel}>Cancel</button>
     </div>
   </form>
 </PromptFrame>
+
+{#snippet inputs()}
+  {#each view.fields as field, i (i)}
+    {#if field.plain}
+      <div class="field">
+        <label for="{uid}-f{i}">{field.label}</label>
+        <input
+          id="{uid}-f{i}"
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+          bind:value={values[i]}
+        />
+      </div>
+    {:else}
+      <PasswordField id="{uid}-f{i}" label={field.label} bind:value={values[i]!} />
+    {/if}
+  {/each}
+{/snippet}
 
 <style>
   .lead {
@@ -146,6 +176,37 @@
     display: flex;
     flex-direction: column;
     gap: 14px;
+  }
+
+  .fields {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  /* fernjo's own words: who asks */
+  .asks {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .host {
+    font-family: var(--font-mono);
+    font-weight: var(--weight-medium);
+  }
+
+  /* the server's words, quoted: a rule on the left, set in from fernjo's text */
+  .quoted {
+    padding-left: var(--space-4);
+    border-left: 2px solid var(--color-border-strong);
+  }
+
+  .note {
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+    line-height: 1.3;
+    overflow-wrap: anywhere;
   }
 
   .field {

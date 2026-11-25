@@ -3,8 +3,10 @@
 //!
 //! Locking: every method takes the locks in the app's order (pending, then vault, then store),
 //! copies out or writes, and releases them before it returns, so the engine never holds one while
-//! it talks to the hub. `read` copies the tree, the vault file bytes and, while the vault is
-//! unlocked, its entries and data key. `apply` takes the locks again and first compares the
+//! it talks to the hub. `read` copies the tree, the vault file bytes (`Vault::file_bytes`: only the
+//! file the vault handle last read or wrote, `changed_on_disk` for a file a data-folder writer put
+//! there, so such a file is never pushed) and, while the vault is unlocked, its entries and data
+//! key. `apply` takes the locks again and first compares the
 //! current tree and vault file bytes with what the merge was made from (`expected`): any
 //! difference is `local_changed` and nothing is written, so a user edit between "read" and
 //! "apply" is never overwritten (the engine starts the run over). The writes then go through
@@ -21,6 +23,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use fernjo_core::{Node, NodeKind, Store, Tree};
 use fernjo_sync::SyncError;
+use fernjo_sync::engine::refused_head;
 use fernjo_sync::ports::{LocalChange, LocalPort, LocalState, VaultChange, VaultSide};
 use fernjo_vault::{FILE_NAME as VAULT_FILE_NAME, Vault, VaultError, inspect_file};
 
@@ -36,6 +39,19 @@ fn local_failed(code: &str) -> SyncError {
 
 fn vault_failed(e: &VaultError) -> SyncError {
     SyncError::LocalFailed(e.code().to_owned())
+}
+
+/// A refusal of `adopt_file` or `adopt_merged`. A head the vault refused as `rolled_back` is
+/// reported through `refused_head`, which tells a head older than the local file (Re-seed keeps
+/// the newer local vault) from a local file that is itself below the device mark
+/// (`vault_below_mark`, no Re-seed). The open vault's generation is the local file's: memory
+/// changes only after a successful save. Both refusals need an unlocked vault; were it locked,
+/// the code stays `vault_below_mark`, which offers nothing that could push an older vault.
+fn adopt_failed(v: &Vault, e: &VaultError) -> SyncError {
+    match e {
+        VaultError::RolledBack { found, .. } => refused_head(*found, v.generation().unwrap_or(0)),
+        other => vault_failed(other),
+    }
 }
 
 /// A poisoned lock means a thread panicked while it held the data; refuse instead of reading it.
@@ -164,8 +180,14 @@ fn apply_vault(
 ) -> Result<(), SyncError> {
     match change {
         VaultChange::Keep => Ok(()),
-        VaultChange::Merged { head, entries } => match slot {
-            VaultState::Open(v) => v.adopt_merged(&head, entries).map_err(|e| vault_failed(&e)),
+        VaultChange::Merged {
+            head,
+            base_generation,
+            entries,
+        } => match slot {
+            VaultState::Open(v) => v
+                .adopt_merged(&head, base_generation, entries)
+                .map_err(|e| adopt_failed(v, &e)),
             VaultState::None => Err(local_failed("no_vault")),
             VaultState::Unusable { .. } => Err(local_failed("vault_unusable")),
         },
@@ -173,7 +195,7 @@ fn apply_vault(
             VaultState::Open(v) => {
                 let id = inspect_file(&bytes).map_err(|e| vault_failed(&e))?.id;
                 if id == v.id() {
-                    v.adopt_file(&bytes).map_err(|e| vault_failed(&e))
+                    v.adopt_file(&bytes).map_err(|e| adopt_failed(v, &e))
                 } else {
                     v.replace_with_file(&bytes).map_err(|e| vault_failed(&e))?;
                     forget_auto_unlock_issue(state);

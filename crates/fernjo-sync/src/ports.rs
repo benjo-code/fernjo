@@ -11,7 +11,8 @@ use crate::error::SyncError;
 
 /// The local vault as sync sees it. `entries` and `key` are present only while it is unlocked.
 pub struct VaultSide {
-    /// The `vault.fernjo` bytes as they are on disk.
+    /// The `vault.fernjo` bytes as the open vault last read or wrote them (`Vault::file_bytes`
+    /// refuses a file that changed on disk behind it).
     pub file: Vec<u8>,
     pub entries: Option<Vec<(EntryId, NewEntry)>>,
     pub key: Option<DataKey>,
@@ -60,9 +61,12 @@ pub enum VaultChange {
     /// file itself.
     Adopt(Vec<u8>),
     /// Both sides changed it: write `entries` with the header of `head` and a generation above
-    /// both (needs the vault unlocked).
+    /// both (needs the vault unlocked). `base_generation` is the generation of the base file (0
+    /// without one); `Vault::adopt_merged` refuses a head below it (`rolled_back`; a port reports
+    /// such a refusal through `engine::refused_head`, as it does for `adopt_file`).
     Merged {
         head: Vec<u8>,
+        base_generation: u64,
         entries: Vec<(EntryId, NewEntry)>,
     },
 }
@@ -72,7 +76,7 @@ impl fmt::Debug for VaultChange {
         match self {
             Self::Keep => f.write_str("Keep"),
             Self::Adopt(bytes) => write!(f, "Adopt({} bytes)", bytes.len()),
-            Self::Merged { head, entries } => {
+            Self::Merged { head, entries, .. } => {
                 write!(f, "Merged({} bytes, {} entries)", head.len(), entries.len())
             }
         }

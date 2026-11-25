@@ -392,7 +392,7 @@
 {/if}
 
 {#if importOpen}
-  <ImportDialog store={importer} {vault} tree={store} onclose={() => (importOpen = false)} />
+  <ImportDialog store={importer} {vault} tree={store} {sync} onclose={() => (importOpen = false)} />
 {/if}
 
 <style>
