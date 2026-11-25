@@ -34,9 +34,10 @@ const EVENT_QUEUE: usize = 8;
 const COMMAND_QUEUE: usize = 64;
 /// How long a resize waits for the display channel to become ready.
 const RESIZE_RETRY_LIMIT: Duration = Duration::from_secs(60);
-/// How long one step of a reactivation may wait for the server.
 /// How long one step of a write to the server may make no progress before the session is treated as
-/// lost. A server that stops reading must not keep a closing session alive.
+/// lost. A server that stops reading must not keep a closing session alive. The limit applies per
+/// piece of `WRITE_STEP` (4 KiB), not per frame: the slowest reader that is still tolerated takes
+/// 4096 B / 15 s, about 273 B/s.
 pub(crate) const WRITE_LIMIT: Duration = Duration::from_secs(15);
 
 /// A frame goes out in pieces of this size, each bounded by `WRITE_LIMIT`.
@@ -46,7 +47,8 @@ const WRITE_STEP: usize = 4096;
 /// limit: a peer that keeps reading, however slowly, never trips it, because every piece is
 /// bounded on its own. `FramedWrite::write_all` hides how far a write got, so the frame is cut
 /// into pieces and each piece gets the timer. Not cancel-safe, like `write_all` itself: after an
-/// error the connection is dropped.
+/// error the connection is dropped. `WRITE_LIMIT` is per piece of `WRITE_STEP`, so the slowest
+/// tolerated reader is about 273 B/s, whatever the frame size.
 async fn write_bounded<W: ironrdp_tokio::FramedWrite>(
     writer: &mut W,
     frame: &[u8],
@@ -60,6 +62,7 @@ async fn write_bounded<W: ironrdp_tokio::FramedWrite>(
     Ok(())
 }
 
+/// How long one step of a reactivation may wait for the server.
 const REACTIVATION_STEP_LIMIT: Duration = Duration::from_secs(30);
 /// How long a final event may wait for a consumer that has stopped reading.
 const DELIVER_LIMIT: Duration = Duration::from_secs(5);

@@ -49,7 +49,9 @@ pub(crate) const MIN_FRAGMENTED_UPDATE: u64 = 8 * 1024 * 1024;
 /// that proposes a size sizes it for one whole screen update (FreeRDP's server: 16 KiB per 64 x 64
 /// tile plus 16 KiB, which twice the raw frame covers for every desktop of at least 200 x 200), and
 /// the cap is as large as the two copies of the desktop the session already holds (the decoded
-/// image and the framebuffer).
+/// image and the framebuffer). The cap bounds the bytes counted, not the allocation: IronRDP's
+/// reassembly buffer grows by `Vec` doubling, so its capacity can reach about twice the cap (about
+/// 512 MiB at the largest desktop, 16 MiB at the 8 MiB floor).
 pub(crate) fn fragment_cap(width: u16, height: u16) -> u64 {
     (8 * u64::from(width) * u64::from(height)).max(MIN_FRAGMENTED_UPDATE)
 }
