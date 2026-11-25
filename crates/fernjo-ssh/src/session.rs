@@ -226,6 +226,7 @@ impl<H: client::Handler> KiTransport for HandleKi<'_, H> {
 async fn keyboard_interactive_attempt<H: client::Handler, I: Interaction>(
     handle: &mut client::Handle<H>,
     user: &str,
+    host: &str,
     interaction: &I,
     limit: Duration,
 ) -> Result<Outcome, SshError> {
@@ -234,7 +235,7 @@ async fn keyboard_interactive_attempt<H: client::Handler, I: Interaction>(
         handle.authenticate_keyboard_interactive_start(user, None),
     )
     .await?;
-    keyboard_interactive_rounds(first, &mut HandleKi { handle, limit }, interaction).await
+    keyboard_interactive_rounds(first, &mut HandleKi { handle, limit }, host, interaction).await
 }
 
 /// Works through the server's `InfoRequest` rounds. The user prompts (`interaction`) are never
@@ -242,6 +243,7 @@ async fn keyboard_interactive_attempt<H: client::Handler, I: Interaction>(
 async fn keyboard_interactive_rounds<T: KiTransport, I: Interaction>(
     first: KeyboardInteractiveAuthResponse,
     transport: &mut T,
+    host: &str,
     interaction: &I,
 ) -> Result<Outcome, SshError> {
     let mut response = first;
@@ -271,6 +273,7 @@ async fn keyboard_interactive_rounds<T: KiTransport, I: Interaction>(
                     Vec::new()
                 } else {
                     let round = KiRound {
+                        host: host.to_owned(),
                         name,
                         instructions,
                         prompts: prompts
@@ -513,7 +516,7 @@ async fn authenticate<H: client::Handler, I: Interaction>(
             // A cancelled prompt ends authentication, but the final error must still say that the
             // key was unreadable.
             Attempt::KeyboardInteractive => {
-                keyboard_interactive_attempt(handle, &user, interaction, limit)
+                keyboard_interactive_attempt(handle, &user, &params.host, interaction, limit)
                     .await
                     .map_err(|e| with_key_flag(e, key_unreadable))?
             }
@@ -935,7 +938,7 @@ mod tests {
             replies.push_back(KeyboardInteractiveAuthResponse::Success);
         }
         let mut transport = Scripted { replies, calls: 0 };
-        let out = keyboard_interactive_rounds(info(), &mut transport, &Answering).await;
+        let out = keyboard_interactive_rounds(info(), &mut transport, "h", &Answering).await;
         (out, transport.calls)
     }
 

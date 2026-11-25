@@ -204,7 +204,10 @@ pub enum PromptView {
         old: Vec<String>,
         new: String,
     },
+    /// A server's keyboard-interactive round. `host` is the connection's host, so the UI can say
+    /// who asks and mark the rest (`name`, `instructions`, the prompt texts) as the server's text.
     KeyboardInteractive {
+        host: String,
         name: String,
         instructions: String,
         prompts: Vec<KiPromptView>,
@@ -445,6 +448,8 @@ fn cap_chars(text: String, max: usize) -> String {
 /// safe way instead of sending answers to prompts the user never saw.
 fn cap_ki_round(round: KiRound) -> PromptView {
     PromptView::KeyboardInteractive {
+        // validated (`validate_host`, at most 255 bytes) before the connect, so it needs no cap
+        host: round.host,
         name: cap_chars(round.name, KI_MAX_PROMPT_CHARS),
         instructions: cap_chars(round.instructions, KI_MAX_INSTRUCTION_CHARS),
         prompts: round

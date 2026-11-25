@@ -31,6 +31,7 @@ fn ki_prompts_are_capped_in_count_and_length() {
     use fernjo_ssh::KiPrompt;
     let long = |n: usize| "\u{e9}".repeat(n);
     let round = KiRound {
+        host: "bastion.example.org".into(),
         name: long(5000),
         instructions: long(5000),
         prompts: (0..40)
@@ -41,6 +42,7 @@ fn ki_prompts_are_capped_in_count_and_length() {
             .collect(),
     };
     let PromptView::KeyboardInteractive {
+        host,
         name,
         instructions,
         prompts,
@@ -48,6 +50,8 @@ fn ki_prompts_are_capped_in_count_and_length() {
     else {
         panic!("wrong view");
     };
+    // M11 review #39: the view names the host, so the UI can say who asks
+    assert_eq!(host, "bastion.example.org");
     assert_eq!(prompts.len(), 16);
     assert_eq!(
         prompts[0].text.chars().count(),
@@ -61,6 +65,7 @@ fn ki_prompts_are_capped_in_count_and_length() {
     assert_eq!(name.chars().count(), 1025);
     // a round within the limits passes unchanged
     let small = KiRound {
+        host: "h".into(),
         name: "n".into(),
         instructions: "i".into(),
         prompts: vec![KiPrompt {
@@ -71,6 +76,7 @@ fn ki_prompts_are_capped_in_count_and_length() {
     assert_eq!(
         cap_ki_round(small),
         PromptView::KeyboardInteractive {
+            host: "h".into(),
             name: "n".into(),
             instructions: "i".into(),
             prompts: vec![KiPromptView {
@@ -196,6 +202,7 @@ async fn interaction_maps_answers_and_falls_back_to_the_safe_answer() {
     });
     assert_eq!(p.unwrap().expose_secret(), "pw");
     let round = KiRound {
+        host: "h".into(),
         name: "n".into(),
         instructions: "i".into(),
         prompts: vec![
@@ -378,6 +385,7 @@ fn session_event_json_has_no_secret_field() {
         UiEvent::Prompt {
             id: 3,
             prompt: PromptView::KeyboardInteractive {
+                host: "h".into(),
                 name: "n".into(),
                 instructions: "i".into(),
                 prompts: vec![KiPromptView {
@@ -432,6 +440,7 @@ fn session_event_json_has_no_secret_field() {
     assert_eq!(json[5]["prompt"]["old"], json!(["SHA256:a"]));
     assert_eq!(json[5]["prompt"]["new"], "SHA256:b");
     assert_eq!(json[6]["prompt"]["prompts"][0]["echo"], false);
+    assert_eq!(json[6]["prompt"]["host"], "h");
     assert_eq!(
         json[7]["prompt"],
         json!({"kind": "password", "user": "u", "host": "h"})

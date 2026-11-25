@@ -457,6 +457,8 @@ export type Prompt =
     }
   | {
       kind: "keyboardInteractive";
+      /** The host the connection goes to: the prompt names it as the one asking. */
+      host: string;
       name: string;
       instructions: string;
       prompts: { text: string; echo: boolean }[];

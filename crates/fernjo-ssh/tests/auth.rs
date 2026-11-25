@@ -206,6 +206,10 @@ async fn keyboard_interactive_round_is_shown_and_answered() {
     assert_eq!(ia.ki_calls(), 1);
     assert_eq!(ia.password_calls(), 0);
     let rounds = ia.ki_rounds();
+    assert_eq!(
+        rounds[0].host, s.host,
+        "the round names the host it comes from"
+    );
     assert_eq!(rounds[0].prompts.len(), 1);
     assert!(!rounds[0].prompts[0].echo);
     assert!(!rounds[0].prompts[0].text.is_empty());

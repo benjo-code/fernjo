@@ -54,6 +54,9 @@ pub struct KiPrompt {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KiRound {
+    /// The host the connection goes to (as configured), so the prompt can name who asks: the rest
+    /// of the round is the server's own text.
+    pub host: String,
     pub name: String,
     pub instructions: String,
     pub prompts: Vec<KiPrompt>,
