@@ -376,7 +376,8 @@ publish_goes_through_a_draft() {
   local steps
   steps="$(grep -E '^ *- name: (Check that the release is a draft|Attach the installers to the draft|Publish the release)$' "$release_yml" | sed 's/^ *- name: //')"
   ! grep -Eq '^  release:' "$release_yml" &&
-    grep -Fq "startsWith(github.ref, 'refs/tags/v')" "$release_yml" &&
+    grep -Fxq "    if: github.event_name != 'pull_request' && startsWith(github.ref, 'refs/tags/v')" "$release_yml" &&
+    awk '/^on:/ { o = 1; next } o && /^[^ ]/ { o = 0 } o && /^  push:/ { p = 1; next } p && /^    tags:/ { t = 1; next } t && /^      - .v\*.$/ { f = 1 } END { exit !f }' "$release_yml" &&
     [ "$steps" = "$(printf '%s\n' 'Check that the release is a draft' 'Attach the installers to the draft' 'Publish the release')" ] &&
     [ "$(grep -E '^ *- name: ' "$release_yml" | tail -n 1 | sed 's/^ *- name: //')" = 'Publish the release' ]
 }
