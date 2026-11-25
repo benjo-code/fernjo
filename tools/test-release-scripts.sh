@@ -446,6 +446,49 @@ containerfile_has_the_oci_labels() {
 }
 assert_true hub_containerfile_has_the_oci_labels containerfile_has_the_oci_labels
 
+# --- smoke-hub-image.sh ---
+smoke_hub="$root/tools/smoke-hub-image.sh"
+assert_exit smoke_hub_image_needs_an_image 2 "usage" bash "$smoke_hub"
+assert_exit smoke_hub_image_refuses_an_unknown_engine 2 "ENGINE" env ENGINE=rm bash "$smoke_hub" some/image:tag
+
+# A stub engine first on PATH logs every call; `run` behaves as $STUB_RUN says. The script's
+# trap must still remove the volume and the container it named.
+fake_engine() {
+  local bin="$tmp/fake-bin-$1"
+  mkdir -p "$bin"
+  cat >"$bin/docker" <<STUB
+#!/usr/bin/env bash
+echo "\$*" >>"$tmp/fake-$1.log"
+case "\$1" in
+  run) $2 ;;
+esac
+exit 0
+STUB
+  chmod +x "$bin/docker"
+  echo "$bin"
+}
+fake_bin="$(fake_engine fails 'exit 1')"
+assert_exit smoke_hub_image_fails_naming_the_step_with_a_fake_engine 1 "FAILED at step: init" \
+  env PATH="$fake_bin:$PATH" bash "$smoke_hub" some/image:tag
+smoke_cleans_up_what_it_created() {
+  local log="$tmp/fake-fails.log" vol
+  vol="$(sed -n 's/^volume create \(fernjo-hub-smoke-.*\)$/\1/p' "$log" | head -n 1)"
+  [ -n "$vol" ] &&
+    grep -Fxq "volume rm -f $vol" "$log" &&
+    grep -Fxq "rm -f $vol" "$log"
+}
+assert_true smoke_hub_image_cleans_up_the_volume_and_container_after_a_failure smoke_cleans_up_what_it_created
+
+# A hanging engine call is cut off by the timeout, and the cleanup still runs.
+hang_bin="$(fake_engine hangs 'exec sleep 30')"
+assert_exit smoke_hub_image_times_out_a_hanging_engine_call 1 "FAILED at step: init" \
+  env PATH="$hang_bin:$PATH" SMOKE_TIMEOUT=1 bash "$smoke_hub" some/image:tag
+smoke_cleans_up_after_a_hang() {
+  grep -Eq '^volume rm -f fernjo-hub-smoke-' "$tmp/fake-hangs.log" &&
+    grep -Eq '^rm -f fernjo-hub-smoke-' "$tmp/fake-hangs.log"
+}
+assert_true smoke_hub_image_cleans_up_after_a_hang smoke_cleans_up_after_a_hang
+
 # --- third-party-notices.mjs (pure checks through --fixture; the full run needs cargo-about) ---
 notices="$root/tools/third-party-notices.mjs"
 
