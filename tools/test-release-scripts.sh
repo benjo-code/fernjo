@@ -234,12 +234,43 @@ YML
 assert_exit check_workflows_accepts_the_ordinary_block_forms 0 "" bash "$check_workflows" "$d"
 
 # --- check-release-version.sh ---
-check_version="$root/tools/check-release-version.sh"
-cur="$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version *= *"\(.*\)"/\1/p;}' "$root/Cargo.toml" | head -n 1)"
+# The real tree pins the hub image to the next release while Cargo.toml still has the current one
+# (between the milestone merge and the release bump), so the cases run on fixture trees. The script
+# finds its root from its own location, so each fixture holds a copy of it.
+# version_fixture <dir> <cargo ver> <package ver> <compose tag> <quadlet tag>
+version_fixture() {
+  local d="$1"
+  mkdir -p "$d/tools" "$d/crates/fernjo-hub/deploy"
+  cp "$root/tools/check-release-version.sh" "$d/tools/"
+  printf '[workspace.package]\nversion = "%s"\n' "$2" >"$d/Cargo.toml"
+  printf '{\n  "name": "x",\n  "version": "%s"\n}\n' "$3" >"$d/package.json"
+  printf 'services:\n  hub:\n    image: ghcr.io/benjo-code/fernjo-hub:%s\n' "$4" >"$d/crates/fernjo-hub/deploy/compose.yaml"
+  printf '[Container]\nImage=ghcr.io/benjo-code/fernjo-hub:%s\n' "$5" >"$d/crates/fernjo-hub/deploy/fernjo-hub.container"
+}
+version_fixture "$tmp/ver-ok" 1.2.3 1.2.3 1.2.3 1.2.3
+check_version="$tmp/ver-ok/tools/check-release-version.sh"
 
-assert_exit check_release_version_accepts_the_matching_tag 0 "" bash "$check_version" "v$cur"
-assert_exit check_release_version_accepts_the_tag_without_v 0 "" bash "$check_version" "$cur"
+assert_exit check_release_version_accepts_the_matching_tag 0 "" bash "$check_version" "v1.2.3"
+assert_exit check_release_version_accepts_the_tag_without_v 0 "" bash "$check_version" "1.2.3"
+assert_exit check_release_version_accepts_when_all_four_agree 0 "compose.yaml" bash "$check_version" "v1.2.3"
 assert_exit check_release_version_rejects_a_mismatching_tag 1 "does not match" bash "$check_version" "v99.99.99"
+version_fixture "$tmp/ver-compose" 1.2.3 1.2.3 1.2.2 1.2.3
+assert_exit check_release_version_rejects_a_stale_compose_pin 1 "compose.yaml pins image tag '1.2.2'" \
+  bash "$tmp/ver-compose/tools/check-release-version.sh" v1.2.3
+version_fixture "$tmp/ver-quadlet" 1.2.3 1.2.3 1.2.3 1.2.2
+assert_exit check_release_version_rejects_a_stale_quadlet_pin 1 "fernjo-hub.container pins image tag '1.2.2'" \
+  bash "$tmp/ver-quadlet/tools/check-release-version.sh" v1.2.3
+version_fixture "$tmp/ver-missing" 1.2.3 1.2.3 1.2.3 1.2.3
+printf 'services:\n  hub: {}\n' >"$tmp/ver-missing/crates/fernjo-hub/deploy/compose.yaml"
+assert_exit check_release_version_rejects_a_missing_pin_line 1 "compose.yaml has no hub image line" \
+  bash "$tmp/ver-missing/tools/check-release-version.sh" v1.2.3
+version_fixture "$tmp/ver-nofile" 1.2.3 1.2.3 1.2.3 1.2.3
+rm "$tmp/ver-nofile/crates/fernjo-hub/deploy/fernjo-hub.container"
+assert_exit check_release_version_rejects_a_missing_deploy_file 1 "fernjo-hub.container is missing" \
+  bash "$tmp/ver-nofile/tools/check-release-version.sh" v1.2.3
+version_fixture "$tmp/ver-cargo" 1.2.2 1.2.3 1.2.3 1.2.3
+assert_exit check_release_version_still_rejects_a_stale_cargo_version 1 "Cargo.toml" \
+  bash "$tmp/ver-cargo/tools/check-release-version.sh" v1.2.3
 
 marker="$tmp/pwned"
 assert_exit check_release_version_rejects_a_tag_with_shell_metacharacters 1 "not a valid" \
