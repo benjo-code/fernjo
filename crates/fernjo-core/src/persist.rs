@@ -47,6 +47,11 @@ pub enum Notice {
 pub struct Loaded {
     pub tree: Tree,
     pub notice: Option<Notice>,
+    /// SHA-256 of the exact bytes of the main file that `tree` was parsed from (M11 review #34);
+    /// `None` when the tree did not come from the main file (it was missing or the backup was
+    /// used). The store takes its change-detection fingerprint from here instead of reading the
+    /// file a second time, so a file replaced between two reads cannot pair tree A with bytes B.
+    pub fingerprint: Option<Fingerprint>,
 }
 
 #[derive(Serialize)]
@@ -180,7 +185,7 @@ fn migrate(value: FileIn, from: u32) -> FileIn {
 
 enum Read {
     Missing,
-    Parsed(Tree),
+    Parsed(Tree, Fingerprint),
     Bad(String),
 }
 
@@ -205,10 +210,12 @@ fn read_file(path: &Path) -> Result<Read, LoadError> {
             });
         }
     };
+    // the fingerprint covers the raw bytes, exactly what was read (BOM included)
+    let fingerprint: Fingerprint = Sha256::digest(&bytes).into();
     // editors on Windows may add a UTF-8 byte order mark; that is not corruption
     let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
     match parse_document_bytes(bytes) {
-        Ok(tree) => Ok(Read::Parsed(tree)),
+        Ok(tree) => Ok(Read::Parsed(tree, fingerprint)),
         Err(DocumentError::NewerSchema { found, supported }) => Err(LoadError::NewerSchema {
             found,
             supported,
@@ -316,17 +323,32 @@ fn drop_invalid_rdp_settings(settings: &mut Settings) {
 /// Writes nothing except renaming a corrupt main file out of the way after a successful
 /// fallback.
 pub fn load(path: &Path) -> Result<Loaded, LoadError> {
+    load_with(path, &mut || {})
+}
+
+/// [`load`] with a hook that runs right after the main file was read (tests change the file
+/// there to prove the fingerprint belongs to the bytes that were parsed).
+pub(crate) fn load_with(
+    path: &Path,
+    after_main_read: &mut dyn FnMut(),
+) -> Result<Loaded, LoadError> {
     let bak = with_suffix(path, ".bak");
-    let reason = match read_file(path)? {
-        Read::Parsed(tree) => {
-            return Ok(Loaded { tree, notice: None });
+    let main = read_file(path)?;
+    after_main_read();
+    let reason = match main {
+        Read::Parsed(tree, fingerprint) => {
+            return Ok(Loaded {
+                tree,
+                notice: None,
+                fingerprint: Some(fingerprint),
+            });
         }
         Read::Missing => None,
         Read::Bad(reason) => Some(reason),
     };
 
     match read_file(&bak)? {
-        Read::Parsed(tree) => {
+        Read::Parsed(tree, _) => {
             let bad_file = if reason.is_some() {
                 let target = move_aside(path).map_err(|e| LoadError::Unreadable {
                     path: path.to_path_buf(),
@@ -339,12 +361,14 @@ pub fn load(path: &Path) -> Result<Loaded, LoadError> {
             Ok(Loaded {
                 tree,
                 notice: Some(Notice::RestoredFromBackup { bad_file }),
+                fingerprint: None,
             })
         }
         Read::Missing => match reason {
             None => Ok(Loaded {
                 tree: Tree::new(),
                 notice: None,
+                fingerprint: None,
             }),
             Some(reason) => Err(LoadError::Unreadable {
                 path: path.to_path_buf(),

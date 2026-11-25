@@ -31,7 +31,9 @@ fn adopted_fingerprint(path: &Path, loaded: &persist::Loaded) -> Option<Fingerpr
     {
         return Some(fingerprint);
     }
-    persist::fingerprint(path).ok().flatten()
+    // the hash of the bytes the tree was parsed from, never a second read of the file (M11
+    // review #34): a file replaced in between would pair this tree with other bytes
+    loaded.fingerprint
 }
 
 impl Store {
@@ -39,8 +41,14 @@ impl Store {
     /// only created by the first mutation. After a restore from `.bak` the main file is
     /// written again (best effort: a read-only folder still lets the tree be viewed).
     pub fn open(dir: &Path) -> Result<Opened, LoadError> {
+        Self::open_with(dir, &mut || {})
+    }
+
+    /// [`Store::open`] with a hook that runs right after the file was read (tests change the
+    /// file there).
+    fn open_with(dir: &Path, after_read: &mut dyn FnMut()) -> Result<Opened, LoadError> {
         let path = dir.join(FILE_NAME);
-        let loaded = persist::load(&path)?;
+        let loaded = persist::load_with(&path, after_read)?;
         let fingerprint = adopted_fingerprint(&path, &loaded);
         Ok(Opened {
             store: Store {
@@ -63,7 +71,11 @@ impl Store {
     /// Re-reads the file and makes it current, adopting what another program or device wrote.
     /// On an error nothing changes (a later save is still refused while the file differs).
     pub fn reload(&mut self) -> Result<Option<Notice>, LoadError> {
-        let loaded = persist::load(&self.path)?;
+        self.reload_with(&mut || {})
+    }
+
+    fn reload_with(&mut self, after_read: &mut dyn FnMut()) -> Result<Option<Notice>, LoadError> {
+        let loaded = persist::load_with(&self.path, after_read)?;
         self.fingerprint = adopted_fingerprint(&self.path, &loaded);
         self.tree = loaded.tree;
         Ok(loaded.notice)
@@ -785,6 +797,59 @@ mod tests {
         assert_eq!(names, ["external"]);
         store.create_folder(None, None, "after").unwrap();
         assert_eq!(open(dir.path()).tree(), store.tree());
+    }
+
+    #[test]
+    fn open_takes_the_fingerprint_from_the_bytes_it_parsed() {
+        use sha2::{Digest, Sha256};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        let parsed = external_document("parsed");
+        fs::write(&path, &parsed).unwrap();
+        // a sync tool replaces the file after the store read it, before it could fingerprint it
+        let mut opened = Store::open_with(dir.path(), &mut || {
+            fs::write(&path, external_document("replaced")).unwrap();
+        })
+        .unwrap();
+        let hash: Fingerprint = Sha256::digest(&parsed).into();
+        assert_eq!(opened.store.fingerprint, Some(hash));
+        // the replaced file is noticed instead of being overwritten
+        assert!(matches!(
+            opened.store.create_folder(None, None, "x").unwrap_err(),
+            StoreError::ChangedOnDisk
+        ));
+    }
+
+    #[test]
+    fn reload_takes_the_fingerprint_from_the_bytes_it_parsed() {
+        use sha2::{Digest, Sha256};
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = open(dir.path());
+        store.create_folder(None, None, "one").unwrap();
+        let parsed = external_document("parsed");
+        fs::write(store.path(), &parsed).unwrap();
+        let path = store.path().to_path_buf();
+        store
+            .reload_with(&mut || fs::write(&path, external_document("replaced")).unwrap())
+            .unwrap();
+        let hash: Fingerprint = Sha256::digest(&parsed).into();
+        assert_eq!(store.fingerprint, Some(hash));
+        assert!(matches!(
+            store.create_folder(None, None, "x").unwrap_err(),
+            StoreError::ChangedOnDisk
+        ));
+    }
+
+    #[test]
+    fn the_fingerprint_covers_the_raw_bytes_including_a_byte_order_mark() {
+        use sha2::{Digest, Sha256};
+        let dir = tempfile::tempdir().unwrap();
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend(external_document("bom"));
+        fs::write(dir.path().join(FILE_NAME), &bytes).unwrap();
+        let opened = Store::open(dir.path()).unwrap();
+        let hash: Fingerprint = Sha256::digest(&bytes).into();
+        assert_eq!(opened.store.fingerprint, Some(hash));
     }
 
     #[test]
