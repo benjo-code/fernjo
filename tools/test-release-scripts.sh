@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for tools/check-workflows.sh, check-release-version.sh, verify-installers.sh and third-party-notices.mjs.
+# Tests for tools/check-workflows.sh, check-release-version.sh, hub-image-tags.sh, verify-installers.sh and third-party-notices.mjs.
 # Plain bash, temp dirs, no dependencies. Run: bash tools/test-release-scripts.sh
 set -uo pipefail
 
@@ -234,12 +234,43 @@ YML
 assert_exit check_workflows_accepts_the_ordinary_block_forms 0 "" bash "$check_workflows" "$d"
 
 # --- check-release-version.sh ---
-check_version="$root/tools/check-release-version.sh"
-cur="$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version *= *"\(.*\)"/\1/p;}' "$root/Cargo.toml" | head -n 1)"
+# The real tree pins the hub image to the next release while Cargo.toml still has the current one
+# (between the milestone merge and the release bump), so the cases run on fixture trees. The script
+# finds its root from its own location, so each fixture holds a copy of it.
+# version_fixture <dir> <cargo ver> <package ver> <compose tag> <quadlet tag>
+version_fixture() {
+  local d="$1"
+  mkdir -p "$d/tools" "$d/crates/fernjo-hub/deploy"
+  cp "$root/tools/check-release-version.sh" "$d/tools/"
+  printf '[workspace.package]\nversion = "%s"\n' "$2" >"$d/Cargo.toml"
+  printf '{\n  "name": "x",\n  "version": "%s"\n}\n' "$3" >"$d/package.json"
+  printf 'services:\n  hub:\n    image: ghcr.io/benjo-code/fernjo-hub:%s\n' "$4" >"$d/crates/fernjo-hub/deploy/compose.yaml"
+  printf '[Container]\nImage=ghcr.io/benjo-code/fernjo-hub:%s\n' "$5" >"$d/crates/fernjo-hub/deploy/fernjo-hub.container"
+}
+version_fixture "$tmp/ver-ok" 1.2.3 1.2.3 1.2.3 1.2.3
+check_version="$tmp/ver-ok/tools/check-release-version.sh"
 
-assert_exit check_release_version_accepts_the_matching_tag 0 "" bash "$check_version" "v$cur"
-assert_exit check_release_version_accepts_the_tag_without_v 0 "" bash "$check_version" "$cur"
+assert_exit check_release_version_accepts_the_matching_tag 0 "" bash "$check_version" "v1.2.3"
+assert_exit check_release_version_accepts_the_tag_without_v 0 "" bash "$check_version" "1.2.3"
+assert_exit check_release_version_accepts_when_all_four_agree 0 "compose.yaml" bash "$check_version" "v1.2.3"
 assert_exit check_release_version_rejects_a_mismatching_tag 1 "does not match" bash "$check_version" "v99.99.99"
+version_fixture "$tmp/ver-compose" 1.2.3 1.2.3 1.2.2 1.2.3
+assert_exit check_release_version_rejects_a_stale_compose_pin 1 "compose.yaml pins image tag '1.2.2'" \
+  bash "$tmp/ver-compose/tools/check-release-version.sh" v1.2.3
+version_fixture "$tmp/ver-quadlet" 1.2.3 1.2.3 1.2.3 1.2.2
+assert_exit check_release_version_rejects_a_stale_quadlet_pin 1 "fernjo-hub.container pins image tag '1.2.2'" \
+  bash "$tmp/ver-quadlet/tools/check-release-version.sh" v1.2.3
+version_fixture "$tmp/ver-missing" 1.2.3 1.2.3 1.2.3 1.2.3
+printf 'services:\n  hub: {}\n' >"$tmp/ver-missing/crates/fernjo-hub/deploy/compose.yaml"
+assert_exit check_release_version_rejects_a_missing_pin_line 1 "compose.yaml has no hub image line" \
+  bash "$tmp/ver-missing/tools/check-release-version.sh" v1.2.3
+version_fixture "$tmp/ver-nofile" 1.2.3 1.2.3 1.2.3 1.2.3
+rm "$tmp/ver-nofile/crates/fernjo-hub/deploy/fernjo-hub.container"
+assert_exit check_release_version_rejects_a_missing_deploy_file 1 "fernjo-hub.container is missing" \
+  bash "$tmp/ver-nofile/tools/check-release-version.sh" v1.2.3
+version_fixture "$tmp/ver-cargo" 1.2.2 1.2.3 1.2.3 1.2.3
+assert_exit check_release_version_still_rejects_a_stale_cargo_version 1 "Cargo.toml" \
+  bash "$tmp/ver-cargo/tools/check-release-version.sh" v1.2.3
 
 marker="$tmp/pwned"
 assert_exit check_release_version_rejects_a_tag_with_shell_metacharacters 1 "not a valid" \
@@ -253,6 +284,48 @@ if [ -e "$marker" ]; then
 else
   echo "ok   check_release_version_does_not_evaluate_the_tag"
 fi
+
+# --- hub-image-tags.sh ---
+hub_tags="$root/tools/hub-image-tags.sh"
+
+# assert_lines <name> <expected output, one line each> <command...>: exit 0 and the output equals the lines exactly.
+assert_lines() {
+  local name="$1" want="$2"
+  shift 2
+  total=$((total + 1))
+  local out got
+  out="$("$@" 2>&1)"
+  got=$?
+  if [ "$got" -ne 0 ] || [ "$out" != "$want" ]; then
+    echo "FAIL $name: exit $got, output:"
+    echo "$out" | sed 's/^/     | /'
+    failures=$((failures + 1))
+    return
+  fi
+  echo "ok   $name"
+}
+
+want_tags=$'ghcr.io/x/y:0.3.1\nghcr.io/x/y:0.3\nghcr.io/x/y:latest'
+assert_lines hub_image_tags_for_a_plain_version "$want_tags" bash "$hub_tags" v0.3.1 ghcr.io/x/y
+assert_lines hub_image_tags_accept_the_tag_without_v "$want_tags" bash "$hub_tags" 0.3.1 ghcr.io/x/y
+# A stray tag must produce no image tags at all, so it can never move `latest`.
+assert_exit hub_image_tags_reject_a_prerelease 1 "not a valid" bash "$hub_tags" v0.3.1-rc.1 ghcr.io/x/y
+assert_exit hub_image_tags_reject_two_parts 1 "not a valid" bash "$hub_tags" v1.2 ghcr.io/x/y
+assert_exit hub_image_tags_reject_four_parts 1 "not a valid" bash "$hub_tags" v1.2.3.4 ghcr.io/x/y
+hub_marker="$tmp/hub-pwned"
+assert_exit hub_image_tags_reject_shell_metacharacters 1 "not a valid" \
+  bash "$hub_tags" "v1.2.3; touch $hub_marker" ghcr.io/x/y
+assert_exit hub_image_tags_reject_command_substitution 1 "not a valid" \
+  bash "$hub_tags" '$(touch '"$hub_marker"')' ghcr.io/x/y
+total=$((total + 1))
+if [ -e "$hub_marker" ]; then
+  echo "FAIL hub_image_tags_do_not_evaluate_the_tag: marker file exists"
+  failures=$((failures + 1))
+else
+  echo "ok   hub_image_tags_do_not_evaluate_the_tag"
+fi
+assert_exit hub_image_tags_wrong_argument_count 2 "usage" bash "$hub_tags" v0.3.1
+assert_exit hub_image_tags_no_arguments 2 "usage" bash "$hub_tags"
 
 # --- verify-installers.sh ---
 verify="$root/tools/verify-installers.sh"
@@ -358,7 +431,7 @@ assert_true() {
 checkout_refs_are_full_tag_refs() {
   local refs
   refs="$(awk '/uses: actions\/checkout@/ { c = 1; next } c && /^ *ref:/ { print; c = 0 } /^ *- / { c = 0 }' "$release_yml")"
-  [ "$(printf '%s\n' "$refs" | grep -c .)" -eq 2 ] && ! printf '%s\n' "$refs" | grep -vq "refs/tags/"
+  [ "$(printf '%s\n' "$refs" | grep -c .)" -eq 4 ] && ! printf '%s\n' "$refs" | grep -vq "refs/tags/"
 }
 assert_true release_checkouts_use_full_tag_refs checkout_refs_are_full_tag_refs
 upload_skips_forks() {
@@ -382,6 +455,169 @@ publish_goes_through_a_draft() {
     [ "$(grep -E '^ *- name: ' "$release_yml" | tail -n 1 | sed 's/^ *- name: //')" = 'Publish the release' ]
 }
 assert_true release_publish_attaches_to_a_draft_then_publishes publish_goes_through_a_draft
+
+# --- release.yml: hub image ---
+# job_block <job key>: the lines of one job of release.yml (from its key to the next job key).
+job_block() {
+  awk -v job="  $1:" '$0 == job { p = 1; print; next } p && /^  [a-z][a-z0-9-]*:$/ { exit } p { print }' "$release_yml"
+}
+hub_image_is_the_only_job_with_packages_write() {
+  [ "$(grep -c 'packages: write' "$release_yml")" -eq 1 ] &&
+    job_block hub-image | grep -Fxq '      packages: write'
+}
+assert_true release_hub_image_is_the_only_job_with_packages_write hub_image_is_the_only_job_with_packages_write
+hub_image_build_has_read_only_permissions() {
+  local perms
+  perms="$(job_block hub-image-build | awk '/^    permissions:$/ { p = 1; next } p && /^      [a-z-]+:/ { print; next } p { exit }')"
+  [ "$perms" = '      contents: read' ]
+}
+assert_true release_hub_image_build_has_read_only_permissions hub_image_build_has_read_only_permissions
+hub_image_runs_only_on_a_tag_push() {
+  local block
+  block="$(job_block hub-image)"
+  printf '%s\n' "$block" | grep -Fxq "    if: github.event_name != 'pull_request' && startsWith(github.ref, 'refs/tags/v')" &&
+    printf '%s\n' "$block" | grep -Fxq '    needs: hub-image-build'
+}
+assert_true release_hub_image_runs_only_on_a_tag_push hub_image_runs_only_on_a_tag_push
+hub_image_build_matrix_has_both_architectures() {
+  local block
+  block="$(job_block hub-image-build)"
+  printf '%s\n' "$block" | grep -Fq 'os: ubuntu-latest' && printf '%s\n' "$block" | grep -Fq 'os: ubuntu-24.04-arm'
+}
+assert_true release_hub_image_build_matrix_has_both_architectures hub_image_build_matrix_has_both_architectures
+hub_image_upload_skips_forks() {
+  job_block hub-image-build | awk '/uses: actions\/upload-artifact@/ { getline; print; exit }' |
+    grep -Fq "if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository"
+}
+assert_true release_hub_image_upload_skips_fork_pull_requests hub_image_upload_skips_forks
+pull_request_paths_cover_the_hub_image() {
+  local paths want
+  paths="$(awk '/^on:/ { o = 1; next } o && /^[^ ]/ { o = 0 } o && /^  pull_request:/ { p = 1; next } p && /^  [a-z_]+:/ { p = 0 } p && /^      - / { print }' "$release_yml")"
+  for want in crates/fernjo-hub/Containerfile 'crates/fernjo-hub/deploy/**' .dockerignore; do
+    printf '%s\n' "$paths" | grep -Fxq "      - $want" || return 1
+  done
+}
+assert_true release_pull_request_paths_cover_the_hub_image_inputs pull_request_paths_cover_the_hub_image
+hub_image_pushes_with_a_digest_check() {
+  job_block hub-image | grep -Fxq '      - name: Push the manifest list' &&
+    job_block hub-image | grep -Fxq '      - name: Check that every tag has the same digest'
+}
+assert_true release_hub_image_pushes_with_a_digest_check hub_image_pushes_with_a_digest_check
+# The installer release must not be published while the image it points at is missing: the published
+# release is immutable and its deploy files pin that image.
+publish_waits_for_the_hub_image() {
+  job_block publish | awk '/^    needs:$/ { n = 1; next } n && /^      - / { sub(/^ +/, ""); print; next } n { exit }' | sort | tr '\n' ' ' |
+    grep -Fxq -- '- build - hub-image '
+}
+assert_true release_publish_waits_for_the_hub_image publish_waits_for_the_hub_image
+hub_image_checks_the_registry_digests() {
+  job_block hub-image | grep -Fq "skopeo inspect --format '{{.Digest}}'"
+}
+assert_true release_hub_image_checks_the_registry_digests hub_image_checks_the_registry_digests
+hub_image_annotates_the_index_with_the_source() {
+  job_block hub-image | grep -Fq 'podman manifest annotate --index --annotation org.opencontainers.image.source=https://github.com/benjo-code/fernjo'
+}
+assert_true release_hub_image_annotates_the_index_with_the_source hub_image_annotates_the_index_with_the_source
+
+# --- hub Containerfile ---
+hub_containerfile="$root/crates/fernjo-hub/Containerfile"
+containerfile_final_stage_is_scratch_as_10001() {
+  grep -Fxq 'FROM scratch' "$hub_containerfile" &&
+    grep -Fxq 'USER 10001:10001' "$hub_containerfile" &&
+    grep -Fxq 'VOLUME /data' "$hub_containerfile" &&
+    grep -Fxq 'COPY --from=build --chown=10001:10001 /data /data' "$hub_containerfile"
+}
+assert_true hub_containerfile_final_stage_is_scratch_as_10001 containerfile_final_stage_is_scratch_as_10001
+containerfile_has_the_oci_labels() {
+  local key
+  for key in source version revision licenses description; do
+    grep -Fq "org.opencontainers.image.$key=" "$hub_containerfile" || return 1
+  done
+  grep -Fq 'org.opencontainers.image.licenses="MIT OR Apache-2.0"' "$hub_containerfile" &&
+    grep -Fq 'org.opencontainers.image.source="https://github.com/benjo-code/fernjo"' "$hub_containerfile" &&
+    grep -Fxq 'ARG VERSION=dev' "$hub_containerfile" &&
+    grep -Fxq 'ARG REVISION=unknown' "$hub_containerfile"
+}
+assert_true hub_containerfile_has_the_oci_labels containerfile_has_the_oci_labels
+
+# --- smoke-hub-image.sh ---
+smoke_hub="$root/tools/smoke-hub-image.sh"
+assert_exit smoke_hub_image_needs_an_image 2 "usage" bash "$smoke_hub"
+assert_exit smoke_hub_image_refuses_an_unknown_engine 2 "ENGINE" env ENGINE=rm bash "$smoke_hub" some/image:tag
+
+# A stub engine first on PATH logs every call; `run` behaves as $STUB_RUN says. The script's
+# trap must still remove the volume and the container it named.
+fake_engine() {
+  local bin="$tmp/fake-bin-$1"
+  mkdir -p "$bin"
+  cat >"$bin/docker" <<STUB
+#!/usr/bin/env bash
+echo "\$*" >>"$tmp/fake-$1.log"
+case "\$1" in
+  run) $2 ;;
+esac
+exit 0
+STUB
+  chmod +x "$bin/docker"
+  echo "$bin"
+}
+fake_bin="$(fake_engine fails 'exit 1')"
+assert_exit smoke_hub_image_fails_naming_the_step_with_a_fake_engine 1 "FAILED at step: init" \
+  env PATH="$fake_bin:$PATH" bash "$smoke_hub" some/image:tag
+smoke_cleans_up_what_it_created() {
+  local log="$tmp/fake-fails.log" vol
+  vol="$(sed -n 's/^volume create \(fernjo-hub-smoke-.*\)$/\1/p' "$log" | head -n 1)"
+  [ -n "$vol" ] &&
+    grep -Fxq "volume rm -f $vol" "$log" &&
+    grep -Fxq "rm -f $vol" "$log"
+}
+assert_true smoke_hub_image_cleans_up_the_volume_and_container_after_a_failure smoke_cleans_up_what_it_created
+
+# A hanging engine call is cut off by the timeout, and the cleanup still runs.
+hang_bin="$(fake_engine hangs 'exec sleep 30')"
+assert_exit smoke_hub_image_times_out_a_hanging_engine_call 1 "FAILED at step: init" \
+  env PATH="$hang_bin:$PATH" SMOKE_TIMEOUT=1 bash "$smoke_hub" some/image:tag
+smoke_cleans_up_after_a_hang() {
+  grep -Eq '^volume rm -f fernjo-hub-smoke-' "$tmp/fake-hangs.log" &&
+    grep -Eq '^rm -f fernjo-hub-smoke-' "$tmp/fake-hangs.log"
+}
+assert_true smoke_hub_image_cleans_up_after_a_hang smoke_cleans_up_after_a_hang
+
+# --- hub deploy files ---
+deploy="$root/crates/fernjo-hub/deploy"
+hub_ref='ghcr.io/benjo-code/fernjo-hub:0.3.1'
+compose_pins_the_image_and_hardens_it() {
+  local f="$deploy/compose.yaml"
+  grep -Eq "^    image: $hub_ref\$" "$f" &&
+    grep -Eq '^    user: "10001:10001"$' "$f" &&
+    grep -Eq '^    init: true$' "$f" &&
+    grep -Eq '^    read_only: true$' "$f" &&
+    grep -Eq '^    cap_drop: \[ALL\]$' "$f" &&
+    grep -Eq '^    security_opt: \["no-new-privileges:true"\]$' "$f" &&
+    grep -Eq '^    restart: unless-stopped$' "$f" &&
+    grep -Eq '^      - "127\.0\.0\.1:8787:8787"$' "$f" &&
+    grep -Eq '^      - "hub-data:/data"$' "$f" &&
+    grep -Eq '^  hub-data: \{\}$' "$f"
+}
+assert_true hub_compose_pins_the_image_and_hardens_it compose_pins_the_image_and_hardens_it
+compose_base_file_has_no_podman_only_key() {
+  [ -f "$deploy/compose.yaml" ] && ! grep -Eq '^[^#]*(userns_mode|keep-id)' "$deploy/compose.yaml"
+}
+assert_true hub_compose_base_file_has_no_podman_only_key compose_base_file_has_no_podman_only_key
+compose_podman_override_holds_keep_id() {
+  local f="$deploy/compose.podman.yaml"
+  grep -Fxq '    userns_mode: "keep-id:uid=10001,gid=10001"' "$f" && ! grep -Eq '^[^#]*image:' "$f"
+}
+assert_true hub_compose_podman_override_holds_keep_id compose_podman_override_holds_keep_id
+quadlet_uses_the_ghcr_image_and_keeps_its_hardening() {
+  local f="$deploy/fernjo-hub.container" line
+  ! grep -Fq 'localhost/fernjo-hub' "$f" || return 1
+  for line in "Image=$hub_ref" 'UserNS=keep-id:uid=10001,gid=10001' 'RunInit=true' 'ReadOnly=true' \
+    'DropCapability=ALL' 'NoNewPrivileges=true' 'PublishPort=127.0.0.1:8787:8787'; do
+    grep -Fxq "$line" "$f" || return 1
+  done
+}
+assert_true hub_quadlet_uses_the_ghcr_image_and_keeps_its_hardening quadlet_uses_the_ghcr_image_and_keeps_its_hardening
 
 # --- third-party-notices.mjs (pure checks through --fixture; the full run needs cargo-about) ---
 notices="$root/tools/third-party-notices.mjs"

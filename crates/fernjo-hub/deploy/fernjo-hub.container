@@ -1,12 +1,13 @@
 # Rootless Quadlet unit: ~/.config/containers/systemd/fernjo-hub.container
-# Before the first start run `fernjo-hub init` once (see Docs/hub.md).
+# Before the first start run `init` once on the volume (Docs/hub.md, "Set it up from the published image").
+# The image is pulled on the first start; the tag is bumped together with every release.
 
 [Unit]
 Description=fernjo sync hub
 After=network-online.target
 
 [Container]
-Image=localhost/fernjo-hub:latest
+Image=ghcr.io/benjo-code/fernjo-hub:0.3.1
 ContainerName=fernjo-hub
 # only loopback on the host: Caddy is the one that is reachable
 PublishPort=127.0.0.1:8787:8787

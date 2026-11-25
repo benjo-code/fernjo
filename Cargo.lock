@@ -1700,7 +1700,7 @@ dependencies = [
 
 [[package]]
 name = "fernjo-app"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "arboard",
  "base64 0.23.1",
@@ -1728,7 +1728,7 @@ dependencies = [
 
 [[package]]
 name = "fernjo-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "directories",
  "fernjo-fs",
@@ -1742,7 +1742,7 @@ dependencies = [
 
 [[package]]
 name = "fernjo-fs"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "getrandom 0.4.3",
  "libc",
@@ -1751,7 +1751,7 @@ dependencies = [
 
 [[package]]
 name = "fernjo-hub"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -1769,7 +1769,7 @@ dependencies = [
 
 [[package]]
 name = "fernjo-import"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "aes-gcm",
  "base64 0.23.1",
@@ -1789,7 +1789,7 @@ dependencies = [
 
 [[package]]
 name = "fernjo-rdp"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "fernjo-fs",
  "ironrdp-cliprdr",
@@ -1818,7 +1818,7 @@ dependencies = [
 
 [[package]]
 name = "fernjo-ssh"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "data-encoding",
  "fernjo-fs",
@@ -1833,7 +1833,7 @@ dependencies = [
 
 [[package]]
 name = "fernjo-sync"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "base64 0.23.1",
  "chacha20poly1305",
@@ -1861,7 +1861,7 @@ dependencies = [
 
 [[package]]
 name = "fernjo-vault"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "argon2",
  "chacha20poly1305",
