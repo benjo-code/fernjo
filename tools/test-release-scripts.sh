@@ -183,6 +183,95 @@ for n in "${names[@]}"; do : >"$d/$n"; done
 : >"$d/surprise.zip"
 assert_exit verify_installers_fails_on_an_unexpected_extra_file 1 "unexpected: surprise.zip" bash "$verify" "$ver" "$d"
 
+# --artifacts: one folder per build job's artifact; nothing may cross platforms (M11 review #72).
+# artifacts_fixture <name>: the layout publish downloads when every job uploaded only its own files.
+artifacts_fixture() {
+  local a="$tmp/art-$1"
+  mkdir -p "$a/installers-windows" "$a/installers-macos-arm64" "$a/installers-macos-x64" "$a/installers-linux"
+  echo win >"$a/installers-windows/${names[0]}"
+  echo arm >"$a/installers-macos-arm64/${names[1]}"
+  echo x64 >"$a/installers-macos-x64/${names[2]}"
+  echo img >"$a/installers-linux/${names[3]}"
+  echo deb >"$a/installers-linux/${names[4]}"
+  echo "$a"
+}
+
+a="$(artifacts_fixture ok)"
+assert_exit verify_installers_artifacts_pass_and_collect_the_set 0 "all 5 installers present" \
+  bash "$verify" "$ver" --artifacts "$a" "$a.out"
+total=$((total + 1))
+if [ "$(cat "$a.out/${names[0]}" 2>/dev/null)" = win ] && [ "$(ls "$a.out" 2>/dev/null | wc -l)" -eq 5 ]; then
+  echo "ok   verify_installers_artifacts_copy_each_platform_file_unchanged"
+else
+  echo "FAIL verify_installers_artifacts_copy_each_platform_file_unchanged"
+  failures=$((failures + 1))
+fi
+
+a="$(artifacts_fixture cross)"
+echo evil >"$a/installers-linux/${names[0]}"
+assert_exit verify_installers_artifacts_reject_another_platforms_installer 1 \
+  "unexpected: installers-linux/${names[0]}" bash "$verify" "$ver" --artifacts "$a" "$a.out"
+total=$((total + 1))
+if [ -e "$a.out" ]; then
+  echo "FAIL verify_installers_artifacts_collect_nothing_on_a_mismatch: $a.out exists"
+  failures=$((failures + 1))
+else
+  echo "ok   verify_installers_artifacts_collect_nothing_on_a_mismatch"
+fi
+
+a="$(artifacts_fixture extra-artifact)"
+mkdir -p "$a/installers-zz"
+echo evil >"$a/installers-zz/${names[0]}"
+assert_exit verify_installers_artifacts_reject_an_extra_artifact 1 "unexpected: art-extra-artifact/installers-zz" \
+  bash "$verify" "$ver" --artifacts "$a" "$a.out"
+
+a="$(artifacts_fixture missing-platform)"
+rm -r "$a/installers-macos-x64"
+assert_exit verify_installers_artifacts_reject_a_missing_platform 1 "missing: art-missing-platform/installers-macos-x64" \
+  bash "$verify" "$ver" --artifacts "$a" "$a.out"
+
+a="$(artifacts_fixture extra-file)"
+: >"$a/installers-windows/readme.txt"
+assert_exit verify_installers_artifacts_reject_an_extra_file_in_a_platform 1 "unexpected: installers-windows/readme.txt" \
+  bash "$verify" "$ver" --artifacts "$a" "$a.out"
+
+# The old merged layout (download-artifact with merge-multiple) must not pass.
+a="$tmp/art-flat"
+mkdir -p "$a"
+for n in "${names[@]}"; do : >"$a/$n"; done
+assert_exit verify_installers_artifacts_reject_a_merged_folder 1 "unexpected: art-flat/${names[0]}" \
+  bash "$verify" "$ver" --artifacts "$a" "$a.out"
+
+a="$(artifacts_fixture out-exists)"
+mkdir -p "$a.out"
+assert_exit verify_installers_artifacts_refuse_an_existing_out_dir 1 "already exists" \
+  bash "$verify" "$ver" --artifacts "$a" "$a.out"
+
+# --- release.yml: pins for the M11 review fixes #70, #72 and #73 (the behaviour needs a real run) ---
+release_yml="$root/.github/workflows/release.yml"
+# assert_true <name> <command...>
+assert_true() {
+  local name="$1"
+  shift
+  total=$((total + 1))
+  if "$@"; then echo "ok   $name"; else echo "FAIL $name"; failures=$((failures + 1)); fi
+}
+checkout_refs_are_full_tag_refs() {
+  local refs
+  refs="$(awk '/uses: actions\/checkout@/ { c = 1; next } c && /^ *ref:/ { print; c = 0 } /^ *- / { c = 0 }' "$release_yml")"
+  [ "$(printf '%s\n' "$refs" | grep -c .)" -eq 2 ] && ! printf '%s\n' "$refs" | grep -vq "refs/tags/"
+}
+assert_true release_checkouts_use_full_tag_refs checkout_refs_are_full_tag_refs
+upload_skips_forks() {
+  awk '/uses: actions\/upload-artifact@/ { getline; print; exit }' "$release_yml" |
+    grep -Fq "if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository"
+}
+assert_true release_upload_skips_fork_pull_requests upload_skips_forks
+publish_keeps_artifacts_apart() {
+  ! grep -q "merge-multiple:" "$release_yml" && grep -Fq 'verify-installers.sh "${TAG#v}" --artifacts artifacts installers' "$release_yml"
+}
+assert_true release_publish_keeps_each_artifact_in_its_own_folder publish_keeps_artifacts_apart
+
 # --- third-party-notices.mjs (pure checks through --fixture; the full run needs cargo-about) ---
 notices="$root/tools/third-party-notices.mjs"
 
