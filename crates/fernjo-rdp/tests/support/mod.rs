@@ -1,6 +1,7 @@
 //! Test doubles for the connect tests: a scripted `Interaction` and a fake server that speaks just
 //! enough RDP (the X.224 negotiation and a TLS handshake) to reach the certificate decision.
-//! The steps after that (NLA, the session itself) need a real host; see `tests/connect.rs`.
+//! By default it selects CredSSP (`HYBRID`), as a server with NLA does; it never runs CredSSP, so
+//! the steps after the prompts (NLA, the session itself) need a real host; see `tests/connect.rs`.
 
 #![allow(dead_code)]
 
@@ -11,7 +12,9 @@ use std::sync::{Arc, Mutex};
 use fernjo_rdp::{
     CertChangedDecision, CertChangedPrompt, CertDecision, CertPrompt, ConnectParams, Interaction,
 };
-use ironrdp_pdu::nego::{ConnectionConfirm, ResponseFlags, SecurityProtocol};
+use ironrdp_pdu::nego::{
+    ConnectionConfirm, ConnectionRequest, FailureCode, ResponseFlags, SecurityProtocol,
+};
 use ironrdp_pdu::x224::X224;
 use secrecy::SecretString;
 use sha2::{Digest, Sha256};
@@ -85,9 +88,16 @@ impl Interaction for Script {
 
 #[derive(Clone, Copy)]
 pub enum Behaviour {
-    /// X.224 negotiation selecting TLS, then a TLS handshake with a self-signed certificate; the
-    /// connection is closed once the client has the certificate.
+    /// X.224 negotiation selecting CredSSP (`HYBRID`), then a TLS handshake with a self-signed
+    /// certificate; the connection is closed once the client has the certificate and sent its
+    /// next message (the start of CredSSP).
     TlsThenClose,
+    /// A server without NLA: the X.224 confirm selects this protocol (`SSL` for TLS-only, empty
+    /// for standard RDP security), then the server records everything the client sends until it
+    /// hangs up (`FakeServer::after_confirm`). No TLS handshake is started.
+    Selects(SecurityProtocol),
+    /// As `Selects`, but the server answers the request with a negotiation failure.
+    RefusesWith(FailureCode),
     /// As `TlsThenClose`, but the server is an impostor: it presents the real server's public
     /// certificate and signs the TLS handshake with a different private key, which is all an
     /// attacker on the path can do (the certificate is public, its key is not).
@@ -145,6 +155,11 @@ pub struct FakeServer {
     /// `sha256:<hex>` of the certificate the server presents.
     pub fingerprint: String,
     pub connections: Arc<AtomicUsize>,
+    /// The protocols of every X.224 connection request the server read.
+    pub requested: Arc<Mutex<Vec<SecurityProtocol>>>,
+    /// `Selects` and `RefusesWith`: the bytes the client sent after the confirm, set once the
+    /// client hung up.
+    after: Arc<Mutex<Option<Vec<u8>>>>,
 }
 
 impl FakeServer {
@@ -194,6 +209,10 @@ impl FakeServer {
         let acceptor = TlsAcceptor::from(Arc::new(config));
         let connections = Arc::new(AtomicUsize::new(0));
         let counter = connections.clone();
+        let requested = Arc::new(Mutex::new(Vec::new()));
+        let requests = requested.clone();
+        let after = Arc::new(Mutex::new(None));
+        let after_confirm = after.clone();
         tokio::spawn(async move {
             loop {
                 let Ok((mut stream, _)) = listener.accept().await else {
@@ -201,6 +220,8 @@ impl FakeServer {
                 };
                 counter.fetch_add(1, Ordering::SeqCst);
                 let acceptor = acceptor.clone();
+                let requests = requests.clone();
+                let after_confirm = after_confirm.clone();
                 tokio::spawn(async move {
                     if matches!(behaviour, Behaviour::Silent) {
                         std::future::pending::<()>().await;
@@ -215,6 +236,12 @@ impl FakeServer {
                     if stream.read_exact(&mut rest).await.is_err() {
                         return;
                     }
+                    let request = [header.as_slice(), rest.as_slice()].concat();
+                    if let Ok(X224(request)) =
+                        ironrdp_core::decode::<X224<ConnectionRequest>>(&request)
+                    {
+                        requests.lock().unwrap().push(request.protocol);
+                    }
                     if matches!(behaviour, Behaviour::Garbage) {
                         // a TPKT header with a version that does not exist, then noise
                         let _ = stream
@@ -222,12 +249,30 @@ impl FakeServer {
                             .await;
                         return;
                     }
-                    let confirm = X224(ConnectionConfirm::Response {
-                        flags: ResponseFlags::empty(),
-                        protocol: SecurityProtocol::SSL,
-                    });
-                    let bytes = ironrdp_core::encode_vec(&confirm).unwrap();
+                    let confirm = match behaviour {
+                        Behaviour::Selects(protocol) => ConnectionConfirm::Response {
+                            flags: ResponseFlags::empty(),
+                            protocol,
+                        },
+                        Behaviour::RefusesWith(code) => ConnectionConfirm::Failure { code },
+                        _ => ConnectionConfirm::Response {
+                            flags: ResponseFlags::empty(),
+                            protocol: SecurityProtocol::HYBRID,
+                        },
+                    };
+                    let bytes = ironrdp_core::encode_vec(&X224(confirm)).unwrap();
                     if stream.write_all(&bytes).await.is_err() {
+                        return;
+                    }
+                    if matches!(behaviour, Behaviour::Selects(_) | Behaviour::RefusesWith(_)) {
+                        // whatever the client sends now (a TLS ClientHello, a Client Info PDU)
+                        let mut seen = Vec::new();
+                        let _ = tokio::time::timeout(
+                            std::time::Duration::from_secs(10),
+                            stream.read_to_end(&mut seen),
+                        )
+                        .await;
+                        *after_confirm.lock().unwrap() = Some(seen);
                         return;
                     }
                     let Ok(mut tls) = acceptor.accept(stream).await else {
@@ -243,6 +288,24 @@ impl FakeServer {
             addr,
             fingerprint,
             connections,
+            requested,
+            after,
+        }
+    }
+
+    /// `Selects` and `RefusesWith`: the bytes the client sent after the X.224 confirm, once it
+    /// hung up (panics when that takes more than a few seconds).
+    pub async fn after_confirm(&self) -> Vec<u8> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if let Some(seen) = self.after.lock().unwrap().clone() {
+                return seen;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the client did not hang up after the confirm"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     }
 

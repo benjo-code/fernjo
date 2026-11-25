@@ -263,6 +263,19 @@ fn a_certificate_rustls_cannot_use_has_its_own_failure_text() {
     );
 }
 
+#[test]
+fn a_server_without_nla_has_its_own_failure_text() {
+    // `run` reports a failed connect with the error's text; a server that is refused for lack of
+    // NLA must say why, not read like a protocol error
+    use fernjo_rdp::RdpError;
+    assert_eq!(RdpError::NlaRequired.code(), "nla_required");
+    assert_eq!(
+        RdpError::NlaRequired.to_string(),
+        "the server does not offer Network Level Authentication (NLA); fernjo only connects to \
+         RDP servers with NLA, so the password never goes to the server in plain form"
+    );
+}
+
 // ---------- the forwarder ----------
 
 fn spawn_forward(

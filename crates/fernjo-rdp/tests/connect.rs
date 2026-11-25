@@ -16,6 +16,7 @@ use fernjo_rdp::{
     CertChangedDecision, CertCheck, CertDecision, CertStore, CloseReason, ConnectParams, RdpError,
     Session, SessionEvent,
 };
+use ironrdp_pdu::nego::{FailureCode, SecurityProtocol};
 use secrecy::SecretString;
 use support::{Behaviour, FakeServer, Fixture, Script};
 
@@ -312,6 +313,78 @@ async fn an_empty_user_name_asks_for_one() {
     let result = connect(params, &script).await;
     assert_eq!(code(&result), "auth_failed");
     assert_eq!(script.log().last().unwrap(), "username 127.0.0.1");
+}
+
+// ---- servers without NLA -----------------------------------------------------------------
+
+/// Connects with an empty user name and password (so any prompt would be raised) to a server with
+/// `behaviour`, and checks that the attempt ends with `nla_required` before anything follows the
+/// X.224 confirm: no prompt, no pin, and not a byte from the client after the confirm (no TLS
+/// ClientHello, no Client Info PDU).
+async fn assert_refused_without_nla(behaviour: Behaviour) {
+    let server = FakeServer::start(behaviour).await;
+    let mut params = server.params();
+    params.username = String::new();
+    params.password = SecretString::from(String::new());
+    let certs = params.certs.clone();
+    let script = Script::new(CertDecision::TrustAlways);
+    let result = connect(params, &script).await;
+    assert_eq!(code(&result), "nla_required");
+    assert!(script.log().is_empty(), "{:?}", script.log());
+    assert!(
+        server.after_confirm().await.is_empty(),
+        "the client sent something after the confirm"
+    );
+    assert_eq!(
+        certs
+            .check("127.0.0.1", server.addr.port(), &server.fingerprint)
+            .unwrap(),
+        CertCheck::Unknown
+    );
+}
+
+#[tokio::test]
+async fn the_request_offers_credssp_and_not_tls_alone() {
+    let server = FakeServer::start(Behaviour::TlsThenClose).await;
+    let _ = connect(server.params(), &Script::new(CertDecision::Reject)).await;
+    let requested = server.requested.lock().unwrap().clone();
+    assert_eq!(
+        requested,
+        vec![SecurityProtocol::HYBRID | SecurityProtocol::HYBRID_EX]
+    );
+}
+
+#[tokio::test]
+async fn a_tls_only_server_is_refused_with_nla_required_before_tls_and_any_prompt() {
+    assert_refused_without_nla(Behaviour::Selects(SecurityProtocol::SSL)).await;
+}
+
+#[tokio::test]
+async fn a_server_selecting_standard_rdp_security_is_refused_with_nla_required() {
+    assert_refused_without_nla(Behaviour::Selects(SecurityProtocol::empty())).await;
+}
+
+#[tokio::test]
+async fn a_negotiation_failure_for_lack_of_nla_is_nla_required() {
+    for failure in [
+        FailureCode::SSL_REQUIRED_BY_SERVER,
+        FailureCode::SSL_NOT_ALLOWED_BY_SERVER,
+        FailureCode::SSL_WITH_USER_AUTH_REQUIRED_BY_SERVER,
+    ] {
+        assert_refused_without_nla(Behaviour::RefusesWith(failure)).await;
+    }
+}
+
+#[tokio::test]
+async fn another_negotiation_failure_stays_connect_failed() {
+    // the server has no certificate: NLA would not help, so this is not `nla_required`
+    let server =
+        FakeServer::start(Behaviour::RefusesWith(FailureCode::SSL_CERT_NOT_ON_SERVER)).await;
+    let script = Script::new(CertDecision::TrustAlways);
+    let result = connect(server.params(), &script).await;
+    assert_eq!(code(&result), "connect_failed");
+    assert!(script.log().is_empty(), "{:?}", script.log());
+    assert!(server.after_confirm().await.is_empty());
 }
 
 // ---- tests that need a real RDP host -----------------------------------------------------

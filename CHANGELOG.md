@@ -30,6 +30,10 @@ Daily-use features: milestone M10.
 - The Reload bar (M7) now also appears when a vault credential delete or a restore from a backup finds that `connections.json` changed on disk, in addition to the plain error text. The file in question can be `vault.fernjo` (a restore saves the vault first), while the bar still names `connections.json`.
 - Opening the vault now removes leftover `vault.fernjo.<hex>.tmp` files of an interrupted save that are more than a day old; younger ones, symbolic links and other names are left alone.
 
+### Changed
+
+- RDP (M11): fernjo now requires Network Level Authentication (NLA). A server that offers only TLS or standard RDP security is refused with "the server does not offer Network Level Authentication (NLA)" before any certificate question or password prompt, and fernjo sends it nothing further, so the password never reaches such a server (or a machine in the path pretending to be one) in plain form. Hosts with NLA switched off no longer connect; switch NLA on at the host.
+
 ### Fixed
 
 - RDP TLS (M11): fernjo checks the server certificate with its own verifier. It no longer needs the operating system's root certificates (a Linux machine without them got "the secure connection to the server failed" for every RDP host), and certificates signed with SHA-1, issued for another name or past their expiry date reach the certificate prompt as before (the pin decides trust). The TLS handshake signature is still always checked against the certificate's key. A host whose certificate the TLS library cannot use (for example an RSA key under 2048 bits, or an unknown extension marked critical) now fails with its own message, "the server certificate is not supported", before any prompt (see the known limit in the README).

@@ -13,6 +13,10 @@ pub enum RdpError {
     AuthFailed,
     #[error("the secure connection to the server failed")]
     TlsFailed,
+    #[error(
+        "the server does not offer Network Level Authentication (NLA); fernjo only connects to RDP servers with NLA, so the password never goes to the server in plain form"
+    )]
+    NlaRequired,
     #[error("the server certificate is not supported")]
     CertificateUnsupported,
     #[error("the server certificate was not accepted")]
@@ -50,6 +54,7 @@ impl RdpError {
             RdpError::AuthFailed => "auth_failed",
             RdpError::TlsFailed => "tls_failed",
             RdpError::CertificateUnsupported => "certificate_unsupported",
+            RdpError::NlaRequired => "nla_required",
             RdpError::CertificateRejected => "certificate_rejected",
             RdpError::DesktopTooLarge => "desktop_too_large",
             RdpError::Protocol => "protocol",
@@ -72,6 +77,7 @@ mod tests {
             (RdpError::AuthFailed, "auth_failed"),
             (RdpError::TlsFailed, "tls_failed"),
             (RdpError::CertificateUnsupported, "certificate_unsupported"),
+            (RdpError::NlaRequired, "nla_required"),
             (RdpError::CertificateRejected, "certificate_rejected"),
             (RdpError::DesktopTooLarge, "desktop_too_large"),
             (RdpError::Protocol, "protocol"),
