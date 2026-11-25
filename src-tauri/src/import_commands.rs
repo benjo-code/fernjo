@@ -338,6 +338,23 @@ pub fn import_begin(state: &AppState, kind: ImportKind, path: PathBuf) -> Picked
     PickedFile { file_name }
 }
 
+/// Drops a pending value that holds decrypted secrets (an mRemoteNG plan with credentials, a
+/// backup with vault entries); called by `vault_lock`, which the idle auto-lock uses too, so a
+/// locked vault does not leave them in memory (M11 review #36). A plan without secrets (a
+/// connections import, a picked file) stays. Waits for the lock (it is taken before the vault
+/// lock, the order everywhere else) and recovers from a poisoned one.
+pub fn clear_secret_pending(state: &AppState) {
+    let mut slot = pending_slot(state);
+    let holds_secrets = match &*slot {
+        Some(Pending::MRemoteNg(plan)) => !plan.entries.is_empty(),
+        Some(Pending::Backup(contents)) => !contents.entries.is_empty(),
+        _ => false,
+    };
+    if holds_secrets {
+        *slot = None;
+    }
+}
+
 /// Drops the pending value (also what every page load does).
 pub fn import_cancel(state: &AppState) {
     *pending_slot(state) = None;
@@ -1262,6 +1279,8 @@ mod tests {
         assert!(top_names(&s).is_empty());
         unlocked(&s);
         vault_commands::vault_lock(&s).unwrap();
+        // locking dropped the plan (it holds credentials): inspect it again
+        inspect(&s, ImportKind::Mremoteng, &path, None).unwrap();
         let e = apply(&s).unwrap_err();
         assert_eq!(e.code, "vault_needed");
         assert!(e.message.contains("locked"), "{}", e.message);
@@ -1760,6 +1779,8 @@ mod tests {
         assert_eq!(pending_kind(&dst), "backup");
         unlocked(&dst);
         vault_commands::vault_lock(&dst).unwrap();
+        // locking dropped the decrypted backup: inspect it again
+        inspect(&dst, ImportKind::Backup, &backup_path, Some(BACKUP_PW)).unwrap();
         assert_eq!(apply(&dst).unwrap_err().code, "vault_needed");
         assert_eq!(top_names(&dst), ["keep"]);
         vault_commands::vault_unlock(&dst, sec(MASTER), false).unwrap();
@@ -2215,6 +2236,54 @@ mod tests {
     }
 
     #[test]
+    fn vault_lock_clears_a_decrypted_backup_from_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_src, backup_path) = source_with_backup(dir.path());
+        let dst = st(&dir.path().join("dst"));
+        unlocked(&dst);
+        inspect(&dst, ImportKind::Backup, &backup_path, Some(BACKUP_PW)).unwrap();
+        assert_eq!(pending_kind(&dst), "backup");
+        vault_commands::vault_lock(&dst).unwrap();
+        assert_eq!(pending_kind(&dst), "none");
+    }
+
+    #[test]
+    fn vault_lock_clears_an_mremoteng_plan_with_credentials_but_keeps_one_without() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = st(&dir.path().join("d"));
+        unlocked(&s);
+        let xml = file(dir.path(), "c.xml", DEFAULT_KEY_XML);
+        inspect(&s, ImportKind::Mremoteng, &xml, None).unwrap();
+        assert_eq!(pending_kind(&s), "mremoteng");
+        vault_commands::vault_lock(&s).unwrap();
+        assert_eq!(pending_kind(&s), "none");
+        // a plain connections import holds no secret and waits through the lock
+        vault_commands::vault_unlock(&s, sec(MASTER), false).unwrap();
+        let export = dir.path().join("e.json");
+        export_connections_to(&s, &export).unwrap();
+        inspect(&s, ImportKind::Connections, &export, None).unwrap();
+        assert_eq!(pending_kind(&s), "connections");
+        vault_commands::vault_lock(&s).unwrap();
+        assert_eq!(pending_kind(&s), "connections");
+    }
+
+    #[test]
+    fn the_auto_lock_also_clears_the_secret_pending_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = st(&dir.path().join("d"));
+        unlocked(&s);
+        let xml = file(dir.path(), "c.xml", DEFAULT_KEY_XML);
+        inspect(&s, ImportKind::Mremoteng, &xml, None).unwrap();
+        *s.vault_auto_lock_minutes.lock().unwrap() = Some(5);
+        let now = std::time::Instant::now();
+        let wall = std::time::SystemTime::now();
+        s.idle.note(now, wall);
+        let later = std::time::Duration::from_secs(5 * 60);
+        assert!(crate::idle_lock::run_tick(&s, now + later, wall + later).is_some());
+        assert_eq!(pending_kind(&s), "none");
+    }
+
+    #[test]
     fn an_inspect_that_finishes_after_a_skipped_page_load_drops_its_result() {
         let dir = tempfile::tempdir().unwrap();
         let s = st(&dir.path().join("d"));
@@ -2253,6 +2322,7 @@ mod tests {
         assert_eq!(pending_kind(&s), "none");
         inspect(&s, ImportKind::Mremoteng, &xml, None).unwrap();
         vault_commands::vault_lock(&s).unwrap();
+        inspect(&s, ImportKind::Mremoteng, &xml, None).unwrap();
         assert_eq!(apply(&s).unwrap_err().code, "vault_needed");
         assert_eq!(pending_kind(&s), "mremoteng");
     }

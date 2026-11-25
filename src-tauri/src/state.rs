@@ -112,6 +112,12 @@ pub struct AppState {
     /// unlock or a new vault). Shown while the vault is locked.
     pub auto_unlock_issue: Mutex<Option<AutoUnlockIssue>>,
     pub keystore: Box<dyn KeyStore>,
+    /// Whether the key store holds this vault's key, as last known: set by the operations that
+    /// store or delete the key and by the startup auto-unlock, filled by one `get` otherwise, so
+    /// locking and every status call never read the data key from the keychain just to report a
+    /// yes/no flag (M11 review #36). A leaf lock. An item removed outside the app shows after a
+    /// restart.
+    pub auto_unlock_known: Mutex<Option<(fernjo_vault::VaultId, bool)>>,
     /// The highest vault generation this device has seen, per vault (rollback protection):
     /// a file in `device_dir` when there is one, else memory only.
     pub generations: Arc<dyn GenerationStore>,
@@ -330,6 +336,7 @@ impl AppState {
         let mut notices = Vec::new();
         let mut vault = VaultState::None;
         let mut auto_unlock_issue = None;
+        let mut auto_unlock_known = None;
         let store = match &dir {
             None => Err(StartupFailure {
                 code: "load_failed".to_string(),
@@ -361,8 +368,15 @@ impl AppState {
                     v.attach_generation_store(Arc::clone(&generations));
                     // Never deletes the keychain item; the UI learns of a failure through
                     // `vault_status` (`autoUnlockIssue`).
-                    auto_unlock_issue =
-                        AutoUnlockIssue::from_outcome(&try_auto_unlock(&mut v, keystore.as_ref()));
+                    let outcome = try_auto_unlock(&mut v, keystore.as_ref());
+                    // the attempt read the key store: remember whether an item exists (an
+                    // unavailable store stays unknown and is asked again)
+                    auto_unlock_known = match &outcome {
+                        AutoUnlock::NoKey => Some((v.id(), false)),
+                        AutoUnlock::KeychainUnavailable(_) => None,
+                        _ => Some((v.id(), true)),
+                    };
+                    auto_unlock_issue = AutoUnlockIssue::from_outcome(&outcome);
                     VaultState::Open(v)
                 }
                 Err(e) => VaultState::Unusable {
@@ -382,6 +396,7 @@ impl AppState {
             notices: Mutex::new(notices),
             vault: Mutex::new(vault),
             auto_unlock_issue: Mutex::new(auto_unlock_issue),
+            auto_unlock_known: Mutex::new(auto_unlock_known),
             keystore,
             generations,
             kdf,
