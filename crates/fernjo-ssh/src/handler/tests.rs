@@ -182,7 +182,7 @@ async fn known_but_unconfirmed_asks_and_always_records_so_the_next_attempt_is_si
         !f.confirmed.exists(),
         "nothing is written before the handshake"
     );
-    h.apply_pending_trust().unwrap();
+    h.apply_pending_trust().await.unwrap();
     assert_eq!(status(&f.confirmed, &key(ED_A)), HostKeyStatus::Known);
     // A fresh handler and an empty script: a prompt would answer Reject.
     let (h, script) = handler(
@@ -238,7 +238,7 @@ async fn a_key_that_differs_from_the_confirmed_one_asks_with_previous() {
     assert_eq!(script.prompts(), (0, 1, 0));
     let prompt = script.synced_prompts.lock().unwrap()[0].clone();
     assert_eq!(prompt.previous, vec![FP_ED_A.to_string()]);
-    h.apply_pending_trust().unwrap();
+    h.apply_pending_trust().await.unwrap();
     // The confirmed key was replaced, not duplicated.
     assert_eq!(status(&f.confirmed, &key(ED_B)), HostKeyStatus::Known);
     assert!(matches!(
@@ -257,7 +257,7 @@ async fn unknown_host_trust_always_writes_both_files() {
     );
     assert!(h.decide(&key(ED_A)).await);
     assert_eq!(script.prompts(), (1, 0, 0));
-    h.apply_pending_trust().unwrap();
+    h.apply_pending_trust().await.unwrap();
     assert_eq!(status(&f.known, &key(ED_A)), HostKeyStatus::Known);
     assert_eq!(status(&f.confirmed, &key(ED_A)), HostKeyStatus::Known);
 }
@@ -286,7 +286,7 @@ async fn changed_host_replace_updates_both_files() {
     );
     assert!(h.decide(&key(ED_B)).await);
     assert_eq!(script.prompts(), (0, 0, 1));
-    h.apply_pending_trust().unwrap();
+    h.apply_pending_trust().await.unwrap();
     for path in [&f.known, &f.confirmed] {
         assert_eq!(status(path, &key(ED_B)), HostKeyStatus::Known);
         assert!(matches!(
@@ -310,7 +310,7 @@ async fn without_a_confirmed_layer_behaviour_is_as_before() {
     );
     assert!(h.decide(&key(ED_B)).await);
     assert_eq!(script.prompts(), (0, 0, 1));
-    h.apply_pending_trust().unwrap();
+    h.apply_pending_trust().await.unwrap();
     assert_eq!(status(&f.known, &key(ED_B)), HostKeyStatus::Known);
     assert!(!f.dir.path().join("device").exists());
 }
@@ -331,7 +331,7 @@ async fn an_unwritable_confirmed_file_does_not_stop_the_connect() {
     assert!(h.decide(&key(ED_A)).await);
     assert_eq!(script.prompts(), (0, 1, 0));
     assert!(rejection(&h).is_none());
-    h.apply_pending_trust().unwrap();
+    h.apply_pending_trust().await.unwrap();
     // Changed host, replace: known_hosts is written, the confirmed failure is ignored.
     let (h, _) = handler(
         &f.known,
@@ -339,7 +339,7 @@ async fn an_unwritable_confirmed_file_does_not_stop_the_connect() {
         Script::default().changed(HostKeyChangedDecision::Replace),
     );
     assert!(h.decide(&key(ED_B)).await);
-    h.apply_pending_trust().unwrap();
+    h.apply_pending_trust().await.unwrap();
     assert_eq!(status(&f.known, &key(ED_B)), HostKeyStatus::Known);
 }
 
@@ -379,7 +379,7 @@ async fn an_unwritable_known_hosts_fails_when_the_trust_is_applied() {
         Script::default().unknown(HostKeyDecision::TrustAlways),
     );
     assert!(h.decide(&key(ED_A)).await);
-    assert!(h.apply_pending_trust().is_err());
+    assert!(h.apply_pending_trust().await.is_err());
     assert!(
         !f.confirmed.exists(),
         "nothing is confirmed that was not saved"
@@ -398,7 +398,7 @@ async fn an_in_memory_confirmed_layer_asks_once_per_process() {
     );
     assert!(h.decide(&key(ED_A)).await);
     assert_eq!(script.prompts(), (0, 1, 0));
-    h.apply_pending_trust().unwrap();
+    h.apply_pending_trust().await.unwrap();
     let (h, script) = handler(&f.known, Some(memory), Script::default());
     assert!(h.decide(&key(ED_A)).await);
     assert_eq!(script.prompts(), (0, 0, 0));
@@ -418,12 +418,12 @@ async fn trust_always_writes_known_hosts_only_after_the_handshake() {
         !f.known.exists() && !f.confirmed.exists(),
         "the decision alone writes nothing"
     );
-    h.apply_pending_trust().unwrap();
+    h.apply_pending_trust().await.unwrap();
     assert_eq!(status(&f.known, &key(ED_A)), HostKeyStatus::Known);
     assert_eq!(status(&f.confirmed, &key(ED_A)), HostKeyStatus::Known);
     // applied once: a second call has nothing left to write
     std::fs::remove_file(&f.known).unwrap();
-    h.apply_pending_trust().unwrap();
+    h.apply_pending_trust().await.unwrap();
     assert!(!f.known.exists());
 }
 

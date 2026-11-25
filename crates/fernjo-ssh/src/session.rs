@@ -581,7 +581,10 @@ impl Session {
             .map(KnownHosts::new)
             .or_else(|| params.confirmed_in_memory.clone());
         let mut config = client_config(params.keepalive_secs);
-        let stored = known_hosts.stored_algorithms(&params.host, params.port)?;
+        let stored = {
+            let (store, host, port) = (known_hosts.clone(), params.host.clone(), params.port);
+            crate::known_hosts::blocking(move || store.stored_algorithms(&host, port)).await?
+        };
         restrict_host_key_algorithms(&mut config, &stored);
 
         // Name resolution and the TCP connect get the whole timeout.
@@ -630,7 +633,7 @@ impl Session {
         socket_guard.disarm();
 
         // The key exchange is verified: only now is the user's decision about the key written.
-        trust.apply_pending_trust()?;
+        trust.apply_pending_trust().await?;
 
         authenticate(&mut handle, &params, interaction.as_ref()).await?;
 

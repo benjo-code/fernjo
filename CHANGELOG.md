@@ -38,6 +38,7 @@ Daily-use features: milestone M10.
 - App shortcuts (Ctrl+Shift+letter, Cmd+letter) work on non-Latin keyboard layouts, and Ctrl+Shift+W no longer closes a hidden tab while the vault view is open.
 - The splitter's keyboard focus is a 1 px centred line and its hit area no longer covers the tree's scrollbar.
 - The tree keeps 21 rows at the default window size instead of 23 (the quick connect field takes the room) so the properties panel stays reachable at 1280x800.
+- Data files are never read or copied through a symbolic link at their own name (M11): a `known_hosts`, `settings.json` or other data file that is a symbolic link (a sync tool can plant one pointing at, for example, a private SSH key) is refused instead of being read and written back, together with its `.bak`, as a regular file in the synced folder. A FIFO or device at the name is refused without blocking, and `known_hosts` is read only up to 16 MiB. A single data file you linked on purpose (for example `known_hosts` to `~/.ssh/known_hosts`) now makes the connect or load fail with an error; link the whole data folder instead.
 
 ## [0.2.0] - 2026-11-22
 

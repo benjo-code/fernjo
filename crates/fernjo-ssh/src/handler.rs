@@ -11,7 +11,7 @@ use crate::interaction::{
     HostKeyChangedDecision, HostKeyChangedPrompt, HostKeyDecision, HostKeyPrompt,
     HostKeySyncedPrompt, Interaction,
 };
-use crate::known_hosts::{HostKeyStatus, KnownHosts, fingerprint};
+use crate::known_hosts::{HostKeyStatus, KnownHosts, blocking, fingerprint};
 
 /// Why the handler refused a key. `check_server_key` can only answer yes or no, so the real reason
 /// is parked here for `Session::connect` to turn into the matching `SshError`.
@@ -86,11 +86,34 @@ impl<I: Interaction> ClientHandler<I> {
         false
     }
 
+    /// `store.check` for this host and port, on the blocking pool (see `known_hosts::blocking`).
+    async fn check_in(
+        &self,
+        store: &KnownHosts,
+        key: &PublicKey,
+    ) -> Result<HostKeyStatus, SshError> {
+        let (store, host, port, key) = (store.clone(), self.host.clone(), self.port, key.clone());
+        blocking(move || store.check(&host, port, &key)).await
+    }
+
+    /// Adds (`replace: false`) or replaces the key in `known_hosts`, on the blocking pool.
+    async fn write_known(&self, key: PublicKey, replace: bool) -> Result<(), SshError> {
+        let (store, host, port) = (self.known_hosts.clone(), self.host.clone(), self.port);
+        blocking(move || {
+            if replace {
+                store.replace(&host, port, &key)
+            } else {
+                store.add(&host, port, &key)
+            }
+        })
+        .await
+    }
+
     async fn decide(&self, key: &PublicKey) -> bool {
         if let Ok(mut slot) = self.pending_trust.lock() {
             *slot = None;
         }
-        let status = match self.known_hosts.check(&self.host, self.port, key) {
+        let status = match self.check_in(&self.known_hosts, key).await {
             Ok(status) => status,
             Err(e) => return self.reject(e),
         };
@@ -140,7 +163,7 @@ impl<I: Interaction> ClientHandler<I> {
             return true;
         };
         // An unreadable confirmed file counts as "not confirmed": it asks, it never trusts.
-        let previous = match confirmed.check(&self.host, self.port, key) {
+        let previous = match self.check_in(confirmed, key).await {
             Ok(HostKeyStatus::Known) => return true,
             Ok(HostKeyStatus::Unknown) | Err(_) => Vec::new(),
             Ok(HostKeyStatus::Changed { stored }) => stored,
@@ -176,22 +199,22 @@ impl<I: Interaction> ClientHandler<I> {
     /// a failed handshake never calls it, so a peer that merely offered a key cannot get it
     /// recorded. A failed write of `known_hosts` is
     /// an error (the connect stops); the device-confirmed file is best effort.
-    pub(crate) fn apply_pending_trust(&self) -> Result<(), SshError> {
+    pub(crate) async fn apply_pending_trust(&self) -> Result<(), SshError> {
         let action = self.pending_trust.lock().ok().and_then(|mut s| s.take());
         match action {
             None => Ok(()),
             Some(TrustAction::Add(key)) => {
-                self.known_hosts.add(&self.host, self.port, &key)?;
-                self.confirm(&key);
+                self.write_known(key.clone(), false).await?;
+                self.confirm(&key).await;
                 Ok(())
             }
             Some(TrustAction::Replace(key)) => {
-                self.known_hosts.replace(&self.host, self.port, &key)?;
-                self.confirm(&key);
+                self.write_known(key.clone(), true).await?;
+                self.confirm(&key).await;
                 Ok(())
             }
             Some(TrustAction::Confirm(key)) => {
-                self.confirm(&key);
+                self.confirm(&key).await;
                 Ok(())
             }
         }
@@ -199,13 +222,15 @@ impl<I: Interaction> ClientHandler<I> {
 
     /// Records the key as confirmed on this device. Best effort: when the file cannot be written
     /// the connect goes on and the next one asks again.
-    fn confirm(&self, key: &PublicKey) {
+    async fn confirm(&self, key: &PublicKey) {
         let Some(confirmed) = &self.confirmed else {
             return;
         };
         // `trust` replaces a stored key of the same algorithm, so an earlier confirmation of a
         // different key (or an unreadable-then-recovered file) never leaves a stale one behind.
-        let _ = confirmed.trust(&self.host, self.port, key);
+        let (store, host, port, key) =
+            (confirmed.clone(), self.host.clone(), self.port, key.clone());
+        let _ = blocking(move || store.trust(&host, port, &key)).await;
     }
 }
 

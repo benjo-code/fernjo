@@ -7,7 +7,6 @@
 //! exact names (`host`, `[host]:port`) and hashed `|1|` entries; wildcards, negations and `@marker`
 //! lines are left alone and never match.
 
-use std::fs;
 use std::io;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -27,6 +26,12 @@ use crate::SshError;
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 const BOM: &[u8] = b"\xEF\xBB\xBF";
+
+/// Largest `known_hosts` (or `known_hosts.confirmed`) that is read: 16 MiB. A line is about 100
+/// to 750 bytes (an RSA 4096 key is the longest), so this holds tens of thousands of hosts, more
+/// than any hand-kept or managed file; the whole file is read and scanned on every connect. A
+/// larger file is refused (`Io`), like an unreadable one.
+pub(crate) const MAX_KNOWN_HOSTS_LEN: u64 = 16 * 1024 * 1024;
 
 /// Result of comparing a presented host key with the stored ones.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -170,12 +175,25 @@ impl KnownHosts {
         if let Some(memory) = &self.memory {
             return Ok(memory.lock().map_err(|_| SshError::Io)?.clone());
         }
-        match fs::read(&self.path) {
+        // capped, and never through a symlink or from a FIFO or device at the name (a planted
+        // link would otherwise be read here and written back into the synced folder by `modify`)
+        match fernjo_fs::read_capped(&self.path, MAX_KNOWN_HOSTS_LEN) {
             Ok(b) => Ok(b),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
             Err(_) => Err(SshError::Io),
         }
     }
+}
+
+/// Runs a `known_hosts` file operation on tokio's blocking pool, so a slow or hung file system
+/// (a stalled network share) holds a blocking thread instead of one of the shared runtime's async
+/// workers. A panicked or cancelled operation is `Io`.
+pub(crate) async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, SshError> + Send + 'static,
+) -> Result<T, SshError> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .unwrap_or(Err(SshError::Io))
 }
 
 /// `bytes` without the entries for `name` whose key has the algorithm of `key`. A line shared with
@@ -403,6 +421,11 @@ mod tests {
             .collect();
         v.sort();
         v
+    }
+
+    #[track_caller]
+    fn expect_io<T: std::fmt::Debug>(result: Result<T, SshError>) {
+        assert!(matches!(result, Err(SshError::Io)), "{result:?}");
     }
 
     #[test]
@@ -889,5 +912,107 @@ mod tests {
             fs::read_to_string(d.path().join("known_hosts.tmp")).unwrap(),
             "stale"
         );
+    }
+
+    #[test]
+    fn an_oversized_known_hosts_is_refused_and_left_alone() {
+        let (d, kh, p) = setup();
+        // a real line first, so a reader without the cap would find the host
+        let line = format!("big.example ssh-ed25519 {ED_A}\n");
+        fs::write(&p, &line).unwrap();
+        let file = fs::OpenOptions::new().write(true).open(&p).unwrap();
+        file.set_len(MAX_KNOWN_HOSTS_LEN + 1).unwrap();
+        drop(file);
+
+        expect_io(kh.check("big.example", 22, &key(ED_A)));
+        expect_io(kh.stored_algorithms("big.example", 22));
+        expect_io(kh.add("a", 22, &key(ED_B)));
+        assert_eq!(fs::metadata(&p).unwrap().len(), MAX_KNOWN_HOSTS_LEN + 1);
+        assert_eq!(names(d.path()), ["known_hosts"], "nothing written");
+
+        // exactly at the cap is still read
+        let file = fs::OpenOptions::new().write(true).open(&p).unwrap();
+        file.set_len(MAX_KNOWN_HOSTS_LEN).unwrap();
+        drop(file);
+        assert_eq!(
+            kh.check("big.example", 22, &key(ED_A)).unwrap(),
+            HostKeyStatus::Known
+        );
+    }
+
+    #[test]
+    fn a_folder_at_the_known_hosts_name_is_an_error_not_an_empty_file() {
+        let (d, kh, p) = setup();
+        fs::create_dir(&p).unwrap();
+        expect_io(kh.check("h", 22, &key(ED_A)));
+        expect_io(kh.add("h", 22, &key(ED_A)));
+        assert!(p.is_dir());
+        assert_eq!(names(d.path()), ["known_hosts"]);
+    }
+
+    /// Every regular file below `dir` (recursively) that contains `needle`.
+    #[cfg(unix)]
+    fn files_containing(dir: &Path, needle: &[u8]) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let meta = fs::symlink_metadata(&path).unwrap();
+            if meta.is_dir() {
+                found.extend(files_containing(&path, needle));
+            } else if meta.file_type().is_file()
+                && fs::read(&path)
+                    .unwrap()
+                    .windows(needle.len())
+                    .any(|w| w == needle)
+            {
+                found.push(path);
+            }
+        }
+        found
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn add_over_a_symlinked_known_hosts_does_not_copy_the_link_target() {
+        let data = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("id_ed25519");
+        let sentinel = b"-----BEGIN OPENSSH PRIVATE KEY----- SENTINEL";
+        fs::write(&secret, sentinel).unwrap();
+        let p = data.path().join("known_hosts");
+        std::os::unix::fs::symlink(&secret, &p).unwrap();
+        let kh = KnownHosts::new(&p);
+
+        expect_io(kh.check("h", 22, &key(ED_A)));
+        expect_io(kh.add("h", 22, &key(ED_A)));
+        expect_io(kh.replace("h", 22, &key(ED_A)));
+
+        assert!(files_containing(data.path(), sentinel).is_empty());
+        assert_eq!(fs::read(&secret).unwrap(), sentinel);
+        assert!(fs::symlink_metadata(&p).unwrap().file_type().is_symlink());
+        assert_eq!(names(data.path()), ["known_hosts"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_at_the_known_hosts_name_is_refused_without_blocking() {
+        let (d, _kh, p) = setup();
+        let status = std::process::Command::new("mkfifo")
+            .arg(&p)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let path = p.clone();
+        std::thread::spawn(move || {
+            let kh = KnownHosts::new(&path);
+            let _ = tx.send((kh.check("h", 22, &key(ED_A)), kh.add("h", 22, &key(ED_A))));
+        });
+        let (check, add) = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("opening the FIFO blocked");
+        expect_io(check);
+        expect_io(add);
+        assert_eq!(names(d.path()), ["known_hosts"]);
     }
 }
