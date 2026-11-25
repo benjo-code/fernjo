@@ -225,6 +225,8 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -247,6 +249,14 @@ jobs:
 
       - name: Write SHA256SUMS
         run: (cd installers && sha256sum -- *) > SHA256SUMS
+
+      # Build provenance (M11 review #71): SHA256SUMS sits in the same mutable release as the
+      # installers, so it proves integrity, not origin. The attestation ties each installer to this
+      # workflow run and the tagged commit; check it with `gh attestation verify <file> --repo
+      # benjo-code/fernjo`.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: installers/*
 
       - name: Attach the installers to the release
         env:

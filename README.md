@@ -46,6 +46,14 @@ shasum -a 256 <file>                       # macOS: compare the printed hash wit
 (Get-FileHash .\fernjo_<version>_x64-setup.exe -Algorithm SHA256).Hash   # compare with the line in SHA256SUMS
 ```
 
+`SHA256SUMS` sits in the same release as the installers, so it only shows that the download is intact. To check where an installer came from, verify its build provenance with the [GitHub CLI](https://cli.github.com/):
+
+```bash
+gh attestation verify <installer file> --repo benjo-code/fernjo
+```
+
+A passing check proves that the file was built by this repository's release workflow from the tagged commit. Releases before v0.3.0 have no attestation.
+
 **Windows.** Run the setup. SmartScreen shows "Windows protected your PC": choose "More info", then "Run anyway". The install is per user (under `%LOCALAPPDATA%\fernjo`) and needs no administrator rights. Uninstalling keeps your data in `%APPDATA%\fernjo`.
 
 **macOS** (the flow below, from the quarantine flag through Open Anyway to the running app, was reported to work by the project owner on an Intel Mac (macOS 15) on 2026-11-18, so with the Intel image; no per-step details. The Apple Silicon image has not been started on a real Apple Silicon Mac). Open the `.dmg` and drag fernjo to Applications. The first start is blocked because the app is unsigned and not notarised: open System Settings, Privacy & Security, scroll to the message about fernjo and choose "Open Anyway". Alternatively remove the quarantine flag once: `xattr -dr com.apple.quarantine /Applications/fernjo.app`. Use the Apple Silicon image on M-series Macs and the Intel image otherwise; macOS 11 or newer.
