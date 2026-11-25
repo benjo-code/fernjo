@@ -89,6 +89,16 @@ pub fn tick(state: &AppState, now: Instant, wall: SystemTime) -> Option<VaultSta
     vault_commands::vault_lock(state).ok()
 }
 
+/// A heartbeat from the UI. When the idle limit has already run out (a long sleep: the first
+/// input can arrive before the idle thread's next tick), the overdue lock wins: the vault is
+/// locked first and the status returned, so activity never cancels a lock that was due.
+/// Otherwise it restarts the idle clock.
+pub fn note_activity_at(state: &AppState, now: Instant, wall: SystemTime) -> Option<VaultStatus> {
+    let locked = run_tick(state, now, wall);
+    state.idle.note(now, wall);
+    locked
+}
+
 /// Runs `f` and turns a panic into `None`, so one bad tick cannot end the idle thread (a dead
 /// thread would silently stop the auto-lock for the rest of the run). It covers a panic inside
 /// the tick; a vault mutex poisoned by a panic elsewhere is handled separately: the unlocked
@@ -197,16 +207,49 @@ mod tests {
     }
 
     #[test]
-    fn activity_resets_both_clocks() {
+    fn activity_within_the_limit_resets_both_clocks() {
         let (t0, w0) = start();
         let tracker = IdleTracker::new(t0, w0);
-        // a long sleep, then the user moves the mouse
-        let (now, wall) = (t0 + Duration::from_secs(10), w0 + 8 * 60 * MIN);
-        assert!(tracker.is_due(now, wall, Some(15)));
-        tracker.note(now, wall);
+        // the steady clock stood still for 10 s while the wall clock ran 10 min: not overdue
+        let (now, wall) = (t0 + Duration::from_secs(10), w0 + 10 * MIN);
         assert!(!tracker.is_due(now, wall, Some(15)));
+        tracker.note(now, wall);
         assert!(!tracker.is_due(now + 14 * MIN, wall + 14 * MIN, Some(15)));
         assert!(tracker.is_due(now + 15 * MIN, wall + 15 * MIN, Some(15)));
+    }
+
+    #[test]
+    fn activity_after_an_overdue_sleep_locks_instead_of_resetting() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = AppState::open(Some(dir.path().to_path_buf()));
+        vault_commands::vault_create(&st, secrecy::SecretString::from("a master password"), false)
+            .unwrap();
+        *st.vault_auto_lock_minutes.lock().unwrap() = Some(15);
+        let (t0, w0) = start();
+        st.idle.note(t0, w0);
+        // a long sleep (the steady clock stood still), then the first mouse move reaches the
+        // app before the idle thread has ticked
+        let (now, wall) = (t0 + Duration::from_secs(10), w0 + 8 * 60 * MIN);
+        assert!(vault_is_unlocked(&st));
+        let status = note_activity_at(&st, now, wall).expect("the overdue lock wins");
+        assert_eq!(status.state, "locked");
+        assert!(!vault_is_unlocked(&st));
+    }
+
+    #[test]
+    fn activity_within_the_limit_keeps_the_vault_and_resets_the_clock() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = AppState::open(Some(dir.path().to_path_buf()));
+        vault_commands::vault_create(&st, secrecy::SecretString::from("a master password"), false)
+            .unwrap();
+        *st.vault_auto_lock_minutes.lock().unwrap() = Some(15);
+        let (t0, w0) = start();
+        st.idle.note(t0, w0);
+        assert!(note_activity_at(&st, t0 + 14 * MIN, w0 + 14 * MIN).is_none());
+        assert!(vault_is_unlocked(&st));
+        // the clock restarted at minute 14
+        assert!(tick(&st, t0 + 28 * MIN, w0 + 28 * MIN).is_none());
+        assert!(tick(&st, t0 + 29 * MIN, w0 + 29 * MIN).is_some());
     }
 
     #[test]

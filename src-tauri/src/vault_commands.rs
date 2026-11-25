@@ -1860,7 +1860,7 @@ mod tests {
                 j(crate::app_settings::set_vault_auto_lock(&w.st, Some(15)))
             }),
             entry("note_activity", |w| {
-                crate::app_settings::note_activity(&w.st);
+                let _ = crate::app_settings::note_activity(&w.st);
                 String::new()
             }),
             entry("open_session", |w| {
