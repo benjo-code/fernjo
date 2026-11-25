@@ -31,7 +31,8 @@ pub enum SyncError {
     HubProtocol(String),
     /// The hub's answer is larger than an envelope may be.
     HubTooLarge,
-    /// The hub address is not allowed (not https, and not plain http to a loopback address).
+    /// The hub address is not allowed (not https; plain http only to a loopback address, and only
+    /// in debug builds).
     InvalidHubUrl(String),
     /// The pinned CA certificate is not valid PEM.
     InvalidCa,

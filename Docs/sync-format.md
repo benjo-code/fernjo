@@ -56,7 +56,7 @@ Limits a device applies to everything it takes from the hub, before anything is 
 
 ## Hub HTTP API (protocol 1)
 
-Every request carries `Authorization: Bearer <hub secret>`. The hub stores only the SHA-256 of the secret and compares in constant time. A missing or wrong secret is `401` (with `WWW-Authenticate: Bearer`) on both endpoints (the secret is checked inside the two handlers: another path answers `404`, another method `405`). The hub speaks plain HTTP and is meant to sit behind a TLS-terminating proxy; the client only talks HTTPS (plain `http://` only to the literal `127.0.0.1` and `[::1]`, for tests), accepts no user name, query (`?`) or fragment (`#`) in the address, never follows redirects, and trusts either the system roots or the certificates of one pinned PEM text from the pairing code (every certificate in it is trusted).
+Every request carries `Authorization: Bearer <hub secret>`. The hub stores only the SHA-256 of the secret and compares in constant time. A missing or wrong secret is `401` (with `WWW-Authenticate: Bearer`) on both endpoints (the secret is checked inside the two handlers: another path answers `404`, another method `405`). The hub speaks plain HTTP and is meant to sit behind a TLS-terminating proxy; the client only talks HTTPS (plain `http://` only to the literal `127.0.0.1` and `[::1]`, and only in debug builds, for the tests; a release build refuses every `http://` address), accepts no user name, query (`?`) or fragment (`#`) in the address, never follows redirects, and trusts either the system roots or the certificates of one pinned PEM text from the pairing code (every certificate in it is trusted).
 
 | Request | Answer |
 |---|---|

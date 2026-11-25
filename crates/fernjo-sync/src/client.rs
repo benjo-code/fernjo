@@ -1,10 +1,10 @@
 //! The blocking HTTP client for the sync hub.
 //!
-//! HTTPS only (plain `http://` only to the literal loopback addresses), trust is the system roots
-//! or exactly one pinned CA from the pairing code, redirects are never followed, every call has a
-//! connect and a total timeout, and a response body is read in bounded steps: more than
-//! [`MAX_ENVELOPE_LEN`] bytes is `hub_too_large` and the rest is never pulled from the socket.
-//! The hub secret is held as a `SecretString` and only ever sent as the bearer header.
+//! HTTPS only (plain `http://` only to the literal loopback addresses, and only in debug builds),
+//! trust is the system roots or exactly one pinned CA from the pairing code, redirects are never
+//! followed, every call has a connect and a total timeout, and a response body is read in bounded
+//! steps: more than [`MAX_ENVELOPE_LEN`] bytes is `hub_too_large` and the rest is never pulled from
+//! the socket. The hub secret is held as a `SecretString` and only ever sent as the bearer header.
 
 use std::fmt;
 use std::io::Read;
@@ -55,9 +55,20 @@ pub struct HubInfo {
     pub max_bytes: u64,
 }
 
-/// Accepts `https://...`, and `http://` only for the literal addresses `127.0.0.1` and `[::1]`.
-/// `localhost` is not accepted, and neither is a user name, a query or a fragment in the address.
+/// Whether plain `http://` to a literal loopback address is accepted: in debug builds only, which
+/// is what the tests run (the in-process hub speaks plain HTTP on loopback). A release build
+/// talks HTTPS only, so another local user who binds the port while a loopback hub is down never
+/// receives the hub secret.
+const ALLOW_PLAIN_LOOPBACK: bool = cfg!(debug_assertions);
+
+/// Accepts `https://...`, and, in debug builds, `http://` for the literal addresses `127.0.0.1`
+/// and `[::1]`. `localhost` is not accepted, and neither is a user name, a query or a fragment in
+/// the address.
 pub(crate) fn check_hub_url(url: &str) -> Result<(), SyncError> {
+    check_hub_url_with(url, ALLOW_PLAIN_LOOPBACK)
+}
+
+fn check_hub_url_with(url: &str, allow_plain_loopback: bool) -> Result<(), SyncError> {
     let refuse = |why: &str| Err(SyncError::InvalidHubUrl(why.to_owned()));
     let (secure, rest) = if let Some(rest) = url.strip_prefix("https://") {
         (true, rest)
@@ -96,6 +107,9 @@ pub(crate) fn check_hub_url(url: &str) -> Result<(), SyncError> {
     };
     if host.is_empty() || host == "[]" {
         return refuse("the address needs a host");
+    }
+    if !secure && !allow_plain_loopback {
+        return refuse("the address must start with https://");
     }
     if !secure && host != "127.0.0.1" && host != "[::1]" {
         return refuse("plain http is only allowed to 127.0.0.1 and ::1; use https");
@@ -400,13 +414,26 @@ mod tests {
             let err = HubClient::new(&config(url)).unwrap_err();
             assert_eq!(err.code(), "invalid_hub_url", "{url}");
         }
-        for url in [
-            "http://127.0.0.1:8787",
-            "http://[::1]:8787/",
-            "https://hub.example.test",
-        ] {
-            assert!(HubClient::new(&config(url)).is_ok(), "{url}");
+        assert!(HubClient::new(&config("https://hub.example.test")).is_ok());
+        for url in ["http://127.0.0.1:8787", "http://[::1]:8787/"] {
+            assert_eq!(
+                HubClient::new(&config(url)).is_ok(),
+                ALLOW_PLAIN_LOOPBACK,
+                "{url}"
+            );
         }
+    }
+
+    #[test]
+    fn plain_http_to_loopback_is_refused_where_it_is_not_allowed() {
+        for url in ["http://127.0.0.1:8787", "http://[::1]:8787/"] {
+            let err = check_hub_url_with(url, false).unwrap_err();
+            assert_eq!(err.code(), "invalid_hub_url", "{url}");
+            check_hub_url_with(url, true).unwrap();
+        }
+        check_hub_url_with("https://127.0.0.1:8787", false).unwrap();
+        // debug builds (the tests) allow it, release builds do not
+        assert_eq!(ALLOW_PLAIN_LOOPBACK, cfg!(debug_assertions));
     }
 
     #[test]
