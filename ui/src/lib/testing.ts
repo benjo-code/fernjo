@@ -3,6 +3,7 @@ import type {
   Api,
   ApiError,
   ApplyResult,
+  AutoLockInfo,
   ConnectionNode,
   CredentialInfo,
   DataFolderInfo,
@@ -14,6 +15,8 @@ import type {
   ResolvedNode,
   SessionEvent,
   Snapshot,
+  SyncStatus,
+  OpenTabsInfo,
   TerminalSettings,
   Theme,
   ThemeInfo,
@@ -110,6 +113,37 @@ export function themeInfo(partial: Partial<ThemeInfo> = {}): ThemeInfo {
   return { theme: "system", persistent: true, unsavedReason: null, ...partial };
 }
 
+export function openTabsInfo(partial: Partial<OpenTabsInfo> = {}): OpenTabsInfo {
+  return {
+    reopen: true,
+    persistent: true,
+    unsavedReason: null,
+    active: null,
+    tabs: [],
+    ...partial,
+  };
+}
+
+export function autoLockInfo(partial: Partial<AutoLockInfo> = {}): AutoLockInfo {
+  return { minutes: null, persistent: true, unsavedReason: null, ...partial };
+}
+
+export function syncStatus(partial: Partial<SyncStatus> = {}): SyncStatus {
+  return {
+    state: "off",
+    lastSyncedAt: null,
+    pendingChanges: 0,
+    deviceName: null,
+    hubUrl: null,
+    findings: [],
+    error: null,
+    running: false,
+    applied: 0,
+    confirmation: null,
+    ...partial,
+  };
+}
+
 export function report(partial: Partial<Report> = {}): Report {
   return {
     counts: {
@@ -178,6 +212,13 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     chooseDataFolder: [],
     restartApp: [],
     openSession: [],
+    quickParse: [],
+    clipboardReadText: [],
+    openQuickSession: [],
+    restoreSession: [],
+    getOpenTabs: [],
+    setReopenTabs: [],
+    saveOpenTabs: [],
     sessionInput: [],
     rdpInput: [],
     rdpClipboard: [],
@@ -192,13 +233,29 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     setTerminalSettings: [],
     getTheme: [],
     setTheme: [],
+    getVaultAutoLock: [],
+    setVaultAutoLock: [],
+    noteActivity: [],
     importPick: [],
     importInspect: [],
     importApply: [],
     importCancel: [],
     exportConnections: [],
     exportBackup: [],
+    syncStatus: [],
+    syncSetup: [],
+    syncPairingCode: [],
+    syncJoin: [],
+    syncNow: [],
+    syncReseed: [],
+    syncEditSecret: [],
+    syncLeave: [],
+    syncDismissFindings: [],
+    onSyncStatus: [],
+    onVaultStatus: [],
   };
+  const syncHandlers = new Set<(status: SyncStatus) => void>();
+  const vaultHandlers = new Set<(status: VaultStatus) => void>();
   let current = initial;
   const mutation = (id: string | null): Mutation => ({ id, snapshot: snapshot(current) });
   const api: Api = {
@@ -325,6 +382,43 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
       calls.openSession.push(args);
       return impl.openSession ? impl.openSession(...args) : "sid";
     },
+    clipboardReadText: async () => {
+      calls.clipboardReadText.push([]);
+      return impl.clipboardReadText ? impl.clipboardReadText() : "";
+    },
+    quickParse: async (input) => {
+      calls.quickParse.push([input]);
+      if (impl.quickParse) return impl.quickParse(input);
+      const m = /^(?:(ssh|rdp):\/\/)?(?:([^@]+)@)?([^:@]+)(?::(\d+))?$/.exec(input.trim());
+      if (!m) throw apiError("quick_bad_target", "Not a valid target");
+      const protocol = m[1] === "rdp" ? "rdp" : "ssh";
+      return {
+        protocol,
+        host: m[3]!,
+        port: m[4] ? Number(m[4]) : protocol === "rdp" ? 3389 : 22,
+        user: m[2] ?? null,
+      };
+    },
+    restoreSession: async (...args) => {
+      calls.restoreSession.push(args);
+      return impl.restoreSession ? impl.restoreSession(...args) : "sid";
+    },
+    getOpenTabs: async () => {
+      calls.getOpenTabs.push([]);
+      return impl.getOpenTabs ? impl.getOpenTabs() : openTabsInfo();
+    },
+    setReopenTabs: async (...args) => {
+      calls.setReopenTabs.push(args);
+      return impl.setReopenTabs ? impl.setReopenTabs(...args) : openTabsInfo({ reopen: args[0] });
+    },
+    saveOpenTabs: async (...args) => {
+      calls.saveOpenTabs.push(args);
+      if (impl.saveOpenTabs) await impl.saveOpenTabs(...args);
+    },
+    openQuickSession: async (...args) => {
+      calls.openQuickSession.push(args);
+      return impl.openQuickSession ? impl.openQuickSession(...args) : "sid";
+    },
     sessionInput: async (...args) => {
       calls.sessionInput.push(args);
       if (impl.sessionInput) await impl.sessionInput(...args);
@@ -383,6 +477,20 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
       calls.setTheme.push(args);
       return impl.setTheme ? impl.setTheme(...args) : themeInfo({ theme: args[0] as Theme });
     },
+    getVaultAutoLock: async () => {
+      calls.getVaultAutoLock.push([]);
+      return impl.getVaultAutoLock ? impl.getVaultAutoLock() : autoLockInfo();
+    },
+    setVaultAutoLock: async (...args) => {
+      calls.setVaultAutoLock.push(args);
+      return impl.setVaultAutoLock
+        ? impl.setVaultAutoLock(...args)
+        : autoLockInfo({ minutes: args[0] });
+    },
+    noteActivity: async () => {
+      calls.noteActivity.push([]);
+      if (impl.noteActivity) await impl.noteActivity();
+    },
     importPick: async (...args) => {
       calls.importPick.push(args);
       return impl.importPick ? impl.importPick(...args) : { fileName: "confCons.xml" };
@@ -411,10 +519,66 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
         ? impl.exportBackup(...args)
         : { fileName: "fernjo-backup.fjbk", droppedCredentials: 0 };
     },
+    syncStatus: async () => {
+      calls.syncStatus.push([]);
+      return impl.syncStatus ? impl.syncStatus() : syncStatus();
+    },
+    syncSetup: async (...args) => {
+      calls.syncSetup.push(args);
+      return impl.syncSetup ? impl.syncSetup(...args) : syncStatus({ state: "ok" });
+    },
+    syncPairingCode: async () => {
+      calls.syncPairingCode.push([]);
+      return impl.syncPairingCode ? impl.syncPairingCode() : "PAIRING-CODE";
+    },
+    syncJoin: async (...args) => {
+      calls.syncJoin.push(args);
+      return impl.syncJoin ? impl.syncJoin(...args) : syncStatus({ state: "ok" });
+    },
+    syncNow: async () => {
+      calls.syncNow.push([]);
+      return impl.syncNow ? impl.syncNow() : syncStatus({ state: "ok" });
+    },
+    syncReseed: async () => {
+      calls.syncReseed.push([]);
+      return impl.syncReseed ? impl.syncReseed() : syncStatus({ state: "ok" });
+    },
+    syncEditSecret: async (...args) => {
+      calls.syncEditSecret.push(args);
+      return impl.syncEditSecret ? impl.syncEditSecret(...args) : syncStatus({ state: "ok" });
+    },
+    syncLeave: async () => {
+      calls.syncLeave.push([]);
+      return impl.syncLeave ? impl.syncLeave() : syncStatus();
+    },
+    syncDismissFindings: async () => {
+      calls.syncDismissFindings.push([]);
+      if (impl.syncDismissFindings) await impl.syncDismissFindings();
+    },
+    onSyncStatus: async (handler) => {
+      calls.onSyncStatus.push([]);
+      if (impl.onSyncStatus) return impl.onSyncStatus(handler);
+      syncHandlers.add(handler);
+      return () => void syncHandlers.delete(handler);
+    },
+    onVaultStatus: async (handler) => {
+      calls.onVaultStatus.push([]);
+      if (impl.onVaultStatus) return impl.onVaultStatus(handler);
+      vaultHandlers.add(handler);
+      return () => void vaultHandlers.delete(handler);
+    },
   };
   return {
     api,
     calls,
+    /** Plays the part of Rust's `vault-status` event. */
+    emitVault(status: VaultStatus) {
+      for (const h of [...vaultHandlers]) h(status);
+    },
+    /** Plays the part of Rust's `sync-status` event. */
+    emitSync(status: SyncStatus) {
+      for (const h of [...syncHandlers]) h(status);
+    },
     /** Changes what the default implementations return as the tree. */
     setTree(children: TreeNode[]) {
       current = children;

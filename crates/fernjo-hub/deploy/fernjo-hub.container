@@ -1,0 +1,27 @@
+# Rootless Quadlet unit: ~/.config/containers/systemd/fernjo-hub.container
+# Before the first start run `fernjo-hub init` once (see Docs/hub.md).
+
+[Unit]
+Description=fernjo sync hub
+After=network-online.target
+
+[Container]
+Image=localhost/fernjo-hub:latest
+ContainerName=fernjo-hub
+# only loopback on the host: Caddy is the one that is reachable
+PublishPort=127.0.0.1:8787:8787
+Volume=fernjo-hub-data:/data:Z
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=ALL
+# the image runs as 10001; in a rootless user namespace map it onto the volume's owner
+UserNS=keep-id:uid=10001,gid=10001
+User=10001:10001
+# a tiny init as PID 1 (belt and braces next to the hub's own SIGTERM handling)
+RunInit=true
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

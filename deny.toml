@@ -1,6 +1,10 @@
 # cargo-deny policy for fernjo (MIT OR Apache-2.0). See Docs/DECISIONS.md.
 
 [advisories]
+# Report unmaintained crates anywhere in the graph (the default only reports direct dependencies)
+# and fail on yanked versions (M11 review #77).
+unmaintained = "all"
+yanked = "deny"
 ignore = [
     { id = "RUSTSEC-2024-0370", reason = "proc-macro-error is unmaintained; pulled in by Tauri's Linux GTK3 stack (glib-macros), no safe upgrade exists" },
     { id = "RUSTSEC-2026-0370", reason = "zvariant is unmaintained; pulled in by zbus via tauri-plugin-single-instance (Linux D-Bus only), no safe upgrade exists" },
@@ -24,6 +28,7 @@ allow = [
     "Unicode-3.0",
     "CC0-1.0",
     "MPL-2.0",
+    "BSL-1.0",
 ]
 
 [bans]

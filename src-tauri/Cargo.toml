@@ -25,6 +25,8 @@ fernjo-vault = { path = "../crates/fernjo-vault" }
 fernjo-ssh = { path = "../crates/fernjo-ssh" }
 fernjo-rdp = { path = "../crates/fernjo-rdp" }
 fernjo-import = { path = "../crates/fernjo-import" }
+fernjo-sync = { path = "../crates/fernjo-sync" }
+fernjo-fs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 secrecy.workspace = true
@@ -34,6 +36,11 @@ tauri-plugin-opener = "2"
 tokio.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 uuid.workspace = true
+arboard = { version = "3.7", default-features = false, features = ["wayland-data-control"] }
 
 [dev-dependencies]
 tempfile.workspace = true
+fernjo-hub = { path = "../crates/fernjo-hub" }
+base64.workspace = true
+# a paused clock for the timing tests of the RDP forwarder
+tokio = { workspace = true, features = ["test-util"] }

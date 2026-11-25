@@ -43,6 +43,7 @@
         onResize: (cols, rows) => sessions.resize(id, cols, rows),
         onAck: (bytes) => sessions.ack(id, bytes),
         openUrl: (url) => void tauriApi.openExternalUrl(url).catch(() => {}),
+        readClipboard: () => tauriApi.clipboardReadText(),
         onSearchRequest: () => (searching = true),
       },
     );

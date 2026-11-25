@@ -4,6 +4,14 @@
 
 export type Protocol = "ssh" | "rdp";
 
+/** A connection typed into the quick connect field; Rust parses it and never stores it. */
+export interface QuickTarget {
+  protocol: Protocol;
+  host: string;
+  port: number;
+  user: string | null;
+}
+
 /** How big an RDP desktop is: it follows the tab, or has a fixed size in pixels. */
 export type RdpResolution = { mode: "fit" } | { mode: "fixed"; width: number; height: number };
 
@@ -221,6 +229,11 @@ export interface Api {
   getDataFolder(): Promise<DataFolderInfo>;
   /** Opens the folder picker; `null` when it was cancelled. */
   chooseDataFolder(): Promise<DataFolderInfo | null>;
+  /**
+   * Restarts the app like a close: with a connected session Rust asks first ("Restart fernjo?").
+   * No sync push runs first: sync is paused while a data folder change waits for the restart.
+   * Resolves at once, also when the user keeps the app open.
+   */
   restartApp(): Promise<void>;
   /**
    * Starts a session. Terminal output reaches `onEvent` as an `ArrayBuffer`, events as parsed
@@ -232,6 +245,31 @@ export interface Api {
     cols: number,
     rows: number,
   ): Promise<string>;
+  /** Parses `[ssh://|rdp://][user@]host[:port]`; rejects with a `quick_*` error. */
+  quickParse(input: string): Promise<QuickTarget>;
+  /** The OS clipboard text for the terminal menu Paste; rejects with `clipboard_*` errors. */
+  clipboardReadText(): Promise<string>;
+  /** Like `openSession` for a target that is not in the tree. */
+  openQuickSession(
+    target: QuickTarget,
+    onEvent: (e: SessionEvent | ArrayBuffer) => void,
+    cols: number,
+    rows: number,
+  ): Promise<string>;
+  /**
+   * Creates the session of a tab that was restored from the last run; it starts disconnected
+   * (Rust sends the explaining state event) and connects with `reconnectSession`.
+   */
+  restoreSession(
+    target: TargetView,
+    onEvent: (e: SessionEvent | ArrayBuffer) => void,
+    cols: number,
+    rows: number,
+  ): Promise<string>;
+  getOpenTabs(): Promise<OpenTabsInfo>;
+  setReopenTabs(enabled: boolean): Promise<OpenTabsInfo>;
+  /** Saves the open tabs (targets only) and the index of the active one. */
+  saveOpenTabs(tabs: SavedTab[], active: number | null): Promise<void>;
   sessionInput(id: string, data: Uint8Array): Promise<void>;
   /** RDP: keyboard and mouse events (at most 256 per call; coordinates are desktop pixels). */
   rdpInput(id: string, events: RdpInputEvent[]): Promise<void>;
@@ -253,6 +291,11 @@ export interface Api {
   }): Promise<TerminalSettings>;
   getTheme(): Promise<ThemeInfo>;
   setTheme(theme: Theme): Promise<ThemeInfo>;
+  getVaultAutoLock(): Promise<AutoLockInfo>;
+  /** `null` turns it off; Rust refuses a value outside 1 to 1440 with `invalid_auto_lock`. */
+  setVaultAutoLock(minutes: number | null): Promise<AutoLockInfo>;
+  /** The throttled heartbeat of user input; restarts Rust's idle clock. */
+  noteActivity(): Promise<void>;
   /** Opens the native file picker; `null` when it was cancelled. */
   importPick(kind: ImportKind): Promise<PickedFile | null>;
   /** The secret is an mRemoteNG key or a backup password; the only secret that goes in. */
@@ -262,6 +305,69 @@ export interface Api {
   /** Opens the save dialog and writes the file; `null` when it was cancelled. */
   exportConnections(): Promise<ExportInfo | null>;
   exportBackup(password: string): Promise<ExportInfo | null>;
+  syncStatus(): Promise<SyncStatus>;
+  /** `caPem` is `null` when the hub's certificate comes from a public CA. */
+  syncSetup(
+    url: string,
+    secret: string,
+    caPem: string | null,
+    deviceName: string,
+  ): Promise<SyncStatus>;
+  /** The explicit reveal: the pairing code contains the keys of the sync group. */
+  syncPairingCode(): Promise<string>;
+  /** Without `confirmReplace` Rust answers `needs_confirmation` with the counts and changes nothing. */
+  syncJoin(code: string, deviceName: string, confirmReplace: boolean): Promise<SyncStatus>;
+  syncNow(): Promise<SyncStatus>;
+  syncReseed(): Promise<SyncStatus>;
+  syncEditSecret(secret: string): Promise<SyncStatus>;
+  syncLeave(): Promise<SyncStatus>;
+  syncDismissFindings(): Promise<void>;
+  /** Subscribes to the `sync-status` event; resolves with the function that unsubscribes. */
+  onSyncStatus(handler: (status: SyncStatus) => void): Promise<() => void>;
+  /** Subscribes to the `vault-status` event (Rust locked the vault); resolves with the unsubscribe function. */
+  onVaultStatus(handler: (status: VaultStatus) => void): Promise<() => void>;
+}
+
+export type SyncState =
+  "off" | "ok" | "offline" | "waiting_for_unlock" | "rolled_back" | "error" | "needs_confirmation";
+
+export type SyncFindingKind =
+  | "conflictCopy"
+  | "keptEdit"
+  | "placementKept"
+  | "moveUndone"
+  | "entryConflictCopy"
+  | "entryKeptEdit"
+  | "passwordChangeDropped";
+
+export interface SyncFinding {
+  id: string;
+  name: string;
+  kind: SyncFindingKind;
+  message: string;
+}
+
+export interface SyncConfirmation {
+  connections: number;
+  folders: number;
+  /** `null` while the vault is locked. */
+  vaultEntries: number | null;
+  hasVault: boolean;
+}
+
+/** The wire type of `sync_status` and the `sync-status` event (see `sync_commands.rs`). */
+export interface SyncStatus {
+  state: SyncState;
+  /** RFC 3339 UTC of the last successful run since the app started. */
+  lastSyncedAt: string | null;
+  pendingChanges: number;
+  deviceName: string | null;
+  hubUrl: string | null;
+  findings: SyncFinding[];
+  error: ApiError | null;
+  running: boolean;
+  applied: number;
+  confirmation: SyncConfirmation | null;
 }
 
 export type ImportKind = "mremoteng" | "connections" | "backup";
@@ -344,7 +450,6 @@ export type Prompt =
       port: number;
       keyType: string;
       fingerprint: string;
-      previous: string[];
     }
   | {
       kind: "hostKeyChanged";
@@ -356,6 +461,8 @@ export type Prompt =
     }
   | {
       kind: "keyboardInteractive";
+      /** The host the connection goes to: the prompt names it as the one asking. */
+      host: string;
       name: string;
       instructions: string;
       prompts: { text: string; echo: boolean }[];
@@ -381,7 +488,12 @@ export type SessionEvent =
   /** RDP: the remote desktop has this size in pixels (before the first region and on a change). */
   | { kind: "desktop"; width: number; height: number }
   /** RDP: the remote side copied this text. */
-  | { kind: "clipboard"; text: string };
+  | { kind: "clipboard"; text: string }
+  /**
+   * RDP: the effective settings of the plan this attempt uses (first event of every attempt). The
+   * clipboard marker and the clipboard sync follow `clipboard`; `host` is named in the marker.
+   */
+  | { kind: "rdpSettings"; clipboard: boolean; host: string };
 
 /** One keyboard or mouse event for an RDP session; coordinates are desktop pixels. */
 export type RdpInputEvent =
@@ -411,6 +523,14 @@ export interface ThemeInfo {
   unsavedReason: UnsavedReason | null;
 }
 
+/** The vault auto-lock setting (`get_vault_auto_lock`). */
+export interface AutoLockInfo {
+  /** Idle minutes before the vault locks itself; `null` is off. */
+  minutes: number | null;
+  persistent: boolean;
+  unsavedReason: UnsavedReason | null;
+}
+
 export interface TerminalSettings {
   /** `null` means the default monospace stack. */
   fontFamily: string | null;
@@ -422,4 +542,37 @@ export interface TerminalSettings {
   persistent: boolean;
   /** Why they are not saved; `null` when they are. */
   unsavedReason: UnsavedReason | null;
+}
+
+/** A session target on the wire: exactly one of the two fields is present. */
+export interface TargetView {
+  node?: string;
+  quick?: QuickTarget;
+}
+
+/** One tab as it is saved: exactly one of the two fields is present. */
+export interface SavedTab {
+  node?: string;
+  quick?: QuickTarget;
+}
+
+/** A saved tab that still resolves; the title, protocol and credential use come from the tree. */
+export interface RestorableTab {
+  target: TargetView;
+  protocol: Protocol;
+  title: string;
+  /** The connection has an effective credential, so connecting needs the vault. */
+  usesVault: boolean;
+}
+
+/** `get_open_tabs` / `set_reopen_tabs`. */
+export interface OpenTabsInfo {
+  /** The "Reopen tabs on start" setting. */
+  reopen: boolean;
+  /** `false` when the setting only lives in memory. */
+  persistent: boolean;
+  unsavedReason: UnsavedReason | null;
+  /** Index into `tabs` of the tab that was active. */
+  active: number | null;
+  tabs: RestorableTab[];
 }

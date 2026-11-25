@@ -19,6 +19,7 @@ secrecy.workspace = true
 zeroize.workspace = true
 unicode-normalization.workspace = true
 getrandom.workspace = true
+fernjo-fs.workspace = true
 keyring = "4.2"
 keyring-core = "1"
 

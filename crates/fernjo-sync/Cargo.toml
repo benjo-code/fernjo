@@ -1,0 +1,35 @@
+[package]
+name = "fernjo-sync"
+description = "Multi-device sync for fernjo: snapshot, encrypted envelope and hub client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+fernjo-core = { path = "../fernjo-core" }
+fernjo-vault = { path = "../fernjo-vault" }
+fernjo-fs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chacha20poly1305.workspace = true
+hkdf.workspace = true
+sha2.workspace = true
+base64.workspace = true
+zeroize.workspace = true
+getrandom.workspace = true
+secrecy.workspace = true
+ureq = { version = "3.5", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8"
+keyring = "4.2"
+keyring-core = "1"
+
+[dev-dependencies]
+fernjo-hub = { path = "../fernjo-hub" }
+tokio = { workspace = true, features = ["rt", "net"] }
+tempfile.workspace = true
+rcgen = { version = "0.14", default-features = false, features = ["pem", "ring"] }

@@ -15,6 +15,13 @@
 //!   [`MIN_AUTO_CLOSE_SESSION`]) are set on the `disconnected` event that ends a connected
 //!   session and are `null`/`false` on every other event; the UI decides what to do with them.
 //!
+//! **Restored tabs:** `restore_session` (same `on_event` channel, `cols` and `rows` as
+//! `open_session`) creates the session without connecting. Its only event is `{kind:"state",
+//! state:"disconnected", detail:RESTORED_TEXT, exitStatus:null, endedCleanly:false}`; the tab
+//! then behaves like any disconnected one, and `reconnect_session` resolves the plan from the
+//! tree as it is then. A restored session is never "ended cleanly" and does not count as
+//! connected for the close confirmation.
+//!
 //! The UI tells them apart with `message instanceof ArrayBuffer`. Input travels the other way as
 //! the raw request body of `session_input` (the session id in the `x-fernjo-session` header).
 //! The UI acknowledges output with `session_ack(id, bytes)` once xterm.js has written it; more
@@ -27,11 +34,12 @@
 //! 128 KiB unacknowledged and at most one more batch (`MAX_BATCH` 32 KiB). Details and
 //! measurements: `Docs/DECISIONS.md`, "M4 flow control numbers".
 //!
-//! Host keys: `hostKey` is a host that is not in `known_hosts`, `hostKeyChanged` a stored key that
-//! differs, and `hostKeySynced` a key that `known_hosts` has but this device has not confirmed
-//! (another device or a file added it; it carries `previous`, the fingerprints this device
-//! confirmed before for that host, port and key type). `hostKey` and `hostKeySynced` are answered
-//! with `{kind:"hostKey", decision:"once"|"always"|"reject"}`; for the synced one "always" confirms
+//! Host keys: `hostKey` is a host that neither `known_hosts` nor this device's confirmed keys know,
+//! `hostKeyChanged` a key that differs from the stored ones (in `known_hosts` for its type, or any
+//! key this device confirmed for the host, whatever its type), and `hostKeySynced` a key that
+//! `known_hosts` has but this device has not confirmed, for a host this device confirmed nothing
+//! for (another device or a file added it). `hostKey` and `hostKeySynced` are answered with
+//! `{kind:"hostKey", decision:"once"|"always"|"reject"}`; for the synced one "always" confirms
 //! the key on this device and "once" records nothing.
 //!
 //! # RDP sessions
@@ -47,6 +55,12 @@
 //!   from the spike, `Docs/DECISIONS.md` "M8: RDP render path spike").
 //! * Two more JSON events: `{kind:"desktop", width, height}` (before the first region and on every
 //!   desktop size change) and `{kind:"clipboard", text}` (the remote side copied text).
+//! * `{kind:"rdpSettings", clipboard, host}` comes first for every attempt (`open_session`,
+//!   `open_quick_session`, `reconnect_session`, and the start after a vault unlock), before its
+//!   first state event: the effective clipboard setting and host of the plan that attempt uses.
+//!   The UI derives the tab's clipboard marker and whether it touches the local clipboard from it,
+//!   never from a separate read of the connection (M11 review #61). A restored tab gets it only
+//!   when it is reconnected.
 //! * `open_session`, `session_resize` and `reconnect_session` carry **pixels** in their `cols` and
 //!   `rows` arguments. Input is `rdp_input(id, events)` (not `session_input`) and clipboard text
 //!   `rdp_clipboard(id, text)`.
@@ -54,8 +68,25 @@
 //!   decision}` and `certificateChanged {host, port, old, new}` with `{kind:"hostKeyChanged",
 //!   decision}`; `username` and `password` are the shared ones. Pins live in
 //!   `<device folder>/rdp_certs.confirmed` (memory for the run without a device folder).
+//! * A failed connect ends with the text of the `fernjo_rdp::RdpError`. A server whose
+//!   certificate rustls cannot use (webpki cannot parse it, or its key cannot verify the handshake
+//!   signature, for example RSA under 2048 bits) fails before any prompt with "the server
+//!   certificate is not supported" (`certificate_unsupported`); other TLS failures keep "the secure
+//!   connection to the server failed" (`tls_failed`). A server without NLA (its X.224 confirm
+//!   selects no CredSSP protocol, for example TLS-only or standard RDP security, or refuses
+//!   CredSSP) fails before TLS and any prompt with "the server does not offer Network Level
+//!   Authentication (NLA); …" (`nla_required`).
 //! * An RDP session never ends "cleanly" (`endedCleanly` is always `false`): there is no shell exit
-//!   status and the tab stays until the user closes it.
+//!   status and the tab stays until the user closes it. A server that announces a virtual channel
+//!   message above 4 MiB ends the session with the detail "The server sent a channel message that
+//!   is too large." (`fernjo_rdp::CloseReason::ChannelTooLarge`). A fragmented fast-path update
+//!   above its cap (8 MiB, or twice the raw desktop when that is more) or a pointer outside the 32
+//!   advertised cache entries or above 384 pixels ends it with "The server sent a display update
+//!   beyond the limits of this client." (`fernjo_rdp::CloseReason::UpdateOutOfLimits`).
+//! * Remote clipboard text reaches the UI coalesced: at most one `clipboard` event per
+//!   `sessions::rdp::CLIPBOARD_EVENT_GAP` (500 ms) per session; text that arrives within the gap
+//!   replaces the text still waiting, so only the latest goes out (and it is still delivered when
+//!   the session ends).
 //!
 //! No event carries a secret: prompts describe what is asked, answers travel UI to Rust only.
 
@@ -80,8 +111,8 @@ use tokio::sync::{Notify, oneshot};
 use tokio::time::Instant;
 
 use crate::commands::CommandError;
-use crate::connect_plan::{self, ConnectPlan, CredentialPlan, Plan};
-use crate::session_flow::FlowControl;
+use crate::connect_plan::{self, ConnectPlan, CredentialPlan, Plan, Target};
+use crate::session_flow::{FlowControl, InputBudget, MIN_OP_WEIGHT};
 use crate::state::AppState;
 
 /// Largest raw output message.
@@ -92,6 +123,8 @@ pub const BATCH_INTERVAL: Duration = Duration::from_millis(16);
 /// connected at least this long, so a shell that dies at once (a broken profile script) keeps its
 /// tab and its message.
 pub const MIN_AUTO_CLOSE_SESSION: Duration = Duration::from_secs(5);
+/// The reason text of a tab restored from the last run: it exists, but nothing is connected.
+pub const RESTORED_TEXT: &str = "Restored from your last session. Not connected.";
 
 fn error(code: &str, message: impl Into<String>) -> CommandError {
     CommandError {
@@ -152,6 +185,13 @@ pub enum UiEvent {
     Clipboard {
         text: String,
     },
+    /// RDP only: the effective settings of the plan this attempt uses, sent before the attempt's
+    /// first state event. The tab's clipboard marker and the UI clipboard sync follow `clipboard`
+    /// (M11 review #61), `host` names the remote side in the marker.
+    RdpSettings {
+        clipboard: bool,
+        host: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -179,7 +219,6 @@ pub enum PromptView {
         port: u16,
         key_type: String,
         fingerprint: String,
-        previous: Vec<String>,
     },
     HostKeyChanged {
         host: String,
@@ -188,7 +227,10 @@ pub enum PromptView {
         old: Vec<String>,
         new: String,
     },
+    /// A server's keyboard-interactive round. `host` is the connection's host, so the UI can say
+    /// who asks and mark the rest (`name`, `instructions`, the prompt texts) as the server's text.
     KeyboardInteractive {
+        host: String,
         name: String,
         instructions: String,
         prompts: Vec<KiPromptView>,
@@ -429,6 +471,8 @@ fn cap_chars(text: String, max: usize) -> String {
 /// safe way instead of sending answers to prompts the user never saw.
 fn cap_ki_round(round: KiRound) -> PromptView {
     PromptView::KeyboardInteractive {
+        // validated (`validate_host`, at most 255 bytes) before the connect, so it needs no cap
+        host: round.host,
         name: cap_chars(round.name, KI_MAX_PROMPT_CHARS),
         instructions: cap_chars(round.instructions, KI_MAX_INSTRUCTION_CHARS),
         prompts: round
@@ -489,7 +533,6 @@ impl Interaction for TauriInteraction {
             port: prompt.port,
             key_type: prompt.key_type,
             fingerprint: prompt.fingerprint,
-            previous: prompt.previous,
         };
         match self.ask(view).await {
             Some(PromptAnswer::HostKey { decision }) => match decision {
@@ -567,15 +610,32 @@ enum Phase {
     Disconnected,
 }
 
-/// What the ordered writer task does with the live session. `Resize` carries character cells for
-/// a terminal and pixels for an RDP desktop; `Rdp` and `Clipboard` only exist for RDP and `Data`
-/// only for SSH (the other protocol's writer ignores them).
+/// What the ordered writer task does with the live session. `Resize` carries no size: the writer
+/// applies the latest `Shared::size` (character cells for a terminal, pixels for an RDP desktop),
+/// see [`take_resize`]. `Rdp` and `Clipboard` only exist for RDP and `Data` only for SSH (the
+/// other protocol's writer ignores them).
 enum Op {
     Data(Vec<u8>),
     Rdp(Vec<fernjo_rdp::InputEvent>),
     Clipboard(String),
-    Resize(u32, u32),
+    Resize,
     Close,
+}
+
+impl Op {
+    /// Bytes this op counts against the session's `InputBudget`: input ops weigh their length but
+    /// at least [`MIN_OP_WEIGHT`], so the number of queued ops is bounded too. Resize and close
+    /// weigh 0 and are never refused: at most one resize is queued at a time (`resize_queued`) and
+    /// the close request is sent once, when the session is forgotten.
+    fn weight(&self) -> usize {
+        let bytes = match self {
+            Op::Data(data) => data.len(),
+            Op::Rdp(events) => events.len() * std::mem::size_of::<fernjo_rdp::InputEvent>(),
+            Op::Clipboard(text) => text.len(),
+            Op::Resize | Op::Close => return 0,
+        };
+        bytes.max(MIN_OP_WEIGHT)
+    }
 }
 
 /// State shared by the manager, the connect task and the interaction.
@@ -588,11 +648,54 @@ struct Shared {
     phase: Mutex<Phase>,
     size: Mutex<(u32, u32)>,
     /// Input, resizes and the close request, in order, towards the live `Session`. `None` while
-    /// there is no shell.
+    /// there is no shell. Lock order: `ops` before `size`.
     ops: Mutex<Option<UnboundedSender<Op>>>,
+    /// The tab was closed (`shut_down`). Set and read only while `ops` is locked, so a connect
+    /// that finishes after the close is torn down by [`install_ops`] instead of installing a
+    /// queue nobody will ever close (M11 review #59).
+    closed: AtomicBool,
+    /// Input bytes queued in `ops` and not yet handled by the writer.
+    input_budget: InputBudget,
+    /// An `Op::Resize` is in `ops` and the writer has not taken its size yet. Set and cleared
+    /// only while `size` is locked, so a new size is either read by the queued resize or queues
+    /// a new one (see [`take_resize`]).
+    resize_queued: AtomicBool,
 }
 
 impl Shared {
+    /// Queues `op` for the writer. Input is reserved against the budget first and the reservation
+    /// goes back when the op was not queued; the writer releases it after handling the op.
+    fn queue(&self, op: Op, no_session: impl Fn() -> CommandError) -> Result<(), CommandError> {
+        let ops = lock(&self.ops)?;
+        let tx = ops.as_ref().ok_or_else(&no_session)?;
+        let weight = op.weight();
+        if !self.input_budget.try_reserve(weight) {
+            return Err(error(
+                "input_queue_full",
+                "too much input is waiting; try again",
+            ));
+        }
+        tx.send(op).map_err(|_| {
+            self.input_budget.release(weight);
+            no_session()
+        })
+    }
+
+    fn new(channel: Channel<InvokeResponseBody>, phase: Phase, size: (u32, u32)) -> Self {
+        Self {
+            sink: Arc::new(Sink::new(channel)),
+            hub: Arc::new(PromptHub::default()),
+            flow: Mutex::new(FlowControl::default()),
+            wake: Notify::new(),
+            phase: Mutex::new(phase),
+            size: Mutex::new(size),
+            ops: Mutex::new(None),
+            closed: AtomicBool::new(false),
+            input_budget: InputBudget::default(),
+            resize_queued: AtomicBool::new(false),
+        }
+    }
+
     fn set_phase(&self, phase: Phase) {
         if let Ok(mut p) = self.phase.lock() {
             *p = phase;
@@ -620,7 +723,7 @@ impl Shared {
 }
 
 struct Entry {
-    node_id: NodeId,
+    target: Target,
     shared: Arc<Shared>,
     task: Mutex<Option<JoinHandle<()>>>,
 }
@@ -735,25 +838,62 @@ impl SessionManager {
         cols: u32,
         rows: u32,
     ) -> Result<String, CommandError> {
-        let plan = connect_plan::resolve_session(state, node_id, false)?;
+        self.open_target(state, Target::Node(node_id), channel, cols, rows)
+    }
+
+    /// Resolves the target (a tree node or a quick connect target) and starts its session.
+    ///
+    /// # Errors
+    /// What `connect_plan::resolve_target` reports, or `no_data_dir`. A quick target is checked
+    /// again here (`invalid_host`), whatever the webview parsed.
+    pub fn open_target(
+        &self,
+        state: &AppState,
+        target: Target,
+        channel: Channel<InvokeResponseBody>,
+        cols: u32,
+        rows: u32,
+    ) -> Result<String, CommandError> {
+        let plan = connect_plan::resolve_target(state, &target, false)?;
         let hosts = self.host_files(state)?;
-        let shared = Arc::new(Shared {
-            sink: Arc::new(Sink::new(channel)),
-            hub: Arc::new(PromptHub::default()),
-            flow: Mutex::new(FlowControl::default()),
-            wake: Notify::new(),
-            phase: Mutex::new(Phase::Connecting),
-            size: Mutex::new((cols, rows)),
-            ops: Mutex::new(None),
-        });
+        let shared = Arc::new(Shared::new(channel, Phase::Connecting, (cols, rows)));
         let entry = Arc::new(Entry {
-            node_id,
+            target,
             shared,
             task: Mutex::new(None),
         });
         let id = uuid::Uuid::new_v4().to_string();
         lock(&self.entries)?.insert(id.clone(), Arc::clone(&entry));
         start(&entry, plan, hosts);
+        Ok(id)
+    }
+
+    /// Creates a session entry in the disconnected state without connecting (a tab restored from
+    /// the last run): it sends the disconnected event with [`RESTORED_TEXT`] (not clean, no exit
+    /// status) and waits for `reconnect`, which resolves the plan then. It never counts as
+    /// connected.
+    ///
+    /// # Errors
+    /// `not_found` / `not_a_connection` for a node that is gone or a folder, a structure code for
+    /// a bad quick target.
+    pub fn restore(
+        &self,
+        state: &AppState,
+        target: Target,
+        channel: Channel<InvokeResponseBody>,
+        cols: u32,
+        rows: u32,
+    ) -> Result<String, CommandError> {
+        connect_plan::check_target(state, &target)?;
+        let shared = Arc::new(Shared::new(channel, Phase::Disconnected, (cols, rows)));
+        let entry = Arc::new(Entry {
+            target,
+            shared,
+            task: Mutex::new(None),
+        });
+        let id = uuid::Uuid::new_v4().to_string();
+        lock(&self.entries)?.insert(id.clone(), Arc::clone(&entry));
+        entry.shared.failed(RESTORED_TEXT.to_string());
         Ok(id)
     }
 
@@ -803,11 +943,12 @@ impl SessionManager {
         entry: &Arc<Entry>,
         skip_vault: bool,
     ) -> Result<(), CommandError> {
-        let plan = connect_plan::resolve_session(state, entry.node_id, skip_vault);
+        let plan = connect_plan::resolve_target(state, &entry.target, skip_vault);
         match (plan, self.host_files(state)) {
             (Ok(plan), Ok(hosts)) => start(entry, plan, hosts),
             (Err(e), _) | (_, Err(e)) => {
-                let text = if e.code == "not_found" {
+                // only a tree node can be gone
+                let text = if e.code == "not_found" && matches!(entry.target, Target::Node(_)) {
                     GONE.to_string()
                 } else {
                     e.message
@@ -824,12 +965,9 @@ impl SessionManager {
     /// `not_found`; `session_not_connected` while there is no shell.
     pub fn input(&self, id: &str, data: Vec<u8>) -> Result<(), CommandError> {
         let entry = self.entry(id)?;
-        let ops = lock(&entry.shared.ops)?;
-        let no_shell = || error("session_not_connected", "the session has no running shell");
-        ops.as_ref()
-            .ok_or_else(no_shell)?
-            .send(Op::Data(data))
-            .map_err(|_| no_shell())
+        entry.shared.queue(Op::Data(data), || {
+            error("session_not_connected", "the session has no running shell")
+        })
     }
 
     /// Remembers the terminal size and tells the shell when there is one.
@@ -838,10 +976,17 @@ impl SessionManager {
     /// `not_found`.
     pub fn resize(&self, id: &str, cols: u32, rows: u32) -> Result<(), CommandError> {
         let entry = self.entry(id)?;
-        *lock(&entry.shared.size)? = (cols, rows);
-        // Without a shell the size is applied at the next connect.
-        if let Some(tx) = lock(&entry.shared.ops)?.as_ref() {
-            let _ = tx.send(Op::Resize(cols, rows));
+        let shared = &entry.shared;
+        let ops = lock(&shared.ops)?;
+        let mut size = lock(&shared.size)?;
+        *size = (cols, rows);
+        // Without a shell the size is applied at the next connect. With one, a resize that is
+        // still queued will read this size; otherwise one is queued now.
+        if let Some(tx) = ops.as_ref()
+            && !shared.resize_queued.swap(true, Ordering::SeqCst)
+            && tx.send(Op::Resize).is_err()
+        {
+            shared.resize_queued.store(false, Ordering::SeqCst);
         }
         Ok(())
     }
@@ -912,6 +1057,12 @@ impl SessionManager {
             .count()
     }
 
+    /// What a restart request (`restart_app`) does: like an exit without a code, it asks while a
+    /// session is connected and does nothing while the dialog is already open (M11 review #65).
+    pub(crate) fn restart_action(&self, prompt_open: bool) -> ExitAction {
+        exit_action(None, self.connected_count(), prompt_open)
+    }
+
     /// Number of sessions that exist (open, connecting, prompting or disconnected).
     #[cfg(test)]
     pub fn len(&self) -> usize {
@@ -924,15 +1075,77 @@ pub(crate) fn needs_close_confirmation(connected: usize) -> bool {
     connected > 0
 }
 
+/// What an app exit request (`RunEvent::ExitRequested`, e.g. Cmd+Q on macOS) should do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExitAction {
+    /// Let the exit proceed.
+    Allow,
+    /// Stop the exit and show the confirmation dialog.
+    Ask,
+    /// Stop the exit; a dialog is already open.
+    Prevent,
+}
+
+/// An explicit exit code (restart, update, `app.exit(n)`) and an exit without a connected
+/// session are never intercepted; otherwise the exit waits for the dialog.
+pub(crate) fn exit_action(code: Option<i32>, connected: usize, prompt_open: bool) -> ExitAction {
+    if code.is_some() || !needs_close_confirmation(connected) {
+        ExitAction::Allow
+    } else if prompt_open {
+        ExitAction::Prevent
+    } else {
+        ExitAction::Ask
+    }
+}
+
+/// What follows the close confirmation (and the sync close push): the window goes, or the app
+/// restarts (`restart_app`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CloseThen {
+    Exit,
+    Restart,
+}
+
+/// The texts of the "sessions still connected" dialog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ClosePrompt {
+    pub title: &'static str,
+    pub message: String,
+    /// The confirming button; the other one is "Keep open".
+    pub confirm: &'static str,
+}
+
+pub(crate) fn close_prompt(connected: usize, then: CloseThen) -> ClosePrompt {
+    let noun = if connected == 1 {
+        "session is"
+    } else {
+        "sessions are"
+    };
+    let (title, verb, confirm) = match then {
+        CloseThen::Exit => ("Close fernjo?", "Closing", "Close"),
+        CloseThen::Restart => ("Restart fernjo?", "Restarting", "Restart"),
+    };
+    ClosePrompt {
+        title,
+        message: format!("{connected} {noun} still connected. {verb} fernjo ends them."),
+        confirm,
+    }
+}
+
 /// Mutes the channel, answers every prompt with the safe answer, tells the writer task to close
-/// and aborts the connect task.
+/// and aborts the connect task. For SSH the abort is what ends a session whose server stopped
+/// reading: the writer may hang in a write and never take `Op::Close`, but aborting `run` drops
+/// the events receiver, which makes `fernjo_ssh::Session` shut its socket down and fail that write
+/// (M11 review #22). `closed` is set under the `ops` lock, so a connect task that has not
+/// installed its queue yet closes its session in [`install_ops`] (M11 review #59).
 fn shut_down(entry: &Entry) {
     entry.shared.sink.close();
     entry.shared.hub.close();
-    if let Ok(ops) = entry.shared.ops.lock()
-        && let Some(tx) = ops.as_ref()
-    {
-        let _ = tx.send(Op::Close);
+    if let Ok(ops) = entry.shared.ops.lock() {
+        entry.shared.closed.store(true, Ordering::SeqCst);
+        if let Some(tx) = ops.as_ref() {
+            let _ = tx.send(Op::Close);
+        }
     }
     if let Ok(mut task) = entry.task.lock()
         && let Some(handle) = task.take()
@@ -1004,16 +1217,8 @@ async fn run(shared: Arc<Shared>, params: ConnectParams) {
         }
     };
     let (tx, ops) = unbounded_channel();
-    // A resize that arrived while connecting is applied now.
-    if let Ok(size) = shared.size.lock()
-        && *size != started_size
-    {
-        let _ = tx.send(Op::Resize(size.0, size.1));
-    }
-    if let Ok(mut slot) = shared.ops.lock() {
-        *slot = Some(tx);
-    }
-    tauri::async_runtime::spawn(write_ops(session, ops));
+    install_ops(&shared, tx, |size| size != started_size);
+    tauri::async_runtime::spawn(write_ops(session, ops, Arc::clone(&shared)));
     if let Ok(mut flow) = shared.flow.lock() {
         *flow = FlowControl::default();
     }
@@ -1029,24 +1234,84 @@ async fn run(shared: Arc<Shared>, params: ConnectParams) {
 }
 
 /// Applies input, resizes and the close request to the session, in the order they were queued.
-async fn write_ops(session: Session, mut ops: UnboundedReceiver<Op>) {
+async fn write_ops(session: Session, mut ops: UnboundedReceiver<Op>, shared: Arc<Shared>) {
     while let Some(op) = ops.recv().await {
-        match op {
-            Op::Data(data) => {
-                if session.write(data).await.is_err() {
-                    break;
-                }
-            }
-            Op::Resize(cols, rows) => {
+        let weight = op.weight();
+        let stop = match op {
+            Op::Data(data) => session.write(data).await.is_err(),
+            Op::Resize => {
+                let (cols, rows) = take_resize(&shared);
                 let _ = session.resize(cols, rows).await;
+                false
             }
             // RDP only
-            Op::Rdp(_) | Op::Clipboard(_) => {}
+            Op::Rdp(_) | Op::Clipboard(_) => false,
             Op::Close => {
                 session.close();
-                break;
+                true
             }
+        };
+        shared.input_budget.release(weight);
+        if stop {
+            break;
         }
+    }
+    release_unhandled(&mut ops, &shared);
+}
+
+/// Makes `tx` the session's op queue once the shell (or desktop) is live, and queues a resize
+/// when `differs` says the size the UI reported meanwhile is not the one the connect used. Runs
+/// under the `ops` and `size` locks, so a resize that arrives during this call is either seen
+/// here or queued by `SessionManager::resize` on the new sender. It also resets a flag left set
+/// by a writer that stopped with a resize still queued.
+///
+/// When the tab was already closed (`shut_down` ran before the connect finished), nothing is
+/// installed: the writer gets `Op::Close` and the sender is dropped, so it closes the session and
+/// ends instead of keeping it alive with no entry left to close it.
+fn install_ops(shared: &Shared, tx: UnboundedSender<Op>, differs: impl Fn((u32, u32)) -> bool) {
+    let Ok(mut slot) = shared.ops.lock() else {
+        let _ = tx.send(Op::Close);
+        return;
+    };
+    if shared.closed.load(Ordering::SeqCst) {
+        let _ = tx.send(Op::Close);
+        return;
+    }
+    let resize = shared.size.lock().is_ok_and(|size| {
+        let wanted = differs(*size);
+        shared.resize_queued.store(wanted, Ordering::SeqCst);
+        wanted
+    });
+    if resize {
+        let _ = tx.send(Op::Resize);
+    }
+    *slot = Some(tx);
+}
+
+/// The writer's half of resize coalescing: clears `resize_queued` and returns the latest size, both
+/// under the `size` lock. `SessionManager::resize` stores the size and tests the flag under the
+/// same lock, so a size stored before this call is returned here, and one stored after it finds
+/// the flag clear and queues a new `Op::Resize`: the final size always reaches the session, and
+/// the queue never holds more than one resize.
+fn take_resize(shared: &Shared) -> (u32, u32) {
+    match shared.size.lock() {
+        Ok(size) => {
+            shared.resize_queued.store(false, Ordering::SeqCst);
+            *size
+        }
+        Err(poisoned) => {
+            shared.resize_queued.store(false, Ordering::SeqCst);
+            *poisoned.into_inner()
+        }
+    }
+}
+
+/// Gives back the budget of ops that were queued but never handled (the writer stopped), so a
+/// reconnect of the same tab starts with an empty budget.
+fn release_unhandled(ops: &mut UnboundedReceiver<Op>, shared: &Shared) {
+    ops.close();
+    while let Ok(op) = ops.try_recv() {
+        shared.input_budget.release(op.weight());
     }
 }
 

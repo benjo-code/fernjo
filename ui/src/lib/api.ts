@@ -1,5 +1,6 @@
+import { listen } from "@tauri-apps/api/event";
 import { Channel, invoke, type InvokeArgs, type InvokeOptions } from "@tauri-apps/api/core";
-import type { Api, ApiError, SessionEvent } from "./types";
+import type { Api, ApiError, SessionEvent, SyncStatus, VaultStatus } from "./types";
 
 export type { Api } from "./types";
 
@@ -56,6 +57,21 @@ export const tauriApi: Api = {
     channel.onmessage = onEvent;
     return call("open_session", { nodeId, onEvent: channel, cols, rows });
   },
+  quickParse: (input) => call("quick_parse", { input }),
+  clipboardReadText: () => call("clipboard_read_text"),
+  openQuickSession: (target, onEvent, cols, rows) => {
+    const channel = new Channel<ArrayBuffer | SessionEvent>();
+    channel.onmessage = onEvent;
+    return call("open_quick_session", { target, onEvent: channel, cols, rows });
+  },
+  restoreSession: (target, onEvent, cols, rows) => {
+    const channel = new Channel<ArrayBuffer | SessionEvent>();
+    channel.onmessage = onEvent;
+    return call("restore_session", { target, onEvent: channel, cols, rows });
+  },
+  getOpenTabs: () => call("get_open_tabs"),
+  setReopenTabs: (enabled) => call("set_reopen_tabs", { enabled }),
+  saveOpenTabs: (tabs, active) => call("save_open_tabs", { tabs, active }),
   // the input is the raw request body, the session id travels in a header
   sessionInput: (id, data) => call("session_input", data, { headers: { "x-fernjo-session": id } }),
   rdpInput: (id, events) => call("rdp_input", { id, events }),
@@ -71,10 +87,26 @@ export const tauriApi: Api = {
   setTerminalSettings: (settings) => call("set_terminal_settings", { settings }),
   getTheme: () => call("get_theme"),
   setTheme: (theme) => call("set_theme", { theme }),
+  getVaultAutoLock: () => call("get_vault_auto_lock"),
+  setVaultAutoLock: (minutes) => call("set_vault_auto_lock", { minutes }),
+  noteActivity: () => call("note_activity"),
   importPick: (kind) => call("import_pick", { kind }),
   importInspect: (secret) => call("import_inspect", { secret }),
   importApply: (options) => call("import_apply", { options }),
   importCancel: () => call("import_cancel"),
   exportConnections: () => call("export_connections"),
   exportBackup: (password) => call("export_backup", { password }),
+  syncStatus: () => call("sync_status"),
+  syncSetup: (url, secret, caPem, deviceName) =>
+    call("sync_setup", { url, secret, caPem, deviceName }),
+  syncPairingCode: () => call("sync_pairing_code"),
+  syncJoin: (code, deviceName, confirmReplace) =>
+    call("sync_join", { code, deviceName, confirmReplace }),
+  syncNow: () => call("sync_now"),
+  syncReseed: () => call("sync_reseed"),
+  syncEditSecret: (secret) => call("sync_edit_secret", { secret }),
+  syncLeave: () => call("sync_leave"),
+  syncDismissFindings: () => call("sync_dismiss_findings"),
+  onSyncStatus: (handler) => listen<SyncStatus>("sync-status", (e) => handler(e.payload)),
+  onVaultStatus: (handler) => listen<VaultStatus>("vault-status", (e) => handler(e.payload)),
 };

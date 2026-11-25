@@ -1,0 +1,25 @@
+# Build from the repository root:
+#   podman build -f crates/fernjo-hub/Containerfile -t fernjo-hub .
+# (`docker build` works the same.) Static musl binary, non-root user, nothing else in the image.
+# The build context is filtered by the .dockerignore at the repository root.
+
+# The tag matches rust-toolchain.toml (1.100.0), so cargo does not download another toolchain.
+FROM docker.io/library/rust:1.100.0-alpine AS build
+RUN apk add --no-cache musl-dev
+WORKDIR /src
+COPY . .
+RUN cargo build --release --locked -p fernjo-hub --target "$(uname -m)-unknown-linux-musl" \
+ && cp "target/$(uname -m)-unknown-linux-musl/release/fernjo-hub" /fernjo-hub
+# an empty /data to copy over: a fresh named volume takes the owner of this directory
+RUN mkdir /data
+
+FROM scratch
+COPY --from=build /fernjo-hub /fernjo-hub
+# /data is the only writable place; it is created here and owned by the unprivileged user,
+# so a new named volume mounted on it is writable by 10001 without any chown
+COPY --from=build --chown=10001:10001 /data /data
+USER 10001:10001
+VOLUME /data
+EXPOSE 8787
+ENTRYPOINT ["/fernjo-hub"]
+CMD ["serve", "--data", "/data", "--listen", "0.0.0.0:8787"]

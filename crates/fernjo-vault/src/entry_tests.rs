@@ -402,6 +402,45 @@ fn a_save_after_another_writer_changed_the_file_is_refused() {
     assert_eq!(vault.list().unwrap().len(), 3);
 }
 
+/// The lost-update check reads the header through `fernjo_fs::open_regular`: a folder (here) or
+/// a FIFO, device or symlink (Unix test below) at the vault's name is refused, never opened.
+#[test]
+fn a_save_over_a_folder_at_the_vault_name_is_refused_as_not_a_regular_file() {
+    let dir = TempDir::new().unwrap();
+    let (mut vault, path) = new_vault(&dir);
+    fs::remove_file(&path).unwrap();
+    fs::create_dir(&path).unwrap();
+    let err = vault.add(password_entry("late", "pw")).unwrap_err();
+    assert!(
+        matches!(&err, VaultError::SaveFailed(m) if m.contains("not a regular file")),
+        "{err:?}"
+    );
+    assert!(path.is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_save_over_a_fifo_at_the_vault_name_fails_without_blocking() {
+    let dir = TempDir::new().unwrap();
+    let (mut vault, path) = new_vault(&dir);
+    fs::remove_file(&path).unwrap();
+    let status = std::process::Command::new("mkfifo")
+        .arg(&path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(vault.add(password_entry("late", "pw")).map(|_| ()));
+    });
+    let result = rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the save blocked on the FIFO");
+    assert!(
+        matches!(&result, Err(VaultError::SaveFailed(m)) if m.contains("not a regular file")),
+        "{result:?}"
+    );
+}
 #[test]
 fn a_save_after_a_password_change_on_another_copy_is_refused() {
     let dir = TempDir::new().unwrap();

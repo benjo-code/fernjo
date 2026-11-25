@@ -134,7 +134,6 @@ describe("TabStrip", () => {
         port: 22,
         keyType: "ssh-ed25519",
         fingerprint: "SHA256:x",
-        previous: [],
       },
     });
     flushSync();
@@ -284,5 +283,84 @@ describe("TabStrip", () => {
     expect(sessions.activeId).toBe(sessions.tabs[0]!.id);
     expect(marks()).toEqual(["true", "false"]);
     expect(titles()).toEqual(["Name a", "Name b"]);
+  });
+
+  test("a_restored_disconnected_tab_shows_no_lamp_and_a_reconnected_one_is_dropped_again", () => {
+    const mock = mockApi();
+    const sessions = new SessionStore(
+      mock.api,
+      (id) => `Name ${id}`,
+      () => true,
+    );
+    sessions.restore([{ target: { node: "r" }, protocol: "ssh", title: "R", usesVault: false }], 0);
+    mounted = mount(TabStrip, { target: document.body, props: { sessions } });
+    flushSync();
+    const tab = () => document.querySelector<HTMLElement>("[data-tab-id]")!;
+    // nothing connected yet: neither a lamp nor the vault lock
+    expect(tab().querySelector(".lamp")).toBeNull();
+    expect(tab().querySelector(".mark svg")).toBeNull();
+    // the flag is cleared when the user connects; a later drop is a real drop
+    sessions.tabs[0]!.restored = false;
+    flushSync();
+    expect(tab().querySelector(".lamp")?.getAttribute("data-state")).toBe("dropped");
+  });
+
+  test("reconnect_all_shows_only_while_a_restored_tab_is_disconnected", async () => {
+    const onreconnectall = vi.fn();
+    const mock = mockApi();
+    const sessions = new SessionStore(
+      mock.api,
+      (id) => `Name ${id}`,
+      () => true,
+    );
+    sessions.open("plain");
+    sessions.tabs[0]!.state = "disconnected";
+    mounted = mount(TabStrip, { target: document.body, props: { sessions, onreconnectall } });
+    flushSync();
+    const all = () =>
+      document.querySelector<HTMLButtonElement>('button[aria-label="Reconnect all restored tabs"]');
+    // a dropped tab that was not restored does not offer it
+    expect(all()).toBeNull();
+
+    sessions.restore([{ target: { node: "r" }, protocol: "ssh", title: "R", usesVault: false }], 0);
+    flushSync();
+    expect(all()).not.toBeNull();
+    expect(all()!.textContent).toContain("Reconnect all");
+    all()!.click();
+    expect(onreconnectall).toHaveBeenCalledTimes(1);
+
+    sessions.tabs.find((t) => t.restored)!.state = "connecting";
+    flushSync();
+    expect(all()).toBeNull();
+  });
+
+  describe("clipboard marker", () => {
+    const marker = (t: Tab) => tabOf(t).querySelector(".clip");
+
+    test("an_rdp_tab_sharing_the_clipboard_shows_the_marker_with_the_host_in_its_tooltip", () => {
+      const { sessions } = setup(["connected"]);
+      const tab = sessions.tabs[0]!;
+      tab.protocol = "rdp";
+      tab.clipboard = true;
+      tab.host = "srv.lab";
+      flushSync();
+      const m = marker(tab)!;
+      expect(m).not.toBeNull();
+      expect(m.getAttribute("title")).toBe("Clipboard shared with srv.lab");
+      expect(m.getAttribute("aria-label")).toBe("Clipboard shared with srv.lab");
+    });
+
+    test("no_marker_on_an_ssh_tab_or_an_rdp_tab_with_the_clipboard_off", () => {
+      const { sessions } = setup(["connected", "connected"]);
+      const [ssh, rdp] = sessions.tabs as [Tab, Tab];
+      ssh.clipboard = true;
+      ssh.host = "a.lab";
+      rdp.protocol = "rdp";
+      rdp.clipboard = false;
+      rdp.host = "b.lab";
+      flushSync();
+      expect(marker(ssh)).toBeNull();
+      expect(marker(rdp)).toBeNull();
+    });
   });
 });

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { SessionStore } from "./sessions.svelte";
 import { apiError, deferred, mockApi } from "./testing";
-import type { SessionEvent } from "./types";
+import type { RestorableTab, SessionEvent } from "./types";
 
 type Emit = (e: SessionEvent | ArrayBuffer) => void;
 
@@ -603,6 +603,279 @@ describe("SessionStore", () => {
       const { emit } = await openAttached(s);
       emit(end(null, false));
       expect(s.store.tabs[0]).toMatchObject({ state: "disconnected" });
+    });
+  });
+});
+
+describe("SessionStore quick connect", () => {
+  const ssh = { protocol: "ssh" as const, host: "h.lab", port: 22, user: "root" };
+
+  test("open_quick_creates_a_tab_for_the_parsed_target", async () => {
+    const s = setup();
+    await s.store.openQuick("root@h.lab");
+    await s.store.openQuick("rdp://srv:3390");
+    expect(s.store.tabs).toHaveLength(2);
+    expect(s.store.tabs[0]).toMatchObject({
+      nodeId: null,
+      quick: ssh,
+      title: "root@h.lab",
+      protocol: "ssh",
+      clipboard: false,
+      state: "connecting",
+    });
+    expect(s.store.tabs[1]).toMatchObject({
+      nodeId: null,
+      quick: { protocol: "rdp", host: "srv", port: 3390, user: null },
+      title: "srv",
+      protocol: "rdp",
+      clipboard: false,
+    });
+    expect(s.store.activeId).toBe(s.store.tabs[1]!.id);
+  });
+
+  test("open_quick_reports_a_parse_error_and_opens_no_tab", async () => {
+    const s = setup({
+      quickParse: async () => {
+        throw apiError("quick_bad_port", "Port must be 1 to 65535");
+      },
+    });
+    await expect(s.store.openQuick("h:0")).rejects.toMatchObject({
+      code: "quick_bad_port",
+      message: "Port must be 1 to 65535",
+    });
+    expect(s.store.tabs).toHaveLength(0);
+  });
+
+  test("a_quick_tab_starts_and_reconnects_through_the_quick_session", async () => {
+    const s = setup({ openQuickSession: async () => "Q1" });
+    await s.store.openQuick("root@h.lab");
+    const tab = s.store.tabs[0]!;
+    const b = bridge(100, 30);
+    s.store.attachTerminal(tab.id, b.api());
+    await tick();
+    expect(s.calls.openQuickSession).toEqual([[ssh, expect.any(Function), 100, 30]]);
+    expect(s.calls.openSession).toEqual([]);
+    expect(tab.sessionId).toBe("Q1");
+    tab.state = "disconnected";
+    s.store.reconnect(tab.id);
+    expect(s.calls.reconnectSession).toEqual([["Q1", 100, 30]]);
+    // the same session is reused: no second open of any kind
+    expect(s.calls.openQuickSession).toHaveLength(1);
+    expect(s.calls.openSession).toHaveLength(0);
+  });
+
+  test("an_rdp_quick_tab_does_not_read_a_connection", async () => {
+    const s = setup();
+    await s.store.openQuick("rdp://srv");
+    const tab = s.store.tabs[0]!;
+    s.store.attachRemote(tab.id, {
+      paint() {},
+      setDesktop() {},
+      clipboard() {},
+      size: () => ({ width: 800, height: 600 }),
+    });
+    await tick();
+    expect(s.calls.getNode).toEqual([]);
+    expect(tab.clipboard).toBe(false);
+  });
+
+  test("a_quick_tab_does_not_light_a_tree_lamp", async () => {
+    const s = setup();
+    await s.store.openQuick("a");
+    s.store.open("a");
+    const [quick, tree] = s.store.tabs;
+    expect(quick!.nodeId).toBeNull();
+    // only the quick tab is connected: the tree node stays dark
+    quick!.state = "connected";
+    expect(s.store.lampFor("a")).toBe("connecting");
+    tree!.state = "disconnected";
+    expect(s.store.lampFor("a")).toBe("dropped");
+    // only the tree tab is connected: the lamp follows it alone
+    quick!.state = "disconnected";
+    tree!.state = "connected";
+    expect(s.store.lampFor("a")).toBe("live");
+    tree!.state = "disconnected";
+    quick!.state = "connected";
+    expect(s.store.lampFor("a")).toBe("dropped");
+    s.store.close(tree!.id);
+    expect(s.store.lampFor("a")).toBeNull();
+  });
+
+  describe("restored tabs", () => {
+    const tab = (id: string, usesVault = false): RestorableTab => ({
+      target: { node: id },
+      protocol: "ssh",
+      title: `T-${id}`,
+      usesVault,
+    });
+
+    /** Restores the tabs and attaches every one of them (its view mounted), like the app. */
+    async function restored(s: ReturnType<typeof setup>, tabs: RestorableTab[], active = 0) {
+      s.store.restore(tabs, active);
+      s.store.tabs.forEach((t) => {
+        s.store.attachTerminal(t.id, bridge().api());
+      });
+      await tick();
+      return s.store.tabs.map((t) => t.id);
+    }
+
+    test("restore_creates_disconnected_tabs_without_opening_a_session", () => {
+      const s = setup();
+      s.store.restore(
+        [
+          tab("a"),
+          {
+            target: { quick: { protocol: "rdp", host: "h", port: 3389, user: null } },
+            protocol: "rdp",
+            title: "h",
+            usesVault: false,
+          },
+          tab("c"),
+        ],
+        1,
+      );
+      expect(s.store.tabs.map((t) => [t.title, t.state, t.restored, t.protocol])).toEqual([
+        ["T-a", "disconnected", true, "ssh"],
+        ["h", "disconnected", true, "rdp"],
+        ["T-c", "disconnected", true, "ssh"],
+      ]);
+      expect(s.store.tabs[1]!.nodeId).toBeNull();
+      expect(s.store.tabs[1]!.quick).toMatchObject({ host: "h" });
+      expect(s.store.activeId).toBe(s.store.tabs[1]!.id);
+      expect(s.calls.openSession).toHaveLength(0);
+      expect(s.calls.openQuickSession).toHaveLength(0);
+      expect(s.calls.restoreSession).toHaveLength(0);
+      expect(s.store.restoredDisconnected).toBe(3);
+    });
+
+    test("a_restored_tab_asks_rust_to_restore_when_its_view_attaches", async () => {
+      const s = setup({ restoreSession: async () => "R1" });
+      s.store.restore([tab("a")], 0);
+      const id = s.store.tabs[0]!.id;
+      s.store.attachTerminal(id, bridge(90, 30).api());
+      await tick();
+      expect(s.calls.restoreSession).toHaveLength(1);
+      expect(s.calls.restoreSession[0]![0]).toEqual({ node: "a" });
+      expect(s.calls.restoreSession[0]!.slice(2)).toEqual([90, 30]);
+      expect(s.calls.openSession).toHaveLength(0);
+      expect(s.store.tabs[0]!.sessionId).toBe("R1");
+      expect(s.store.tabs[0]!.state).toBe("disconnected");
+    });
+
+    test("reconnect_all_connects_each_restored_tab_in_order_with_a_limit_of_three", async () => {
+      let n = 0;
+      const s = setup({ restoreSession: async () => `R${++n}` });
+      const emits: Emit[] = [];
+      s.api.restoreSession = ((o) => (t, onEvent, c, r) => {
+        emits.push(onEvent);
+        return o(t, onEvent, c, r);
+      })(s.api.restoreSession);
+      const ids = await restored(
+        s,
+        ["a", "b", "c", "d", "e"].map((x) => tab(x)),
+      );
+      const done = s.store.reconnectAll(async () => true);
+      await tick();
+      // three at a time, in tab order
+      expect(s.calls.reconnectSession.map((c) => c[0])).toEqual(["R1", "R2", "R3"]);
+      expect(s.store.tabs.map((t) => t.state)).toEqual([
+        "connecting",
+        "connecting",
+        "connecting",
+        "disconnected",
+        "disconnected",
+      ]);
+      // one connects: the next one starts
+      emits[1]!({
+        kind: "state",
+        state: "connected",
+        detail: null,
+        exitStatus: null,
+        endedCleanly: false,
+      });
+      await tick();
+      expect(s.calls.reconnectSession.map((c) => c[0])).toEqual(["R1", "R2", "R3", "R4"]);
+      emits[0]!({
+        kind: "state",
+        state: "connected",
+        detail: null,
+        exitStatus: null,
+        endedCleanly: false,
+      });
+      await tick();
+      expect(s.calls.reconnectSession.map((c) => c[0])).toEqual(["R1", "R2", "R3", "R4", "R5"]);
+      emits[2]!({
+        kind: "state",
+        state: "connected",
+        detail: null,
+        exitStatus: null,
+        endedCleanly: false,
+      });
+      await done;
+      expect(ids).toHaveLength(5);
+      expect(s.store.restoredDisconnected).toBe(0);
+    });
+
+    test("reconnect_all_asks_for_the_vault_once_and_connects_nothing_when_refused", async () => {
+      const s = setup({ restoreSession: async () => "R" });
+      await restored(s, [tab("a", true), tab("b", true), tab("c")]);
+      let asked = 0;
+      await s.store.reconnectAll(async () => {
+        asked++;
+        return false;
+      });
+      expect(asked).toBe(1);
+      expect(s.calls.reconnectSession).toHaveLength(0);
+      expect(s.store.restoredDisconnected).toBe(3);
+    });
+
+    test("reconnect_all_connects_after_the_vault_answered_yes", async () => {
+      const s = setup({ restoreSession: async () => "R" });
+      await restored(s, [tab("a", true), tab("b")]);
+      let asked = 0;
+      await s.store.reconnectAll(async () => {
+        asked++;
+        return true;
+      });
+      expect(asked).toBe(1);
+      expect(s.calls.reconnectSession).toHaveLength(2);
+    });
+
+    test("reconnect_all_skips_the_vault_question_when_no_tab_uses_a_credential", async () => {
+      const s = setup({ restoreSession: async () => "R" });
+      await restored(s, [tab("a"), tab("b")]);
+      let asked = 0;
+      await s.store.reconnectAll(async () => {
+        asked++;
+        return false;
+      });
+      expect(asked).toBe(0);
+      expect(s.calls.reconnectSession).toHaveLength(2);
+    });
+
+    test("a_restored_disconnected_tab_has_no_lamp_until_it_is_reconnected", async () => {
+      const s = setup({ restoreSession: async () => "R" });
+      const [id] = await restored(s, [tab("a")]);
+      // nothing ever connected, so it is not a lost connection
+      expect(s.store.lampFor("a")).toBeNull();
+      s.store.reconnect(id!);
+      expect(s.store.lampFor("a")).toBe("connecting");
+    });
+
+    test("a_restored_tab_does_not_hide_the_lamp_of_another_tab_of_the_same_node", async () => {
+      const s = setup({ restoreSession: async () => "R" });
+      await restored(s, [tab("a")]);
+      s.store.open("a", { another: true });
+      s.store.tabs[1]!.state = "disconnected";
+      expect(s.store.lampFor("a")).toBe("dropped");
+    });
+
+    test("a_restored_tab_loses_the_flag_when_it_connects", async () => {
+      const s = setup({ restoreSession: async () => "R" });
+      const [id] = await restored(s, [tab("a")]);
+      s.store.reconnect(id!);
+      expect(s.store.tabs[0]!.restored).toBe(false);
+      expect(s.store.restoredDisconnected).toBe(0);
     });
   });
 });

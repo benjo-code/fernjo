@@ -18,7 +18,7 @@ use tokio::sync::{Notify, mpsc};
 use crate::SshError;
 use crate::agent::{self, Agent};
 use crate::auth_plan::{Attempt, AuthPlanner, Available, Offered};
-use crate::handler::{ClientHandler, Rejection};
+use crate::handler::{ClientHandler, PendingTrust, Rejection};
 use crate::interaction::{Interaction, KiPrompt, KiRound};
 use crate::known_hosts::KnownHosts;
 use crate::params::{ConnectParams, Credential};
@@ -27,6 +27,11 @@ use crate::params::{ConnectParams, Credential};
 const EVENT_QUEUE: usize = 4;
 /// Keyboard-interactive rounds one attempt may take before it counts as failed.
 const MAX_KI_ROUNDS: usize = 5;
+/// Keepalives sent without an answer before russh ends the connection.
+const KEEPALIVE_MAX: usize = 3;
+/// How long closing waits for the polite end (the disconnect message sent and the connection task
+/// finished) before the socket is shut down regardless.
+const CLOSE_GRACE: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloseReason {
@@ -42,11 +47,16 @@ pub enum SessionEvent {
     Closed(CloseReason),
 }
 
-/// Handle on a running shell session. Output arrives on the receiver `connect` returned.
+/// Handle on a running shell session. Output arrives on the receiver `connect` returned. The
+/// session ends (and its socket is shut down) when it is closed, when the handle is dropped and
+/// when that receiver is dropped.
 pub struct Session {
     writer: ChannelWriteHalf<Msg>,
     stop: Arc<Notify>,
     closed: Arc<AtomicBool>,
+    /// Closed when the session task ended, so a write that waits for the stalled connection (for
+    /// SSH window or for room in russh's queue, neither of which a dead task ever frees) returns.
+    alive: mpsc::Sender<()>,
 }
 
 pub(crate) fn client_config(keepalive_secs: u32) -> client::Config {
@@ -65,7 +75,7 @@ pub(crate) fn client_config(keepalive_secs: u32) -> client::Config {
         preferred,
         keepalive_interval: (keepalive_secs > 0)
             .then(|| Duration::from_secs(u64::from(keepalive_secs))),
-        keepalive_max: 3,
+        keepalive_max: KEEPALIVE_MAX,
         nodelay: true,
         // Everything between the server and the terminal must drain before Ctrl+C is echoed, so the
         // data in flight is kept small: SSH window + packets buffered in the channel + EVENT_QUEUE
@@ -74,6 +84,20 @@ pub(crate) fn client_config(keepalive_secs: u32) -> client::Config {
         channel_buffer_size: 4,
         ..client::Config::default()
     }
+}
+
+/// The host key algorithms to offer for a host: those of the keys this device confirmed first,
+/// then those of the synced `known_hosts`, without duplicates. The synced file can be written by
+/// others, so it must not be able to put a type this device never confirmed ahead of the
+/// confirmed one, nor drop the confirmed type by losing the host's lines (M11 review #24).
+fn stored_algorithms(confirmed: Vec<Algorithm>, known: Vec<Algorithm>) -> Vec<Algorithm> {
+    let mut out = confirmed;
+    for alg in known {
+        if !out.contains(&alg) {
+            out.push(alg);
+        }
+    }
+    out
 }
 
 /// Offer only the host key algorithms already stored for this host, so a server cannot dodge the
@@ -194,6 +218,7 @@ impl<H: client::Handler> KiTransport for HandleKi<'_, H> {
 async fn keyboard_interactive_attempt<H: client::Handler, I: Interaction>(
     handle: &mut client::Handle<H>,
     user: &str,
+    host: &str,
     interaction: &I,
     limit: Duration,
 ) -> Result<Outcome, SshError> {
@@ -202,7 +227,7 @@ async fn keyboard_interactive_attempt<H: client::Handler, I: Interaction>(
         handle.authenticate_keyboard_interactive_start(user, None),
     )
     .await?;
-    keyboard_interactive_rounds(first, &mut HandleKi { handle, limit }, interaction).await
+    keyboard_interactive_rounds(first, &mut HandleKi { handle, limit }, host, interaction).await
 }
 
 /// Works through the server's `InfoRequest` rounds. The user prompts (`interaction`) are never
@@ -210,6 +235,7 @@ async fn keyboard_interactive_attempt<H: client::Handler, I: Interaction>(
 async fn keyboard_interactive_rounds<T: KiTransport, I: Interaction>(
     first: KeyboardInteractiveAuthResponse,
     transport: &mut T,
+    host: &str,
     interaction: &I,
 ) -> Result<Outcome, SshError> {
     let mut response = first;
@@ -239,6 +265,7 @@ async fn keyboard_interactive_rounds<T: KiTransport, I: Interaction>(
                     Vec::new()
                 } else {
                     let round = KiRound {
+                        host: host.to_owned(),
                         name,
                         instructions,
                         prompts: prompts
@@ -481,7 +508,7 @@ async fn authenticate<H: client::Handler, I: Interaction>(
             // A cancelled prompt ends authentication, but the final error must still say that the
             // key was unreadable.
             Attempt::KeyboardInteractive => {
-                keyboard_interactive_attempt(handle, &user, interaction, limit)
+                keyboard_interactive_attempt(handle, &user, &params.host, interaction, limit)
                     .await
                     .map_err(|e| with_key_flag(e, key_unreadable))?
             }
@@ -529,6 +556,40 @@ async fn with_handshake_deadline<T>(
     }
 }
 
+/// Shuts the TCP socket down when it is dropped: when a connect is left at any step, and when the
+/// session ends.
+///
+/// russh's `client::connect_stream` spawns the session task, which takes the stream, as soon as
+/// it has read the server's identification line, and hands out the task's `JoinHandle` only after
+/// the key exchange. A handshake that is dropped in between (our deadline, or the connect task
+/// aborted because the tab was closed) drops that future but not the task: while a key exchange
+/// is active the task does not look at its (now closed) command channel, so against a server that
+/// goes silent it would wait on the socket forever. After the handshake the same holds for a
+/// server that stops reading: the task hangs in a write and never sees the disconnect request
+/// (M11 review #22). A clone of the socket, taken before the handshake and kept for the session's
+/// lifetime (the session's `pump` owns it), lets this guard shut the connection down so the
+/// task's read and write end and the task with them. The clone also keeps the connection open
+/// after the task dropped its own half, so the guard must be dropped for the connection to close.
+struct SocketGuard(std::net::TcpStream);
+
+impl SocketGuard {
+    fn new(stream: TcpStream) -> Result<(TcpStream, Self), SshError> {
+        let std_stream = stream.into_std().map_err(|_| SshError::ConnectFailed)?;
+        let clone = std_stream
+            .try_clone()
+            .map_err(|_| SshError::ConnectFailed)?;
+        let stream = TcpStream::from_std(std_stream).map_err(|_| SshError::ConnectFailed)?;
+        Ok((stream, Self(clone)))
+    }
+}
+
+impl Drop for SocketGuard {
+    fn drop(&mut self) {
+        // A socket the peer or the task already closed reports an error; nothing is left to do.
+        let _ = self.0.shutdown(std::net::Shutdown::Both);
+    }
+}
+
 impl Session {
     /// Connects, checks the host key, authenticates and starts a shell on a PTY.
     pub async fn connect<I: Interaction>(
@@ -545,8 +606,24 @@ impl Session {
             .map(KnownHosts::new)
             .or_else(|| params.confirmed_in_memory.clone());
         let mut config = client_config(params.keepalive_secs);
-        let stored = known_hosts.stored_algorithms(&params.host, params.port)?;
-        restrict_host_key_algorithms(&mut config, &stored);
+        let stored = {
+            let (store, host, port) = (known_hosts.clone(), params.host.clone(), params.port);
+            crate::known_hosts::blocking(move || store.stored_algorithms(&host, port)).await?
+        };
+        // An unreadable confirmed file adds nothing here; the handler then asks (never trusts).
+        let confirmed_algorithms = match &confirmed {
+            Some(store) => {
+                let (store, host, port) = (store.clone(), params.host.clone(), params.port);
+                crate::known_hosts::blocking(move || store.stored_algorithms(&host, port))
+                    .await
+                    .unwrap_or_default()
+            }
+            None => Vec::new(),
+        };
+        restrict_host_key_algorithms(
+            &mut config,
+            &stored_algorithms(confirmed_algorithms, stored),
+        );
 
         // Name resolution and the TCP connect get the whole timeout.
         let stream = match tokio::time::timeout(
@@ -560,6 +637,7 @@ impl Session {
             Ok(Ok(stream)) => stream,
         };
         let _ = stream.set_nodelay(true);
+        let (stream, socket_guard) = SocketGuard::new(stream)?;
 
         let rejection: Rejection = Rejection::default();
         let prompting = Arc::new(AtomicBool::new(false));
@@ -571,7 +649,10 @@ impl Session {
             interaction: Arc::clone(&interaction),
             rejection: Arc::clone(&rejection),
             prompting: Arc::clone(&prompting),
+            pending_trust: PendingTrust::default(),
         };
+        // The handler moves into the connection; this copy shares its parked trust decision.
+        let trust = handler.clone();
         let handshake = client::connect_stream(Arc::new(config), stream, handler);
         let mut handle =
             match with_handshake_deadline(handshake, &prompting, params.connect_timeout).await? {
@@ -586,6 +667,8 @@ impl Session {
                     }));
                 }
             };
+        // The key exchange is verified: only now is the user's decision about the key written.
+        trust.apply_pending_trust().await?;
 
         authenticate(&mut handle, &params, interaction.as_ref()).await?;
 
@@ -618,8 +701,13 @@ impl Session {
         let (tx, rx) = mpsc::channel(EVENT_QUEUE);
         let stop = Arc::new(Notify::new());
         let closed = Arc::new(AtomicBool::new(false));
+        let (alive, alive_rx) = mpsc::channel(1);
         tokio::spawn(pump(
-            handle,
+            Connection {
+                handle,
+                socket: socket_guard,
+                _alive: alive_rx,
+            },
             reader,
             tx,
             Arc::clone(&stop),
@@ -630,26 +718,32 @@ impl Session {
                 writer,
                 stop,
                 closed,
+                alive,
             },
             rx,
         ))
     }
 
+    /// Sends input. Waits while the SSH window or russh's queue is full; returns an error once
+    /// the session ended, also when the write was waiting for a connection that is stuck.
     pub async fn write(&self, data: Vec<u8>) -> Result<(), SshError> {
         if self.closed.load(Ordering::SeqCst) {
             return Err(SshError::Closed);
         }
-        self.writer.data_bytes(data).await.map_err(|_| self.gone())
+        tokio::select! {
+            sent = self.writer.data_bytes(data) => sent.map_err(|_| self.gone()),
+            () = self.alive.closed() => Err(self.gone()),
+        }
     }
 
     pub async fn resize(&self, cols: u32, rows: u32) -> Result<(), SshError> {
         if self.closed.load(Ordering::SeqCst) {
             return Err(SshError::Closed);
         }
-        self.writer
-            .window_change(cols, rows, 0, 0)
-            .await
-            .map_err(|_| self.gone())
+        tokio::select! {
+            sent = self.writer.window_change(cols, rows, 0, 0) => sent.map_err(|_| self.gone()),
+            () = self.alive.closed() => Err(self.gone()),
+        }
     }
 
     /// Ends the session; the events channel then yields `Closed(ClosedByUser)`.
@@ -691,8 +785,42 @@ async fn deliver(tx: &mpsc::Sender<SessionEvent>, stop: &Notify, event: SessionE
     }
 }
 
-async fn pump<H: client::Handler>(
+/// What the session holds of the connection besides its channel. Dropped (and so the socket shut
+/// down and every waiting `Session::write` released) when `pump` returns.
+struct Connection<H: client::Handler> {
     handle: client::Handle<H>,
+    socket: SocketGuard,
+    /// Its sender is `Session::alive`.
+    _alive: mpsc::Receiver<()>,
+}
+
+impl<H: client::Handler> Connection<H> {
+    /// Asks the server politely to end the connection and waits for russh's task to finish, at most
+    /// [`CLOSE_GRACE`]; then shuts the socket down. The bound matters: against a server that stopped
+    /// reading, russh's task hangs in a write and its queue is full, so the disconnect request is
+    /// never taken (M11 review #22); the shutdown makes that write fail and the task end.
+    async fn end(self) {
+        let Self {
+            mut handle,
+            socket,
+            _alive,
+        } = self;
+        let polite = async {
+            if handle
+                .disconnect(Disconnect::ByApplication, "", "en")
+                .await
+                .is_ok()
+            {
+                let _ = (&mut handle).await;
+            }
+        };
+        let _ = tokio::time::timeout(CLOSE_GRACE, polite).await;
+        drop(socket);
+    }
+}
+
+async fn pump<H: client::Handler>(
+    connection: Connection<H>,
     mut reader: russh::ChannelReadHalf,
     tx: mpsc::Sender<SessionEvent>,
     stop: Arc<Notify>,
@@ -700,10 +828,14 @@ async fn pump<H: client::Handler>(
 ) {
     let mut exit: Option<u32> = None;
     let mut exited = false;
+    // `None`: nobody listens any more, so there is nobody to tell.
     let reason = loop {
         let msg = tokio::select! {
             biased;
-            () = stop.notified() => break CloseReason::ClosedByUser,
+            () = stop.notified() => break Some(CloseReason::ClosedByUser),
+            // The receiver was dropped (the app aborts the task that reads it when a tab closes):
+            // end the connection now, not only when the next output finds nobody to take it.
+            () = tx.closed() => break None,
             msg = reader.wait() => msg,
         };
         let data = match msg {
@@ -717,28 +849,24 @@ async fn pump<H: client::Handler>(
                 exited = true;
                 continue;
             }
-            Some(ChannelMsg::Close) => break CloseReason::Exit(exit),
-            None if exited => break CloseReason::Exit(exit),
-            None => break CloseReason::ConnectionLost,
+            Some(ChannelMsg::Close) => break Some(CloseReason::Exit(exit)),
+            None if exited => break Some(CloseReason::Exit(exit)),
+            None => break Some(CloseReason::ConnectionLost),
             Some(_) => continue,
         };
         match deliver(&tx, &stop, SessionEvent::Output(data.to_vec())).await {
             Flow::Continue => {}
-            Flow::UserClose => break CloseReason::ClosedByUser,
-            Flow::ReceiverGone => {
-                closed.store(true, Ordering::SeqCst);
-                // Nobody listens any more: just end the connection.
-                drop(reader);
-                let _ = handle.disconnect(Disconnect::ByApplication, "", "en").await;
-                return;
-            }
+            Flow::UserClose => break Some(CloseReason::ClosedByUser),
+            Flow::ReceiverGone => break None,
         }
     };
     closed.store(true, Ordering::SeqCst);
     // Release russh's channel first: its session loop may be parked on a full channel.
     drop(reader);
-    let _ = handle.disconnect(Disconnect::ByApplication, "", "en").await;
-    let _ = tx.send(SessionEvent::Closed(reason)).await;
+    connection.end().await;
+    if let Some(reason) = reason {
+        let _ = tx.send(SessionEvent::Closed(reason)).await;
+    }
 }
 
 #[cfg(test)]
@@ -815,7 +943,7 @@ mod tests {
             replies.push_back(KeyboardInteractiveAuthResponse::Success);
         }
         let mut transport = Scripted { replies, calls: 0 };
-        let out = keyboard_interactive_rounds(info(), &mut transport, &Answering).await;
+        let out = keyboard_interactive_rounds(info(), &mut transport, "h", &Answering).await;
         (out, transport.calls)
     }
 
@@ -841,6 +969,37 @@ mod tests {
         assert_eq!(c.keepalive_interval, Some(Duration::from_secs(30)));
         assert_eq!(c.keepalive_max, 3);
         assert_eq!(client_config(0).keepalive_interval, None);
+        // No inactivity timeout: russh restarts it only on a non-keepalive loop pass, and its clock
+        // keeps counting while the computer sleeps, so after a sleep longer than the limit a
+        // healthy idle session would end at wake (Docs/DECISIONS.md, M11 review #22).
+        assert_eq!(c.inactivity_timeout, None);
+        assert_eq!(client_config(0).inactivity_timeout, None);
+    }
+
+    /// M11 review #24: the types this device confirmed are offered first, whatever the synced
+    /// `known_hosts` lists (an added ECDSA line ahead of them, or no line at all).
+    #[test]
+    fn the_confirmed_host_key_types_are_offered_first() {
+        let p256 = Algorithm::Ecdsa {
+            curve: EcdsaCurve::NistP256,
+        };
+        for known in [vec![p256.clone(), Algorithm::Ed25519], vec![]] {
+            let mut config = client_config(30);
+            restrict_host_key_algorithms(
+                &mut config,
+                &stored_algorithms(vec![Algorithm::Ed25519], known.clone()),
+            );
+            assert_eq!(config.preferred.key[0], Algorithm::Ed25519, "{known:?}");
+            assert_eq!(
+                config.preferred.key.len(),
+                if known.is_empty() { 1 } else { 2 }
+            );
+        }
+        // nothing confirmed: `known_hosts` alone, in its order
+        assert_eq!(
+            stored_algorithms(vec![], vec![p256.clone(), Algorithm::Ed25519]),
+            [p256, Algorithm::Ed25519]
+        );
     }
 
     fn offered<T: AsRef<str>>(list: &[T]) -> Vec<&str> {

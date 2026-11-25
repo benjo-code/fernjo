@@ -13,7 +13,8 @@
     | "gear"
     | "close"
     | "reconnect"
-    | "import";
+    | "import"
+    | "clipboard";
 
   let { name, size = 16 }: { name: Name; size?: number } = $props();
 </script>
@@ -70,6 +71,9 @@
     <path d="M12.5 8a4.5 4.5 0 1 1-1.4-3.3M13 2.5v3h-3" />
   {:else if name === "import"}
     <path d="M8 2.5v7M5 6.8l3 3 3-3M3 11.5v2h10v-2" />
+  {:else if name === "clipboard"}
+    <rect x="3.5" y="3" width="9" height="10.5" rx="1.5" />
+    <path d="M6 3V2h4v1M6 7h4M6 10h4" />
   {/if}
 </svg>
 

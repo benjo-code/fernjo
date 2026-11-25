@@ -1,7 +1,7 @@
 import { mount, unmount } from "svelte";
 import { afterEach, expect, test, vi } from "vitest";
 import App from "./App.svelte";
-import { apiError, conn, mockApi, preview, snapshot, vaultStatus } from "./lib/testing";
+import { apiError, conn, mockApi, preview, snapshot, syncStatus, vaultStatus } from "./lib/testing";
 import type { Api, SessionEvent, TreeNode } from "./lib/types";
 
 const h = vi.hoisted(() => ({ made: [] as { calls: string[] }[] }));
@@ -495,5 +495,44 @@ test("a_restore_closes_every_tab_and_the_lamps_go_out", async () => {
   expect(calls.importApply).toHaveLength(1);
   expect(tabs()).toHaveLength(0);
   expect(row("web-01").querySelector(".lamp")).toBeNull();
+  expect(calls.closeSession).toEqual([["sid"]]);
+});
+
+test("a_join_closes_every_tab", async () => {
+  // Rust closed the sessions without telling the page; the tabs must not stay "connected"
+  const { calls } = await start([conn("web-01")], {
+    syncJoin: async (_c, _n, confirm) =>
+      confirm
+        ? syncStatus({ state: "ok" })
+        : syncStatus({
+            state: "needs_confirmation",
+            confirmation: { connections: 1, folders: 0, vaultEntries: 0, hasVault: false },
+          }),
+  });
+  doubleClick("web-01");
+  await settle();
+  expect(tabs()).toHaveLength(1);
+
+  const click = async (label: string) => {
+    [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === label)!.click();
+    await settle();
+  };
+  const fill = async (selector: string, value: string) => {
+    const el = document.querySelector<HTMLInputElement>(selector)!;
+    el.value = value;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    await settle();
+  };
+  document.querySelector<HTMLButtonElement>("button[aria-label='Settings']")!.click();
+  await settle();
+  await click("Join with a pairing code");
+  await fill("#sync-code", "CODE");
+  await fill("#sync-device", "Laptop");
+  await click("Join");
+  expect(tabs()).toHaveLength(1);
+  await click("Replace and join");
+
+  expect(calls.syncJoin).toHaveLength(2);
+  expect(tabs()).toHaveLength(0);
   expect(calls.closeSession).toEqual([["sid"]]);
 });

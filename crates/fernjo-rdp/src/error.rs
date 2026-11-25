@@ -13,6 +13,12 @@ pub enum RdpError {
     AuthFailed,
     #[error("the secure connection to the server failed")]
     TlsFailed,
+    #[error(
+        "the server does not offer Network Level Authentication (NLA); fernjo only connects to RDP servers with NLA, so the password is only ever sent inside NLA (CredSSP)"
+    )]
+    NlaRequired,
+    #[error("the server certificate is not supported")]
+    CertificateUnsupported,
     #[error("the server certificate was not accepted")]
     CertificateRejected,
     #[error("the remote desktop has a size that is not supported")]
@@ -25,6 +31,19 @@ pub enum RdpError {
     Io,
 }
 
+/// A server announced a virtual channel message above the session's cap; the session ends with
+/// `CloseReason::ChannelTooLarge`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the server announced a channel message that is too large")]
+pub(crate) struct ChannelTooLarge;
+
+/// A server sent a display update beyond the client's limits (a fragmented fast-path update above
+/// its cap, or a pointer outside the advertised cache or size); the session ends with
+/// `CloseReason::UpdateOutOfLimits`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the server sent a display update beyond the client's limits")]
+pub(crate) struct UpdateOutOfLimits;
+
 impl RdpError {
     /// Stable code shown to the UI and used in tests.
     pub fn code(&self) -> &'static str {
@@ -34,6 +53,8 @@ impl RdpError {
             RdpError::Timeout => "timeout",
             RdpError::AuthFailed => "auth_failed",
             RdpError::TlsFailed => "tls_failed",
+            RdpError::CertificateUnsupported => "certificate_unsupported",
+            RdpError::NlaRequired => "nla_required",
             RdpError::CertificateRejected => "certificate_rejected",
             RdpError::DesktopTooLarge => "desktop_too_large",
             RdpError::Protocol => "protocol",
@@ -55,6 +76,8 @@ mod tests {
             (RdpError::Timeout, "timeout"),
             (RdpError::AuthFailed, "auth_failed"),
             (RdpError::TlsFailed, "tls_failed"),
+            (RdpError::CertificateUnsupported, "certificate_unsupported"),
+            (RdpError::NlaRequired, "nla_required"),
             (RdpError::CertificateRejected, "certificate_rejected"),
             (RdpError::DesktopTooLarge, "desktop_too_large"),
             (RdpError::Protocol, "protocol"),

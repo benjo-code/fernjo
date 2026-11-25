@@ -39,6 +39,8 @@ export class VaultStore {
   #api: Api;
   #onGlobalError: (message: string) => void;
   #queue: Promise<unknown> = Promise.resolve();
+  #unlisten: (() => void) | null = null;
+  #disposed = false;
 
   constructor(api: Api, onGlobalError: (message: string) => void = () => {}) {
     this.#api = api;
@@ -56,6 +58,32 @@ export class VaultStore {
     if (this.unavailable && err && err.code !== "restart_required") {
       this.#onGlobalError(`Vault unavailable: ${err.message}`);
     }
+  }
+
+  /**
+   * Follows the `vault-status` event (Rust locked the vault after the idle time), so the chip and
+   * the credential list never show an unlocked vault that is locked.
+   */
+  async listen(): Promise<void> {
+    if (this.#unlisten !== null || this.#disposed) return;
+    try {
+      const off = await this.#api.onVaultStatus((s) => {
+        void this.#run(async () => {
+          this.status = s;
+          await this.#loadCredentials();
+        });
+      });
+      if (this.#disposed) off();
+      else this.#unlisten = off;
+    } catch {
+      // without the event the status still refreshes when the UI asks
+    }
+  }
+
+  dispose(): void {
+    this.#disposed = true;
+    this.#unlisten?.();
+    this.#unlisten = null;
   }
 
   create(password: string, remember: boolean) {

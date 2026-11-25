@@ -9,17 +9,21 @@ use ironrdp_cliprdr::backend::ClipboardMessage;
 use ironrdp_cliprdr::pdu::{ClipboardFormat, ClipboardFormatId};
 use ironrdp_connector::connection_activation::ConnectionActivationState;
 use ironrdp_displaycontrol::pdu::MonitorLayoutEntry;
+use ironrdp_dvc::DrdynvcClient;
 use ironrdp_graphics::image_processing::PixelFormat;
 use ironrdp_input::{Database, MousePosition, Operation, Scancode, WheelRotations};
+use ironrdp_pdu::Action;
 use ironrdp_pdu::geometry::InclusiveRectangle;
 use ironrdp_pdu::input::fast_path::FastPathInputEvent;
 use ironrdp_session::image::DecodedImage;
 use ironrdp_session::{ActiveStage, ActiveStageBuilder, ActiveStageOutput, fast_path};
-use ironrdp_tokio::{FramedWrite as _, TokioFramed, single_sequence_step_read, split_tokio_framed};
+use ironrdp_tokio::{TokioFramed, single_sequence_step_read, split_tokio_framed};
 use tokio::io::{ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::{Notify, mpsc};
 
+use self::channel_cap::ChannelIds;
+use self::update_cap::UpdateCheck;
 use crate::connect::{ClipboardWiring, Established, establish};
 use crate::text_clipboard::{ClipEvent, LocalText};
 use crate::{ConnectParams, Framebuffer, InputEvent, Interaction, MouseButton, RdpError, Rect};
@@ -30,13 +34,41 @@ const EVENT_QUEUE: usize = 8;
 const COMMAND_QUEUE: usize = 64;
 /// How long a resize waits for the display channel to become ready.
 const RESIZE_RETRY_LIMIT: Duration = Duration::from_secs(60);
+/// How long one step of a write to the server may make no progress before the session is treated as
+/// lost. A server that stops reading must not keep a closing session alive. The limit applies per
+/// piece of `WRITE_STEP` (4 KiB), not per frame: the slowest reader that is still tolerated takes
+/// 4096 B / 15 s, about 273 B/s.
+pub(crate) const WRITE_LIMIT: Duration = Duration::from_secs(15);
+
+/// A frame goes out in pieces of this size, each bounded by `WRITE_LIMIT`.
+const WRITE_STEP: usize = 4096;
+
+/// Writes `frame`, failing when the peer accepts nothing for `WRITE_LIMIT`. The limit is a progress
+/// limit: a peer that keeps reading, however slowly, never trips it, because every piece is
+/// bounded on its own. `FramedWrite::write_all` hides how far a write got, so the frame is cut
+/// into pieces and each piece gets the timer. Not cancel-safe, like `write_all` itself: after an
+/// error the connection is dropped. `WRITE_LIMIT` is per piece of `WRITE_STEP`, so the slowest
+/// tolerated reader is about 273 B/s, whatever the frame size.
+async fn write_bounded<W: ironrdp_tokio::FramedWrite>(
+    writer: &mut W,
+    frame: &[u8],
+) -> Result<(), ()> {
+    for piece in frame.chunks(WRITE_STEP) {
+        match tokio::time::timeout(WRITE_LIMIT, writer.write_all(piece)).await {
+            Ok(Ok(())) => {}
+            _ => return Err(()),
+        }
+    }
+    Ok(())
+}
+
 /// How long one step of a reactivation may wait for the server.
 const REACTIVATION_STEP_LIMIT: Duration = Duration::from_secs(30);
 /// How long a final event may wait for a consumer that has stopped reading.
 const DELIVER_LIMIT: Duration = Duration::from_secs(5);
 
-type Reader = TokioFramed<ReadHalf<ironrdp_tls::TlsStream<TcpStream>>>;
-type Writer = TokioFramed<WriteHalf<ironrdp_tls::TlsStream<TcpStream>>>;
+type Reader = TokioFramed<ReadHalf<tokio_rustls::client::TlsStream<TcpStream>>>;
+type Writer = TokioFramed<WriteHalf<tokio_rustls::client::TlsStream<TcpStream>>>;
 
 /// Why a session ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +79,14 @@ pub enum CloseReason {
     ConnectionLost,
     /// [`Session::close`] was called or the session was dropped.
     ClosedByUser,
+    /// The server announced a virtual channel message above the cap (4 MiB); the session ended
+    /// before the client buffered it.
+    ChannelTooLarge,
+    /// The server sent a display update beyond the client's limits: a fragmented fast-path update
+    /// above its cap (8 MiB, or twice the raw desktop when that is more), or a pointer whose cache
+    /// index is outside the 32 advertised entries or whose side is above 384 pixels. The session
+    /// ended before the client buffered or decoded it.
+    UpdateOutOfLimits,
 }
 
 /// What a session reports. The queue is bounded; `Damage` events are merged while it is full.
@@ -226,7 +266,8 @@ async fn drive(
     let size = result.desktop_size;
     let mut image = DecodedImage::new(PixelFormat::RgbA32, size.width, size.height);
     let activation_factory = result.activation_factory;
-    let mut stage = ActiveStageBuilder {
+    let mut updates = UpdateCheck::new(result.io_channel_id, size.width, size.height);
+    let (mut stage, channels) = build_stage(ActiveStageBuilder {
         static_channels: result.static_channels,
         user_channel_id: result.user_channel_id,
         io_channel_id: result.io_channel_id,
@@ -235,8 +276,7 @@ async fn drive(
         compression_type: result.compression_type,
         enable_server_pointer: result.enable_server_pointer,
         pointer_software_rendering: result.pointer_software_rendering,
-    }
-    .build();
+    });
     let (mut clip_rx, local_text): (
         Option<mpsc::UnboundedReceiver<ClipEvent>>,
         Option<LocalText>,
@@ -255,9 +295,9 @@ async fn drive(
         let outputs: Vec<ActiveStageOutput> = tokio::select! {
             frame = reader.read_pdu() => {
                 let Ok((action, payload)) = frame else { return CloseReason::ConnectionLost };
-                match stage.process(&mut image, action, &payload, None) {
+                match process_frame(&mut stage, &mut image, &channels, &mut updates, action, &payload) {
                     Ok(outputs) => outputs,
-                    Err(_) => return CloseReason::ConnectionLost,
+                    Err(reason) => return reason,
                 }
             }
             command = commands.recv() => {
@@ -337,7 +377,7 @@ async fn drive(
                 if let Ok(outputs) = stage.graceful_shutdown() {
                     for output in outputs {
                         if let ActiveStageOutput::ResponseFrame(frame) = output {
-                            let _ = writer.write_all(&frame).await;
+                            let _ = write_bounded(&mut writer, &frame).await;
                         }
                     }
                 }
@@ -365,7 +405,7 @@ async fn drive(
                     if frame.is_empty() {
                         continue;
                     }
-                    if writer.write_all(&frame).await.is_err() {
+                    if write_bounded(&mut writer, &frame).await.is_err() {
                         return CloseReason::ConnectionLost;
                     }
                 }
@@ -391,7 +431,9 @@ async fn drive(
                             },
                             () = closing.notified() => return CloseReason::ClosedByUser,
                         };
-                        if step.size().is_some() && writer.write_all(buf.filled()).await.is_err() {
+                        if step.size().is_some()
+                            && write_bounded(&mut writer, buf.filled()).await.is_err()
+                        {
                             return CloseReason::ConnectionLost;
                         }
                         if let ConnectionActivationState::Finalized {
@@ -416,6 +458,8 @@ async fn drive(
                         return CloseReason::ConnectionLost;
                     }
                     image = DecodedImage::new(PixelFormat::RgbA32, desktop.width, desktop.height);
+                    // a new fast-path processor holds no fragments, and the cap follows the desktop
+                    updates.reactivated(activation.io_channel_id(), desktop.width, desktop.height);
                     stage.set_fastpath_processor(
                         fast_path::ProcessorBuilder {
                             io_channel_id: activation.io_channel_id(),
@@ -441,6 +485,39 @@ async fn drive(
             }
         }
     }
+}
+
+/// Builds the active stage and notes the ids of its static channels for the channel cap.
+fn build_stage(builder: ActiveStageBuilder) -> (ActiveStage, ChannelIds) {
+    let channels = ChannelIds {
+        statics: builder.static_channels.channel_ids().collect(),
+        drdynvc: builder
+            .static_channels
+            .get_channel_id_by_type::<DrdynvcClient>(),
+    };
+    (builder.build(), channels)
+}
+
+/// Hands a frame from the server to the active stage, unless it announces a channel message above
+/// the cap (refused before IronRDP sizes a reassembly buffer from it) or carries a display update
+/// beyond the limits (a fragment taking a fast-path update above its cap, a pointer outside the
+/// cache or the size the client advertises).
+fn process_frame(
+    stage: &mut ActiveStage,
+    image: &mut DecodedImage,
+    channels: &ChannelIds,
+    updates: &mut UpdateCheck,
+    action: Action,
+    payload: &[u8],
+) -> Result<Vec<ActiveStageOutput>, CloseReason> {
+    channel_cap::check_frame(action, payload, channels)
+        .map_err(|_| CloseReason::ChannelTooLarge)?;
+    updates
+        .check(action, payload)
+        .map_err(|_| CloseReason::UpdateOutOfLimits)?;
+    stage
+        .process(image, action, payload, None)
+        .map_err(|_| CloseReason::ConnectionLost)
 }
 
 /// Encodes a CLIPRDR message as a frame for the wire, or `None` when it is not one we handle.
@@ -539,5 +616,7 @@ fn to_fast_path(
     out
 }
 
+mod channel_cap;
 #[cfg(test)]
 mod tests;
+mod update_cap;

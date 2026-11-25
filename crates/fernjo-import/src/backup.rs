@@ -5,16 +5,20 @@
 //! Limits on the decrypted body: at most `MAX_BODY_BYTES` (64 MiB), at most `MAX_NODES`
 //! tree nodes (the same 100 000 as the mRemoteNG importer) and `MAX_ENTRIES` entries.
 
+use std::borrow::Cow;
 use std::fmt;
 
-use fernjo_core::persist::{document, parse_document};
+use fernjo_core::json;
+use fernjo_core::persist::{document, parse_document_bytes};
 use fernjo_core::{DocumentError, MAX_TREE_DEPTH, Tree};
 use fernjo_vault::{
     EntryId, KdfParams, NewEntry, SealedError, Secret, open_with_password, seal_with_password,
 };
 use secrecy::{ExposeSecret, SecretString};
+use serde::de::{self, DeserializeSeed, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use serde_json::value::RawValue;
 use unicode_normalization::UnicodeNormalization;
 use zeroize::Zeroizing;
 
@@ -74,13 +78,26 @@ impl BackupError {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Body {
+struct BodyOut {
     schema_version: u32,
     created_at: String,
     app: String,
     connections: Value,
+    entries: Vec<BodyEntry>,
+}
+
+/// The body as it is read: `connections` stays the borrowed JSON text until it is counted and
+/// parsed, so the document is never built as a `serde_json::Value` (M11 review #28).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BodyIn<'a> {
+    schema_version: u32,
+    created_at: String,
+    app: String,
+    #[serde(borrow)]
+    connections: &'a RawValue,
     entries: Vec<BodyEntry>,
 }
 
@@ -95,12 +112,6 @@ struct BodyEntry {
     secret: Secret,
     #[serde(default)]
     notes: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Probe {
-    schema_version: u32,
 }
 
 fn damaged(text: &str) -> BackupError {
@@ -129,7 +140,7 @@ pub fn create(
     kdf: KdfParams,
 ) -> Result<Vec<u8>, BackupError> {
     check_password(password)?;
-    let body = Body {
+    let body = BodyOut {
         schema_version: 1,
         created_at: contents.created_at.clone(),
         app: contents.app.clone(),
@@ -152,20 +163,151 @@ pub fn create(
     seal_with_password(MAGIC, VERSION, password, kdf, &json).map_err(|_| failed())
 }
 
-/// True when the `connections` document holds more than `MAX_NODES` nodes (no recursion).
-fn too_many_nodes(document: &Value) -> bool {
-    let mut stack: Vec<&Value> = vec![document];
-    let mut total = 0usize;
-    while let Some(v) = stack.pop() {
-        if let Some(children) = v.get("children").and_then(Value::as_array) {
-            total += children.len();
-            if total > MAX_NODES {
-                return true;
+/// True when the `connections` document holds more than `MAX_NODES` nodes. It counts the
+/// elements of every `children` array while reading the text and keeps nothing; a document that
+/// does not have that shape is left to `parse_document_bytes`.
+fn too_many_nodes(document: &RawValue) -> bool {
+    let mut count = NodeCount {
+        total: 0,
+        exceeded: false,
+    };
+    let mut de = serde_json::Deserializer::from_str(document.get());
+    let _ = CountIn { count: &mut count }.deserialize(&mut de);
+    count.exceeded
+}
+
+struct NodeCount {
+    total: usize,
+    exceeded: bool,
+}
+
+/// Any value: an object's `children` array is counted, everything else skipped.
+struct CountIn<'c> {
+    count: &'c mut NodeCount,
+}
+
+impl<'de> DeserializeSeed<'de> for CountIn<'_> {
+    type Value = ();
+
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
+        d.deserialize_any(self)
+    }
+}
+
+impl<'de> Visitor<'de> for CountIn<'_> {
+    type Value = ();
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("any JSON value")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
+        while let Some(key) = map.next_key::<Cow<'de, str>>()? {
+            if key == "children" {
+                map.next_value_seed(CountChildren { count: self.count })?;
+            } else {
+                map.next_value::<IgnoredAny>()?;
             }
-            stack.extend(children);
+        }
+        Ok(())
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        while seq.next_element::<IgnoredAny>()?.is_some() {}
+        Ok(())
+    }
+
+    fn visit_bool<E: de::Error>(self, _: bool) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_i64<E: de::Error>(self, _: i64) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_u64<E: de::Error>(self, _: u64) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_f64<E: de::Error>(self, _: f64) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_str<E: de::Error>(self, _: &str) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_unit<E: de::Error>(self) -> Result<(), E> {
+        Ok(())
+    }
+}
+
+/// The value of a `children` key: every element of an array is one node.
+struct CountChildren<'c> {
+    count: &'c mut NodeCount,
+}
+
+impl<'de> DeserializeSeed<'de> for CountChildren<'_> {
+    type Value = ();
+
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
+        d.deserialize_any(self)
+    }
+}
+
+impl<'de> Visitor<'de> for CountChildren<'_> {
+    type Value = ();
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("any JSON value")
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        loop {
+            if self.count.total > MAX_NODES {
+                self.count.exceeded = true;
+                return Err(de::Error::custom("too many nodes"));
+            }
+            if seq
+                .next_element_seed(CountIn {
+                    count: &mut *self.count,
+                })?
+                .is_none()
+            {
+                return Ok(());
+            }
+            self.count.total += 1;
         }
     }
-    false
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
+        while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+        Ok(())
+    }
+
+    fn visit_bool<E: de::Error>(self, _: bool) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_i64<E: de::Error>(self, _: i64) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_u64<E: de::Error>(self, _: u64) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_f64<E: de::Error>(self, _: f64) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_str<E: de::Error>(self, _: &str) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_unit<E: de::Error>(self) -> Result<(), E> {
+        Ok(())
+    }
 }
 
 /// Opens a backup.
@@ -184,28 +326,35 @@ pub fn open(bytes: &[u8], password: &SecretString) -> Result<BackupContents, Bac
         return Err(damaged("the backup is too large"));
     }
     let invalid = || damaged("the backup content is not valid");
-    let probe: Probe = serde_json::from_slice(&plain).map_err(|_| invalid())?;
-    if probe.schema_version > 1 {
+    // the whole body is validated as a `Value` parse would (also the nesting limit counted from
+    // the body, not from the `connections` document) and `schemaVersion` read, keeping nothing
+    let [version] = json::head(&plain, ["schemaVersion"]).map_err(|_| invalid())?;
+    let version = version
+        .as_u64()
+        .and_then(|v| u32::try_from(v).ok())
+        .ok_or_else(invalid)?;
+    if version > 1 {
         return Err(BackupError::NewerVersion {
-            found: u16::try_from(probe.schema_version).unwrap_or(u16::MAX),
+            found: u16::try_from(version).unwrap_or(u16::MAX),
         });
     }
-    let body: Body = serde_json::from_slice(&plain).map_err(|_| invalid())?;
+    let body: BodyIn<'_> = serde_json::from_slice(&plain).map_err(|_| invalid())?;
     if body.schema_version != 1 {
         return Err(invalid());
     }
     if body.entries.len() > MAX_ENTRIES {
         return Err(damaged("the backup holds too many entries"));
     }
-    if too_many_nodes(&body.connections) {
+    if too_many_nodes(body.connections) {
         return Err(damaged("the backup holds too many connections and folders"));
     }
-    let mut tree = parse_document(body.connections).map_err(|e| match e {
-        DocumentError::NewerSchema { found, .. } => BackupError::NewerVersion {
-            found: u16::try_from(found).unwrap_or(u16::MAX),
-        },
-        DocumentError::Invalid(_) => damaged("the connections in the backup are not valid"),
-    })?;
+    let mut tree =
+        parse_document_bytes(body.connections.get().as_bytes()).map_err(|e| match e {
+            DocumentError::NewerSchema { found, .. } => BackupError::NewerVersion {
+                found: u16::try_from(found).unwrap_or(u16::MAX),
+            },
+            DocumentError::Invalid(_) => damaged("the connections in the backup are not valid"),
+        })?;
     // A tree that is nested deeper than the core accepts could not be restored (and might not
     // load again): report it here, where it can only mean a damaged or foreign file.
     if tree.depth() > MAX_TREE_DEPTH {
@@ -225,7 +374,8 @@ pub fn open(bytes: &[u8], password: &SecretString) -> Result<BackupContents, Bac
             (
                 e.id,
                 NewEntry {
-                    name: e.name,
+                    // shown in the vault list: no control or direction characters (never cut)
+                    name: clean(&e.name, e.name.chars().count(), false),
                     username: e.username,
                     domain: e.domain,
                     secret: e.secret,

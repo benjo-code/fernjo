@@ -11,6 +11,7 @@ use tokio::sync::mpsc::{Sender, UnboundedReceiver, channel};
 use tokio::time::timeout;
 
 use super::super::{PromptHub, Sink};
+use crate::session_flow::InputBudget;
 
 const WAIT: Duration = Duration::from_secs(15);
 
@@ -74,12 +75,15 @@ fn shared_with(channel: Channel<InvokeResponseBody>, flow: FlowControl) -> Arc<S
         phase: Mutex::new(Phase::Connected),
         size: Mutex::new((1280, 800)),
         ops: Mutex::new(None),
+        closed: std::sync::atomic::AtomicBool::new(false),
+        input_budget: InputBudget::default(),
+        resize_queued: std::sync::atomic::AtomicBool::new(false),
     })
 }
 
 fn entry_with(shared: Arc<Shared>) -> Arc<Entry> {
     Arc::new(Entry {
-        node_id: uuid::Uuid::new_v4(),
+        target: crate::connect_plan::Target::Node(uuid::Uuid::new_v4()),
         shared,
         task: Mutex::new(None),
     })
@@ -163,10 +167,44 @@ fn sizes_are_even_clamped_and_never_zero() {
     assert_eq!(desktop_size(1281, 801), Some((1280, 800)));
     assert_eq!(desktop_size(1920, 1080), Some((1920, 1080)));
     assert_eq!(desktop_size(10, 5), Some((200, 200)));
-    assert_eq!(desktop_size(100_000, 9000), Some((8192, 8192)));
+    assert_eq!(desktop_size(100_000, 200), Some((8192, 200)));
     assert_eq!(desktop_size(0, 800), None);
     assert_eq!(desktop_size(800, 0), None);
-    assert_eq!(desktop_size(u32::MAX, u32::MAX), Some((8192, 8192)));
+    // one side absurdly large, the other tiny: each side is clamped on its own (8192 x 200 is
+    // 1.6 million pixels, far below the area limit, so nothing is scaled)
+    assert_eq!(desktop_size(u32::MAX, 1), Some((8192, 200)));
+    assert_eq!(desktop_size(1, u32::MAX), Some((200, 8192)));
+}
+
+#[test]
+fn desktop_size_scales_a_too_large_area_down_keeping_the_aspect() {
+    let (w, h) = desktop_size(8192, 8192).unwrap();
+    assert!(w % 2 == 0 && h % 2 == 0, "{w}x{h}");
+    assert!(
+        u32::from(w) * u32::from(h) <= fernjo_rdp::MAX_DESKTOP_PIXELS,
+        "{w}x{h}"
+    );
+    assert!(w.abs_diff(h) <= 2, "{w}x{h}");
+    assert!(w > 5000, "scaled down, not collapsed: {w}x{h}");
+    assert_eq!(desktop_size(3840, 2160), Some((3840, 2160)));
+    // the extremes: no overflow, every result even, in range and within the area
+    for (a, b) in [
+        (u32::MAX, u32::MAX),
+        (u32::MAX, 1),
+        (1, u32::MAX),
+        (100_000, 9000),
+        (8192, 4400),
+        (8192, 4321),
+        (1, 1),
+        (200, 200),
+    ] {
+        let (w, h) = desktop_size(a, b).unwrap();
+        assert!(w % 2 == 0 && h % 2 == 0 && (200..=8192).contains(&w) && (200..=8192).contains(&h));
+        assert!(
+            u32::from(w) * u32::from(h) <= fernjo_rdp::MAX_DESKTOP_PIXELS,
+            "{a}x{b} gave {w}x{h}"
+        );
+    }
 }
 
 #[test]
@@ -195,11 +233,47 @@ fn rdp_end_is_never_clean() {
         ),
         (CloseReason::ConnectionLost, "The connection was lost."),
         (CloseReason::ClosedByUser, "The session was closed."),
+        (
+            CloseReason::ChannelTooLarge,
+            "The server sent a channel message that is too large.",
+        ),
+        (
+            CloseReason::UpdateOutOfLimits,
+            "The server sent a display update beyond the limits of this client.",
+        ),
     ] {
         let ended = classify_rdp_end(reason);
         assert_eq!(ended.text, text);
         assert!(!ended.clean && ended.exit_status.is_none());
     }
+}
+
+#[test]
+fn a_certificate_rustls_cannot_use_has_its_own_failure_text() {
+    // `run` reports a failed connect with the error's text; an unsupported certificate must not
+    // read like any other TLS failure
+    use fernjo_rdp::RdpError;
+    assert_eq!(
+        RdpError::CertificateUnsupported.to_string(),
+        "the server certificate is not supported"
+    );
+    assert_eq!(
+        RdpError::TlsFailed.to_string(),
+        "the secure connection to the server failed"
+    );
+}
+
+#[test]
+fn a_server_without_nla_has_its_own_failure_text() {
+    // `run` reports a failed connect with the error's text; a server that is refused for lack of
+    // NLA must say why, not read like a protocol error
+    use fernjo_rdp::RdpError;
+    assert_eq!(RdpError::NlaRequired.code(), "nla_required");
+    assert_eq!(
+        RdpError::NlaRequired.to_string(),
+        "the server does not offer Network Level Authentication (NLA); fernjo only connects to \
+         RDP servers with NLA, so the password is only ever sent inside NLA (CredSSP)"
+    );
 }
 
 // ---------- the forwarder ----------
@@ -336,6 +410,64 @@ async fn a_remote_clipboard_event_reaches_the_ui_as_text() {
     assert_eq!(
         seen[1],
         Msg::Json(json!({"kind": "clipboard", "text": "hello\nworld"}))
+    );
+}
+
+fn clipboard_texts(seen: &[Msg]) -> Vec<String> {
+    seen.iter()
+        .filter_map(|msg| match msg {
+            Msg::Json(v) if v["kind"] == "clipboard" => Some(v["text"].as_str()?.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_burst_of_remote_clipboard_text_reaches_the_ui_coalesced() {
+    let (channel, mut rec) = recorder();
+    let shared = shared_with(channel, credit_for(8, 8));
+    let fb = Framebuffer::new(8, 8).unwrap();
+    let (tx, task) = spawn_forward(&shared, &fb);
+    assert!(is_desktop(&rec.next().await, 8, 8));
+    let started = tokio::time::Instant::now();
+
+    // a hostile server streams clipboard text; the clock stands still meanwhile
+    for i in 0..1000 {
+        tx.send(SessionEvent::Clipboard(format!("text {i}")))
+            .await
+            .unwrap();
+    }
+    // the forwarder has read all of them by the time the clock moves on by a millisecond
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    assert_eq!(
+        clipboard_texts(&rec.drain()),
+        vec!["text 0".to_string()],
+        "the first text goes out at once, the rest waits"
+    );
+
+    // after the gap only the latest text follows
+    let Msg::Json(next) = rec.next().await else {
+        panic!("expected a clipboard event")
+    };
+    assert_eq!(next["text"], "text 999");
+    assert_eq!(started.elapsed(), CLIPBOARD_EVENT_GAP);
+    tokio::time::sleep(CLIPBOARD_EVENT_GAP * 4).await;
+    assert!(rec.drain().is_empty(), "nothing else was waiting");
+
+    // text still waiting for its gap when the session ends is delivered before the end
+    tx.send(SessionEvent::Clipboard("one".into()))
+        .await
+        .unwrap();
+    tx.send(SessionEvent::Clipboard("two".into()))
+        .await
+        .unwrap();
+    tx.send(SessionEvent::Closed(CloseReason::ServerClosed))
+        .await
+        .unwrap();
+    timeout(WAIT, task).await.unwrap().unwrap();
+    assert_eq!(
+        clipboard_texts(&rec.drain()),
+        vec!["one".to_string(), "two".to_string()]
     );
 }
 
@@ -731,6 +863,11 @@ async fn open_session_for_an_rdp_node_starts_an_rdp_session() {
     .unwrap();
     let (channel, mut rec) = recorder();
     let id = open_session(&st, node, channel, 1280, 800).unwrap();
+    // the settings this attempt uses (M11 review #61: the clipboard marker follows them)
+    assert_eq!(
+        rec.next().await,
+        Msg::Json(json!({"kind": "rdpSettings", "clipboard": true, "host": "127.0.0.1"}))
+    );
     // connecting, then the RDP layer's own refusal (an SSH session says something else)
     let first = rec.next().await;
     assert_eq!(
@@ -751,4 +888,85 @@ async fn open_session_for_an_rdp_node_starts_an_rdp_session() {
         code(st.sessions.rdp_input(&id, vec![key(30)])),
         "session_not_connected"
     );
+}
+
+#[tokio::test]
+async fn the_rdp_settings_event_carries_the_clipboard_setting_the_session_uses() {
+    // M11 review #61: the marker and the UI clipboard sync follow the plan of the attempt, also on
+    // a reconnect after the setting changed, never a separate read of the connection
+    let dir = tempfile::tempdir().unwrap();
+    let st = crate::AppState::open(Some(dir.path().to_path_buf()));
+    let node = commands::create_connection(
+        &st,
+        None,
+        None,
+        "r".into(),
+        Protocol::Rdp,
+        "127.0.0.1".into(),
+    )
+    .unwrap()
+    .id
+    .unwrap();
+    let set = |v: Value| {
+        commands::update_node(&st, node, serde_json::from_value(v).unwrap()).unwrap();
+    };
+    set(json!({"port": 1, "rdpClipboard": false}));
+    let (channel, mut rec) = recorder();
+    let id = open_session(&st, node, channel, 1280, 800).unwrap();
+    assert_eq!(
+        rec.next().await,
+        Msg::Json(json!({"kind": "rdpSettings", "clipboard": false, "host": "127.0.0.1"}))
+    );
+    // wait for the refused connect to end
+    loop {
+        if let Msg::Json(v) = rec.next().await
+            && v["state"] == "disconnected"
+        {
+            break;
+        }
+    }
+    set(json!({"rdpClipboard": true}));
+    crate::session_commands::reconnect_session(&st, &id, 1280, 800).unwrap();
+    assert_eq!(
+        rec.next().await,
+        Msg::Json(json!({"kind": "rdpSettings", "clipboard": true, "host": "127.0.0.1"}))
+    );
+}
+
+#[test]
+fn rdp_ops_weigh_at_least_the_minimum_and_resizes_are_coalesced() {
+    use crate::session_flow::MIN_OP_WEIGHT;
+    let (channel, _rec) = recorder();
+    let shared = shared_with(channel, credit_for(8, 8));
+    let (tx, mut ops) = tokio::sync::mpsc::unbounded_channel();
+    *shared.ops.lock().unwrap() = Some(tx);
+    let manager = manager_with("a", entry_with(Arc::clone(&shared)));
+    manager.rdp_input("a", vec![key(30)]).unwrap();
+    manager.rdp_clipboard("a", "x".into()).unwrap();
+    assert_eq!(shared.input_budget.queued(), 2 * MIN_OP_WEIGHT);
+    for i in 0..500u32 {
+        manager.resize("a", 1000 + i, 700 + i).unwrap();
+    }
+    assert!(matches!(ops.try_recv().unwrap(), Op::Rdp(_)));
+    assert!(matches!(ops.try_recv().unwrap(), Op::Clipboard(_)));
+    assert!(matches!(ops.try_recv().unwrap(), Op::Resize));
+    assert!(ops.try_recv().is_err(), "a burst queues a single resize");
+    assert_eq!(super::super::take_resize(&shared), (1499, 1199));
+    assert_eq!(shared.input_budget.queued(), 2 * MIN_OP_WEIGHT);
+}
+
+/// `ConnectParams` and `RdpPlan` print the host but neither the account nor the password
+/// (M11 review #79: the guard in `vault_commands` covers the plan, this covers the params built
+/// from it).
+#[test]
+fn debug_output_of_plan_and_params_hides_user_domain_and_password() {
+    let p = plan(RdpResolution::Fit);
+    let plan_text = format!("{p:?}");
+    let params = build_params(p, (1280, 800), CertStore::in_memory());
+    for text in [plan_text, format!("{params:?}")] {
+        assert!(text.contains("dc01"), "the host stays visible: {text}");
+        for secret in ["admin", "CORP", "sentinel-pw"] {
+            assert!(!text.contains(secret), "Debug leaked {secret}: {text}");
+        }
+    }
 }

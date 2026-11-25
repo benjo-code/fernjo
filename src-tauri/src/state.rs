@@ -1,7 +1,7 @@
 //! Application state shared by all commands.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use fernjo_core::{
@@ -13,8 +13,12 @@ use fernjo_vault::{
 };
 
 use crate::commands::CommandError;
+use crate::idle_lock::IdleTracker;
 use crate::import_commands::Pending;
 use crate::sessions::SessionManager;
+use crate::sync_commands::SyncRuntime;
+use crate::sync_runner::SyncWake;
+use fernjo_sync::secrets::{MemorySyncSecrets, OsSyncSecrets, SyncSecrets};
 
 /// Why the data could not be opened. Every command reports this until the app restarts.
 #[derive(Debug, Clone)]
@@ -108,6 +112,12 @@ pub struct AppState {
     /// unlock or a new vault). Shown while the vault is locked.
     pub auto_unlock_issue: Mutex<Option<AutoUnlockIssue>>,
     pub keystore: Box<dyn KeyStore>,
+    /// Whether the key store holds this vault's key, as last known: set by the operations that
+    /// store or delete the key and by the startup auto-unlock, filled by one `get` otherwise, so
+    /// locking and every status call never read the data key from the keychain just to report a
+    /// yes/no flag (M11 review #36). A leaf lock. An item removed outside the app shows after a
+    /// restart.
+    pub auto_unlock_known: Mutex<Option<(fernjo_vault::VaultId, bool)>>,
     /// The highest vault generation this device has seen, per vault (rollback protection):
     /// a file in `device_dir` when there is one, else memory only.
     pub generations: Arc<dyn GenerationStore>,
@@ -135,10 +145,37 @@ pub struct AppState {
     pub terminal: Mutex<TerminalPrefs>,
     /// Colour theme: loaded from `settings.json` at startup (same rule as `terminal`).
     pub theme: Mutex<Theme>,
+    /// Idle minutes after which the vault locks itself (`None` = off): loaded from
+    /// `settings.json` at startup, in memory only while `FERNJO_DATA_DIR` is set.
+    pub vault_auto_lock_minutes: Mutex<Option<u32>>,
+    /// Whether the open tabs are saved and reopened (default on): loaded from `settings.json`
+    /// at startup (same rule as `terminal`). The lock also serialises writes of `open-tabs.json`.
+    pub reopen_tabs: Mutex<bool>,
+    /// When the user last did something (fed by `note_activity`); see `idle_lock`.
+    pub idle: IdleTracker,
     /// The open terminal sessions.
     pub sessions: SessionManager,
     /// The import or restore that waits for inspect/apply (one at a time).
     pub pending: Mutex<Option<Pending>>,
+    /// Set by `clear_pending` when it had to skip because an apply held the `pending` lock;
+    /// `import_apply` then drops the pending value if it fails, and resets the flag.
+    pub page_reloaded: AtomicBool,
+    /// Multi-device sync (M9): what the last run reported, the findings still to show and the
+    /// running flag. Holds no secret. A leaf lock: never held while taking another one.
+    pub sync: Mutex<SyncRuntime>,
+    /// The hub secret and the sync key per group (the OS keychain in the app, memory in tests).
+    pub sync_secrets: Box<dyn SyncSecrets>,
+    /// Counts every local edit of the synced data (tree command, credential command, import);
+    /// the sync runner debounces its "after a local save" trigger on it. Sync's own writes do
+    /// not count.
+    pub edit_seq: AtomicU64,
+    /// Counts the sync runs that wrote remote changes into the local data; the UI reloads the
+    /// tree and the vault when it changes.
+    pub sync_applied: AtomicU64,
+    /// Wakes the sync runner (window focus).
+    pub sync_wake: SyncWake,
+    /// The window is closing and the best-effort push is under way (set once).
+    pub sync_closing: AtomicBool,
 }
 
 /// Debug output never includes the vault, the key store or the connection data.
@@ -209,8 +246,10 @@ impl AppState {
                     settings::load(&l.config_dir.join(settings::FILE_NAME)).ok()
                 };
                 let terminal = loaded.as_ref().and_then(|s| s.terminal.clone());
+                let auto_lock = loaded.as_ref().and_then(|s| s.vault_auto_lock_minutes);
+                let reopen_tabs = loaded.as_ref().and_then(|s| s.reopen_tabs);
                 let theme = loaded.and_then(|s| s.theme);
-                let state = Self::build(
+                let mut state = Self::build(
                     Some(l.data_dir),
                     Folders {
                         config_dir: Some(l.config_dir),
@@ -225,11 +264,18 @@ impl AppState {
                     KdfParams::default(),
                     None,
                 );
+                state.sync_secrets = Box::new(OsSyncSecrets);
                 if let (Some(prefs), Ok(mut slot)) = (terminal, state.terminal.lock()) {
                     *slot = prefs;
                 }
                 if let (Some(theme), Ok(mut slot)) = (theme, state.theme.lock()) {
                     *slot = theme;
+                }
+                if let Ok(mut slot) = state.vault_auto_lock_minutes.lock() {
+                    *slot = auto_lock.filter(|m| settings::AUTO_LOCK_MINUTES_RANGE.contains(m));
+                }
+                if let (Some(on), Ok(mut slot)) = (reopen_tabs, state.reopen_tabs.lock()) {
+                    *slot = on;
                 }
                 state
             }
@@ -290,6 +336,7 @@ impl AppState {
         let mut notices = Vec::new();
         let mut vault = VaultState::None;
         let mut auto_unlock_issue = None;
+        let mut auto_unlock_known = None;
         let store = match &dir {
             None => Err(StartupFailure {
                 code: "load_failed".to_string(),
@@ -321,8 +368,15 @@ impl AppState {
                     v.attach_generation_store(Arc::clone(&generations));
                     // Never deletes the keychain item; the UI learns of a failure through
                     // `vault_status` (`autoUnlockIssue`).
-                    auto_unlock_issue =
-                        AutoUnlockIssue::from_outcome(&try_auto_unlock(&mut v, keystore.as_ref()));
+                    let outcome = try_auto_unlock(&mut v, keystore.as_ref());
+                    // the attempt read the key store: remember whether an item exists (an
+                    // unavailable store stays unknown and is asked again)
+                    auto_unlock_known = match &outcome {
+                        AutoUnlock::NoKey => Some((v.id(), false)),
+                        AutoUnlock::KeychainUnavailable(_) => None,
+                        _ => Some((v.id(), true)),
+                    };
+                    auto_unlock_issue = AutoUnlockIssue::from_outcome(&outcome);
                     VaultState::Open(v)
                 }
                 Err(e) => VaultState::Unusable {
@@ -342,6 +396,7 @@ impl AppState {
             notices: Mutex::new(notices),
             vault: Mutex::new(vault),
             auto_unlock_issue: Mutex::new(auto_unlock_issue),
+            auto_unlock_known: Mutex::new(auto_unlock_known),
             keystore,
             generations,
             kdf,
@@ -355,9 +410,42 @@ impl AppState {
             pending_data_dir: Mutex::new(None),
             terminal: Mutex::new(TerminalPrefs::default()),
             theme: Mutex::new(Theme::default()),
+            vault_auto_lock_minutes: Mutex::new(None),
+            reopen_tabs: Mutex::new(true),
+            idle: IdleTracker::new(std::time::Instant::now(), std::time::SystemTime::now()),
             sessions: SessionManager::default(),
             pending: Mutex::new(None),
+            page_reloaded: AtomicBool::new(false),
+            sync: Mutex::new(SyncRuntime::default()),
+            sync_secrets: Box::new(MemorySyncSecrets::default()),
+            edit_seq: AtomicU64::new(0),
+            sync_applied: AtomicU64::new(0),
+            sync_wake: SyncWake::default(),
+            sync_closing: AtomicBool::new(false),
         }
+    }
+
+    /// Records a local edit of the synced data (the sync runner's debounce trigger).
+    pub fn note_local_edit(&self) {
+        self.edit_seq.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Test constructor with a device folder (sync keeps its state there) and memory secrets.
+    #[cfg(test)]
+    pub(crate) fn open_with_device_dir(dir: PathBuf, device_dir: PathBuf) -> AppState {
+        Self::build(
+            Some(dir),
+            Folders {
+                config_dir: None,
+                device_dir: Some(device_dir),
+                source: DataDirSource::Default,
+            },
+            false,
+            None,
+            Box::new(MemoryKeyStore::default()),
+            KdfParams::TEST,
+            None,
+        )
     }
 
     #[cfg(test)]
@@ -369,13 +457,17 @@ impl AppState {
     /// Drops the pending import or restore (every page load does this, next to closing the
     /// sessions); a poisoned lock is recovered. It never waits: while an apply holds the lock
     /// (disk work on another thread) the call is skipped, which is safe because the apply
-    /// takes the pending value itself and so clears it. A pick or inspect holds the lock only
+    /// clears the value itself on success, and on failure when `page_reloaded` is set, and an inspect that installs its
+    /// result while the flag is set drops it instead. A pick or inspect holds the lock only
     /// to swap the value, never across I/O.
     pub fn clear_pending(&self) {
         match self.pending.try_lock() {
             Ok(mut guard) => *guard = None,
             Err(std::sync::TryLockError::Poisoned(p)) => *p.into_inner() = None,
-            Err(std::sync::TryLockError::WouldBlock) => {}
+            Err(std::sync::TryLockError::WouldBlock) => {
+                // the apply drops the value itself on failure when it sees this flag
+                self.page_reloaded.store(true, Ordering::SeqCst);
+            }
         }
     }
 

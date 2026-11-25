@@ -15,8 +15,7 @@
 //!    150     n  body ciphertext (JSON + 16 byte tag)
 //! ```
 
-use std::fs;
-use std::io::{self, Read};
+use std::io;
 use std::path::Path;
 
 use uuid::Uuid;
@@ -49,30 +48,23 @@ pub(crate) const HEADER_LEN: usize = OFF_BODY_NONCE + NONCE_LEN;
 /// See `Docs/DECISIONS.md` ("M6 security review").
 pub const MAX_FILE_LEN: u64 = 64 * 1024 * 1024;
 
-/// Reads a whole file, but never more than `max` bytes. The length is checked up front (so an
-/// oversized file is refused without allocating it) and the read itself is bounded too, so a
-/// file that grows between the check and the read cannot bypass the cap. Oversize is an
-/// `InvalidData` error; a missing file keeps its `NotFound` kind.
+/// Reads a whole file, but never more than `max` bytes (`fernjo_fs::read_capped`: the length is
+/// checked up front and the read itself is bounded). Oversize is an `InvalidData` error whose
+/// text names the cap ("the file is larger than 64 MiB"), because it reaches the user as the
+/// reason of an unusable vault; a missing file keeps its `NotFound` kind.
 pub(crate) fn read_capped(path: &Path, max: u64) -> io::Result<Vec<u8>> {
-    let too_large = || {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("the file is larger than {} MiB", max / (1024 * 1024)),
-        )
-    };
-    let file = fs::File::open(path)?;
-    let len = file.metadata()?.len();
-    if len > max {
-        return Err(too_large());
-    }
-    // `len <= max`, so the reservation is bounded by the cap (the cast cannot truncate on
-    // the targets that matter and a smaller reservation only costs a reallocation)
-    let mut bytes = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
-    file.take(max.saturating_add(1)).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > max {
-        return Err(too_large());
-    }
-    Ok(bytes)
+    fernjo_fs::read_capped(path, max).map_err(|e| {
+        // fernjo_fs reports only oversize as `InvalidData` (opening and reading raw bytes
+        // never produce that kind)
+        if e.kind() == io::ErrorKind::InvalidData {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("the file is larger than {} MiB", max / (1024 * 1024)),
+            )
+        } else {
+            e
+        }
+    })
 }
 
 /// Bounds applied to the parameters read from a file, so a hostile synced file cannot
@@ -164,6 +156,19 @@ fn be_u32(bytes: &[u8], at: usize) -> u32 {
 }
 
 impl Header {
+    /// The KDF cost, salt, wrap nonce and wrapped key as bytes: what the master password
+    /// decides. Everything else in the header (id, version, body nonce) is left out.
+    pub(crate) fn password_wrap(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(12 + SALT_LEN + NONCE_LEN + WRAPPED_KEY_LEN);
+        out.extend_from_slice(&self.kdf.memory_kib.to_be_bytes());
+        out.extend_from_slice(&self.kdf.iterations.to_be_bytes());
+        out.extend_from_slice(&self.kdf.parallelism.to_be_bytes());
+        out.extend_from_slice(&self.salt);
+        out.extend_from_slice(&self.wrap_nonce);
+        out.extend_from_slice(&self.wrapped_key);
+        out
+    }
+
     pub(crate) fn encode(&self) -> [u8; HEADER_LEN] {
         let mut out = [0u8; HEADER_LEN];
         out[..8].copy_from_slice(MAGIC);

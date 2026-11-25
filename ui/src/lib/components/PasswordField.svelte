@@ -36,7 +36,7 @@
       {id}
       type={shown ? "text" : "password"}
       {placeholder}
-      autocomplete="off"
+      autocomplete="new-password"
       spellcheck="false"
       aria-invalid={error !== null ? "true" : undefined}
       aria-describedby={error !== null ? errorId : undefined}

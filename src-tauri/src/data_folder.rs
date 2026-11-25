@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
 use fernjo_core::{AppSettings, DataDirSource, FILE_NAME as CONNECTIONS_FILE, settings};
+use fernjo_fs::{FileMode, Parent, WriteOptions};
 use fernjo_vault::FILE_NAME as VAULT_FILE;
 use serde::Serialize;
 
@@ -83,8 +84,15 @@ fn check_writable(dir: &Path) -> std::io::Result<()> {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos());
     let probe = dir.join(format!(".fernjo-write-test-{}-{nanos}", std::process::id()));
-    fs::write(&probe, b"fernjo")?;
-    fs::remove_file(&probe)
+    // create_new: a link planted at the probe name is an error, never followed on write.
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)?;
+    let written = std::io::Write::write_all(&mut file, b"fernjo");
+    drop(file);
+    let removed = fs::remove_file(&probe);
+    written.and(removed)
 }
 
 fn not_usable(target: &Path, reason: impl std::fmt::Display) -> CommandError {
@@ -97,16 +105,22 @@ fn not_usable(target: &Path, reason: impl std::fmt::Display) -> CommandError {
     )
 }
 
-/// Copies `from` to `to` through a temp file and a rename, so `to` never holds a partial file.
-fn copy_atomic(from: &Path, to: &Path) -> std::io::Result<()> {
-    let mut tmp = to.as_os_str().to_owned();
-    tmp.push(".fernjo-copy.tmp");
-    let tmp = PathBuf::from(tmp);
-    let result = fs::copy(from, &tmp).and_then(|_| fs::rename(&tmp, to));
-    if result.is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
-    result
+/// Copies `from` to `to` through `fernjo-fs`: the source is read capped at `max` and only when
+/// it is a regular file (a symlink at the source name is refused, so a link to a private file
+/// is never copied into the new folder), and the copy is written to a random `create_new` temp
+/// name and renamed (no fixed temp name a planted link could redirect, owner-only mode, no
+/// `.bak`, the target folder must exist), so `to` never holds a partial file.
+fn copy_atomic(from: &Path, to: &Path, max: u64) -> std::io::Result<()> {
+    let bytes = fernjo_fs::read_capped(from, max)?;
+    fernjo_fs::write_atomic(
+        to,
+        &bytes,
+        WriteOptions {
+            parent: Parent::MustExist,
+            backup: false,
+            file_mode: FileMode::OwnerOnly,
+        },
+    )
 }
 
 /// Copies the data files of `from` into `target` when `target` has neither of them. A failure
@@ -114,23 +128,27 @@ fn copy_atomic(from: &Path, to: &Path) -> std::io::Result<()> {
 /// `target` (kept untouched; empty when files were copied).
 fn copy_data_files(from: &Path, target: &Path) -> Result<Vec<String>, CommandError> {
     let present = |dir: &Path, name: &str| dir.join(name).try_exists().unwrap_or(true);
-    let names = [CONNECTIONS_FILE, VAULT_FILE];
-    let existing: Vec<String> = names
+    // each data file with the cap its own reader applies
+    let files = [
+        (CONNECTIONS_FILE, fernjo_core::MAX_DATA_FILE_LEN),
+        (VAULT_FILE, fernjo_vault::MAX_FILE_LEN),
+    ];
+    let existing: Vec<String> = files
         .iter()
-        .filter(|n| present(target, n))
-        .map(|n| (*n).to_string())
+        .filter(|(n, _)| present(target, n))
+        .map(|(n, _)| (*n).to_string())
         .collect();
     if !existing.is_empty() {
         return Ok(existing);
     }
     let mut placed: Vec<PathBuf> = Vec::new();
-    for name in names {
+    for (name, max) in files {
         let source = from.join(name);
         if !source.try_exists().unwrap_or(false) {
             continue;
         }
         let dest = target.join(name);
-        if let Err(e) = copy_atomic(&source, &dest) {
+        if let Err(e) = copy_atomic(&source, &dest, max) {
             for p in placed {
                 let _ = fs::remove_file(p);
             }
@@ -262,7 +280,7 @@ pub fn apply_data_folder(state: &AppState, target: &Path) -> Result<DataFolderIn
 /// The `#[tauri::command]` wrappers registered in `run()`.
 pub mod handlers {
     use super::*;
-    use tauri::{AppHandle, State};
+    use tauri::{AppHandle, Manager, State};
     use tauri_plugin_dialog::DialogExt;
 
     #[tauri::command]
@@ -292,10 +310,24 @@ pub mod handlers {
         super::apply_data_folder(&state, &path).map(Some)
     }
 
-    /// Restarts the application. Never returns: the process is replaced.
+    /// Restarts the application the way a close ends it (M11 review #65): while a session is
+    /// connected it shows the "Restart fernjo?" confirmation first. No sync push runs before it:
+    /// the command is offered only while a data folder change waits, and sync is paused then
+    /// (`sync_runner::ready`), so `finish_after_push` restarts at once. Returns at once; the
+    /// process is replaced later.
     #[tauri::command]
-    pub fn restart_app(app: AppHandle) {
-        app.restart()
+    pub fn restart_app(window: tauri::Window) {
+        use crate::sessions::{CloseThen, ExitAction};
+        let state = window.state::<AppState>();
+        let prompt_open = state.close_prompt_open.load(Ordering::SeqCst);
+        match state.sessions.restart_action(prompt_open) {
+            ExitAction::Allow => crate::sync_runner::finish_after_push(window, CloseThen::Restart),
+            ExitAction::Prevent => {}
+            ExitAction::Ask => {
+                let connected = state.sessions.connected_count();
+                crate::ask_to_close(&window, connected, CloseThen::Restart);
+            }
+        }
     }
 }
 
@@ -618,9 +650,11 @@ mod tests {
     #[test]
     fn failed_settings_write_leaves_restart_required_unset() {
         let [data, config, target] = dirs();
-        // settings.json is absent (so it still reads as "defaults"), but a directory sits where
-        // the atomic write wants its temp file, so the write fails on every OS
-        fs::create_dir(config.path().join("settings.json.tmp")).unwrap();
+        // settings.json holds the defaults, but a directory sits where the atomic write wants
+        // its backup, so the write fails on every OS
+        let settings_file = config.path().join(settings::FILE_NAME);
+        settings::save(&settings_file, &AppSettings::default()).unwrap();
+        fs::create_dir(config.path().join("settings.json.bak")).unwrap();
         let st = state(data.path(), config.path(), DataDirSource::Default);
         fill(&st);
         let err = apply_data_folder(&st, target.path()).unwrap_err();
@@ -736,31 +770,112 @@ mod tests {
         let [data, config, target] = dirs();
         let st = state(data.path(), config.path(), DataDirSource::Default);
         fill(&st);
-        let before: Vec<Vec<u8>> = [CONNECTIONS_FILE, VAULT_FILE]
-            .iter()
-            .map(|n| fs::read(data.path().join(n)).unwrap())
-            .collect();
+        let before = fs::read(data.path().join(CONNECTIONS_FILE)).unwrap();
         fs::write(target.path().join("notes.txt"), b"keep me").unwrap();
-        // a directory where the temp file of the vault copy goes makes that copy fail
-        let blocker = target.path().join(format!("{VAULT_FILE}.fernjo-copy.tmp"));
-        fs::create_dir(&blocker).unwrap();
+        // a folder at the vault's source name is not a regular file: its copy is refused
+        let source_vault = data.path().join(VAULT_FILE);
+        fs::remove_file(&source_vault).unwrap();
+        fs::create_dir(&source_vault).unwrap();
         let err = apply_data_folder(&st, target.path()).unwrap_err();
         assert_eq!(err.code, "copy_failed");
+        assert!(err.message.contains(VAULT_FILE), "{}", err.message);
         assert!(!target.path().join(CONNECTIONS_FILE).exists());
         assert!(!target.path().join(VAULT_FILE).exists());
         assert_eq!(
             fs::read(target.path().join("notes.txt")).unwrap(),
             b"keep me"
         );
-        assert!(blocker.is_dir());
-        assert_eq!(fs::read_dir(target.path()).unwrap().count(), 2);
+        assert_eq!(
+            fs::read_dir(target.path()).unwrap().count(),
+            1,
+            "no temp file left"
+        );
         assert!(!settings_path(config.path()).exists());
         assert!(!restart_required(&st));
         assert!(!get_data_folder(&st).unwrap().restart_required);
-        let after: Vec<Vec<u8>> = [CONNECTIONS_FILE, VAULT_FILE]
-            .iter()
-            .map(|n| fs::read(data.path().join(n)).unwrap())
-            .collect();
-        assert_eq!(before, after);
+        assert_eq!(
+            fs::read(data.path().join(CONNECTIONS_FILE)).unwrap(),
+            before
+        );
+        assert!(source_vault.is_dir());
+    }
+
+    /// Older builds copied through the fixed name `<file>.fernjo-copy.tmp`, opened with
+    /// create and truncate. Whatever sits at that name in the target (here a hard link to a
+    /// file elsewhere; a symlink in the Unix test) is never written through.
+    #[test]
+    fn a_file_planted_at_the_old_temp_name_is_never_written() {
+        let [data, config, target, elsewhere] = dirs();
+        let st = state(data.path(), config.path(), DataDirSource::Default);
+        fill(&st);
+        let victim = elsewhere.path().join("victim");
+        fs::write(&victim, b"victim data").unwrap();
+        let planted = target.path().join(format!("{VAULT_FILE}.fernjo-copy.tmp"));
+        fs::hard_link(&victim, &planted).unwrap();
+
+        apply_data_folder(&st, target.path()).unwrap();
+
+        assert_eq!(fs::read(&victim).unwrap(), b"victim data");
+        assert_eq!(fs::read(&planted).unwrap(), b"victim data");
+        for name in [CONNECTIONS_FILE, VAULT_FILE] {
+            assert_eq!(
+                fs::read(target.path().join(name)).unwrap(),
+                fs::read(data.path().join(name)).unwrap()
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_at_a_source_name_is_not_copied() {
+        let [data, config, target, elsewhere] = dirs();
+        let st = state(data.path(), config.path(), DataDirSource::Default);
+        fill(&st);
+        let secret = elsewhere.path().join("id_ed25519");
+        fs::write(&secret, b"SECRET KEY SENTINEL").unwrap();
+        let source = data.path().join(CONNECTIONS_FILE);
+        fs::remove_file(&source).unwrap();
+        std::os::unix::fs::symlink(&secret, &source).unwrap();
+
+        let err = apply_data_folder(&st, target.path()).unwrap_err();
+        assert_eq!(err.code, "copy_failed");
+        assert_eq!(
+            fs::read_dir(target.path()).unwrap().count(),
+            0,
+            "nothing copied"
+        );
+        assert!(!settings_path(config.path()).exists());
+        assert_eq!(fs::read(&secret).unwrap(), b"SECRET KEY SENTINEL");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_at_the_old_temp_name_is_not_followed() {
+        let [data, config, target, elsewhere] = dirs();
+        let st = state(data.path(), config.path(), DataDirSource::Default);
+        fill(&st);
+        let victim = elsewhere.path().join("victim");
+        fs::write(&victim, b"victim data").unwrap();
+        for name in [CONNECTIONS_FILE, VAULT_FILE] {
+            let planted = target.path().join(format!("{name}.fernjo-copy.tmp"));
+            std::os::unix::fs::symlink(&victim, &planted).unwrap();
+        }
+
+        apply_data_folder(&st, target.path()).unwrap();
+
+        assert_eq!(fs::read(&victim).unwrap(), b"victim data");
+        for name in [CONNECTIONS_FILE, VAULT_FILE] {
+            let planted = target.path().join(format!("{name}.fernjo-copy.tmp"));
+            assert!(
+                fs::symlink_metadata(&planted)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            assert_eq!(
+                fs::read(target.path().join(name)).unwrap(),
+                fs::read(data.path().join(name)).unwrap()
+            );
+        }
     }
 }

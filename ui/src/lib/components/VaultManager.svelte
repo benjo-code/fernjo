@@ -229,7 +229,11 @@
     if (!target) return;
     deleting = null;
     const { value, error } = await vault.deleteCredential(target.id);
-    if (error) return showError(error);
+    if (error) {
+      // the credential list is in the vault, but the nodes that used it are in connections.json
+      if (error.code === "changed_on_disk") tree.markChangedOnDisk();
+      return showError(error);
+    }
     await tree.applySnapshot(value.snapshot);
     if (selected === target.id) {
       hideReveal();
@@ -370,11 +374,11 @@
       <div class="list-head">
         <div class="list-title">
           <h3>Credentials</h3>
-          <span class="muted"
-            >{vault.credentials.length === 1
+          <span class="muted">
+            {vault.credentials.length === 1
               ? "1 credential"
-              : `${vault.credentials.length} credentials`}</span
-          >
+              : `${vault.credentials.length} credentials`}
+          </span>
         </div>
         <button type="button" class="btn small" onclick={startNew}>+ New</button>
       </div>
@@ -507,7 +511,13 @@
             <div class="revealed" role="group" aria-label="Revealed secret">
               {#if revealed.password !== undefined}
                 <label for="cred-revealed-password">Stored password</label>
-                <input id="cred-revealed-password" type="text" readonly value={revealed.password} />
+                <input
+                  id="cred-revealed-password"
+                  type="text"
+                  autocomplete="off"
+                  readonly
+                  value={revealed.password}
+                />
               {/if}
               {#if revealed.privateKey !== undefined}
                 <span class="label">Stored private key</span>
@@ -517,6 +527,7 @@
                 <label for="cred-revealed-passphrase">Stored passphrase</label>
                 <input
                   id="cred-revealed-passphrase"
+                  autocomplete="off"
                   type="text"
                   readonly
                   value={revealed.passphrase}

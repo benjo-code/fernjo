@@ -12,3 +12,8 @@ export function reorder<T extends { id: string }>(
   const at = beforeId === null ? rest.length : rest.findIndex((t) => t.id === beforeId);
   return [...rest.slice(0, at), from, ...rest.slice(at)];
 }
+
+/** The tab Ctrl+Shift+W closes: none while the vault view covers the tabs, else the active one. */
+export function tabToClose(view: string, activeId: string | null): string | null {
+  return view === "vault" ? null : activeId;
+}

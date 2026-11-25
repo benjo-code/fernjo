@@ -3,14 +3,16 @@
 //! Like `commands.rs`: plain functions over `&AppState` (testable without Tauri) plus thin
 //! wrappers in [`handlers`].
 
-use fernjo_core::NodeId;
 use fernjo_core::{
     DEFAULT_CLOSE_ON_EXIT, DEFAULT_FONT_SIZE, DEFAULT_SCROLLBACK, DataDirSource, TerminalPrefs,
 };
+use fernjo_core::{NodeId, QuickTarget};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, InvokeResponseBody};
 
 use crate::commands::CommandError;
+use crate::connect_plan::Target;
+use crate::open_tabs::TargetView;
 use crate::sessions::PromptAnswer;
 use crate::state::AppState;
 
@@ -154,6 +156,54 @@ pub fn open_session(
     state.sessions.open(state, node_id, on_event, cols, rows)
 }
 
+/// Creates a disconnected session for a tab of the last run and returns its id; nothing connects
+/// until the UI calls `reconnect_session`. The event channel and size are as for `open_session`.
+///
+/// # Errors
+/// `invalid_target`, `not_found`, `not_a_connection`, or a structure code for a quick target.
+pub fn restore_session(
+    state: &AppState,
+    target: TargetView,
+    on_event: Channel<InvokeResponseBody>,
+    cols: u32,
+    rows: u32,
+) -> Result<String, CommandError> {
+    state
+        .sessions
+        .restore(state, target.into_target()?, on_event, cols, rows)
+}
+
+/// Parses what was typed into quick connect and checks the host against the same allow-list a
+/// session uses, so the field can refuse a bad host before any tab exists. Nothing is opened or
+/// stored.
+///
+/// # Errors
+/// `quick_empty`, `quick_user_required`, `quick_bad_scheme`, `quick_bad_port`, `quick_bad_target`,
+/// `quick_user_password`, `invalid_host`.
+pub fn quick_parse(input: &str) -> Result<QuickTarget, CommandError> {
+    let target = fernjo_core::parse_quick(input).map_err(|e| error(e.code, e.message()))?;
+    // the plan is dropped: only the host check (and the structure check) matter here
+    crate::connect_plan::resolve_quick(&target)?;
+    Ok(target)
+}
+
+/// Opens a session for a quick connect target. The target is validated again here: the webview
+/// is not trusted to have parsed it. Nothing is written to the tree.
+///
+/// # Errors
+/// `invalid_host`, `no_data_dir`.
+pub fn open_quick_session(
+    state: &AppState,
+    target: QuickTarget,
+    on_event: Channel<InvokeResponseBody>,
+    cols: u32,
+    rows: u32,
+) -> Result<String, CommandError> {
+    state
+        .sessions
+        .open_target(state, Target::Quick(target), on_event, cols, rows)
+}
+
 /// Queues keystrokes. `not_found` for an unknown id, `session_not_connected` without a shell.
 pub fn session_input(state: &AppState, id: &str, data: Vec<u8>) -> Result<(), CommandError> {
     state.sessions.input(id, data)
@@ -221,6 +271,33 @@ pub mod handlers {
         rows: u32,
     ) -> Result<String, CommandError> {
         super::open_session(&state, node_id, on_event, cols, rows)
+    }
+
+    #[tauri::command]
+    pub fn restore_session(
+        state: State<'_, AppState>,
+        target: TargetView,
+        on_event: Channel<InvokeResponseBody>,
+        cols: u32,
+        rows: u32,
+    ) -> Result<String, CommandError> {
+        super::restore_session(&state, target, on_event, cols, rows)
+    }
+
+    #[tauri::command]
+    pub fn quick_parse(input: String) -> Result<QuickTarget, CommandError> {
+        super::quick_parse(&input)
+    }
+
+    #[tauri::command]
+    pub fn open_quick_session(
+        state: State<'_, AppState>,
+        target: QuickTarget,
+        on_event: Channel<InvokeResponseBody>,
+        cols: u32,
+        rows: u32,
+    ) -> Result<String, CommandError> {
+        super::open_quick_session(&state, target, on_event, cols, rows)
     }
 
     /// The body is the raw bytes, the session id travels in the `x-fernjo-session` header.
@@ -334,6 +411,14 @@ mod tests {
     use super::*;
     use fernjo_core::{AppSettings, settings};
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn quick_parse_refuses_a_host_outside_the_allow_list_with_invalid_host() {
+        let err = quick_parse("u@bad$host").unwrap_err();
+        assert_eq!(err.code, "invalid_host");
+        let target = quick_parse("root@srv.lab:2222").unwrap();
+        assert_eq!((target.host.as_str(), target.port), ("srv.lab", 2222));
+    }
 
     fn dirs<const N: usize>() -> [tempfile::TempDir; N] {
         std::array::from_fn(|_| tempfile::tempdir().unwrap())
@@ -476,6 +561,8 @@ mod tests {
                 data_dir: Some(elsewhere.path().to_path_buf()),
                 terminal: None,
                 theme: None,
+                vault_auto_lock_minutes: None,
+                reopen_tabs: None,
             },
         )
         .unwrap();

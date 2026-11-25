@@ -79,6 +79,34 @@ describe("routeKey", () => {
   });
 });
 
+describe("routeKey on other layouts", () => {
+  const withCode = (key: string, code: string, ctrl = true, shift = true) => ({
+    ...k(key, { ctrl, shift }),
+    code,
+  });
+
+  test("ctrl_shift_w_on_a_non_latin_layout_closes_the_tab", () => {
+    expect(routeKey(withCode("ц", "KeyW"), false, "none")).toBe("closeTab");
+    expect(routeKey(withCode("Ц", "KeyW"), false, "terminal")).toBe("closeTab");
+  });
+
+  test("a_non_latin_layout_does_not_make_plain_ctrl_letters_chords", () => {
+    expect(routeKey(withCode("ц", "KeyW", true, false), false, "terminal")).toBeNull();
+    expect(
+      routeKey({ ...k("ц", { alt: true, ctrl: true, shift: true }), code: "KeyW" }, false, "none"),
+    ).toBeNull();
+  });
+
+  test("a_non_letter_key_with_a_letter_code_is_not_a_chord_on_the_plain_key", () => {
+    // key is a Latin letter: it wins over the physical code (Dvorak: code KeyW types ",")
+    expect(routeKey(withCode("a", "KeyW"), false, "none")).toBeNull();
+    expect(routeKey(withCode("k", "KeyF"), false, "none")).toBe("focusFilter");
+    // neither a Latin key nor a letter code
+    expect(routeKey(withCode("1", "Digit1"), false, "none")).toBeNull();
+    expect(routeKey(withCode("ц", "Semicolon"), false, "none")).toBeNull();
+  });
+});
+
 describe("routeKey in a remote desktop", () => {
   test("remote_focus_forwards_everything_except_fullscreen_and_tab_chords", () => {
     for (const mac of [false, true]) {
@@ -134,6 +162,7 @@ describe("SHORTCUTS", () => {
         "nextTab",
         "paste",
         "prevTab",
+        "quickConnect",
         "terminalSearch",
       ].sort(),
     );
@@ -182,5 +211,17 @@ describe("SHORTCUTS", () => {
     ]);
     expect(shortcutKeys(plain[1], true)).toBe("Cmd+click");
     for (const s of plain) expect(shortcutEvent(s, false)).toBeNull();
+  });
+});
+
+describe("quick connect chord", () => {
+  test("ctrl_shift_n_is_quick_connect_and_plain_ctrl_n_is_not", () => {
+    expect(routeKey(k("N", { ctrl: true, shift: true }), false, "terminal")).toBe("quickConnect");
+    expect(routeKey(k("n", { meta: true }), true, "none")).toBe("quickConnect");
+    expect(routeKey(k("n", { ctrl: true }), false, "terminal")).toBeNull();
+    expect(routeKey(k("n", { ctrl: true }), true, "terminal")).toBeNull();
+    expect(routeKey(k("N", { ctrl: true, shift: true }), false, "remote")).toBeNull();
+    expect(shortcutKeys(shortcutFor("quickConnect")!, false)).toBe("Ctrl+Shift+N");
+    expect(shortcutKeys(shortcutFor("quickConnect")!, true)).toBe("Cmd+N");
   });
 });

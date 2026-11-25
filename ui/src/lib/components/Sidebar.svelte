@@ -2,12 +2,16 @@
   import type { Snippet } from "svelte";
   import type { SessionStore } from "../sessions.svelte";
   import type { TreeStore } from "../store.svelte";
+  import type { SyncStore } from "../sync.svelte";
   import type { VaultStore } from "../vault.svelte";
   import { LayoutStore, SIDEBAR_MIN, sidebarMax } from "../layout.svelte";
+  import { syncLine } from "../sync-line";
   import FilterBox from "./FilterBox.svelte";
   import Icon from "./Icon.svelte";
+  import QuickConnect from "./QuickConnect.svelte";
   import NoticeBar from "./NoticeBar.svelte";
   import Splitter from "./Splitter.svelte";
+  import SyncStatusLine from "./SyncStatus.svelte";
   import TreeView from "./TreeView.svelte";
   import VaultChip from "./VaultChip.svelte";
   import VaultNote from "./VaultNote.svelte";
@@ -19,6 +23,9 @@
     onOpenVault,
     onsettings,
     onimport,
+    sync,
+    onsyncdetails,
+    onreseed,
     restartPending = false,
     onRestart,
     layout = new LayoutStore(),
@@ -33,6 +40,12 @@
     onsettings?: () => void;
     /** The "Import / Export" button was clicked. */
     onimport?: () => void;
+    /** Its status line sits above the footer buttons and its findings join the notice bar. */
+    sync?: SyncStore;
+    /** "Details" or the status line was clicked: open Settings at the Sync section. */
+    onsyncdetails?: () => void;
+    /** "Re-seed…" of a hub that is older than this device. */
+    onreseed?: () => void;
     restartPending?: boolean;
     onRestart?: () => void;
     layout?: LayoutStore;
@@ -40,6 +53,12 @@
   } = $props();
 
   let filterBox: FilterBox | undefined = $state();
+  let quickConnect: QuickConnect | undefined = $state();
+
+  /** Focuses the quick connect field (the Ctrl+Shift+N shortcut). */
+  export function focusQuickConnect() {
+    quickConnect?.focus();
+  }
 
   /** Focuses the tree filter (the Ctrl+Shift+K shortcut). */
   export function focusFilter() {
@@ -53,11 +72,24 @@
 
   let note: VaultNote | undefined = $state();
   let noteOpen = $state(false);
+
+  // Any bar above the tree or the sync line below the panel takes height the 23-row minimum has
+  // no room for, so the tree may shrink to 6 rows and the properties panel stays reachable.
+  const barsOpen = $derived(
+    store.loadError !== null ||
+      store.error !== null ||
+      store.changedOnDisk ||
+      store.notices.length > 0 ||
+      restartPending ||
+      (sync?.status?.findings.length ?? 0) > 0 ||
+      syncLine(sync?.status ?? null) !== null,
+  );
 </script>
 
 <aside
   class="sidebar"
   class:note-open={noteOpen}
+  class:bars-open={barsOpen}
   class:panel-sized={layout.propertiesHeight !== null}
   aria-label="Connections"
 >
@@ -65,10 +97,14 @@
     <div class="filter"><FilterBox bind:this={filterBox} {store} /></div>
     <VaultChip {vault} onOpenManager={onOpenVault} onFocusUnlock={() => void note?.focusForm()} />
   </div>
+  <QuickConnect bind:this={quickConnect} {sessions} />
   <VaultNote bind:this={note} bind:open={noteOpen} {vault} />
-  <NoticeBar {store} {restartPending} {onRestart} />
+  <NoticeBar {store} {sync} {restartPending} {onRestart} />
   <div class="tree-slot"><TreeView {store} {sessions} {onimport} /></div>
   {@render children?.()}
+  {#if sync}
+    <SyncStatusLine {sync} {onreseed} ondetails={onsyncdetails} />
+  {/if}
   <div class="foot">
     <button
       type="button"
@@ -150,18 +186,20 @@
     color: var(--color-text);
   }
 
-  /* 23 rows stay visible when the window allows it; the properties panel gives way first */
+  /* 21 rows stay visible when the window allows it; the properties panel gives way first */
   .tree-slot {
     display: flex;
     flex: 1 1 0;
     flex-direction: column;
-    min-height: min(calc(var(--row-height-tree) * 23), calc(100vh - 120px));
+    min-height: min(calc(var(--row-height-tree) * 21), calc(100vh - 156px));
     overflow-y: auto;
   }
 
   /* the vault form is open: it is taller than the compact note, so the tree may shrink; the same
-     when the user has set the properties panel's height (TREE_ROWS_SIZED in layout.svelte.ts) */
+     when the user has set the properties panel's height (TREE_ROWS_SIZED in layout.svelte.ts)
+     and while a notice bar or the sync line is shown */
   .note-open .tree-slot,
+  .bars-open .tree-slot,
   .panel-sized .tree-slot {
     min-height: calc(var(--row-height-tree) * 6);
   }

@@ -6,6 +6,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import { isMac, routeKey } from "../shortcuts";
+import { sanitizePaste } from "./paste";
 import { terminalTheme } from "./theme";
 
 export interface TerminalOptions {
@@ -20,6 +21,8 @@ export interface TerminalDeps {
   onResize(cols: number, rows: number): void;
   onAck(bytes: number): void;
   openUrl(url: string): void;
+  /** The OS clipboard text through the native command (the menu Paste). */
+  readClipboard(): Promise<string>;
   /** Ctrl+Shift+F inside the terminal. */
   onSearchRequest?(): void;
 }
@@ -27,9 +30,6 @@ export interface TerminalDeps {
 const DEFAULT_CONTRAST = 4.5;
 /** DESIGN.md: 13px text on a 19px line. */
 const LINE_HEIGHT = 19 / 13;
-
-/** How long a menu paste waits for the clipboard before giving up. */
-const PASTE_TIMEOUT_MS = 2500;
 
 const encoder = new TextEncoder();
 
@@ -77,6 +77,16 @@ export class TerminalController {
       theme: terminalTheme(rootStyle()),
       cursorBlink: true,
       allowProposedApi: true,
+      // OSC 8 hyperlinks from the server leave through `openUrl` too (Rust checks the scheme);
+      // xterm's default would show a server-worded confirm() and call window.open(). Only http(s)
+      // links are made clickable at all (M11 review #58).
+      linkHandler: {
+        activate: (event, uri) => {
+          event.preventDefault();
+          deps.openUrl(uri);
+        },
+        allowNonHttpProtocols: false,
+      },
     });
     this.#term.onData((s) => deps.onData(encoder.encode(s)));
     this.#term.onBinary((s) => deps.onData(latin1(s)));
@@ -102,6 +112,9 @@ export class TerminalController {
 
   mount(el: HTMLElement): void {
     this.#el = el;
+    // In front of xterm's own paste listeners (they sit on elements inside `el`), so a keyboard
+    // or middle-click paste is filtered like the menu Paste.
+    el.addEventListener("paste", this.#onPasteEvent, { capture: true });
     this.#term.open(el);
     if (this.#visible) this.#loadWebgl();
   }
@@ -172,23 +185,32 @@ export class TerminalController {
   }
 
   /**
-   * Menu paste. WebView2 shows a permission prompt for `readText` (measured: it stays pending),
-   * so keyboard paste (Ctrl+V, Ctrl+Shift+V) is left to the browser's native paste event, which
-   * xterm handles without a prompt.
+   * Menu paste. The text comes from the native clipboard command: WebView2 shows a permission
+   * prompt for `navigator.clipboard.readText` that can stay pending. Keyboard paste (Ctrl+V,
+   * Ctrl+Shift+V) is left to the browser's native paste event, which `#onPasteEvent` takes
+   * before xterm does. A failed read pastes nothing.
    */
   async paste(): Promise<void> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<null>((resolve) => {
-      timer = setTimeout(() => resolve(null), PASTE_TIMEOUT_MS);
-    });
+    let text: string;
     try {
-      // A late answer after the timeout is dropped: it could land in whatever has focus by then.
-      const text = await Promise.race([navigator.clipboard.readText(), timeout]);
-      if (text) this.#term.paste(text);
-    } finally {
-      clearTimeout(timer);
+      text = await this.#deps.readClipboard();
+    } catch {
+      return;
     }
+    this.#pasteText(text);
   }
+
+  /** The one way pasted text reaches xterm: filtered first (see `sanitizePaste`). */
+  #pasteText(text: string): void {
+    const clean = sanitizePaste(text);
+    if (clean) this.#term.paste(clean);
+  }
+
+  #onPasteEvent = (e: ClipboardEvent): void => {
+    e.preventDefault();
+    e.stopPropagation();
+    this.#pasteText(e.clipboardData?.getData("text/plain") ?? "");
+  };
 
   refreshTheme(): void {
     this.#term.options.theme = terminalTheme(rootStyle());
@@ -197,6 +219,7 @@ export class TerminalController {
 
   dispose(): void {
     this.#dropWebgl();
+    this.#el?.removeEventListener("paste", this.#onPasteEvent, { capture: true });
     this.#term.dispose();
     this.#el = null;
   }
@@ -208,7 +231,7 @@ export class TerminalController {
    *   ignores them.
    * - every other app action (tabs, close, filter, and paste) returns false WITHOUT
    *   preventDefault, so xterm ignores it and the event bubbles to the window handler; for
-   *   paste the native paste event then reaches xterm's own handler.
+   *   paste the native paste event then reaches `#onPasteEvent`, which filters it for xterm.
    * - everything else (plain Ctrl+C/W/B, Alt+letter, Escape) goes to the program.
    */
   #onKey(e: KeyboardEvent): boolean {

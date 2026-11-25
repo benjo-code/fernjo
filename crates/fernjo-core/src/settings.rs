@@ -4,13 +4,15 @@
 //! folder is). Same rules as `connections.json`: atomic write with `.bak`, missing means
 //! defaults, a newer schema is refused and never overwritten.
 
+use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use serde::de::{self, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
 
 use crate::error::{LoadError, SaveError};
+use crate::json;
 use crate::persist::{move_aside, read_capped, with_suffix, write_atomic};
 
 /// Name of the settings file inside the config folder.
@@ -35,6 +37,26 @@ pub struct AppSettings {
         deserialize_with = "lenient_theme"
     )]
     pub theme: Option<Theme>,
+    /// Lock the vault after this many idle minutes; unset means never.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault_auto_lock_minutes: Option<u32>,
+    /// Reopen the tabs of the last session on start; unset means on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reopen_tabs: Option<bool>,
+}
+
+/// Allowed idle times for the vault auto-lock, in minutes.
+pub const AUTO_LOCK_MINUTES_RANGE: std::ops::RangeInclusive<u32> = 1..=1440;
+
+/// Checks the auto-lock minutes (`None` means off).
+///
+/// # Errors
+/// `invalid_auto_lock` when a value is outside [`AUTO_LOCK_MINUTES_RANGE`].
+pub fn validate_auto_lock(minutes: Option<u32>) -> Result<(), &'static str> {
+    match minutes {
+        Some(m) if !AUTO_LOCK_MINUTES_RANGE.contains(&m) => Err("invalid_auto_lock"),
+        _ => Ok(()),
+    }
 }
 
 /// The colour theme choice.
@@ -49,10 +71,59 @@ pub enum Theme {
 }
 
 /// Reads the theme, mapping an unknown string or a wrong JSON type to `None` so a hand-edited
-/// or newer value never makes the whole file unusable.
+/// or newer value never makes the whole file unusable. A value that is not a string is skipped
+/// without being kept (M11 review #28).
 fn lenient_theme<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Theme>, D::Error> {
-    let value = Value::deserialize(d)?;
-    Ok(serde_json::from_value::<Theme>(value).ok())
+    d.deserialize_any(LenientTheme)
+}
+
+struct LenientTheme;
+
+impl<'de> Visitor<'de> for LenientTheme {
+    type Value = Option<Theme>;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("any JSON value")
+    }
+
+    fn visit_str<E: de::Error>(self, v: &str) -> Result<Option<Theme>, E> {
+        Ok(match v {
+            "system" => Some(Theme::System),
+            "light" => Some(Theme::Light),
+            "dark" => Some(Theme::Dark),
+            _ => None,
+        })
+    }
+
+    fn visit_bool<E: de::Error>(self, _: bool) -> Result<Option<Theme>, E> {
+        Ok(None)
+    }
+
+    fn visit_i64<E: de::Error>(self, _: i64) -> Result<Option<Theme>, E> {
+        Ok(None)
+    }
+
+    fn visit_u64<E: de::Error>(self, _: u64) -> Result<Option<Theme>, E> {
+        Ok(None)
+    }
+
+    fn visit_f64<E: de::Error>(self, _: f64) -> Result<Option<Theme>, E> {
+        Ok(None)
+    }
+
+    fn visit_unit<E: de::Error>(self) -> Result<Option<Theme>, E> {
+        Ok(None)
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Option<Theme>, A::Error> {
+        while seq.next_element::<IgnoredAny>()?.is_some() {}
+        Ok(None)
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Option<Theme>, A::Error> {
+        while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+        Ok(None)
+    }
 }
 
 /// Default terminal font size in pixels.
@@ -129,11 +200,12 @@ fn read_file(path: &Path) -> Result<Read, LoadError> {
         }
     };
     let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
-    let value: Value = match serde_json::from_slice(bytes) {
-        Ok(v) => v,
+    // validated and `schemaVersion` read without building a `serde_json::Value` (`crate::json`)
+    let version = match json::head(bytes, ["schemaVersion"]) {
+        Ok([version]) => version,
         Err(e) => return Ok(Read::Bad(e.to_string())),
     };
-    let Some(version) = value.get("schemaVersion").and_then(Value::as_u64) else {
+    let Some(version) = version.as_u64() else {
         return Ok(Read::Bad("missing or invalid schemaVersion".to_string()));
     };
     let version = u32::try_from(version).unwrap_or(u32::MAX);
@@ -147,7 +219,7 @@ fn read_file(path: &Path) -> Result<Read, LoadError> {
     if version == 0 {
         return Ok(Read::Bad("invalid schemaVersion 0".to_string()));
     }
-    match serde_json::from_value::<AppSettings>(value) {
+    match serde_json::from_slice::<AppSettings>(bytes) {
         Ok(settings) => Ok(Read::Parsed(settings)),
         Err(e) => Ok(Read::Bad(e.to_string())),
     }
@@ -157,6 +229,8 @@ fn read_file(path: &Path) -> Result<Read, LoadError> {
 /// main file falls back to `.bak` (the bad file is moved aside) and otherwise fails with
 /// [`LoadError::Unreadable`]. Nothing else is written.
 pub fn load(path: &Path) -> Result<AppSettings, LoadError> {
+    // leftovers of an interrupted save (`settings.json.<16 hex>.tmp`, best effort)
+    fernjo_fs::sweep_stale_temps(path, fernjo_fs::STALE_TEMP_AGE);
     let reason = match read_file(path)? {
         Read::Parsed(settings) => return Ok(settings),
         Read::Missing => None,
@@ -224,6 +298,8 @@ mod tests {
             data_dir: Some(PathBuf::from(p)),
             terminal: None,
             theme: None,
+            vault_auto_lock_minutes: None,
+            reopen_tabs: None,
         }
     }
 
@@ -239,6 +315,28 @@ mod tests {
             fs::metadata(&p).unwrap().len(),
             crate::persist::MAX_DATA_FILE_LEN + 1
         );
+    }
+
+    /// Final M11 review, Minor 2: a temp file of an interrupted save older than a day is removed
+    /// on open; a younger one stays (it may belong to a save that is still running).
+    #[test]
+    fn load_removes_stale_temp_files_of_settings_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let stale = dir.path().join(format!("{FILE_NAME}.0123456789abcdef.tmp"));
+        let fresh = dir.path().join(format!("{FILE_NAME}.fedcba9876543210.tmp"));
+        for p in [&stale, &fresh] {
+            fs::write(p, b"x").unwrap();
+        }
+        let old = fernjo_fs::STALE_TEMP_AGE + std::time::Duration::from_secs(3600);
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&stale)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - old)
+            .unwrap();
+        load(&path(dir.path())).unwrap();
+        assert!(!stale.exists());
+        assert!(fresh.exists());
     }
 
     #[test]
@@ -274,6 +372,8 @@ mod tests {
                 close_on_exit: Some(false),
             }),
             theme: None,
+            vault_auto_lock_minutes: None,
+            reopen_tabs: None,
         };
         save(&path(dir.path()), &settings).unwrap();
         assert_eq!(load(&path(dir.path())).unwrap(), settings);
@@ -432,5 +532,37 @@ mod tests {
             .unwrap();
             assert_eq!(load(&path(dir.path())).unwrap().theme, None, "{bad}");
         }
+    }
+
+    #[test]
+    fn auto_lock_defaults_to_off_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        // an old file without the field still loads, as off
+        fs::write(path(dir.path()), r#"{"schemaVersion":1,"dataDir":"/x"}"#).unwrap();
+        assert_eq!(
+            load(&path(dir.path())).unwrap().vault_auto_lock_minutes,
+            None
+        );
+        save(&path(dir.path()), &AppSettings::default()).unwrap();
+        assert_eq!(read_json(dir.path()), json!({"schemaVersion": 1}));
+        let settings = AppSettings {
+            vault_auto_lock_minutes: Some(15),
+            ..AppSettings::default()
+        };
+        save(&path(dir.path()), &settings).unwrap();
+        assert_eq!(load(&path(dir.path())).unwrap(), settings);
+        assert_eq!(
+            read_json(dir.path()),
+            json!({"schemaVersion": 1, "vaultAutoLockMinutes": 15})
+        );
+    }
+
+    #[test]
+    fn auto_lock_range_is_1_to_1440() {
+        assert_eq!(validate_auto_lock(Some(0)), Err("invalid_auto_lock"));
+        assert_eq!(validate_auto_lock(Some(1441)), Err("invalid_auto_lock"));
+        assert_eq!(validate_auto_lock(Some(1)), Ok(()));
+        assert_eq!(validate_auto_lock(Some(1440)), Ok(()));
+        assert_eq!(validate_auto_lock(None), Ok(()));
     }
 }
