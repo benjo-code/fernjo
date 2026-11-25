@@ -547,7 +547,8 @@
     {
       "version": "0.3.0",
       "title": "Sync, daily-use features and security check",
-      "status": "open",
+      "status": "done",
+      "date": "2026-11-25",
       "afterMilestone": "11",
       "covers": ["9", "10", "11"],
       "intro": "Device sync (M9), the daily-use features (M10) and a full hardening and security check of everything in the release (M11)."

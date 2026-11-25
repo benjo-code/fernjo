@@ -455,6 +455,58 @@ Not run here: the RDP tests that need a host (`cargo test -p fernjo-rdp --test c
 | Repo settings | **Go.** Every setting is on (above); the draft-then-publish flow is first exercised on the release run. |
 | **Overall** | **Go from M11's side** (updated 2026-11-25). Until then this line read "no-go until the owner checks"; the owner reported the RDP, sync and real-app checks as passed on 2026-11-25, and M11 is closed (roadmap, `done`). Still named above, none of them a blocker: performance not re-run, the M10 and earlier owner checks, three real-app items not reported, row 73, `fernjo-fs` on macOS, and build provenance, which only the release run can show. The release itself waits for the owner's instruction (`CLAUDE.md` "Releases"). |
 
+## v0.3.0 result
+
+Date 2026-11-25. Branch `release/v0.3.0` from `dev` (`8bd25a0`, the merge of the last Dependabot pull request #49, which the owner had me handle for this release only); plan `Docs/superpowers/plans/2026-11-25-release-v0.3.0.md`, design `Docs/superpowers/specs/2026-11-25-release-v0.3.0-design.md`. The commands ran on the plan commit `59e2c05` plus the release edits (version bump with `Cargo.lock` (nine workspace crates, only their `version` lines changed), `CHANGELOG.md` `[0.3.0] - 2026-11-25`, README status line, roadmap release `0.3.0` done) on Windows 11.
+
+| Command | Result |
+|---|---|
+| `bash tools/check-release-version.sh v0.3.0` | exit 0, "version 0.3.0 matches Cargo.toml and package.json" |
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets --locked -- -D warnings` | exit 0 |
+| `cargo test --workspace --locked` | exit 0, 1252 passed, 0 failed, 2 ignored (summed over 43 test binaries) |
+| `pnpm install --frozen-lockfile` | exit 0 |
+| `pnpm test` | exit 0, 59 files, 816 tests passed |
+| `pnpm lint` | exit 0 (Prettier clean, `svelte-check` 272 files, 0 errors, 0 warnings) |
+| `pnpm audit --prod` | exit 0, "No known vulnerabilities found" |
+| `cargo deny check` | exit 0, "advisories ok, bans ok, licenses ok, sources ok" |
+| `bash tools/check-workflows.sh` | exit 0 |
+| `bash tools/test-release-scripts.sh` | exit 0, 79/79 passed |
+| `dotnet run tools/roadmap.cs -- check` | "Roadmap is valid and ROADMAP.md is up to date." |
+
+Not run here: the live SSH container tests (`cargo test -p fernjo-ssh`; they run in the CI `rust` job of the release PR; the M11 readiness run had 95 passed with the container), the RDP tests that need a host (skip without `FERNJO_TEST_RDP_ADDR`, also in CI) and the Unix-only tests (they run on Linux in CI). The first `cargo test` run of the gate overlapped with a second copy of the script and its log was mixed (1222 counted); the count above is from a clean run of the same command afterwards.
+
+**Delta review since the security review** (`735dc25..HEAD`, the merge of PR #48): five commits, #49 (`@tauri-apps/api` 2.12.4 to 2.12.5 in `package.json` and `pnpm-lock.yaml`, two version and checksum lines each), #50 (`release.yml` draft-then-publish, `codeql.yml` adds the `actions` language, `tools/test-release-scripts.sh` one test, `CLAUDE.md`, README, `SECURITY.md`), #51 and #52 (documents) and the plan commit. `git diff --name-only` lists no file under `crates/`, `src-tauri/src/` or `ui/src/`, so the delta holds no application code and the `security-review` skill was not run. The `release.yml` diff was read: the tag push starts the run, `publish` first checks that the release is a draft, attaches installers and `SHA256SUMS` with `--clobber`, attests provenance and publishes last. No finding.
+
+- `gh api "repos/benjo-code/fernjo/code-scanning/alerts?state=open" --jq length`: `0`. Open Dependabot alert: `glib` GHSA-wrw7-89jp-8q8g, accepted since M0.
+- gitleaks v8.30.1 via Docker over the history: `no leaks found` (51 commits scanned).
+- CI on `dev` at `8bd25a0`: `CI`, `CodeQL` and `Roadmap` completed with success.
+
+**Known gaps** (carried over from "v0.3.0 readiness", brought up to date)
+
+| Gap | Disposition |
+|---|---|
+| RDP on a real Windows 11 host after the M11 changes, sync on two real devices, real-app UI checks of M11, Windows sleep with an SSH tab | Done (owner report of 2026-11-25, see "v0.3.0 readiness"; steps not itemised) |
+| Linux Secret Service keychain item and any Linux device in sync | Open, unverified (CHANGELOG says so) |
+| M10 owner checks, M7 and M8 and earlier owner checks (roadmap blocks) | Owner checks, not run or waived, still open |
+| `fernjo-fs` on macOS (CI tests on Linux only) | Known gap, low risk (same libc flags) |
+| Performance not re-measured since v0.1.1 | Not re-run: no WebView2 runtime on this machine; CHANGELOG and README claim no number for 0.3.0 |
+| Build provenance and the draft-then-publish flow | Unverified until the release run; the outcome is added after the release |
+| Row 73 (fork pull request dry run publishes artifacts of the official repository) | After release |
+| Accepted findings, acknowledged behaviour changes, the NLA requirement, row 52 not put to the owner | Accepted by the owner (`Docs/DECISIONS.md` "M11: owner decisions on the security review (2026-11-25)"), unchanged |
+
+**Verdict**
+
+| Area | Verdict | Reasoning |
+|---|---|---|
+| Security review | Go | No High or Medium open (see "v0.3.0 readiness"); the delta since it holds no application code; 0 open code-scanning alerts, gitleaks clean |
+| Installers | Go on the dry run | Judged by the dry run of the release PR (evidence added after the release); provenance unverified until the release run |
+| Docs | Go | README, CHANGELOG, SECURITY.md, roadmap and this file match the code and the evidence; unverified items are named as such |
+| Performance | Not re-run | No claim is made for v0.3.0 |
+| Repo settings | Go | All settings on (SHA pinning, `v*` tag ruleset, immutable releases, CodeQL for `actions`); the draft-then-publish flow first runs on this release |
+
+**Overall: no unfixed High or Medium finding; no blocker for v0.3.0 from the checks run here. The PR to `main` and the tag wait for the owner's instruction.**
+
 ## v0.1.0 security review
 
 Review date: 2026-11-18 (Windows 11; CI dry-run installers of run `44205574554`, PR #10). The checks of Steps 1-4 ran on `target/release/fernjo.exe` built from commit `1bc2762` (built after the last commit that touched `src-tauri`, `crates` or `ui`). The fix commits of this review (`64aa818`, `6648cff`, `5791506`) and the later import fixes (`36c3be0`, `de2a615`, `c809677`) post-date that binary; the real-app checks were not repeated on a rebuild, so they say nothing about those changes (the code fixes have their own tests). Every check below records its command, its result and the date. Real-app checks ran with a scratch `FERNJO_DATA_DIR`; the owner's real data folder was not read, printed or modified, and "Unlock automatically on this device" was never ticked.
