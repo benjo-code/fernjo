@@ -84,8 +84,15 @@ fn check_writable(dir: &Path) -> std::io::Result<()> {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos());
     let probe = dir.join(format!(".fernjo-write-test-{}-{nanos}", std::process::id()));
-    fs::write(&probe, b"fernjo")?;
-    fs::remove_file(&probe)
+    // create_new: a link planted at the probe name is an error, never followed on write.
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)?;
+    let written = std::io::Write::write_all(&mut file, b"fernjo");
+    drop(file);
+    let removed = fs::remove_file(&probe);
+    written.and(removed)
 }
 
 fn not_usable(target: &Path, reason: impl std::fmt::Display) -> CommandError {
