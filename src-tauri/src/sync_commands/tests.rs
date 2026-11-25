@@ -961,6 +961,51 @@ fn an_older_vault_in_the_head_offers_reseed_and_reseed_keeps_the_newer_local_vau
     assert_eq!(credential_names(&b), ["one", "three", "two"]);
 }
 
+/// Re-review N2: the vault refuses a head below this device's mark, but here the local file is
+/// itself below the mark (an "open the older version" whose re-stamp save failed) and the head is
+/// newer than the local file. Re-seed would push the older local vault over it, so the status
+/// is a plain error with its own code and no Re-seed offer; a save of the vault on this device
+/// raises the local generation above the mark, and the next run merges the head.
+#[test]
+fn a_head_newer_than_a_local_vault_below_the_mark_is_not_offered_reseed() {
+    let hub = start_hub();
+    let (a, b) = (dev(), dev());
+    vault_create(&a.st, sec(MASTER), false).unwrap();
+    credential(&a, "one");
+    setup(&a, &hub, "a");
+    join(&b, &a, "b");
+    // A's handle ends up as after a failed re-stamp: unlocked, its file (still the base) below
+    // the device mark. Raising the mark and attaching the store again is that state without
+    // having to make a save fail.
+    {
+        let mut slot = a.st.vault.lock().unwrap();
+        let VaultState::Open(v) = &mut *slot else {
+            panic!("A has a vault");
+        };
+        let generation = v.generation().unwrap();
+        a.st.generations.raise(v.id(), generation + 10);
+        v.attach_generation_store(Arc::clone(&a.st.generations));
+    }
+    // B saves the vault once (a generation between A's file and A's mark) and pushes it
+    vault_unlock(&b.st, sec(MASTER), false).unwrap();
+    credential(&b, "two");
+    assert_eq!(now(&b).state, "ok");
+    let before = vault_file(&a);
+
+    let s = now(&a);
+    assert_eq!(s.state, "error", "{:?}", s.error);
+    assert_eq!(s.error.as_ref().unwrap().code, "vault_below_mark");
+    assert_ne!(s.state, "rolled_back", "no Re-seed offer");
+    assert_eq!(vault_file(&a), before, "nothing was adopted");
+    assert_eq!(credential_names(&a), ["one"]);
+
+    // any save on this device lifts the local file above the mark; the next run merges
+    credential(&a, "three");
+    let s = now(&a);
+    assert_eq!(s.state, "ok", "{:?}", s.error);
+    assert_eq!(credential_names(&a), ["one", "three", "two"]);
+}
+
 fn head_seq(hub: &Hub) -> Option<u64> {
     HubClient::new(&HubConfig {
         url: hub.url(),

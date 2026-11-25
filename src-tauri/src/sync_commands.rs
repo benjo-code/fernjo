@@ -29,7 +29,9 @@
 //!   `"waiting_for_unlock"` (both sides changed the vault and it is locked), `"rolled_back"` (the
 //!   hub shows an older state than this device saw; `error` says which: `hub_rolled_back` for
 //!   the sequence, `vault_rolled_back` when the run refused the head's vault as older than the
-//!   base or this device's rollback mark, V5; "Re-seed" repairs both),
+//!   base or this device's rollback mark and older than the local vault file, V5; "Re-seed"
+//!   repairs both; a refused head that is not older than the local file is the plain error
+//!   `vault_below_mark`, because a re-seed would push the older local vault over it),
 //!   `"error"` (the last run failed, `error` names the code) or `"needs_confirmation"` (only the
 //!   answer of `sync_join` without `confirmReplace`).
 //! - `lastSyncedAt`: RFC 3339 UTC of the last successful run since the app started, else `null`.
@@ -109,9 +111,10 @@ enum LastOutcome {
         seen: u64,
     },
     /// The run refused the head's vault as older than this device has seen (V5: a head below the
-    /// base's generation, or a file below this device's rollback mark; the engine's or the
-    /// vault's `rolled_back`). Shown like a rolled-back hub, so the user is offered Re-seed,
-    /// which pushes this device's newer vault instead of merging the older one.
+    /// base's generation, or a file below this device's rollback mark) and older than the local
+    /// vault file (`engine::refused_head` gives `rolled_back` only then). Shown like a
+    /// rolled-back hub, so the user is offered Re-seed, which pushes this device's newer vault
+    /// instead of merging the older one. The other case, `vault_below_mark`, stays a plain error.
     VaultRolledBack,
 }
 
@@ -463,7 +466,8 @@ fn record(state: &AppState, result: Result<Outcome, SyncError>) {
             rt.error = None;
         }
         // the vault refusal of V5 repeats on every run until the hub is re-seeded: give it the
-        // rolled-back state (and its Re-seed action), not a plain error
+        // rolled-back state (and its Re-seed action), not a plain error. `vault_below_mark` (the
+        // head is not older than the local file) is a plain error: Re-seed would lose the head.
         Err(SyncError::LocalFailed(code)) if code == "rolled_back" => {
             rt.last = LastOutcome::VaultRolledBack;
             rt.error = None;

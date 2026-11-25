@@ -62,7 +62,8 @@ pub enum VaultChange {
     Adopt(Vec<u8>),
     /// Both sides changed it: write `entries` with the header of `head` and a generation above
     /// both (needs the vault unlocked). `base_generation` is the generation of the base file (0
-    /// without one); `Vault::adopt_merged` refuses a head below it (`rolled_back`).
+    /// without one); `Vault::adopt_merged` refuses a head below it (`rolled_back`; a port reports
+    /// such a refusal through `engine::refused_head`, as it does for `adopt_file`).
     Merged {
         head: Vec<u8>,
         base_generation: u64,

@@ -144,6 +144,23 @@ fn next_seq(seq: u64) -> Result<u64, SyncError> {
     seq.checked_add(1).ok_or(SyncError::SeqExhausted)
 }
 
+/// The error for a head vault that was refused as older than this device has seen (V5), by the
+/// engine (below the base) or by the vault (below the device mark). `rolled_back` only when the
+/// head is older than the local vault file, so a re-seed (which pushes the local file) keeps
+/// the newer vault. Otherwise the local file itself is behind (for example after "open the older
+/// version" whose re-stamp save failed) and a re-seed would push it over a newer head:
+/// `vault_below_mark`, which a save of the vault on this device resolves (the save writes a
+/// generation above the mark, so the next run merges).
+#[must_use]
+pub fn refused_head(head_generation: u64, local_generation: u64) -> SyncError {
+    let code = if head_generation < local_generation {
+        "rolled_back"
+    } else {
+        "vault_below_mark"
+    };
+    SyncError::LocalFailed(code.to_owned())
+}
+
 /// A local vault file that would be pushed or merged must parse (size cap, header, KDF bounds):
 /// one that does not is `local_failed` with `vault_unreadable` and never leaves the device.
 fn check_local_vault(local: &LocalState) -> Result<(), SyncError> {
@@ -347,8 +364,10 @@ impl Engine<'_> {
 
     /// The merged entries, the base file's generation and the findings, or `None` when the vault
     /// is locked. A head whose generation is below the base's is an older file of the vault
-    /// played back (every save since the base raised the generation): `local_failed` with
-    /// `rolled_back`, nothing merged (V5).
+    /// played back (every save since the base raised the generation): nothing merged (V5),
+    /// `local_failed` with `rolled_back` when the head is also older than the local file (a
+    /// re-seed keeps the newer local vault), else with `vault_below_mark` (the local file itself
+    /// is behind, see [`refused_head`]).
     fn merge_vault(
         &self,
         base: Option<&[u8]>,
@@ -375,7 +394,10 @@ impl Engine<'_> {
         let head_contents = read_entries(head, key)
             .map_err(|_| invalid("the vault in the snapshot does not open with this key"))?;
         if head_contents.generation < base_generation {
-            return Err(SyncError::LocalFailed("rolled_back".to_owned()));
+            let local_generation = read_entries(&side.file, key)
+                .map_err(|_| SyncError::LocalFailed("vault_unreadable".to_owned()))?
+                .generation;
+            return Err(refused_head(head_contents.generation, local_generation));
         }
         let merged = merge_entries(
             &base_entries,

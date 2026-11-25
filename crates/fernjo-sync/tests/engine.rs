@@ -871,6 +871,50 @@ fn a_head_with_an_older_vault_than_the_base_is_rolled_back_when_both_changed_it(
     assert!(!b.port.file_opens_with(PW));
 }
 
+/// Re-review N2: the head is below the base (V5), but the local file is older still (an older
+/// copy of the vault put back on this device and opened). A re-seed would push that older file
+/// over the head, so the refusal is `vault_below_mark`, not `rolled_back`.
+#[test]
+fn a_head_below_the_base_but_newer_than_the_local_file_is_vault_below_mark() {
+    let hub = start();
+    let (a, b) = pair_with_vault(&hub);
+    let oldest = a.port.vault_file().unwrap();
+    a.port.add_entry("a1");
+    let middle = a.port.vault_file().unwrap();
+    a.port.add_entry("a2");
+    assert!(matches!(a.run(), Outcome::Synced { seq: 2, .. }));
+    b.port.unlock();
+    assert!(matches!(b.run(), Outcome::Synced { seq: 2, .. }));
+    // B's base is the newest file; its own file goes back to the oldest and is opened again
+    b.port.force_vault_file(&oldest);
+    b.port.unlock();
+    let group = group_of(&a);
+    put_head_with_vault(
+        &hub,
+        &key_of(&a, group),
+        group,
+        3,
+        3,
+        Tree::new(),
+        Some(middle),
+    );
+
+    let before = b.untouched();
+    assert_eq!(b.run_err(), local_failed("vault_below_mark"));
+    b.assert_untouched(&before);
+    assert_eq!(head_seq(&hub), Some(3), "nothing was pushed");
+    assert!(b.port.entry_names().is_empty());
+}
+
+#[test]
+fn only_a_head_older_than_the_local_file_is_rolled_back() {
+    use fernjo_sync::engine::refused_head;
+    assert_eq!(refused_head(3, 4), local_failed("rolled_back"));
+    // the same generation is not older: a re-seed would drop the head's own saves
+    assert_eq!(refused_head(4, 4), local_failed("vault_below_mark"));
+    assert_eq!(refused_head(5, 4), local_failed("vault_below_mark"));
+}
+
 #[test]
 fn a_both_changed_merge_where_this_device_saved_more_often_than_the_head_still_merges() {
     let hub = start();

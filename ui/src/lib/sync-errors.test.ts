@@ -15,6 +15,13 @@ describe("syncErrorText", () => {
     expect(e.code).toBeNull();
   });
 
+  test("a_local_vault_below_the_mark_says_how_to_recover_and_offers_no_reseed", () => {
+    const e = syncErrorText({ code: "vault_below_mark", message: "raw" });
+    expect(e.text).toContain("Save the vault once on this device");
+    expect(e.text).not.toContain("Re-seed");
+    expect(e.code).toBeNull();
+  });
+
   test("an_exhausted_sequence_number_gets_human_text", () => {
     const e = syncErrorText({ code: "seq_exhausted", message: "raw" });
     expect(e.text).toContain("sequence number is at its maximum");

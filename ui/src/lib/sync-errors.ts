@@ -25,6 +25,8 @@ const TEXT: Record<string, string> = {
     "The hub's sequence number is at its maximum, so nothing can be sent to it, not even by a re-seed. The hub's admin has to remove its head.",
   vault_rolled_back:
     "The hub holds an older vault than this device has seen. Re-seed it from here if that is expected.",
+  vault_below_mark:
+    "The hub's vault was not taken because this device's vault file is older than one it opened before. Save the vault once on this device (for example add or edit a credential), then sync again.",
 };
 
 /** The text to show for an error, with the raw code appended when there is no wording for it. */
