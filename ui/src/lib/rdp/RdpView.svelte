@@ -36,6 +36,13 @@
   // reads it when the remote side copies something.
   let sync: ClipboardSync | null = null;
   let clipboardBlocked = $state(false);
+  /**
+   * The latest text the remote side copied while this tab was hidden or its desktop had no focus.
+   * Only the desktop in front and focused writes the local clipboard, so a background tab cannot
+   * set what the next paste into another tab pastes (M11 review #31); held text is written when
+   * the desktop next gets the focus.
+   */
+  let heldRemote: string | null = null;
   /** Key events wait here while a paste chord brings the clipboard over first. */
   let gate: Promise<void> | null = null;
   /** Bumped when keys are released, so a key event that still waits at the gate is dropped. */
@@ -76,7 +83,7 @@
         c.setDesktop(width, height);
         desktop = { width, height };
       },
-      clipboard: (text) => void sync?.onRemote(text),
+      clipboard: onRemoteClipboard,
       size: measure,
     });
     return () => {
@@ -100,6 +107,7 @@
   });
 
   $effect(() => {
+    heldRemote = null;
     if (!tab.clipboard) {
       sync = null;
       clipboardBlocked = false;
@@ -114,8 +122,23 @@
     });
     return () => {
       sync = null;
+      heldRemote = null;
     };
   });
+
+  function onRemoteClipboard(text: string) {
+    if (!sync) return;
+    if (visible && canvas && document.activeElement === canvas) void sync.onRemote(text);
+    else heldRemote = text;
+  }
+
+  /** The desktop got the focus: write held remote text first, then offer the local clipboard. */
+  async function onDesktopFocus() {
+    const held = heldRemote;
+    heldRemote = null;
+    if (held !== null) await sync?.onRemote(held);
+    if (tab.state === "connected") await sync?.syncLocal();
+  }
 
   // The local clipboard is offered to the remote one when the desktop gets the focus, and once
   // more when the session becomes live while it already has it.
@@ -264,9 +287,7 @@
       {onpointerdown}
       {onpointerup}
       onpointermove={(e) => controller?.pointerMove(e)}
-      onfocus={() => {
-        if (tab.state === "connected") void sync?.syncLocal();
-      }}
+      onfocus={() => void onDesktopFocus()}
       onblur={() => {
         dropPending();
         controller?.blur();

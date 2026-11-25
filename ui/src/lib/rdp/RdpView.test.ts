@@ -419,3 +419,43 @@ test("a refused write of the remote text shows one line", async () => {
     "The clipboard is blocked by the web view",
   );
 });
+
+test("a hidden rdp tab never writes the remote text locally; it waits for the tab's focus", async () => {
+  // M11 review #31: a background tab must not set what the next paste into another tab pastes
+  const clip = fakeClipboard(async () => "");
+  const t = setup(2);
+  await flush();
+  for (const i of [0, 1]) {
+    handlers[i]!({ kind: "rdpSettings", clipboard: true, host: `r${i}` });
+    state(i, "connected");
+  }
+  await flush();
+  // the second tab is in front; the first one's server copies something
+  expect(t.sessions.activeId).toBe(t.sessions.tabs[1]!.id);
+  handlers[0]!({ kind: "clipboard", text: "ls\x1b[201~\rrm -rf ~\r" });
+  handlers[0]!({ kind: "clipboard", text: "latest" });
+  await flush();
+  expect(clip.writeText).not.toHaveBeenCalled();
+  // the user brings the tab to the front: its desktop takes the focus and the latest text is
+  // written then
+  t.sessions.activate(t.sessions.tabs[0]!.id);
+  flushSync();
+  canvases()[0]!.dispatchEvent(new FocusEvent("focus"));
+  await flush();
+  expect(clip.writeText.mock.calls).toEqual([["latest"]]);
+});
+
+test("a visible rdp tab whose desktop lost the focus holds the remote text too", async () => {
+  const clip = fakeClipboard(async () => "");
+  await connected(true);
+  const canvas = canvases()[0]!;
+  canvas.blur();
+  canvas.dispatchEvent(new FocusEvent("blur"));
+  handlers[0]!({ kind: "clipboard", text: "while away" });
+  await flush();
+  expect(clip.writeText).not.toHaveBeenCalled();
+  canvas.focus();
+  canvas.dispatchEvent(new FocusEvent("focus"));
+  await flush();
+  expect(clip.writeText).toHaveBeenCalledWith("while away");
+});
