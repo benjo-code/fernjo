@@ -429,7 +429,24 @@ fn progress_sink<Ho: Host>(host: Ho) -> Progress {
 }
 
 /// The second half: installs the held bytes. Does nothing unless the state is `Ready`.
+///
+/// `finish_after_push` sets `sync_closing` before it gets here and nothing else resets it, because
+/// an exit or a restart ends the process. An install is the one path that can return (it failed,
+/// the state was no longer `Ready`, or macOS and Linux replaced the files and only request a
+/// restart), so every return clears the flag: the window stays closable and a retry runs again.
+/// On Windows a successful install never returns, which is fine.
 pub fn finish_install<B, Ho>(backend: &B, host: &Ho)
+where
+    B: UpdateBackend,
+    Ho: Host<Handle = B::Handle>,
+{
+    install_held(backend, host);
+    host.state()
+        .sync_closing
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn install_held<B, Ho>(backend: &B, host: &Ho)
 where
     B: UpdateBackend,
     Ho: Host<Handle = B::Handle>,

@@ -603,3 +603,62 @@ fn the_write_probe_leaves_nothing_behind() {
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     assert!(!dir_is_writable(&dir.path().join("missing")));
 }
+
+#[tokio::test]
+async fn a_returning_install_clears_sync_closing_so_the_window_closes_and_a_retry_runs() {
+    use std::sync::atomic::Ordering::SeqCst;
+    struct Failing(Arc<FakeBackend>, AtomicBool);
+    impl UpdateBackend for Failing {
+        type Handle = u32;
+        fn check(
+            &self,
+            c: &str,
+            s: Option<&str>,
+        ) -> impl Future<Output = Result<Option<Found<u32>>, FeedError>> + Send {
+            self.0.check(c, s)
+        }
+        fn download(
+            &self,
+            h: &u32,
+            p: Progress,
+        ) -> impl Future<Output = Result<Vec<u8>, FeedError>> + Send {
+            self.0.download(h, p)
+        }
+        fn install(&self, h: &u32, b: Vec<u8>) -> Result<(), &'static str> {
+            if self.1.load(SeqCst) {
+                self.0.install(h, b)
+            } else {
+                Err("install_failed")
+            }
+        }
+    }
+    let (inner, host, log) = setup();
+    let backend = Failing(inner, AtomicBool::new(false));
+    let closing = &host.state().sync_closing;
+    run_check(&backend, &host, true).await;
+    {
+        let mut g = host.0.rt.lock().unwrap();
+        g.state = UpdateState::Ready;
+        g.bytes = Some(vec![1, 2, 3]);
+    }
+
+    // `finish_after_push` has set the flag; the install fails and returns
+    closing.store(true, SeqCst);
+    finish_install(&backend, &host);
+    assert_eq!(status_of(&host).state, UpdateState::Failed);
+    assert!(!closing.load(SeqCst));
+    assert!(!crate::sync_runner::hold_close(host.state()));
+
+    // the state is no longer `Ready`: nothing is installed, the flag is cleared as well
+    closing.store(true, SeqCst);
+    finish_install(&backend, &host);
+    assert!(!closing.load(SeqCst));
+    assert!(!logged(&log).contains(&"install".to_owned()));
+
+    // a retry (`Failed` -> download -> `Ready` -> `go`) installs and returns the flag cleared
+    backend.1.store(true, SeqCst);
+    closing.store(true, SeqCst);
+    run_install(&backend, &host).await;
+    assert!(logged(&log).contains(&"install".to_owned()));
+    assert!(!closing.load(SeqCst));
+}
