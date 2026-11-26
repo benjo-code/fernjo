@@ -7,7 +7,7 @@ use std::{
     net::{SocketAddr, TcpListener, TcpStream},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -32,7 +32,13 @@ pub enum Route {
     /// Announces `declared` bytes, sends `first`, then sends nothing more until the server stops.
     Stall { declared: u64, first: Vec<u8> },
     /// No `Content-Length` (chunked); sends zero bytes in 1 KiB chunks, `total` in all.
-    Endless { total: usize },
+    /// `sent` counts the body bytes written; `done` is set when the handler ends (the client went
+    /// away, an error, or all `total` bytes sent).
+    Endless {
+        total: usize,
+        sent: Arc<AtomicUsize>,
+        done: Arc<AtomicBool>,
+    },
     /// A status line only, no body.
     Status(u16),
 }
@@ -180,23 +186,32 @@ fn respond(out: &mut TcpStream, route: &Route, stop: &AtomicBool) -> std::io::Re
                 thread::sleep(Duration::from_millis(50));
             }
         }
-        Route::Endless { total } => {
-            write!(
-                out,
-                "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
-            )?;
-            let chunk = [0u8; 1024];
-            let mut sent = 0;
-            while sent < *total {
-                write!(out, "{:x}\r\n", chunk.len())?;
-                out.write_all(&chunk)?;
-                out.write_all(b"\r\n")?;
-                out.flush()?;
-                sent += chunk.len();
-                thread::sleep(Duration::from_millis(1));
-            }
-            out.write_all(b"0\r\n\r\n")?;
+        Route::Endless { total, sent, done } => {
+            let result = stream_endless(out, *total, sent);
+            done.store(true, Ordering::SeqCst);
+            result?;
         }
     }
     out.flush()
+}
+
+const CRLF: &[u8] = b"\r\n";
+/// 1024 bytes in hex.
+const CHUNK_SIZE_LINE: &[u8] = b"400\r\n";
+const HEAD_CHUNKED: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+
+fn stream_endless(out: &mut TcpStream, total: usize, sent: &AtomicUsize) -> std::io::Result<()> {
+    out.write_all(HEAD_CHUNKED)?;
+    let chunk = [0u8; 1024];
+    let mut written = 0;
+    while written < total {
+        out.write_all(CHUNK_SIZE_LINE)?;
+        out.write_all(&chunk)?;
+        out.write_all(CRLF)?;
+        out.flush()?;
+        written += chunk.len();
+        sent.store(written, Ordering::SeqCst);
+        thread::sleep(Duration::from_millis(1));
+    }
+    out.write_all(b"0\r\n\r\n")
 }

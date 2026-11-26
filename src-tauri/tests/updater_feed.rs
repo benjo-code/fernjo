@@ -9,7 +9,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -265,6 +265,41 @@ async fn a_404_and_a_broken_body_are_told_apart() {
     }
 }
 
+async fn bad_feed(body: String) -> FeedError {
+    let server = FakeFeed::start(vec![("/latest.json", Route::Json(body))]);
+    check_with_feed(&server, "0.4.0", None)
+        .await
+        .expect_err("a feed like this must not be offered")
+}
+
+#[tokio::test]
+async fn non_semver_feed_version_is_feed_invalid_and_offers_nothing() {
+    for version in ["banana", "1.2", ""] {
+        let body = manifest(version, "http://127.0.0.1:9/x", &payload_signature(), "");
+        assert_eq!(
+            bad_feed(body).await,
+            FeedError::BadFeed,
+            "version {version:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn empty_platforms_map_is_feed_invalid_and_offers_nothing() {
+    let body = json!({ "version": "0.4.1", "platforms": {} }).to_string();
+    assert_eq!(bad_feed(body).await, FeedError::BadFeed);
+}
+
+#[tokio::test]
+async fn platforms_without_this_target_is_feed_invalid() {
+    let body = json!({
+        "version": "0.4.1",
+        "platforms": { "plan9-mips": { "signature": payload_signature(), "url": "http://127.0.0.1:9/x" } }
+    })
+    .to_string();
+    assert_eq!(bad_feed(body).await, FeedError::BadFeed);
+}
+
 fn limits(cap: u64, stall_ms: u64) -> Limits {
     Limits {
         cap,
@@ -301,7 +336,7 @@ async fn oversize_declared_length_is_refused_before_streaming() {
         limits(1024, 10_000),
     )
     .await;
-    assert_eq!(result.unwrap_err().code(), "download_refused");
+    assert_eq!(result.unwrap_err(), FeedError::DownloadRefused("too_large"));
     assert!(
         started.elapsed() < Duration::from_secs(5),
         "refused at the first chunk, not after the stall timeout"
@@ -310,15 +345,35 @@ async fn oversize_declared_length_is_refused_before_streaming() {
 
 #[tokio::test]
 async fn stream_past_the_cap_is_cut_off() {
-    // no Content-Length: only the received bytes can stop it
+    // no Content-Length: only the received bytes can stop it. At 1 KiB per millisecond the
+    // handler would need over a minute for all 64 MiB, so if it ends within seconds the client
+    // closed the connection after the cap.
+    let total = 64 * 1024 * 1024;
+    let sent = Arc::new(AtomicUsize::new(0));
+    let done = Arc::new(AtomicBool::new(false));
     let (result, _server) = download_from_route(
         Route::Endless {
-            total: 10 * 1024 * 1024,
+            total,
+            sent: sent.clone(),
+            done: done.clone(),
         },
         limits(4096, 10_000),
     )
     .await;
-    assert_eq!(result.unwrap_err().code(), "download_refused");
+    assert_eq!(result.unwrap_err(), FeedError::DownloadRefused("too_large"));
+    let waited = Instant::now();
+    while !done.load(Ordering::SeqCst) && waited.elapsed() < Duration::from_secs(20) {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        done.load(Ordering::SeqCst),
+        "the server never saw the connection close"
+    );
+    assert!(
+        sent.load(Ordering::SeqCst) < total / 2,
+        "the server kept sending: {} bytes",
+        sent.load(Ordering::SeqCst)
+    );
 }
 
 #[tokio::test]
@@ -332,7 +387,7 @@ async fn stalled_download_times_out() {
         limits(1_000_000, 300),
     )
     .await;
-    assert_eq!(result.unwrap_err().code(), "download_refused");
+    assert_eq!(result.unwrap_err(), FeedError::DownloadRefused("stalled"));
     assert!(started.elapsed() < Duration::from_secs(5));
 }
 
