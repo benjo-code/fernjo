@@ -31,8 +31,9 @@ pub use persist::{
 pub use quick::{QuickError, QuickTarget, parse_quick, validate_quick};
 pub use resolve::resolve;
 pub use settings::{
-    AppSettings, DEFAULT_CLOSE_ON_EXIT, DEFAULT_FONT_SIZE, DEFAULT_SCROLLBACK, FONT_SIZE_RANGE,
-    SCROLLBACK_RANGE, TerminalPrefs, Theme,
+    AppSettings, DEFAULT_CHECK_FOR_UPDATES, DEFAULT_CLOSE_ON_EXIT, DEFAULT_FONT_SIZE,
+    DEFAULT_SCROLLBACK, FONT_SIZE_RANGE, SCROLLBACK_RANGE, TerminalPrefs, Theme,
+    validate_update_version,
 };
 pub use store::{Opened, Store};
 pub use tree::{MAX_TREE_DEPTH, NodePatch, Patch, Tree, subtree_depth};

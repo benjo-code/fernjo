@@ -43,6 +43,31 @@ pub struct AppSettings {
     /// Reopen the tabs of the last session on start; unset means on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reopen_tabs: Option<bool>,
+    /// Check for a new release in the background; unset means [`DEFAULT_CHECK_FOR_UPDATES`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_for_updates: Option<bool>,
+    /// The release version the user chose to skip (`MAJOR.MINOR.PATCH`); unset means none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped_update_version: Option<String>,
+}
+
+/// Whether the app checks for updates, unless set.
+pub const DEFAULT_CHECK_FOR_UPDATES: bool = true;
+
+/// Longest accepted update version string, in bytes.
+const MAX_UPDATE_VERSION_LEN: usize = 32;
+
+/// Checks a release version: exactly `MAJOR.MINOR.PATCH` (digits only, no `v`, no pre-release
+/// or build part), at most 32 bytes.
+///
+/// # Errors
+/// `invalid_version` for anything else.
+pub fn validate_update_version(v: &str) -> Result<(), &'static str> {
+    let ok = v.len() <= MAX_UPDATE_VERSION_LEN
+        && v.split('.').count() == 3
+        && v.split('.')
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    if ok { Ok(()) } else { Err("invalid_version") }
 }
 
 /// Allowed idle times for the vault auto-lock, in minutes.
@@ -300,6 +325,8 @@ mod tests {
             theme: None,
             vault_auto_lock_minutes: None,
             reopen_tabs: None,
+            check_for_updates: None,
+            skipped_update_version: None,
         }
     }
 
@@ -374,6 +401,8 @@ mod tests {
             theme: None,
             vault_auto_lock_minutes: None,
             reopen_tabs: None,
+            check_for_updates: None,
+            skipped_update_version: None,
         };
         save(&path(dir.path()), &settings).unwrap();
         assert_eq!(load(&path(dir.path())).unwrap(), settings);
@@ -555,6 +584,60 @@ mod tests {
             read_json(dir.path()),
             json!({"schemaVersion": 1, "vaultAutoLockMinutes": 15})
         );
+    }
+
+    #[test]
+    fn update_fields_round_trip_and_keep_other_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = AppSettings {
+            theme: Some(Theme::Dark),
+            check_for_updates: Some(false),
+            skipped_update_version: Some("1.2.3".into()),
+            ..AppSettings::default()
+        };
+        save(&path(dir.path()), &settings).unwrap();
+        assert_eq!(load(&path(dir.path())).unwrap(), settings);
+        assert_eq!(
+            read_json(dir.path()),
+            json!({"schemaVersion": 1, "theme": "dark", "checkForUpdates": false,
+                   "skippedUpdateVersion": "1.2.3"})
+        );
+    }
+
+    #[test]
+    fn old_settings_file_without_update_fields_loads_as_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(path(dir.path()), r#"{"schemaVersion":1,"dataDir":"/x"}"#).unwrap();
+        let loaded = load(&path(dir.path())).unwrap();
+        assert_eq!(loaded.check_for_updates, None);
+        assert_eq!(loaded.skipped_update_version, None);
+        const { assert!(DEFAULT_CHECK_FOR_UPDATES) };
+        save(&path(dir.path()), &AppSettings::default()).unwrap();
+        assert_eq!(read_json(dir.path()), json!({"schemaVersion": 1}));
+    }
+
+    #[test]
+    fn validate_update_version_rejects_prerelease_long_and_garbage() {
+        for bad in [
+            "1.2.3-rc.1",
+            "v1.2.3",
+            "",
+            "1.2",
+            "1.2.3+b",
+            "1.2.x",
+            "1..3",
+        ] {
+            assert_eq!(
+                validate_update_version(bad),
+                Err("invalid_version"),
+                "{bad}"
+            );
+        }
+        let long = format!("1.2.{}", "3".repeat(29));
+        assert_eq!(long.len(), 33);
+        assert_eq!(validate_update_version(&long), Err("invalid_version"));
+        assert_eq!(validate_update_version("0.4.0"), Ok(()));
+        assert_eq!(validate_update_version("10.20.300"), Ok(()));
     }
 
     #[test]
