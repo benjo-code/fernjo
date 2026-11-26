@@ -29,6 +29,7 @@ allow = [
     "CC0-1.0",
     "MPL-2.0",
     "BSL-1.0",
+    "CDLA-Permissive-2.0", # webpki-root-certs (Mozilla root certificate data, via the updater plugin's TLS stack; M13), permissive, no copyleft
 ]
 
 [bans]

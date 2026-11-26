@@ -16,7 +16,7 @@ mod state;
 mod sync_commands;
 mod sync_port;
 mod sync_runner;
-mod updater;
+pub mod updater;
 mod vault_commands;
 
 use std::sync::atomic::Ordering;
@@ -45,6 +45,7 @@ pub fn run() {
             }
         }))
         .plugin(nav_guard::plugin())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             // terminal links open through `open_external_url` in Rust; the plugin's JS

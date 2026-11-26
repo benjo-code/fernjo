@@ -34,6 +34,9 @@ secrecy.workspace = true
 tauri-plugin-single-instance = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
+# exact pin: installer code is security-relevant, read a new release before taking it (Docs/DECISIONS.md, "M13: update signing and the updater plugin")
+tauri-plugin-updater = "=2.14.1"
+url = "2"
 tokio.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 uuid.workspace = true
@@ -45,3 +48,13 @@ fernjo-hub = { path = "../crates/fernjo-hub" }
 base64.workspace = true
 # a paused clock for the timing tests of the RDP forwarder
 tokio = { workspace = true, features = ["test-util"] }
+# the mock runtime hosts the updater plugin in the feed tests
+tauri = { version = "2.12", features = ["test"] }
+# Enables `update-test-hooks` for this package's own tests, so plain `cargo test --workspace` runs
+# `tests/updater_feed.rs`. Dev-dependencies are never part of a release build.
+fernjo-app = { path = ".", features = ["update-test-hooks"] }
+
+[features]
+# The endpoint override of `updater::feed::check`. Off by default; the release build never enables
+# it (`src-tauri/tests/tauri_conf.rs`, `updater_config_is_pinned`, asserts it is not in `default`).
+update-test-hooks = []

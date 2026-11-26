@@ -122,18 +122,77 @@ fn version_comes_from_cargo_not_from_the_conf() {
     );
 }
 
+const ENDPOINT: &str = "https://github.com/benjo-code/fernjo/releases/latest/download/latest.json";
+/// The owner's update public key (key id 15493CC4F35D089F, Docs/DECISIONS.md, "M13: update signing
+/// and the updater plugin"). The private half is never in the repository.
+const UPDATE_PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE1NDkzQ0M0RjM1RDA4OUYKUldTZkNGM3p4RHhKRmZYQjlQaGNSZVRCNWdKejJvZTg0TWh1bEl3VWorRmJKWCtEM0I1VTlKVSsK";
+
 #[test]
-fn no_updater_and_no_signing_material() {
+fn updater_config_is_pinned() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
     let conf = load("tauri.conf.json");
-    assert!(conf["plugins"]["updater"].is_null(), "no updater plugin");
+    let updater = conf["plugins"]["updater"]
+        .as_object()
+        .expect("plugins.updater must be set");
+    let mut keys: Vec<&str> = updater.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        ["endpoints", "pubkey", "requireSignedVersion"],
+        "no other updater keys (no dangerous* switch, no allowDowngrades)"
+    );
+    assert_eq!(updater["endpoints"], serde_json::json!([ENDPOINT]));
+    assert_eq!(updater["requireSignedVersion"], Value::Bool(true));
+    let pubkey = updater["pubkey"].as_str().unwrap();
+    assert_eq!(pubkey, UPDATE_PUBKEY);
+    let text = String::from_utf8(STANDARD.decode(pubkey).expect("base64")).expect("utf-8");
+    assert!(
+        text.starts_with("untrusted comment: minisign public key: "),
+        "a minisign public key text: {text}"
+    );
+    // the committed test key must never be the real one
+    let test_key = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/update-test-key/test-only.pub"),
+    )
+    .unwrap();
+    assert_ne!(
+        pubkey,
+        test_key.trim(),
+        "the test key is not the update key"
+    );
     assert!(
         conf["bundle"]["createUpdaterArtifacts"].is_null(),
-        "no updater artifacts"
+        "no updater artifacts: the build job needs no private key"
     );
     let text = serde_json::to_string(&conf).unwrap();
-    for key in ["signCommand", "signingIdentity", "certificateThumbprint"] {
+    for key in [
+        "dangerousInsecureTransportProtocol",
+        "signCommand",
+        "signingIdentity",
+        "certificateThumbprint",
+        "TAURI_SIGNING_PRIVATE_KEY",
+        "untrusted comment: rsign encrypted secret key",
+    ] {
         assert!(!text.contains(key), "{key} must not appear in the conf");
     }
+}
+
+#[test]
+fn update_test_hooks_are_not_a_default_feature() {
+    let text =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")).unwrap();
+    let mut in_features = false;
+    for line in text.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_features = line == "[features]";
+        } else if in_features && line.starts_with("default") {
+            assert!(!line.contains("update-test-hooks"), "{line}");
+        }
+    }
+    assert!(
+        text.contains("update-test-hooks = []"),
+        "the feature exists and enables nothing else"
+    );
 }
 
 #[test]
