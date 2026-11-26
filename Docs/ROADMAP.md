@@ -41,6 +41,18 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 | – | **Release `v0.3.0`** – Sync, daily-use features and security check (M9 to M11) | – | ✅ done | – | 2026-11-25 |
 | 12 | Hub image on GitHub | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-25-milestone-12-hub-image.md) | 2026-11-26 |
 | – | **Release `v0.3.1`** – Hub image on GitHub (M12) | – | ✅ done | – | 2026-11-26 |
+| 13 | Automatic updates | 1 – fernjo app | ⬜ open | – | – |
+| 14 | Security check and release readiness for v0.4.0 | 1 – fernjo app | ⬜ open | – | – |
+| – | **Release `v0.4.0`** – Automatic updates (M13 to M14) | – | ⬜ open | – | – |
+| 15 | Export to mRemoteNG format | 1 – fernjo app | ⬜ open | – | – |
+| 16 | SFTP file browser | 1 – fernjo app | ⬜ open | – | – |
+| 17 | Security check and release readiness for v0.5.0 | 1 – fernjo app | ⬜ open | – | – |
+| – | **Release `v0.5.0`** – mRemoteNG export and file transfer (M15 to M17) | – | ⬜ open | – | – |
+| 18 | Split panes and broadcast input | 1 – fernjo app | ⬜ open | – | – |
+| 19 | Local shell tabs | 1 – fernjo app | ⬜ open | – | – |
+| 20 | Hardening follow-ups | 1 – fernjo app | ⬜ open | – | – |
+| 21 | Security check and release readiness for v0.6.0 | 1 – fernjo app | ⬜ open | – | – |
+| – | **Release `v0.6.0`** – Workspace and hardening (M18 to M21) | – | ⬜ open | – | – |
 
 ## Scope changes
 
@@ -60,6 +72,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 - **2026-11-25 (Milestone 12 and release v0.3.1 inserted):** Owner request after v0.3.0: setting up `fernjo-hub` should not need a local image build from the source code. A new milestone 12, "Hub image on GitHub", publishes the image to `ghcr.io/benjo-code/fernjo-hub` from the release workflow and ships a Compose file next to the Quadlet unit (the owner mainly uses Compose, so Compose with rootless Podman is the main path and Quadlet stays supported); release `v0.3.1` follows it and contains only this. M12 has no separate spec (delivery work on an existing component); the plan goes under `superpowers/plans/` when the milestone is planned. The image is first published with v0.3.1: the tag and workflow of v0.3.0 are fixed, so there is no v0.3.0 image.
 - **2026-11-25 (M12 implementation):** The release workflow job named `hub-image` in the first task is two jobs: `hub-image-build` (matrix amd64 and arm64, `contents: read`, also the pull request dry run, builds, smoke-tests and saves an OCI archive) and `hub-image` (tag push only, the only job with `packages: write`; pushes exactly those archives as one manifest list). The roadmap rule that only the pushing job gets `packages: write` holds; the split makes the pushed bits the tested bits. Both jobs sit before `publish`, and `publish` also needs `hub-image`, so a release whose deploy files pin the image is not published while the image is missing (a published release is immutable). The attestation command gains `--signer-workflow` and `--source-ref`, the same pins the installers use. No new action was added.
 - **2026-11-26 (M12 owner checks):** The owner check of the Quadlet unit (`systemctl --user stop fernjo-hub` within about a second) is replaced by the same Compose files run as a systemd user service (`fernjo-hub-compose.service`), because the owner set the hub VM up with Compose and removed the Quadlet test setup. The Quadlet unit stays in the repository, with the published image, but its start from GHCR and its stop time are not verified (listed in `Docs/hub.md`, "Not verified yet"); the open owner check of M9 about the Quadlet stop stays open for the same reason.
+- **2026-11-26 (Roadmap extended (M13 to M21, v0.4.0 to v0.6.0)):** Owner request: automatic updates, and a security check plus release-readiness milestone before every release. The roadmap gains three releases and nine milestones. Every release is preceded by its own gate milestone (M14, M17, M21) that updates the threat model, reviews each changed area independently, runs `/security-review` and the dependency checks, triages findings in `Docs/release-checklist.md`, lists the open owner checks and ends with a go or no-go verdict; the gate prepares the release and does not perform it. Not every milestone is a release: v0.4.0 covers M13 and M14, v0.5.0 covers M15 to M17, v0.6.0 covers M18 to M21. M13 (automatic updates) takes "Narrow the webview capability" from the backlog because the update commands touch the same capability file. Code signing and notarisation is not scheduled: the owner finds it too expensive, so the backlog item stays (reworded: the Windows part has a free route for open-source projects, the macOS part needs the paid Apple Developer Program) and the installers stay unsigned; the update signature of M13 is separate and free. M15 and M16 take "Export to mRemoteNG format" and "SFTP file browser", M18 and M19 take "Split panes and detached tabs" (detached windows only if the spec finds a safe way), "Broadcast input" and "Local shell tabs", and M20 takes the hardening items of the M11 review that were accepted for later ("Forget a host key", "Detect a frozen SSH tab", "Native confirmation for sync setup and join", "Sync key rotation", "RDP: allow servers without NLA per connection", "Note when auto-lock is off because settings.json is unusable"). The owner swapped jump hosts and port forwarding out of M15 for the mRemoteNG export, so "Port forwarding and jump hosts" stays in the backlog. The order of M15 to M19 follows the owner’s expected daily use and can be changed before a milestone is planned. A version that contains the updater cannot update older installs, so v0.4.0 is installed by hand once and the first real update is v0.4.0 to v0.5.0 (an owner check in M17).
 
 ## Open manual checks (owner)
 
@@ -646,27 +659,230 @@ Goal: The sync hub can be set up from a ready-made image on the GitHub container
 
 The sync hub comes as a ready-made image on the GitHub container registry (amd64 and arm64), with a Compose file and an updated Quadlet unit. The app is unchanged.
 
+## Milestone 13 – Automatic updates
+**Status:** ⬜ open · **Plan:** – · **Prerequisites:** M12
+
+Goal: The app notices that a new version is available, shows it in the UI, and one click downloads, verifies and installs it in an app-themed update window and starts the new version.
+
+**Tasks**
+- [ ] Create spec `Docs/superpowers/specs/<date>-m13-auto-update-design.md` through brainstorming: update source and endpoint, check timing, privacy of the request, how each platform hands over to the installer (Windows NSIS exits the app, macOS replaces the `.app`, Linux updates the AppImage in place), what happens for a `.deb` or a read-only install location, handling and loss of the update signing key, and what the themed window can show while the installer runs
+- [ ] Update signing key pair (`tauri signer generate`, minisign): the public key goes into `src-tauri/tauri.conf.json`, the private key and its password exist only as GitHub Actions secrets and are never written to a file, log or artifact; record how a lost or leaked key is handled (installs cannot update across a key change, so it needs a manual reinstall) in `Docs/DECISIONS.md`
+- [ ] Release workflow: the platform build jobs also produce and sign the update artifacts (NSIS installer, macOS `.app.tar.gz`, AppImage), a script in `tools/` writes `latest.json` (version, release notes, per platform URL and signature) and `tools/verify-installers.sh` checks it; both are attached to the draft release; the signing secret is available only to the step that signs, the pull request dry run (and every fork) builds without the key and skips signing; `tools/check-workflows.sh` stays green and `tools/test-release-scripts.sh` covers the new scripts
+- [ ] Rust side in `src-tauri/src/updater.rs` (no logic in TypeScript): update plugin with the endpoint and public key pinned to this repository’s release feed (HTTPS only), check at start after a short delay and every 24 hours, a manual check, only a strictly newer stable version (no downgrade, no pre-release), download with progress events, signature verified before anything is installed, install and restart through the same close confirmation as the other restarts ("Install update?" when sessions are connected; never `AppHandle::restart` directly); commands `update_check`, `update_install`, `update_skip`, status event `update-status`; they count in the three-places rule and have `table()` entries
+- [ ] Setting `checkForUpdates` in `settings.json` (default on) with a "Check now" button and the installed version in Settings; a scratch run with `FERNJO_DATA_DIR` never checks automatically (a manual run must not talk to the real feed); an unreadable `settings.json` keeps the check off with the specific note, not the generic one
+- [ ] UI (presentation only, follows `DESIGN.md` and the tokens): an "Update available" marker in the sidebar footer, an update window (`UpdateDialog.svelte`) with the new version, the release notes as plain text (never HTML), "Update and restart", "Later" and "Skip this version", a progress bar with the stage (downloading, verifying, installing, restarting), an error state with Retry and a link to the release page; no update path for a `.deb` or an install location that cannot be written: the window offers the release page instead
+- [ ] Narrow the webview capability (moved from the backlog; the update commands touch the same file): `src-tauri/capabilities` replaces `core:default` with `core:event:allow-listen` and `core:event:allow-unlisten` and the permissions the app really needs, checked in a real build (`pnpm tauri build --no-bundle`, not a debug harness), pinned in `src-tauri/tests/tauri_conf.rs`; the test that forbids an updater in the bundle config becomes a test that pins exactly this updater configuration (public key, endpoint, no other endpoint)
+- [ ] Privacy and docs: `README.md` and `SECURITY.md` state the update check (one HTTPS request to the release feed, no account, no identifiers beyond what the request itself carries, off with one setting), `Docs/release-checklist.md` drops the statement "No update check", `Docs/DECISIONS.md` records the choices, `CLAUDE.md` the lasting facts, `CHANGELOG.md` `[Unreleased]` gets a short user-readable entry
+
+**Acceptance criteria**
+- [ ] Build, test and lint are green: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `pnpm test`, `pnpm lint`, `cargo deny check`, `bash tools/check-workflows.sh`, `bash tools/test-release-scripts.sh`, `dotnet run tools/roadmap.cs -- check`
+- [ ] Tests against a local fake feed show: a newer version is offered, the same or an older version is not, a bad or missing signature is refused, a tampered download is refused, an unreachable feed changes nothing and shows no error at start, a pre-release is ignored (test names as evidence)
+- [ ] `latest.json` for a test key and fixture artifacts has the right shape and signatures (`tools/test-release-scripts.sh`), and the pull request dry run of the release workflow builds without the key and publishes nothing (CI run named as evidence)
+- [ ] The no-secret guard (`no_response_contains_a_secret`) and the command count guard cover the new commands, and a recorded check with a logging local server shows that the update check sends exactly one GET to the pinned feed and nothing else
+- [ ] The capability list contains no `core:default` and the app still works in a real release build (tree loads, session opens, events arrive, update window opens), checked with the DevTools-port recipe
+- [ ] Manual, owner (Windows, macOS, Linux AppImage): an older locally built version against a test feed updates through the update window, the app closes, the new version starts, and `connections.json`, the vault and `settings.json` are untouched; on Windows the per-user installer needs no administrator rights
+- [ ] Manual, owner: a `.deb` install and a read-only AppImage location show the release page offer and install nothing
+
+## Milestone 14 – Security check and release readiness for v0.4.0
+**Status:** ⬜ open · **Plan:** – · **Prerequisites:** M13
+
+Goal: v0.4.0 is only released after an independent security check of what changed since v0.3.1 and a written go or no-go verdict; the milestone prepares the release and does not perform it.
+
+**Tasks**
+- [ ] Update the threat model for what v0.4.0 adds (the update feed, the update signing key and the install handover): what touches secrets, the data folder, the network and the webview, and what a hostile peer, server, feed, file or other local process can do; record it in `Docs/DECISIONS.md`
+- [ ] Independent review per changed area, each by a reviewer that has not seen the others’ findings: the updater (hostile or compromised feed, downgrade, redirect, tampered or truncated download, release notes as text, the handover to the installer and its file paths), the release pipeline and key handling (secrets only in the signing step, fork pull requests, artifact contents, `latest.json`), the webview capability and command list after the narrowing, and the settings and privacy statements
+- [ ] `/security-review` of the whole diff since v0.3.1, and a dependency check: `cargo deny check`, `pnpm audit --prod`, open Dependabot and CodeQL alerts, `tools/check-workflows.sh`
+- [ ] Triage every finding in `Docs/release-checklist.md` (severity, disposition, evidence): fix all High and Medium findings, fix or have the owner accept each Low with the reason recorded in `Docs/DECISIONS.md`
+- [ ] Check that secrets still stay in Rust: the no-secret guard covers every command added since v0.3.1, and nothing secret reaches `connections.json`, `settings.json`, logs, sync data, update or transfer data or webview storage
+- [ ] List every owner check that is still open for the milestones in this release (roadmap block "Open manual checks (owner)" and the criteria marked "Manual, owner") with the command or steps for each; the owner runs them or consciously defers each one, and the verdict names what was deferred
+- [ ] Release-readiness gate for v0.4.0: version and metadata (`Cargo.toml`, `package.json`, hub image tags as in the release procedure), `CHANGELOG.md` `[Unreleased]` reads short and user-friendly, `README.md`, `SECURITY.md` and the privacy statement match what the app really does, the release workflow dry run on the release pull request is green (installers, smoke tests, hub image, `tools/check-no-build-paths.sh`), evidence on the final head, known gaps, and a go or no-go verdict for the owner
+
+**Acceptance criteria**
+- [ ] Every area named in the tasks has a written review, and all findings are in `Docs/release-checklist.md` with severity and disposition
+- [ ] No High finding is open; every Medium is fixed or its remaining risk is recorded in `Docs/DECISIONS.md` with the owner’s acceptance; every Low is fixed or accepted with the reason recorded
+- [ ] Each fix has a test or a recorded check that fails without the fix; commands and results are listed as evidence
+- [ ] A go or no-go verdict for v0.4.0 is written in `Docs/release-checklist.md`, with every known gap and every still-open owner check named
+- [ ] Build, test and lint are green on the final head, including `cargo deny check`, `pnpm audit --prod`, `bash tools/check-workflows.sh`, `bash tools/test-release-scripts.sh` and `dotnet run tools/roadmap.cs -- check`
+- [ ] The update path is attacked on purpose in a recorded check: a feed with a lower version, a feed signed with another key, a modified installer behind a valid `latest.json`, a redirect to another host and release notes with markup; none of them installs or renders anything it should not
+
+## Release `v0.4.0` – Acceptance
+
+The app checks for new versions, shows when one is ready and updates itself with one click in an app-themed window (M13), after an independent security check of the update path (M14). Installing this version by hand is the last manual update.
+
+- [ ] The release has the five installers, `latest.json` with its signatures and `SHA256SUMS`; `gh attestation verify` passes for each installer and `latest.json` carries a valid signature for the pinned public key
+- [ ] The go verdict for v0.4.0 in `Docs/release-checklist.md` names every gap and every owner check that was deferred
+
+## Milestone 15 – Export to mRemoteNG format
+**Status:** ⬜ open · **Plan:** – · **Prerequisites:** M12
+
+Goal: The connection tree can be written as an mRemoteNG `confCons.xml` that mRemoteNG 1.76 opens, so the owner can move back to mRemoteNG or hand a tree to someone who uses it.
+
+**Tasks**
+- [ ] Create spec `Docs/superpowers/specs/<date>-m15-mremoteng-export-design.md` through brainstorming: the file version (2.6 only, as the importer reads), whether passwords are exported at all and under which master password, how fernjo settings that mRemoteNG has no field for are reported, and how an inherited fernjo setting becomes mRemoteNG’s own `Inherit*` attributes
+- [ ] Writer in `crates/fernjo-import` (`mremoteng/write.rs`, no Tauri, no I/O on app data), mirroring the reader: folders become containers, SSH becomes SSH2, RDP stays RDP, name, host, port, user, domain, description, RDP resolution, colour depth and clipboard map to their attributes, and every fernjo inheritance (node, folders upward, default) is written so each connection resolves to the same values in mRemoteNG as in fernjo (faithful per-setting mapping, like the import); the XML is escaped by the writer, never assembled from raw strings
+- [ ] Passwords: connections are exported without credentials by default; an opt-in export with passwords asks for a master password, encrypts each password the way mRemoteNG 2.6 does (AES-256-GCM, PBKDF2 key from that password; the primitives the importer already uses) and needs an unlocked vault; the clear-text password exists only inside the Rust export call and is zeroized, a stored private key is never exported (mRemoteNG has no place for it and the report says so)
+- [ ] Report in the dialog and in the file name of what was left out or changed (private keys, quick-connect-only settings, a port or protocol mRemoteNG does not know, names cut to mRemoteNG’s limits), bounded like the import report; nothing is dropped silently
+- [ ] Command `export_mremoteng` (plain `#[tauri::command]` over `export_mremoteng_to` that takes a path and is therefore never reachable from the webview, like the other exports) with the native save dialog, `FERNJO_DIALOG_FILE` in debug builds, the existing refusal of a target inside the data folder (`export_target_not_allowed`), a file written atomically with `fernjo_fs::write_atomic` and owner-only mode when it holds passwords; it counts in the three-places rule and the no-secret guard (the guard’s sentinel passwords must not appear in a response, error or `Debug` output)
+- [ ] UI: "Export for mRemoteNG" in the "Import, export & backup" dialog (`ImportDialog.svelte` and its store), with the password option, the master password field (`autocomplete="new-password"`, covered by `secret-inputs.test.ts`), a plain warning that a file with passwords is only as safe as its master password, and the report
+- [ ] Independent check: `tools/mremoteng-vectors.cs` (BouncyCastle, .NET 10) gets a mode that decrypts and validates an exported file without using fernjo code, so the writer is not only tested against the reader written by the same hand; the committed fixtures stay generated by the script and are never copied from mRemoteNG (GPL: the source is read to learn the format only)
+- [ ] Record the decisions in `Docs/DECISIONS.md`, the lasting facts in `CLAUDE.md` and `Docs/backup-format.md` or a new `Docs/mremoteng-export.md`; `CHANGELOG.md` `[Unreleased]` gets a short user-readable entry
+
+**Acceptance criteria**
+- [ ] Build, test and lint are green (`cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `pnpm test`, `pnpm lint`, `cargo deny check`, `dotnet run tools/roadmap.cs -- check`)
+- [ ] Round trip: `import(export(tree))` gives back the same tree for every supported field, including inherited values, nested folders and the depth limit, with and without passwords (test names as evidence)
+- [ ] The independent .NET script decrypts the exported passwords and validates the file structure for a generated export (command and result as evidence; CI never runs it, so the result is recorded by hand)
+- [ ] Hostile data is neutralised: names and descriptions with XML markup, control characters, very long values and a tree at the depth limit give a well-formed file that the importer and a strict XML parser both accept (test names as evidence)
+- [ ] The no-secret guard and the command count guard cover `export_mremoteng`; an export without the opt-in contains no password and no key; a file with passwords is written with owner-only mode on Unix (tests run in CI on Linux)
+- [ ] Manual, owner: an exported file with passwords opens in the owner’s real mRemoteNG 1.76 with the master password, the tree looks right, the saved passwords connect, and a file without passwords opens without a master password prompt
+
+## Milestone 16 – SFTP file browser
+**Status:** ⬜ open · **Plan:** – · **Prerequisites:** M12
+
+Goal: An open SSH tab can show the remote files next to the terminal, and the owner can download, upload, rename, delete and create folders without leaving fernjo.
+
+**Tasks**
+- [ ] Create spec `Docs/superpowers/specs/<date>-m16-sftp-design.md` through brainstorming: the SFTP library (an existing crate such as `russh-sftp` against a minimal own client, judged by its maintenance, licence in `cargo deny`, and how much server-controlled memory it buffers), where the panel sits in the tab, how local paths enter the app, which operations are in scope, and the limits
+- [ ] SFTP subsystem channel on the existing SSH connection in `fernjo-ssh`, owned by the session manager with the same flow control and input budget as the terminal; closing the tab or losing the connection stops every transfer
+- [ ] Operations: list, download (file and folder), upload (file and folder), rename, delete, create folder, with progress and cancel; one transfer queue per session, a limit on concurrent transfers, no resume and no sync in this milestone
+- [ ] Local paths never come from the webview as free text: downloads go to a folder chosen in a native dialog, uploads come from a native dialog or a Tauri file drop, and Rust remembers what was chosen; remote names from the server are untrusted (names with `..`, separators, drive letters, control characters, reserved Windows names or an over-long name cannot write outside the chosen folder; symbolic links are not followed on download; an overwrite asks first)
+- [ ] Caps on server-fed data: entries per directory listing, path and name length, bytes buffered per transfer, and a memory bound pinned by a test with a counting allocator like the other readers; a hostile server cannot make the app allocate without limit or hang the UI
+- [ ] UI (presentation only, `DESIGN.md`): file panel in the SSH tab (list with sort, breadcrumb path, context menu, transfer list with progress); the new commands count in the three-places rule and the no-secret guard; keyboard access and focus rules follow `routeKey`
+- [ ] Test setup: the SSH test container offers SFTP; tests need it in CI like the other SSH integration tests
+- [ ] Record the decisions in `Docs/DECISIONS.md` and the lasting facts in `CLAUDE.md`; `CHANGELOG.md` `[Unreleased]` gets a short user-readable entry
+
+**Acceptance criteria**
+- [ ] Build, test and lint are green (`cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `pnpm test`, `pnpm lint`, `cargo deny check`, `dotnet run tools/roadmap.cs -- check`)
+- [ ] Against the test container: a file and a folder round-trip byte for byte (upload, then download, checksum equal), rename, delete and create folder work, cancel stops a transfer and leaves no partial file behind (test names as evidence)
+- [ ] Hostile names and listings are neutralised in tests: `../x`, absolute paths, drive letters, control characters, reserved Windows names, a symbolic link in a folder download, an over-long name, a listing far above the entry cap; nothing is written outside the chosen folder
+- [ ] A large file moves with bounded memory (counting allocator test or a recorded measurement) and a connection drop mid-transfer ends the transfer and shows an error, not a frozen panel
+- [ ] The no-secret guard and the command count guard cover the new commands, and the webview cannot name a local path itself (a test or a code check named as evidence)
+- [ ] Manual, owner: browse, download and upload against a real server on Windows, macOS and Linux, including a drag from the file manager into the panel
+
+## Milestone 17 – Security check and release readiness for v0.5.0
+**Status:** ⬜ open · **Plan:** – · **Prerequisites:** M15, M16
+
+Goal: v0.5.0 is only released after an independent security check of what changed since v0.4.0 and a written go or no-go verdict; the milestone prepares the release and does not perform it.
+
+**Tasks**
+- [ ] Update the threat model for what v0.5.0 adds (the mRemoteNG export (a file that can hold passwords) and SFTP transfers): what touches secrets, the data folder, the network and the webview, and what a hostile peer, server, feed, file or other local process can do; record it in `Docs/DECISIONS.md`
+- [ ] Independent review per changed area, each by a reviewer that has not seen the others’ findings: the mRemoteNG export (what a file with passwords leaks, master password handling, export target, escaping of hostile names), SFTP (untrusted names and listings, local path trust, memory bounds), the session manager and IPC, and the webview surface
+- [ ] `/security-review` of the whole diff since v0.4.0, and a dependency check: `cargo deny check`, `pnpm audit --prod`, open Dependabot and CodeQL alerts, `tools/check-workflows.sh`
+- [ ] Triage every finding in `Docs/release-checklist.md` (severity, disposition, evidence): fix all High and Medium findings, fix or have the owner accept each Low with the reason recorded in `Docs/DECISIONS.md`
+- [ ] Check that secrets still stay in Rust: the no-secret guard covers every command added since v0.4.0, and nothing secret reaches `connections.json`, `settings.json`, logs, sync data, update or transfer data or webview storage
+- [ ] First real end-to-end update: the owner updates an installed v0.4.0 to the release candidate of v0.5.0 on Windows, macOS and Linux (AppImage) through the update window, using a test feed for the candidate; the result is recorded in `Docs/release-checklist.md`
+- [ ] List every owner check that is still open for the milestones in this release (roadmap block "Open manual checks (owner)" and the criteria marked "Manual, owner") with the command or steps for each; the owner runs them or consciously defers each one, and the verdict names what was deferred
+- [ ] Release-readiness gate for v0.5.0: version and metadata (`Cargo.toml`, `package.json`, hub image tags as in the release procedure), `CHANGELOG.md` `[Unreleased]` reads short and user-friendly, `README.md`, `SECURITY.md` and the privacy statement match what the app really does, the release workflow dry run on the release pull request is green (installers, smoke tests, hub image, `tools/check-no-build-paths.sh`), evidence on the final head, known gaps, and a go or no-go verdict for the owner
+
+**Acceptance criteria**
+- [ ] Every area named in the tasks has a written review, and all findings are in `Docs/release-checklist.md` with severity and disposition
+- [ ] No High finding is open; every Medium is fixed or its remaining risk is recorded in `Docs/DECISIONS.md` with the owner’s acceptance; every Low is fixed or accepted with the reason recorded
+- [ ] Each fix has a test or a recorded check that fails without the fix; commands and results are listed as evidence
+- [ ] A go or no-go verdict for v0.5.0 is written in `Docs/release-checklist.md`, with every known gap and every still-open owner check named
+- [ ] Build, test and lint are green on the final head, including `cargo deny check`, `pnpm audit --prod`, `bash tools/check-workflows.sh`, `bash tools/test-release-scripts.sh` and `dotnet run tools/roadmap.cs -- check`
+- [ ] Manual, owner: an installed v0.4.0 updates to the v0.5.0 candidate through the update window on each platform that is at hand, data untouched (the first real run of the M13 update path; what could not be run is named as open)
+
+## Release `v0.5.0` – Acceptance
+
+Export to the mRemoteNG format (M15) and an SFTP file browser (M16), after a security check of everything new (M17). The first release that v0.4.0 can offer as an update.
+
+- [ ] An installed v0.4.0 offers v0.5.0 and updates through the update window (the first real run of the update path; platforms not at hand are named as open)
+- [ ] The go verdict for v0.5.0 in `Docs/release-checklist.md` names every gap and every owner check that was deferred
+
+## Milestone 18 – Split panes and broadcast input
+**Status:** ⬜ open · **Plan:** – · **Prerequisites:** M17
+
+Goal: Several sessions can be shown side by side in one window, and typed input can be sent to several SSH sessions at once.
+
+**Tasks**
+- [ ] Create spec `Docs/superpowers/specs/<date>-m18-split-panes-design.md` through brainstorming: how a tab becomes a split (drag onto a pane edge, a menu entry, a shortcut), how a layout is shown, saved and restored with the open tabs, how focus and `routeKey` work across panes, and whether tabs can also be detached into their own window (the session manager closes every session on a main-window page load and assumes one webview, so a second window needs its own design; if it is not safe, it stays in the backlog)
+- [ ] Layout model in the UI (view state only): horizontal and vertical splits of tab groups, resizable with the existing `Splitter`, minimum sizes, layout kept in `localStorage` or in `open-tabs.json` per the spec; terminals and RDP canvases resize correctly in a pane, and an inactive pane keeps its output
+- [ ] Broadcast input: a per-tab "send to group" switch with an unmistakable marker on every receiving tab and a visible state in the tab strip; input goes through one Rust command that sends to the chosen SSH sessions only (never RDP), respects each session’s input budget, and a paste to a group asks first when it is multi-line
+- [ ] Keyboard and focus: shortcuts for moving focus between panes and for toggling broadcast, listed in the "Keyboard and mouse" list of Settings; plain Ctrl+letter and Alt+letter still belong to the shell
+- [ ] Record the decisions in `Docs/DECISIONS.md` and the lasting facts in `CLAUDE.md`; `CHANGELOG.md` `[Unreleased]` gets a short user-readable entry
+
+**Acceptance criteria**
+- [ ] Build, test and lint are green (`cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `pnpm test`, `pnpm lint`, `dotnet run tools/roadmap.cs -- check`)
+- [ ] Tests show: a split and its resize keep both sessions alive and correctly sized, closing a pane never closes the other session, a restored layout reopens as disconnected tabs without connecting anything, broadcast reaches exactly the marked SSH sessions and no RDP session (test names as evidence)
+- [ ] The DevTools-port recipe on a scratch data folder shows a two-pane layout, the broadcast marker on every receiving tab, and the layout after a restart (screenshots or measurements as evidence)
+- [ ] The no-secret guard and the command count guard cover the new commands
+
+## Milestone 19 – Local shell tabs
+**Status:** ⬜ open · **Plan:** – · **Prerequisites:** M18
+
+Goal: A local terminal (PowerShell, cmd, zsh, bash) can be opened as a tab next to the SSH and RDP sessions.
+
+**Tasks**
+- [ ] Create spec `Docs/superpowers/specs/<date>-m19-local-shell-design.md` through brainstorming: which shells are offered per platform and how the default is found, how a pseudo-terminal is created (a maintained crate such as `portable-pty`, judged by maintenance and licence in `cargo deny`), the working directory and environment, and how this new process-spawning surface is kept out of reach of the webview
+- [ ] Local session in `src-tauri/src/sessions/` next to SSH and RDP with the same wire contract (state events, output channel with ack flow control, resize, close, `endedCleanly`); a shell is chosen from a list Rust builds itself or from a setting stored in `settings.json`, never a command line sent by the webview; the child and its process tree end with the tab, with the app and with a page reload (`close_all`)
+- [ ] Environment hygiene: the child gets a clean, minimal environment plus the usual user variables, never the vault, sync or hub secrets, `FERNJO_*` test variables or an unlocked key; the data folder is not its working directory by default
+- [ ] UI: a "New local shell" entry (tab strip, menu and shortcut), shell choice and working directory in Settings, local tabs restored as disconnected at start like the others; the tab title and lamp follow the same rules
+- [ ] Record the decisions in `Docs/DECISIONS.md` and the lasting facts in `CLAUDE.md`; `CHANGELOG.md` `[Unreleased]` gets a short user-readable entry
+
+**Acceptance criteria**
+- [ ] Build, test and lint are green (`cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `pnpm test`, `pnpm lint`, `cargo deny check`, `dotnet run tools/roadmap.cs -- check`); the Unix-only parts run in CI on Linux and macOS
+- [ ] Tests show: a shell starts, echoes input, resizes and ends cleanly with its exit status; closing the tab or the app leaves no child process behind; the child environment contains none of the listed secrets or test variables (test names as evidence)
+- [ ] The webview has no way to name a program or arguments: the command surface accepts only a shell id from Rust’s own list (a test or code check named as evidence); the no-secret guard and the command count guard cover the new commands
+- [ ] Manual, owner: a local shell tab works on Windows (PowerShell), macOS (zsh) and Linux (bash), including colours, resize, copy and paste, and a full-screen program such as `vim` or `htop`
+
+## Milestone 20 – Hardening follow-ups
+**Status:** ⬜ open · **Plan:** – · **Prerequisites:** M17
+
+Goal: The security and robustness items that the M11 review accepted for later are done, so each of them is either fixed or a conscious decision of the owner.
+
+**Tasks**
+- [ ] Forget or re-confirm a host key per device from the UI (backlog "Forget a host key", findings row 24), and word the changed-key prompt for a presented key of another type than the confirmed one (`HostKeyChangedPrompt.svelte`)
+- [ ] Detect a frozen SSH tab (backlog "Detect a frozen SSH tab", findings row 22): keepalive replies or a stalled write mark the tab dropped with the reconnect action, tolerating a Windows or macOS sleep (the russh `inactivity_timeout` was tried and dropped for cutting healthy sessions)
+- [ ] Native confirmation before `sync_setup` and `sync_join` that names the hub host (backlog "Native confirmation for sync setup and join", findings row 52), outside the webview like the close dialog; update threat-model cell 7
+- [ ] Sync key rotation (backlog "Sync key rotation", findings row 56): a new key under the same group, re-sealed head and history, and the other devices taking the new key through a pairing step; spec first, since it changes the sync format (`Docs/sync-format.md`)
+- [ ] Per-connection opt-in "Allow servers without NLA" for RDP (backlog "RDP: allow servers without NLA per connection", findings row 27) with a warning that the password then goes to whoever holds the accepted certificate; the owner decides whether it is built at all, and a "no" is recorded in `Docs/DECISIONS.md`
+- [ ] Specific note next to the vault auto-lock field when it is off because `settings.json` is unusable (backlog item, findings row 35)
+- [ ] Triage the remaining entries "M4 review follow-ups (remaining)", "M10 review leftovers" and "M11 review leftovers" of the backlog: fix what is cheap, keep the rest in the backlog with a one-line reason each
+- [ ] Record the decisions in `Docs/DECISIONS.md` and the lasting facts in `CLAUDE.md`; `CHANGELOG.md` `[Unreleased]` gets a short user-readable entry
+
+**Acceptance criteria**
+- [ ] Build, test and lint are green (`cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `pnpm test`, `pnpm lint`, `cargo deny check`, `dotnet run tools/roadmap.cs -- check`)
+- [ ] Each item above is fixed with a test that fails without the fix, or consciously not done with the owner’s decision recorded; none is silently dropped
+- [ ] A frozen SSH connection (server stops answering) is marked dropped within the keepalive window, and a laptop sleep does not drop a healthy session (test, plus a recorded manual sleep check by the owner)
+- [ ] A synced key rotation works between two devices and an old key no longer opens the new head (test names as evidence); `sync_setup` and `sync_join` do nothing before the native confirmation (test named)
+- [ ] The no-secret guard and the command count guard cover the new commands
+
+## Milestone 21 – Security check and release readiness for v0.6.0
+**Status:** ⬜ open · **Plan:** – · **Prerequisites:** M18, M19, M20
+
+Goal: v0.6.0 is only released after an independent security check of what changed since v0.5.0 and a written go or no-go verdict; the milestone prepares the release and does not perform it.
+
+**Tasks**
+- [ ] Update the threat model for what v0.6.0 adds (split panes and broadcast input, local shells (a new process-spawning surface), and the changes of the hardening follow-ups (sync key rotation, host key handling, native confirmations)): what touches secrets, the data folder, the network and the webview, and what a hostile peer, server, feed, file or other local process can do; record it in `Docs/DECISIONS.md`
+- [ ] Independent review per changed area, each by a reviewer that has not seen the others’ findings: local shell tabs (what the webview can make Rust spawn, the child environment and process cleanup), broadcast input (which sessions receive it, paste to a group), the layout and session manager changes, the sync key rotation and its format, host key handling, the native confirmation dialogs, and the webview surface
+- [ ] `/security-review` of the whole diff since v0.5.0, and a dependency check: `cargo deny check`, `pnpm audit --prod`, open Dependabot and CodeQL alerts, `tools/check-workflows.sh`
+- [ ] Triage every finding in `Docs/release-checklist.md` (severity, disposition, evidence): fix all High and Medium findings, fix or have the owner accept each Low with the reason recorded in `Docs/DECISIONS.md`
+- [ ] Check that secrets still stay in Rust: the no-secret guard covers every command added since v0.5.0, and nothing secret reaches `connections.json`, `settings.json`, logs, sync data, update or transfer data or webview storage
+- [ ] List every owner check that is still open for the milestones in this release (roadmap block "Open manual checks (owner)" and the criteria marked "Manual, owner") with the command or steps for each; the owner runs them or consciously defers each one, and the verdict names what was deferred
+- [ ] Release-readiness gate for v0.6.0: version and metadata (`Cargo.toml`, `package.json`, hub image tags as in the release procedure), `CHANGELOG.md` `[Unreleased]` reads short and user-friendly, `README.md`, `SECURITY.md` and the privacy statement match what the app really does, the release workflow dry run on the release pull request is green (installers, smoke tests, hub image, `tools/check-no-build-paths.sh`), evidence on the final head, known gaps, and a go or no-go verdict for the owner
+
+**Acceptance criteria**
+- [ ] Every area named in the tasks has a written review, and all findings are in `Docs/release-checklist.md` with severity and disposition
+- [ ] No High finding is open; every Medium is fixed or its remaining risk is recorded in `Docs/DECISIONS.md` with the owner’s acceptance; every Low is fixed or accepted with the reason recorded
+- [ ] Each fix has a test or a recorded check that fails without the fix; commands and results are listed as evidence
+- [ ] A go or no-go verdict for v0.6.0 is written in `Docs/release-checklist.md`, with every known gap and every still-open owner check named
+- [ ] Build, test and lint are green on the final head, including `cargo deny check`, `pnpm audit --prod`, `bash tools/check-workflows.sh`, `bash tools/test-release-scripts.sh` and `dotnet run tools/roadmap.cs -- check`
+
+## Release `v0.6.0` – Acceptance
+
+Split panes and broadcast input (M18), local shell tabs (M19) and the hardening follow-ups of the security review (M20), after a security check of everything new (M21).
+
+- [ ] An installed v0.5.0 offers v0.6.0 and updates through the update window
+- [ ] The go verdict for v0.6.0 in `Docs/release-checklist.md` names every gap and every owner check that was deferred
+
 ## Backlog
 
 Deliberately not scheduled. Ideas that `/ideen` files here are listed; if needed, one becomes a milestone.
 
-- **SFTP file browser:** Browse and transfer files over an open SSH connection.
 - **Port forwarding and jump hosts:** Local/remote forwards and ProxyJump per connection or folder.
-- **Local shell tabs:** Open a local terminal as a tab.
-- **Split panes and detached tabs:** Show several sessions side by side; pop a tab out into its own window.
-- **Broadcast input:** Send keystrokes to several SSH tabs at once.
-- **Export to mRemoteNG format:** Write `confCons.xml` for migration back or to other tools.
 - **Legacy mRemoteNG format:** Import of files from mRemoteNG ≤ 1.75 (AES-CBC), if not already done in M5. Decided in M5 (scope change 2026-11-16) not to be cheap enough; it stays here.
 - **More protocols:** VNC, Telnet, serial.
-- **Code signing, notarisation and auto-update:** Signed installers for Windows and macOS, update channel.
+- **Code signing and notarisation:** Signed installers so SmartScreen and Gatekeeper need no workarounds. Not scheduled because it costs money (owner, 2026-11-26). Windows: SignPath Foundation signs open-source projects for free (an application and its conditions apply), Azure Trusted Signing is a low monthly fee; macOS: signing and notarisation need the paid Apple Developer Program. When picked up: the signing credentials live only in the one job that signs, forks and dry runs build unsigned, the smoke tests check the signature, and the update path of M13 must accept the first signed build after the last unsigned one (the update signature is separate).
 - **Dev-dependency alert: minimatch:** From M6 security review finding 7. Dependabot alert for `minimatch` 10.2.6 (GHSA-g3hv-75wg-m249), a development dependency of typescript-eslint; `pnpm audit --prod` is clean. Take the update when typescript-eslint moves. The `glib` 0.18.5 alert (Tauri's GTK3 stack) is a known gap recorded in `Docs/DECISIONS.md` since M0; revisit when Tauri leaves GTK3.
 - **M4 review follow-ups (remaining):** Left from the M4 whole-branch review after M10 and M11 took the real bugs (the russh task and descriptor leak on a pre-key-exchange timeout and the `tauri_plugin_opener` init script are fixed): `SshError` carries no source (thin diagnostics), the error mapping is coarse and `io_to_lost` is misnamed; `known_hosts`: the BOM is lost when the first line is replaced, a duplicate host inside one entry's host list leaves a stale entry, test gaps (hashed non-22 and IPv6 hosts, tab separators, add on a CRLF file); the agent test is named "in order" but asserts only that the login works; terminal: the `ResizeObserver` is not coalesced per frame, `findNext` is not incremental, the search bar hardcodes 13 px; tabs: an Escape-cancelled drag still fires a click, arrow keys fire from the Close and Reconnect buttons and there is no Home, End or Delete, the tab ARIA is loose, `.reconnect` uses weight 500 where `DESIGN.md` says 400, the lock icon is 12 px inside a 10 px mark, `protocolOf` could be `Tab.protocol`; prompts: a keyboard-interactive round with zero prompts has no focus target, the needs-vault busy flag resets before the resume (double click), `PasswordField` `shown` is not reset after a wrong password, the `FOCUSABLE` selector omits `textarea` and `select`.
 - **M10 review leftovers:** Minor findings of the M10 task reviews that are still open after M11 (the input cap's minimum weight and the resize coalescing, the idle thread's `catch_unwind`, the unparseable auto-lock number, the restore wording with sync, the `arboard` read timeout and the Cmd+Q path with no main window are done or not a defect, see `Docs/DECISIONS.md` "M11 ..." entries): IME and dead keys (`key` "Dead" or "Process") with a letter `code` count as chord letters, and there is no macOS non-Latin test; the auto-lock field stays disabled without a message when the stored value cannot be read; a successful unlock does not count as activity; `ensureVault` of "Reconnect all" waits until the vault is unlocked or the button is pressed again, and "Reconnect all" does nothing visible when the vault status is unloaded or unusable; after a sync join or an import restore the open-tabs file keeps the earlier list until the next user change; the quick connect error overlay covers rows below while it is visible.
-- **RDP: allow servers without NLA per connection:** Since M11 (findings row 27, owner decision 2026-11-25) every RDP server without NLA (TLS-only or standard RDP security) is refused with `nla_required` before TLS, so an old host without CredSSP no longer connects. A per-connection opt-in ("Allow servers without NLA", with a warning that the password then goes to whoever holds the accepted certificate) would let such a host connect again. See `Docs/DECISIONS.md` "M11 RDP: NLA required, TLS-only servers refused".
-- **Forget a host key:** Findings row 24 (M11): the device's confirmed host keys now outrank the synced `known_hosts`, so rotating a server's host key on one device raises the changed-key prompt on every other device, and there is no way to forget or re-confirm a host key per device from the UI. Add a per-device forget or re-confirm action, and word the changed-key prompt for a presented key of another type than the confirmed one (`HostKeyChangedPrompt.svelte` reads as if the same type changed). Owner acknowledgement: `Docs/DECISIONS.md` "M11: owner decisions on the security review (2026-11-25)".
-- **Narrow the webview capability:** Findings row 62 (M11, accepted for now by the owner): `src-tauri/capabilities` grants `core:default`, which includes `allow-emit` (a webview script can forge `vault-status` or `sync-status` to the page's own listeners) and tray and menu creation. Replace it with `core:event:allow-listen` and `core:event:allow-unlisten` after checking the change in a real build (a debug harness cannot show a missing permission; the development VM has no WebView2 runtime), and pin the list in `src-tauri/tests/tauri_conf.rs`.
-- **Native confirmation for sync setup and join:** Findings row 52 (M11; not put to the owner, so not implemented): `sync_setup` and `sync_join` take a hub URL from the webview, so a script can start a sync to a hub of its own and upload the encrypted data. A native dialog that names the hub host before either command runs (like the close dialog, outside the webview) would close that path; the threat-model cell 7 documents it today.
-- **Note when auto-lock is off because settings.json is unusable:** Findings row 35 (M11, accepted): an unreadable or newer-schema `settings.json` turns the vault auto-lock off for the run with only the generic unsaved note (`unsavedNote()` in `ui/src/lib/unsaved.ts`). Show a specific note next to the auto-lock field that the lock is off because the settings file cannot be used.
-- **Detect a frozen SSH tab:** Findings row 22 (M11, the rest accepted): a server that stops reading no longer leaks the socket or tasks, but nothing notices that the terminal froze while the tab stays "connected". A russh `inactivity_timeout` was tried and dropped because it cut healthy sessions after a Windows sleep (`Docs/DECISIONS.md` "M11 SSH: a server that stops reading"). Detect it through keepalive replies (or a stalled write) in a way that tolerates a sleep, and mark the tab dropped with the reconnect action.
-- **Sync key rotation:** Findings row 56 (M11, accepted): the sync key is never rotated, so a removed or lost device keeps it and can decrypt every head it can still fetch until the group is re-created (rotating the hub secret cuts its hub access only). Design a rotation: a new key under the same group, re-sealed head and history, and the other devices taking the new key through a pairing step.
 - **M11 review leftovers:** Minor findings of the M11 task and wave reviews that were not fixed (the others went into wave K). `fernjo-fs` and the readers: the exhausted eight-attempt path of `create_temp_file` has no test; an oversize `Unreadable` reason says "the file is too large" instead of naming the cap, and the vault maps any `InvalidData` from `read_capped` to "larger than N MiB" (name the cap in `fernjo-fs`); `persist::write_atomic` copies the contents to append a newline (twice the memory near the cap); the backup-step temp file can stay next to `known_hosts` or `rdp_certs.confirmed` after a crash; no test pins the sync oversize text remap. RDP: `ChannelIds.statics` does not exclude the io and message channel ids (only a false-positive close reason); a cached pointer index of 32 or more is refused although harmless; no fake-server test for a TLS 1.2-only server, the provider assertion in the `tls.rs` tests cannot fail and they use `rustls::internal`; the comment above `install_ops` in `sessions/rdp.rs` is stale and the writer step is not unit-tested; `a_cancelled_handshake_leaves_no_session_task` uses a fixed 300 ms sleep; held remote clipboard text is written on focus after a disconnect; the clipboard marker also shows on restored or dropped RDP tabs (gate it on connected or word it "Clipboard on for"), treats `state_unusable` as on and misses an empty host. Import: a skipped reload during inspect or pick is not consumed; no test for the `import_begin` reset or the damaged-backup reset; the report text "name, description or host" omits user names and a cleaned mRemoteNG host or name is not reported; other format characters (U+200B, U+2060, U+FEFF) pass `clean`. App: `vault_lock` duplicates the `no_vault` and `vault_unusable` mapping of `with_vault`; the idle test swaps the global panic hook; a failed keychain `get` is not cached (a locked Secret Service is asked again); the `note_activity` command can block the main thread while an overdue lock waits on `pending`. Sync: `seq_exhausted` has no wording in `sync-errors.ts`; `Vault::file_bytes` checks the header only, so a damaged body under the right header is still pushed (a denial of service until the next good push, noted in DECISIONS); the 20 s wall-clock bound of the linear-time merge test can flake on a slow runner. UI: show the OSC 8 link target on hover (it is no longer shown anywhere). Tooling: the host key prompt test `time_spent_on_the_host_key_prompt...` (500 ms budget) flakes under parallel load; unanchored `.gitignore` names could hide a future fixture; a redundant `settings.json.bak`.
