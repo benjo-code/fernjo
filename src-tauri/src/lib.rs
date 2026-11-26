@@ -174,6 +174,12 @@ pub fn run() {
             sync_commands::handlers::sync_edit_secret,
             sync_commands::handlers::sync_leave,
             sync_commands::handlers::sync_dismiss_findings,
+            updater::handlers::update_status,
+            updater::handlers::update_check,
+            updater::handlers::update_install,
+            updater::handlers::update_skip,
+            updater::handlers::set_check_for_updates,
+            updater::handlers::update_open_release_page,
         ])
         .build(tauri::generate_context!())
         .expect("error while building fernjo")

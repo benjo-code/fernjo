@@ -134,10 +134,6 @@ pub fn set_vault_auto_lock(
 ///
 /// # Errors
 /// `settings_unusable` or `settings_write_failed` from the save.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the update commands (M13 task 5) call it")
-)]
 pub fn set_check_for_updates(state: &AppState, on: bool) -> Result<bool, CommandError> {
     let mut slot = state
         .check_for_updates
@@ -154,10 +150,6 @@ pub fn set_check_for_updates(state: &AppState, on: bool) -> Result<bool, Command
 /// # Errors
 /// `invalid_version` for a value that is not `MAJOR.MINOR.PATCH`, otherwise as
 /// [`set_check_for_updates`]; nothing changes on any error.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the update scheduler (M13) calls it")
-)]
 pub(crate) fn set_skipped_version(state: &AppState, v: Option<String>) -> Result<(), CommandError> {
     if let Some(v) = &v {
         settings::validate_update_version(v)
@@ -457,7 +449,55 @@ mod tests {
         assert!(!set_check_for_updates(&st, false).unwrap());
         assert!(!*st.check_for_updates.lock().unwrap());
         set_skipped_version(&st, Some("1.2.3".into())).unwrap();
+        assert_eq!(
+            st.skipped_update_version.lock().unwrap().as_deref(),
+            Some("1.2.3")
+        );
         assert!(!settings_path(config.path()).exists());
+    }
+
+    fn open_for_app(data: &Path, config: &Path, source: DataDirSource) -> AppState {
+        AppState::open_for_app(Some(Location {
+            data_dir: data.to_path_buf(),
+            config_dir: config.to_path_buf(),
+            source,
+            settings_error: None,
+            device_dir: None,
+        }))
+    }
+
+    #[test]
+    fn the_saved_update_settings_are_read_at_startup() {
+        let [data, config] = dirs();
+        let save = |skipped: &str, check: bool| {
+            settings::save(
+                &settings_path(config.path()),
+                &AppSettings {
+                    check_for_updates: Some(check),
+                    skipped_update_version: Some(skipped.into()),
+                    ..AppSettings::default()
+                },
+            )
+            .unwrap();
+        };
+        // an invalid skipped value is dropped, the flag still loads
+        save("1.2", false);
+        let st = open_for_app(data.path(), config.path(), DataDirSource::Default);
+        assert!(!*st.check_for_updates.lock().unwrap());
+        assert_eq!(*st.skipped_update_version.lock().unwrap(), None);
+        // a valid one loads
+        save("1.2.3", true);
+        let st = open_for_app(data.path(), config.path(), DataDirSource::Default);
+        assert!(*st.check_for_updates.lock().unwrap());
+        assert_eq!(
+            st.skipped_update_version.lock().unwrap().as_deref(),
+            Some("1.2.3")
+        );
+        // the environment override reads nothing
+        save("1.2.3", false);
+        let st = open_for_app(data.path(), config.path(), DataDirSource::Env);
+        assert!(*st.check_for_updates.lock().unwrap());
+        assert_eq!(*st.skipped_update_version.lock().unwrap(), None);
     }
 
     #[test]

@@ -9,10 +9,7 @@ pub const MAX_UPDATE_BYTES: u64 = 256 * 1024 * 1024;
 pub const MAX_NOTES_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[expect(
-    clippy::enum_variant_names,
-    reason = "MacOs is the OS name; the brief fixes it"
-)]
+#[expect(clippy::enum_variant_names, reason = "MacOs is the platform's name")]
 pub enum Os {
     Windows,
     MacOs,
@@ -58,7 +55,8 @@ pub fn is_offered(current: &str, candidate: &str, skipped: Option<&str>) -> bool
 
 /// Release notes as plain text: control characters removed (tab and newline kept, CRLF becomes
 /// LF, a lone CR is dropped) and cut to `MAX_NOTES_BYTES` on a char boundary. The text is never
-/// interpreted; escaping is the UI's job.
+/// interpreted; escaping is the UI's job. Unicode format characters (bidi controls, zero-width
+/// characters) are not control characters and pass through; the text is for display only.
 pub fn clean_notes(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len().min(MAX_NOTES_BYTES));
     for c in raw.chars() {
@@ -111,8 +109,10 @@ pub fn install_kind(env: &InstallEnv, writable: &dyn Fn(&Path) -> bool) -> Insta
     }
 }
 
-pub fn within_download_cap(declared: Option<u64>, received: u64) -> bool {
-    declared.is_none_or(|d| d <= MAX_UPDATE_BYTES) && received <= MAX_UPDATE_BYTES
+/// Whether a download stays within `cap` bytes: the declared length (when the server sent one)
+/// and the bytes received so far. Production passes `MAX_UPDATE_BYTES`.
+pub fn within_download_cap(cap: u64, declared: Option<u64>, received: u64) -> bool {
+    declared.is_none_or(|d| d <= cap) && received <= cap
 }
 
 #[cfg(test)]
@@ -136,6 +136,9 @@ mod tests {
         assert!(!is_offered("0.4.0", "0.4.1", Some("0.4.1")));
         assert!(is_offered("0.4.0", "0.4.2", Some("0.4.1")));
         assert!(is_offered("0.4.0", "0.4.1", Some("not a version")));
+        // a mangled skip value never hides an update
+        assert!(is_offered("0.4.0", "0.4.1", Some("0.4.01")));
+        assert!(is_offered("0.4.0", "0.4.1", Some("0.4.1+x")));
     }
 
     #[test]
@@ -237,13 +240,13 @@ mod tests {
 
     #[test]
     fn download_cap_uses_declared_and_received() {
-        assert!(within_download_cap(None, 0));
-        assert!(within_download_cap(
-            Some(MAX_UPDATE_BYTES),
-            MAX_UPDATE_BYTES
-        ));
-        assert!(!within_download_cap(Some(MAX_UPDATE_BYTES + 1), 0));
-        assert!(!within_download_cap(None, MAX_UPDATE_BYTES + 1));
-        assert!(!within_download_cap(Some(1), MAX_UPDATE_BYTES + 1));
+        let cap = MAX_UPDATE_BYTES;
+        assert!(within_download_cap(cap, None, 0));
+        assert!(within_download_cap(cap, Some(cap), cap));
+        assert!(!within_download_cap(cap, Some(cap + 1), 0));
+        assert!(!within_download_cap(cap, None, cap + 1));
+        assert!(!within_download_cap(cap, Some(1), cap + 1));
+        assert!(within_download_cap(10, Some(10), 10));
+        assert!(!within_download_cap(10, Some(11), 0));
     }
 }

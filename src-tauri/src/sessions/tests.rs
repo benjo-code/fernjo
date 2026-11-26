@@ -1479,6 +1479,13 @@ fn the_restart_dialog_says_restart_and_the_close_dialog_says_close() {
         "2 sessions are still connected. Restarting fernjo ends them."
     );
     assert_eq!(restart.confirm, "Restart");
+    let install = close_prompt(3, CloseThen::Install);
+    assert_eq!(install.title, "Install update?");
+    assert_eq!(
+        install.message,
+        "3 sessions are still connected. Installing the update ends them."
+    );
+    assert_eq!(install.confirm, "Install");
 }
 
 // ---------- input queue cap ----------

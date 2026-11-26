@@ -156,6 +156,9 @@ pub struct AppState {
     pub check_for_updates: Mutex<bool>,
     /// The release version the user skipped (`None` = none): same rule as `check_for_updates`.
     pub skipped_update_version: Mutex<Option<String>>,
+    /// The update state machine's data (`updater.rs`). A leaf lock: nothing else is taken while
+    /// it is held, and it is never held across network I/O or a dialog.
+    pub updater: Mutex<crate::updater::UpdaterRuntime>,
     /// When the user last did something (fed by `note_activity`); see `idle_lock`.
     pub idle: IdleTracker,
     /// The open terminal sessions.
@@ -432,6 +435,7 @@ impl AppState {
             reopen_tabs: Mutex::new(true),
             check_for_updates: Mutex::new(settings::DEFAULT_CHECK_FOR_UPDATES),
             skipped_update_version: Mutex::new(None),
+            updater: Mutex::new(crate::updater::UpdaterRuntime::default()),
             idle: IdleTracker::new(std::time::Instant::now(), std::time::SystemTime::now()),
             sessions: SessionManager::default(),
             pending: Mutex::new(None),

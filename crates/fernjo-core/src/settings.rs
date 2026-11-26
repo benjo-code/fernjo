@@ -638,6 +638,9 @@ mod tests {
         assert_eq!(validate_update_version(&long), Err("invalid_version"));
         assert_eq!(validate_update_version("0.4.0"), Ok(()));
         assert_eq!(validate_update_version("10.20.300"), Ok(()));
+        let exact = format!("1.2.{}", "3".repeat(28));
+        assert_eq!(exact.len(), 32);
+        assert_eq!(validate_update_version(&exact), Ok(()));
     }
 
     #[test]

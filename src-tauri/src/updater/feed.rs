@@ -173,11 +173,6 @@ impl Limits {
     }
 }
 
-/// `decide::within_download_cap` with the cap as a parameter.
-fn within_cap(cap: u64, declared: Option<u64>, received: u64) -> bool {
-    declared.is_none_or(|d| d <= cap) && received <= cap
-}
-
 /// Downloads the update with the production limits and returns the bytes the plugin verified.
 pub async fn download(
     update: &FeedUpdate,
@@ -210,7 +205,7 @@ pub async fn download_with(
         received += chunk;
         declared_seen = declared.or(declared_seen);
         on_progress(chunk, declared);
-        within_cap(limits.cap, declared_seen, received)
+        decide::within_download_cap(limits.cap, declared_seen, received)
     };
     loop {
         tokio::select! {
@@ -242,24 +237,6 @@ pub async fn download_with(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_parameterised_cap_agrees_with_the_decision_module() {
-        let cap = decide::MAX_UPDATE_BYTES;
-        for (declared, received) in [
-            (None, 0),
-            (Some(cap), cap),
-            (Some(cap + 1), 0),
-            (None, cap + 1),
-            (Some(1), cap + 1),
-        ] {
-            assert_eq!(
-                within_cap(cap, declared, received),
-                decide::within_download_cap(declared, received),
-                "{declared:?} {received}"
-            );
-        }
-    }
 
     #[test]
     fn error_codes_are_fixed() {
