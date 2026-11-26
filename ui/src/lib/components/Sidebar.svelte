@@ -87,7 +87,13 @@
     installing: "Updating…",
     failed: "Update failed",
   };
-  const marker = $derived(update?.status ? (MARKER_TEXT[update.status.state] ?? null) : null);
+  // "Skip this version" dismisses the notice: a skipped offer shows no marker (a manual check can
+  // still bring it back as available, and Settings lists it as skipped)
+  const marker = $derived(
+    update?.status && !(update.status.state === "available" && update.status.skipped)
+      ? (MARKER_TEXT[update.status.state] ?? null)
+      : null,
+  );
   const markerTitle = $derived(
     update?.status?.version
       ? `fernjo ${update.status.version} (you have ${update.status.currentVersion})`

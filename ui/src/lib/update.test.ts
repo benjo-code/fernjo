@@ -35,6 +35,39 @@ describe("UpdateStore", () => {
     expect(store.status?.state).toBe("upToDate");
   });
 
+  test("the_automatic_check_switch_works_while_a_download_is_running", async () => {
+    const gate = deferred<ReturnType<typeof updateStatus>>();
+    let progress = () => {};
+    const m = mockApi([], {
+      updateInstall: () => gate.promise,
+      // a progress event overtakes the answer of the switch
+      setCheckForUpdates: async (on: boolean) => {
+        progress();
+        return updateStatus({ state: "downloading", version: "0.5.0", checkEnabled: on });
+      },
+    });
+    progress = () =>
+      m.emitUpdate(
+        updateStatus({ state: "downloading", version: "0.5.0", received: 5, total: 10 }),
+      );
+    const store = new UpdateStore(m.api);
+    await store.init();
+    const download = store.install();
+    expect(store.busy).toBe(true);
+    expect(await store.setEnabled(false)).toBe(true);
+    expect(m.calls.setCheckForUpdates).toEqual([[false]]);
+    expect(store.status?.checkEnabled).toBe(false);
+    // the answer of the switch did not replace the newer progress that an event brought
+    expect(store.status?.received).toBe(5);
+    // the other commands still wait for the one in flight, and the switch did not end its busy
+    expect(store.busy).toBe(true);
+    await store.check();
+    expect(m.calls.updateCheck).toHaveLength(0);
+    gate.resolve(updateStatus({ state: "ready", version: "0.5.0" }));
+    await download;
+    expect(store.busy).toBe(false);
+  });
+
   test("init_reads_status_once", async () => {
     const m = mockApi();
     const store = new UpdateStore(m.api);

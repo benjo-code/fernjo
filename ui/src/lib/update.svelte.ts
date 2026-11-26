@@ -66,8 +66,23 @@ export class UpdateStore {
     return this.#act(() => this.#api.updateSkip());
   }
 
-  setEnabled(on: boolean): Promise<boolean> {
-    return this.#act(() => this.#api.setCheckForUpdates(on));
+  /**
+   * Turns the background check on or off. It is a settings write, not a step of the update, so it
+   * also works while a download is running (the other commands wait for that one, and an update
+   * event that arrived meanwhile is newer than this answer, so only the flag is taken from it).
+   */
+  async setEnabled(on: boolean): Promise<boolean> {
+    this.error = null;
+    const seq = this.#seq;
+    try {
+      const status = await this.#api.setCheckForUpdates(on);
+      if (seq === this.#seq || this.status === null) this.#adopt(status);
+      else this.status = { ...this.status, checkEnabled: status.checkEnabled };
+      return true;
+    } catch (e) {
+      this.error = toApiError(e);
+      return false;
+    }
   }
 
   /** Opens the release page of the version on offer (Rust builds the URL). */

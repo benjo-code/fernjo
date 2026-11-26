@@ -73,8 +73,22 @@ describe("UpdateDialog", () => {
     expect(bar.value).toBe(12 * 1048576);
     expect(bar.max).toBe(48 * 1048576);
     expect(document.body.textContent).toContain("Downloading… 12 of 48 MB");
-    // the app stays usable while it downloads: the window can be closed
-    expect(button("Later")).toBeDefined();
+    expect(document.body.textContent).toContain("fernjo restarts when the download is done");
+    // the app stays usable while it downloads: the window can be hidden, the download goes on.
+    // It is not "Later": hiding does not cancel it.
+    expect(labels()).toEqual(["Hide"]);
+  });
+
+  test("hide_closes_the_window_while_downloading", async () => {
+    const { onclose, calls } = await setup(
+      updateStatus({ state: "downloading", version: "0.5.0", received: 1, total: 2 }),
+    );
+    button("Hide")!.click();
+    await settle();
+    expect(onclose).toHaveBeenCalledTimes(1);
+    // nothing is cancelled: no command ran
+    expect(calls.updateInstall).toHaveLength(0);
+    expect(calls.updateCheck).toHaveLength(0);
   });
 
   test("download_without_a_length_is_indeterminate", async () => {
@@ -230,13 +244,13 @@ describe("UpdateDialog", () => {
     );
     await settle();
     expect(dialog().contains(document.activeElement)).toBe(true);
-    // Tab stays inside (Later is the only button)
+    // Tab stays inside (Hide is the only button)
     key("Tab");
     await settle();
-    expect(document.activeElement).toBe(button("Later"));
+    expect(document.activeElement).toBe(button("Hide"));
     key("Tab");
     await settle();
-    expect(document.activeElement).toBe(button("Later"));
+    expect(document.activeElement).toBe(button("Hide"));
     // Escape closes while downloading
     key("Escape");
     expect(onclose).toHaveBeenCalledTimes(1);

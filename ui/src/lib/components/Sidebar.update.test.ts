@@ -59,4 +59,43 @@ describe("Sidebar update marker", () => {
     await settle();
     expect(marker()).toBeNull();
   });
+
+  test("marker_wording_for_ready_downloading_installing_and_the_skipped_offer", async () => {
+    const m = mockApi();
+    const update = new UpdateStore(m.api);
+    await update.init();
+    const store = new TreeStore(m.api);
+    const vault = new VaultStore(m.api, () => {});
+    const sessions = new SessionStore(
+      m.api,
+      (id) => id,
+      () => true,
+    );
+    mounted = mount(Sidebar, {
+      target: document.body,
+      props: { store, vault, sessions, onOpenVault: () => {}, update },
+    });
+    await settle();
+    const marker = () => document.querySelector<HTMLButtonElement>("[data-update-marker]");
+    const base = { version: "0.5.0", install: { kind: "selfUpdate" } as const };
+    const cases = [
+      ["ready", "Update available"],
+      ["downloading", "Updating…"],
+      ["installing", "Updating…"],
+    ] as const;
+    for (const [state, text] of cases) {
+      m.emitUpdate(updateStatus({ ...base, state }));
+      await settle();
+      expect(marker()?.textContent?.trim(), state).toBe(text);
+    }
+    // "Skip this version" dismisses the notice: no marker for a skipped offer
+    m.emitUpdate(updateStatus({ ...base, state: "available", skipped: true }));
+    await settle();
+    expect(marker()).toBeNull();
+    expect(document.querySelector("aside")!.classList.contains("bars-open")).toBe(false);
+    // a different, not skipped version is announced again
+    m.emitUpdate(updateStatus({ ...base, version: "0.5.1", state: "available", skipped: false }));
+    await settle();
+    expect(marker()?.textContent?.trim()).toBe("Update available");
+  });
 });

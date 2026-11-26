@@ -1,6 +1,6 @@
 // Wording of the update window, the footer marker and the Settings section. It words what
 // `update_status` says and decides nothing: Rust owns the state, the sizes and the codes.
-import type { UpdateStatus } from "./types";
+import type { UnsavedReason, UpdateStatus } from "./types";
 
 const MB = 1024 * 1024;
 
@@ -15,9 +15,12 @@ export function stageText(status: UpdateStatus): string {
       return "Checking for updates…";
     case "downloading": {
       const received = status.received ?? 0;
-      return status.total !== null
-        ? `Downloading… ${mbDown(received)} of ${mbUp(status.total)} MB`
-        : `Downloading… ${mbDown(received)} MB`;
+      const progress =
+        status.total !== null
+          ? `Downloading… ${mbDown(received)} of ${mbUp(status.total)} MB`
+          : `Downloading… ${mbDown(received)} MB`;
+      // closing the window does not cancel the download, and the install follows on its own
+      return `${progress}. fernjo restarts when the download is done.`;
     }
     case "ready":
       return "Download finished, ready to install";
@@ -47,5 +50,21 @@ export function reasonText(code: string): string {
       return "The folder fernjo runs from is not writable, so it cannot update itself. Get the new version from the release page.";
     default:
       return "The update failed.";
+  }
+}
+
+/**
+ * A sentence for the causes that stop the background check altogether (the settings dialog shows
+ * it next to the checkbox, which would otherwise read as "on"); `null` when the checks do run.
+ * "No settings folder" only means the choice is not remembered, the checks still run.
+ */
+export function automaticChecksNote(reason: UnsavedReason | null): string | null {
+  switch (reason) {
+    case "env":
+      return "Automatic checks do not run while FERNJO_DATA_DIR is set; use Check now.";
+    case "settingsUnusable":
+      return "Automatic checks do not run until settings.json is fixed; use Check now.";
+    default:
+      return null;
   }
 }

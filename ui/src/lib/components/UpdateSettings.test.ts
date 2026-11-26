@@ -69,6 +69,59 @@ describe("UpdateSettings", () => {
     expect(onshow).toHaveBeenCalledTimes(1);
   });
 
+  test("a_skipped_offer_is_worded_as_skipped", async () => {
+    const { onshow } = await setup(
+      updateStatus({
+        state: "available",
+        version: "0.5.0",
+        install: { kind: "selfUpdate" },
+        skipped: true,
+      }),
+    );
+    expect(document.body.textContent).toContain("You skipped version 0.5.0");
+    expect(document.body.textContent).not.toContain("is available");
+    button("Show update")!.click();
+    expect(onshow).toHaveBeenCalledTimes(1);
+  });
+
+  test("the_result_line_says_what_is_running", async () => {
+    const base = { version: "0.5.0", install: { kind: "selfUpdate" } as const };
+    for (const [state, text] of [
+      ["downloading", "Downloading version 0.5.0"],
+      ["ready", "Version 0.5.0 is ready to install"],
+      ["installing", "Installing version 0.5.0"],
+    ] as const) {
+      await setup(updateStatus({ ...base, state }));
+      expect(document.body.textContent, state).toContain(text);
+      unmount(mounted!);
+      mounted = null;
+      document.body.innerHTML = "";
+    }
+  });
+
+  test("it_says_when_automatic_checks_never_run", async () => {
+    await setup(updateStatus({ unsavedReason: "env" }));
+    expect(document.body.textContent).toContain(
+      "Automatic checks do not run while FERNJO_DATA_DIR",
+    );
+    unmount(mounted!);
+    mounted = null;
+    document.body.innerHTML = "";
+    await setup(updateStatus({ unsavedReason: "settingsUnusable" }));
+    expect(document.body.textContent).toContain("Automatic checks do not run until settings.json");
+    unmount(mounted!);
+    mounted = null;
+    document.body.innerHTML = "";
+    // no settings folder: the checks still run, they are only not remembered
+    await setup(updateStatus({ unsavedReason: "noConfigDir" }));
+    expect(document.body.textContent).not.toContain("Automatic checks do not run");
+    unmount(mounted!);
+    mounted = null;
+    document.body.innerHTML = "";
+    await setup(updateStatus());
+    expect(document.body.textContent).not.toContain("Automatic checks do not run");
+  });
+
   test("unsaved_note_names_the_real_cause", async () => {
     await setup(updateStatus({ unsavedReason: "env" }));
     expect(document.body.textContent).toContain("FERNJO_DATA_DIR");

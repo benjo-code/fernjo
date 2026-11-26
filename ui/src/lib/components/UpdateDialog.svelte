@@ -193,7 +193,8 @@
           </button>
           <button type="button" class="btn" onclick={onclose}>Later</button>
         {:else if phase === "downloading"}
-          <button type="button" class="btn" onclick={onclose}>Later</button>
+          <!-- hiding the window does not cancel the download, so this is not "Later" -->
+          <button type="button" class="btn" onclick={onclose}>Hide</button>
         {:else if phase === "failed"}
           <button
             type="button"

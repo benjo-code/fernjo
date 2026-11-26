@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { UpdateStore } from "../update.svelte";
-  import { reasonText } from "../update-text";
+  import { automaticChecksNote, reasonText } from "../update-text";
   import { unsavedNote } from "../unsaved";
 
   let {
@@ -23,16 +23,24 @@
       case "upToDate":
         return "You have the latest version.";
       case "available":
+        if (!status.version) return "";
+        return status.skipped
+          ? `You skipped version ${status.version}.`
+          : `Version ${status.version} is available.`;
+      // while a command of the store is out, "Check now" waits: say what is going on
       case "downloading":
+        return status.version ? `Downloading version ${status.version}…` : "";
       case "ready":
+        return status.version ? `Version ${status.version} is ready to install.` : "";
       case "installing":
-        return status.version ? `Version ${status.version} is available.` : "";
+        return status.version ? `Installing version ${status.version}…` : "";
       case "failed":
         return status.error ? reasonText(status.error) : "The update failed.";
       default:
         return "";
     }
   });
+  const checksNote = $derived(status ? automaticChecksNote(status.unsavedReason) : null);
   const failed = $derived(status?.state === "failed");
   const showable = $derived(
     status !== null &&
@@ -66,6 +74,9 @@
     A check is one request to the release feed on GitHub, a minute after start and then once a day.
     Nothing is installed without your click.
   </p>
+  {#if checksNote}
+    <p class="note">{checksNote}</p>
+  {/if}
   {#if status.unsavedReason}
     <p class="note">{unsavedNote(status.unsavedReason)}</p>
   {/if}
