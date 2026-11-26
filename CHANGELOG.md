@@ -6,6 +6,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 
 ## [Unreleased]
 
+### Added
+
+- The app can now check for a newer version and update itself with one click (Settings, "Updates"; milestone 13).
+
 ### Fixed
 
 - The hub's Compose override for rootless Podman now also works with `podman-compose`, which failed with "--userns and --pod cannot be set together" (it puts the project into a pod by default; the override turns that off).

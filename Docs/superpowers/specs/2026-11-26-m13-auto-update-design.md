@@ -134,3 +134,7 @@ Owner checks (cannot run in CI): update through the window on Windows, macOS and
 - The "exactly one GET" criterion counts the redirect hops of that one request.
 - The signing step is a separate `sign` job, not a step of the build job.
 - `createUpdaterArtifacts` is deliberately not used.
+
+## 10. Notes from implementation
+- `update_open_release_page` takes no argument and, when no version is on offer, opens the generic releases page (`https://github.com/benjo-code/fernjo/releases/latest`, built in Rust) instead of failing, so every failed state can offer "Open release page".
+- The signing flow is split further than section 9 says: `sign` (the only job with the secrets), `verify-signatures` (no secret) and `publish`; `latest.json` is written by `tools/write-latest-json.mjs`. The Environment `release-signing` needs its required reviewer and tag policy before the first tag, because GitHub creates a missing environment without protection. Details: `Docs/DECISIONS.md` "M13: update feed, signing job, key lifecycle and scope changes".

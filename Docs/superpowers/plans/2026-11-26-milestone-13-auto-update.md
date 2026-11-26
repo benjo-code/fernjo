@@ -125,7 +125,7 @@
   - `pub enum UpdateState { Idle, Checking, UpToDate, Available, Downloading, Ready, Installing, Failed }` (serialised camelCase), `pub enum InstallView { SelfUpdate, ReleasePage { reason: &'static str } }`
   - `pub fn update_status(state: &AppState) -> UpdateStatus`, `pub fn update_skip(state: &AppState) -> Result<UpdateStatus, CommandError>` (skips the currently available version; `no_update` otherwise), `pub fn set_check_for_updates(state: &AppState, on: bool) -> Result<UpdateStatus, CommandError>`
   - `pub async fn update_check(app: &AppHandle, manual: bool) -> UpdateStatus` and `pub async fn update_install(app: &AppHandle) -> UpdateStatus` (take `AppHandle`, so `APP_HANDLE_EXEMPT` entries with reason "takes an AppHandle; returns only UpdateStatus")
-  - `pub fn update_open_release_page(app: &AppHandle) -> Result<(), CommandError>` (opens `decide::release_page_url` of the available version through the same opener `open_external_url` uses; `no_update` when none; `APP_HANDLE_EXEMPT` "takes an AppHandle; returns nothing")
+  - `pub fn update_open_release_page(app: &AppHandle) -> Result<(), CommandError>` (opens `decide::release_page_url` of the available version through the same opener `open_external_url` uses; when no version is on offer it opens the generic releases page `https://github.com/benjo-code/fernjo/releases/latest` (no argument, URL built in Rust; see the deviations at the end); `APP_HANDLE_EXEMPT` "takes an AppHandle; returns nothing")
   - `sessions::CloseThen::Install` with `close_prompt` → title "Install update?", message "{n} session(s) still connected. Installing the update ends them.", confirm "Install"
   - every state change `emit("update-status", UpdateStatus)`
 
@@ -225,3 +225,14 @@
 - [ ] **Step 3: run the full verification:** `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `pnpm test`, `pnpm lint`, `cargo deny check`, `bash tools/check-workflows.sh`, `bash tools/test-release-scripts.sh`, `dotnet run tools/roadmap.cs -- check`; each must exit 0.
 - [ ] **Step 4: roadmap:** tick tasks as they finish, tick only verified acceptance criteria with evidence; leave every "Manual, owner" criterion unticked with its steps (Windows, macOS and Linux AppImage update against a test feed built with a merged config file under `tools/`, `.deb` and read-only AppImage release-page check, no SmartScreen/Gatekeeper warning on the updated app, no administrator prompt on Windows); regenerate with `dotnet run tools/roadmap.cs -- generate`; set `done` with `completedOn` only when every task and criterion is ticked or consciously open as owner checks, as earlier milestones did.
 - [ ] **Step 5: Commit** `docs: record the M13 update path` (roadmap JSON and generated MD together); open the pull request to `dev`; merge only with all CI checks green.
+
+## Deviations while implementing
+
+Task text above is left as planned; this is what was built differently (details in `Docs/DECISIONS.md`, "M13 ..." entries):
+
+- Task 1: the owner delivered the real public key before the plan started, so there is no placeholder key and no placeholder guard in `check-release-version.sh` (Task 9's fallback step and test were dropped). Task 1 changed no repository configuration; Task 4 added the dependency and `plugins.updater`.
+- Task 4: `updater_config_is_pinned` replaced `no_updater_and_no_signing_material` in the same commit that adds the configuration (moved from Task 8). `plugins.updater` also sets `requireSignedVersion: true`, so every release is signed with `--app-version` (Task 10). The `update-test-hooks` feature is enabled for tests through a self dev-dependency so plain `cargo test --workspace` runs the fake-feed tests. `src-tauri/build.rs` embeds a comctl32 v6 manifest into test targets on Windows. `CDLA-Permissive-2.0` was added to `deny.toml` and `about.toml`.
+- Task 5: `update_open_release_page` never answers `no_update`; with no version on offer it opens the generic releases page (every failed state offers "Open release page"). `AppState.sync_closing` is cleared when an install returns.
+- Task 8: the real-build check could not be run on the development machine (application control blocks freshly built binaries); a static proof is in DECISIONS and the real-app check stays an owner check.
+- Task 9: `verify_update_signature` takes an optional `--app-version`; the macOS lists of `verify-installers.sh` gained the two tarballs.
+- Task 10: `verify-signatures` is its own job (no secret); `ci.yml` also runs `cargo clippy -p fernjo-app --lib --bins -- -D warnings`; `check-workflows.sh` accepts only `environment: release-signing`. Steps 6 and 7 (push, pull request, owner's environment and secrets) were not done by the implementer.

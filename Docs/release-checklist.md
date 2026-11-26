@@ -517,6 +517,47 @@ Not run here: the live SSH container tests (`cargo test -p fernjo-ssh`; they run
 
 Still unverified after the release: an installer started on a real machine (the smoke tests prove that it starts on the runner), sync on Linux and the Linux Secret Service keychain item, `fernjo-fs` on macOS, performance for 0.3.0, the M10 and earlier owner checks, and row 73 (the other known gaps are in the table above).
 
+## M13 automatic updates (evidence for the gate of v0.4.0)
+
+Evidence recorded 2026-11-26 on branch `feature/m13-auto-update` (Windows 11 host). Windows blocks freshly built native binaries on this machine (application control), so the Rust commands ran in a Linux container (Ubuntu 22.04 with the WebKitGTK build dependencies, the repository mounted, `cargo` 1.100.0); `pnpm`, `node`, `bash tools/...` and `dotnet` ran natively. Windows-only code is compiled by CI only.
+
+### Commands
+
+| Command | Result |
+|---|---|
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo clippy -p fernjo-app --lib --bins -- -D warnings` (the shipped, feature-off configuration; now also a CI step) | exit 0 |
+| `cargo test --workspace` | exit 0; 1350 passed, 0 failed, 2 ignored over 76 result lines (fernjo-app lib 437, `tauri_conf` 15, `updater_feed` 21); the SSH integration tests skip without the throwaway container |
+| `pnpm test` | 64 files, 848 tests passed |
+| `pnpm lint` | 281 files, 0 errors, 0 warnings (eslint, prettier, svelte-check) |
+| `cargo deny check` (cargo-deny installed in a one-off container, not part of the dev image) | `advisories ok, bans ok, licenses ok, sources ok` |
+| `bash tools/check-workflows.sh` | exit 0 |
+| `bash tools/test-release-scripts.sh` | 152/152 passed |
+| `dotnet run tools/roadmap.cs -- check` | see the roadmap evidence of M13 |
+
+### What the tests pin
+
+- Fake feed (`src-tauri/tests/updater_feed.rs`, 21 tests): newer version offered, same, older, pre-release and skipped version not offered; missing, wrong-key and tampered signatures and a signed-version mismatch refused; unreachable feed changes nothing (`feed_unreachable`), 404 and broken body told apart; oversize declared length, a stream past the cap and a stalled download cut off; `check_sends_exactly_one_get_to_the_pinned_path` (one `GET /latest.json`, no query, no cookie, no authorization) and `redirect_hops_are_counted_and_followed`.
+- Configuration (`src-tauri/tests/tauri_conf.rs`): `updater_config_is_pinned`, `update_test_hooks_are_not_a_default_feature`, `capability_lists_exactly_the_pinned_permissions`, `capability_has_no_core_default_and_no_updater_permission`.
+- Guards: `command_table_covers_every_tauri_command` and `no_response_contains_a_secret` cover the six update commands; `a_returning_install_clears_sync_closing_so_the_window_closes_and_a_retry_runs` pins the install order fix.
+- UI: `ui_imports_only_the_tauri_modules_the_capability_covers` and `no_html_injection_in_ui` (`ui/src/lib/update.test.ts`).
+- Release scripts: `latest.json` shape, signatures, URLs and the file lists in `tools/test-release-scripts.sh`; the workflow pins (only `sign` names the secrets, only `environment: release-signing`, tag-only jobs) there too.
+
+### Open owner checks (not run, not shown as verified)
+
+1. GitHub: create the Environment `release-signing` with a required reviewer and the deployment tag policy `v*` **before the first tag**, then add the secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` to it (GitHub creates a missing environment without protection). Verify: `gh api repos/benjo-code/fernjo/environments/release-signing` shows the protection rule and the tag policy.
+2. The pull request dry run of `release.yml` (build jobs green, `sign`, `verify-signatures` and `publish` skipped, the macOS `.app.tar.gz` step and the collect step succeed); the run id goes into the roadmap evidence.
+3. The first signed release run (v0.4.0): `sign` accepts key and password, `verify-signatures` passes, `latest.json` is attached to the draft (`gh release view vX.Y.Z --json assets`). Nothing proves signing before then.
+4. Real-app capability check in a `pnpm tauri build --no-bundle` binary with a scratch `FERNJO_DATA_DIR` and the DevTools-port recipe in `CLAUDE.md`: tree loads, an SSH session from `tools/ssh-test-server.sh` opens and terminal data arrives, `sync-status` and `update-status` events arrive, remote desktop full screen toggles, the update window opens. Only the static proof exists (`Docs/DECISIONS.md` "M13: capability narrowing").
+5. An update through the window on Windows, macOS and a Linux AppImage against a test feed (needs a test build with a merged configuration file under `tools/`, which does not exist yet; write it first: test endpoint, test public key, `dangerousInsecureTransportProtocol`, built in a debug profile or with `update-test-hooks`, never used by the release workflow): the app closes, the new version starts, `connections.json`, the vault and `settings.json` are untouched, Windows asks for no administrator rights, no SmartScreen or Gatekeeper warning for the updated app.
+6. A `.deb` install and a read-only AppImage location offer the release page and install nothing.
+7. Visual look of the update window, progress bar and sidebar marker in the real app (WebView2, WebKit) at 1280x800, light and dark.
+
+### Known residual limits
+
+The feed body is read without a size cap by the plugin (bounded by the 15 s check timeout and the pinned HTTPS endpoint); the download cap overshoots by one read slice; `sign` trusts the output of `build` including its caches (existing pipeline behaviour); a macOS or Linux install that returns instead of exiting and a confirm that arrives after the state left Ready are rare races noted in `Docs/DECISIONS.md`.
+
 ## v0.1.0 security review
 
 Review date: 2026-11-18 (Windows 11; CI dry-run installers of run `44205574554`, PR #10). The checks of Steps 1-4 ran on `target/release/fernjo.exe` built from commit `1bc2762` (built after the last commit that touched `src-tauri`, `crates` or `ui`). The fix commits of this review (`64aa818`, `6648cff`, `5791506`) and the later import fixes (`36c3be0`, `de2a615`, `c809677`) post-date that binary; the real-app checks were not repeated on a rebuild, so they say nothing about those changes (the code fixes have their own tests). Every check below records its command, its result and the date. Real-app checks ran with a scratch `FERNJO_DATA_DIR`; the owner's real data folder was not read, printed or modified, and "Unlock automatically on this device" was never ticked.
@@ -581,10 +622,10 @@ Scope: three reviewers (opus, fresh, given the code and not these conclusions) r
 
 - `cargo tree -e normal --workspace --target all`: `reqwest` 0.13.5 (with `hyper` 1.12.0 and `hyper-util` 0.1.21) is pulled in only by the `tauri` crate (`cargo tree -i reqwest`); no fernjo crate depends on `reqwest`, `ureq`, `hyper` or an updater (`grep` over `Cargo.toml` files and sources: none). The only URL literal in fernjo's own sources (Rust, TypeScript, Svelte) is `http://x/` in a doc comment.
 - Release binary idle, started without the debugging variable, `Get-NetTCPConnection` over `fernjo.exe` and all descendants every 2 s for 150 s (and 20 s samples to 60 s in a first run): no connection other than loopback until about 60 s, then the single WebView2 connection of finding 5 (in all three runs, one of them with `--disable-background-networking`). Therefore the literal "loopback only for 60 s" condition does not hold for the WebView2 runtime; it holds for fernjo.exe.
-- No update check (no updater plugin, `tauri_conf.rs` guards `bundle` against one), no telemetry in fernjo's code.
+- At the time of this review: no update check and no telemetry in fernjo's code (the update check came with M13, see "M13 automatic updates" below; `tauri_conf.rs` now pins exactly the one update endpoint and key).
 - Proposed privacy statement (all three conditions do not hold literally, so the wording is limited to what was verified; for the controller or Task 10 to put into the README):
 
-  > fernjo's own code makes no network connections except the SSH sessions you open. It has no update check, no telemetry and no analytics. Your connections, settings and encrypted vault stay in your data folder on your computer. The window itself is drawn by your operating system's web view (WebView2 on Windows, WebKit on macOS and Linux), a separate component that makes background connections of its own: on Windows we saw one HTTPS connection from the WebView2 runtime about a minute after start, to an address registered to Microsoft, and have not found a way to disable it. macOS and Linux were not checked.
+  > fernjo's own code makes no network connections except the SSH sessions you open. It has no update check (at the time of v0.1.0; the update check is described in the README since M13), no telemetry and no analytics. Your connections, settings and encrypted vault stay in your data folder on your computer. The window itself is drawn by your operating system's web view (WebView2 on Windows, WebKit on macOS and Linux), a separate component that makes background connections of its own: on Windows we saw one HTTPS connection from the WebView2 runtime about a minute after start, to an address registered to Microsoft, and have not found a way to disable it. macOS and Linux were not checked.
 
 **Step 5 - Data at rest**
 
