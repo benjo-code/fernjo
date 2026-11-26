@@ -41,6 +41,21 @@ The override also sets `x-podman: { in_pod: false }`: `podman-compose` otherwise
 
 `compose run` does not publish the port, so the one-time `init` never collides with a running hub. Check with `curl -H "Authorization: Bearer <secret>" http://127.0.0.1:8787/v1/info`, which answers `{"protocol":1,"maxBytes":67108864}`. `compose down` stops it and keeps the volume.
 
+### Compose as a systemd user service (rootless Podman)
+
+To start the hub at boot and stop it with `systemctl --user`, run the Compose files from a user unit (`crates/fernjo-hub/deploy/fernjo-hub-compose.service`; it uses `podman-compose` directly, which the `podman compose` command calls anyway):
+
+```sh
+mkdir -p ~/.config/systemd/user
+cp fernjo-hub-compose.service ~/.config/systemd/user/fernjo-hub.service
+# set WorkingDirectory in it to the folder that holds compose.yaml and compose.podman.yaml
+systemctl --user daemon-reload
+systemctl --user enable --now fernjo-hub
+loginctl enable-linger "$USER"      # start at boot without a login
+```
+
+Check it with `systemctl --user status fernjo-hub` and `journalctl --user -u fernjo-hub`; stop it with `systemctl --user stop fernjo-hub` (it runs `down`, the volume stays). Do not also enable `podman-restart.service`, and use this unit or the Quadlet unit below, never both.
+
 ### Rootless Podman as a service (Quadlet)
 
 1. Create the data volume and the secret once:
@@ -187,6 +202,7 @@ Wire formats, the envelope layout and the merge rules are in `Docs/sync-format.m
 - **M12, Docker Compose on Docker Desktop (Docker 29.9.3)**, with the locally built image tagged as the pinned reference: `docker compose -f compose.yaml config` is valid (also merged with `compose.podman.yaml`), `compose run --rm hub init --data /data` printed the secret, `up -d` started the hub with the read-only root file system, and `/v1/info` without a secret answered 401.
 - **M12, the published image** (v0.3.1, release run 45720295139, checked 2026-11-26): the package is public (anonymous token and manifest request answer 200); `docker buildx imagetools inspect ghcr.io/benjo-code/fernjo-hub:0.3.1` lists linux/amd64 and linux/arm64 under the index digest `sha256:62c7ac5a32f679ea488eb43daa0769b46ada05440fcc7edccbbf83482d8fe023`; `gh attestation verify oci://ghcr.io/benjo-code/fernjo-hub:0.3.1 --repo benjo-code/fernjo --signer-workflow benjo-code/fernjo/.github/workflows/release.yml --source-ref refs/tags/v0.3.1` exits 0; after `docker logout ghcr.io` an anonymous `docker pull` worked; `docker compose` with the pulled image (`init`, `up -d`, 401 without a secret, `stop` in 2.5 s including Compose overhead, exit status 0).
 - **M12, Podman Compose on the owner's hub VM** (Podman 5.7.0, podman-compose 1.5.0, reported by the owner 2026-11-26): `podman compose` with `compose.yaml` and `compose.podman.yaml` failed with "--userns and --pod cannot be set together"; with `podman-compose --in-pod=false` the `init`, `up -d`, `/v1/info` (`{"protocol":1,"maxBytes":67108864}`) on the published LAN address and `down` (0.5 s) worked. With the override from this fix (`x-podman: { in_pod: false }`) `podman compose up -d` and `down` (0.7 s) worked without the switch; the published port was the VM's LAN address.
+- **M12, Compose as a systemd user service** (owner's hub VM, 2026-11-26, reported by the owner without detail): the unit above with `enable --now` and `enable-linger` ran the hub after a reboot, without a login. The time `systemctl --user stop fernjo-hub` takes was not reported.
 - **M12, the push step rehearsed** against a local registry, with the two OCI archives from the dry run and Podman 4.9.3 (the version on the runners) and 6.2.0: the same commands as the workflow joined them into one manifest list, pushed it as `X.Y.Z`, `X.Y` and `latest` with one shared digest, and `skopeo inspect --raw` showed amd64 and arm64. This is not a run against GHCR.
 
 ## Not verified yet (owner checks)
