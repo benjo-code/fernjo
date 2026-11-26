@@ -89,4 +89,26 @@ describe("UI hardening", () => {
     const offenders = files.filter((f) => /\{\s*@html/.test(sources[f]!));
     expect(offenders).toEqual([]);
   });
+
+  // The webview capability grants only event listening (src-tauri/capabilities/default.json,
+  // pinned in src-tauri/tests/tauri_conf.rs). A UI import of any other Tauri module (window,
+  // webview, plugins) would need a new permission, so it must be noticed and decided on.
+  test("ui_imports_only_the_tauri_modules_the_capability_covers", async () => {
+    const all = import.meta.glob("../../src/**/*.{ts,svelte}", {
+      query: "?raw",
+      import: "default",
+      eager: true,
+    }) as Record<string, string>;
+    const allowed = new Set(["@tauri-apps/api/core", "@tauri-apps/api/event"]);
+    const files = Object.keys(all).filter((f) => !/\.test\.ts$/.test(f));
+    expect(files.length).toBeGreaterThan(10);
+    const offenders: string[] = [];
+    for (const f of files) {
+      for (const m of all[f]!.matchAll(/["'](@tauri-apps\/[^"']+)["']/g)) {
+        if (!allowed.has(m[1]!)) offenders.push(`${f}: ${m[1]}`);
+      }
+      if (/__TAURI/.test(all[f]!)) offenders.push(`${f}: __TAURI`);
+    }
+    expect(offenders).toEqual([]);
+  });
 });

@@ -63,11 +63,64 @@ fn global_tauri_is_off() {
     );
 }
 
+/// Every capability file in `capabilities/`, as (file name, parsed JSON).
+fn capability_files() -> Vec<(String, Value)> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+    let mut files: Vec<(String, Value)> = fs::read_dir(&dir)
+        .expect("read capabilities")
+        .map(|e| e.expect("entry").path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .map(|p| {
+            let name = p.file_name().expect("name").to_string_lossy().into_owned();
+            let text = fs::read_to_string(&p).expect("read capability");
+            (name, serde_json::from_str(&text).expect("capability json"))
+        })
+        .collect();
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    files
+}
+
+fn permissions_of(cap: &Value) -> Vec<String> {
+    cap["permissions"]
+        .as_array()
+        .expect("permissions array")
+        .iter()
+        .map(|p| p.as_str().expect("string permission").to_owned())
+        .collect()
+}
+
 #[test]
-fn default_capability_is_core_only() {
-    let cap = load("capabilities/default.json");
-    assert_eq!(cap["permissions"], serde_json::json!(["core:default"]));
+fn capability_has_no_core_default_and_no_updater_permission() {
+    let files = capability_files();
+    assert!(!files.is_empty());
+    for (name, cap) in &files {
+        for permission in permissions_of(cap) {
+            assert_ne!(permission, "core:default", "{name} grants core:default");
+            assert!(
+                !permission.starts_with("updater:"),
+                "{name} grants {permission}: the update flow runs in Rust commands"
+            );
+        }
+    }
+}
+
+/// The webview needs two permissions: `listen`/`unlisten` of `@tauri-apps/api/event`
+/// (`plugin:event|listen`, `plugin:event|unlisten`). App commands (`invoke`) need none while the
+/// app has no ACL manifest, and a `Channel` fetch is exempt from the ACL. The UI uses no window,
+/// webview, app, path, menu, tray, image or resources API (full screen is a CSS layout change).
+/// Details: `Docs/DECISIONS.md` "M13: capability narrowing".
+#[test]
+fn capability_lists_exactly_the_pinned_permissions() {
+    let files = capability_files();
+    let names: Vec<&str> = files.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["default.json"], "no other capability file");
+    let cap = &files[0].1;
+    assert_eq!(
+        permissions_of(cap),
+        ["core:event:allow-listen", "core:event:allow-unlisten"]
+    );
     assert_eq!(cap["windows"], serde_json::json!(["main"]));
+    assert!(cap.get("webviews").is_none() && cap.get("remote").is_none());
 }
 
 #[test]
