@@ -609,6 +609,11 @@ compose_podman_override_holds_keep_id() {
   grep -Fxq '    userns_mode: "keep-id:uid=10001,gid=10001"' "$f" && ! grep -Eq '^[^#]*image:' "$f"
 }
 assert_true hub_compose_podman_override_holds_keep_id compose_podman_override_holds_keep_id
+compose_podman_override_turns_the_pod_off() {
+  # podman-compose refuses --userns together with its default pod
+  grep -Fxq 'x-podman:' "$deploy/compose.podman.yaml" && grep -Fxq '  in_pod: false' "$deploy/compose.podman.yaml"
+}
+assert_true hub_compose_podman_override_turns_the_pod_off compose_podman_override_turns_the_pod_off
 quadlet_uses_the_ghcr_image_and_keeps_its_hardening() {
   local f="$deploy/fernjo-hub.container" line
   ! grep -Fq 'localhost/fernjo-hub' "$f" || return 1
