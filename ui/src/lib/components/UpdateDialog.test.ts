@@ -124,11 +124,14 @@ describe("UpdateDialog", () => {
     expect(calls.updateOpenReleasePage).toHaveLength(1);
   });
 
-  test("a_failed_check_retries_the_check_manually_and_has_no_release_page", async () => {
+  test("a_failed_check_retries_the_check_manually_and_still_offers_the_release_page", async () => {
     const { calls } = await setup(updateStatus({ state: "failed", error: "feed_unreachable" }));
     expect(document.body.textContent).toContain("Could not reach the update server");
-    // no version is known, so there is no release page to open
-    expect(labels()).toEqual(["Retry", "Close"]);
+    // no version is known: Rust falls back to the generic releases page
+    expect(labels()).toEqual(["Retry", "Open release page", "Close"]);
+    button("Open release page")!.click();
+    await settle();
+    expect(calls.updateOpenReleasePage).toHaveLength(1);
     button("Retry")!.click();
     await settle();
     expect(calls.updateCheck).toEqual([[true]]);
@@ -200,5 +203,69 @@ describe("UpdateDialog", () => {
     mounted = null;
     await settle();
     expect(document.activeElement).toBe(opener);
+  });
+
+  test("focus_stays_in_the_dialog_through_state_changes", async () => {
+    const onclose = vi.fn();
+    const m = mockApi([], { updateStatus: async () => AVAILABLE });
+    const update = new UpdateStore(m.api);
+    await update.init();
+    mounted = mount(UpdateDialog, { target: document.body, props: { update, onclose } });
+    await settle();
+    const dialog = () => document.querySelector<HTMLElement>(`[role="dialog"]`)!;
+    const key = (k: string, shiftKey = false) =>
+      document.activeElement!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: k, shiftKey, bubbles: true, cancelable: true }),
+      );
+    // the user clicks "Update and restart": the focused button goes away with the state
+    button("Update and restart")!.focus();
+    m.emitUpdate(
+      updateStatus({
+        state: "downloading",
+        version: "0.5.0",
+        install: { kind: "selfUpdate" },
+        received: 1048576,
+        total: 4194304,
+      }),
+    );
+    await settle();
+    expect(dialog().contains(document.activeElement)).toBe(true);
+    // Tab stays inside (Later is the only button)
+    key("Tab");
+    await settle();
+    expect(document.activeElement).toBe(button("Later"));
+    key("Tab");
+    await settle();
+    expect(document.activeElement).toBe(button("Later"));
+    // Escape closes while downloading
+    key("Escape");
+    expect(onclose).toHaveBeenCalledTimes(1);
+    // installing: nothing is focusable, the dialog itself keeps the focus, Escape does nothing
+    m.emitUpdate(
+      updateStatus({ state: "installing", version: "0.5.0", install: { kind: "selfUpdate" } }),
+    );
+    await settle();
+    expect(document.activeElement).toBe(dialog());
+    key("Tab");
+    expect(document.activeElement).toBe(dialog());
+    key("Escape");
+    expect(onclose).toHaveBeenCalledTimes(1);
+  });
+
+  test("progress_goes_from_determinate_to_indeterminate_in_one_mounted_dialog", async () => {
+    const m = mockApi([], { updateStatus: async () => AVAILABLE });
+    const update = new UpdateStore(m.api);
+    await update.init();
+    mounted = mount(UpdateDialog, { target: document.body, props: { update, onclose: () => {} } });
+    m.emitUpdate(
+      updateStatus({ state: "downloading", version: "0.5.0", received: 1048576, total: 4194304 }),
+    );
+    await settle();
+    expect(document.querySelector("progress")!.getAttribute("value")).toBe("1048576");
+    m.emitUpdate(updateStatus({ state: "installing", version: "0.5.0" }));
+    await settle();
+    const bar = document.querySelector("progress")!;
+    expect(bar.hasAttribute("value")).toBe(false);
+    expect(bar.hasAttribute("max")).toBe(false);
   });
 });

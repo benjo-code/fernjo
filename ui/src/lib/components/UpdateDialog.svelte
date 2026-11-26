@@ -44,12 +44,8 @@
   // the bar shows while there is something to download or wait for
   const showBar = $derived(phase === "downloading" || installing);
 
-  // without both numbers the bar has no value attribute, which makes it indeterminate
-  const barAttrs = $derived(
-    !installing && status?.received != null && status.total != null
-      ? { value: status.received, max: status.total }
-      : {},
-  );
+  // without both numbers the bar is a separate element without value, so it is truly indeterminate
+  const determinate = $derived(!installing && status?.received != null && status.total != null);
 
   $effect(() => {
     const root = dialog;
@@ -60,6 +56,16 @@
       const active = document.activeElement;
       if (!active || active === document.body || root.contains(active)) opener?.focus?.();
     };
+  });
+
+  // A state change removes the button that had the focus (the click on "Update and restart" ends
+  // in a state without it). Take the focus back to the dialog, or Escape and the Tab trap, which
+  // sit on the dialog, would stop working and Tab would leave the modal.
+  $effect(() => {
+    void phase;
+    void update.busy;
+    const root = dialog;
+    if (root && !root.contains(document.activeElement)) root.focus();
   });
 
   async function skip() {
@@ -121,7 +127,16 @@
     {/if}
 
     {#if showBar && status}
-      <progress class="bar" aria-label="Update progress" {...barAttrs}></progress>
+      {#if determinate}
+        <progress
+          class="bar"
+          aria-label="Update progress"
+          value={status.received ?? 0}
+          max={status.total ?? 1}
+        ></progress>
+      {:else}
+        <progress class="bar" aria-label="Update progress"></progress>
+      {/if}
     {/if}
     {#if stage}
       <p class="stage" role="status">{stage}</p>
@@ -188,16 +203,14 @@
           >
             Retry
           </button>
-          {#if status?.version != null}
-            <button
-              type="button"
-              class="btn"
-              aria-disabled={update.busy}
-              onclick={() => void update.openReleasePage()}
-            >
-              Open release page
-            </button>
-          {/if}
+          <button
+            type="button"
+            class="btn"
+            aria-disabled={update.busy}
+            onclick={() => void update.openReleasePage()}
+          >
+            Open release page
+          </button>
           <button type="button" class="btn" onclick={onclose}>Close</button>
         {:else}
           <button type="button" class="btn" onclick={onclose}>Close</button>
