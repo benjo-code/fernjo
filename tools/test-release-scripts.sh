@@ -549,7 +549,7 @@ release_yml="$root/.github/workflows/release.yml"
 checkout_refs_are_full_tag_refs() {
   local refs
   refs="$(awk '/uses: actions\/checkout@/ { c = 1; next } c && /^ *ref:/ { print; c = 0 } /^ *- / { c = 0 }' "$release_yml")"
-  [ "$(printf '%s\n' "$refs" | grep -c .)" -eq 4 ] && ! printf '%s\n' "$refs" | grep -vq "refs/tags/"
+  [ "$(printf '%s\n' "$refs" | grep -c .)" -eq 6 ] && ! printf '%s\n' "$refs" | grep -vq "refs/tags/"
 }
 assert_true release_checkouts_use_full_tag_refs checkout_refs_are_full_tag_refs
 upload_skips_forks() {
@@ -625,7 +625,7 @@ assert_true release_hub_image_pushes_with_a_digest_check hub_image_pushes_with_a
 # release is immutable and its deploy files pin that image.
 publish_waits_for_the_hub_image() {
   job_block publish | awk '/^    needs:$/ { n = 1; next } n && /^      - / { sub(/^ +/, ""); print; next } n { exit }' | sort | tr '\n' ' ' |
-    grep -Fxq -- '- build - hub-image '
+    grep -Fxq -- '- build - hub-image - verify-signatures '
 }
 assert_true release_publish_waits_for_the_hub_image publish_waits_for_the_hub_image
 hub_image_checks_the_registry_digests() {
@@ -636,6 +636,102 @@ hub_image_annotates_the_index_with_the_source() {
   job_block hub-image | grep -Fq 'podman manifest annotate --index --annotation org.opencontainers.image.source=https://github.com/benjo-code/fernjo'
 }
 assert_true release_hub_image_annotates_the_index_with_the_source hub_image_annotates_the_index_with_the_source
+
+# --- release.yml: update signing (M13) ---
+# The update files are signed in their own job: the only place that names the signing secrets, with
+# read-only permissions, behind the `release-signing` environment, for a tag run only. The first
+# signed run is the v0.4.0 release, so these pins describe the shape, they cannot prove the signing.
+tag_only_if="    if: github.event_name != 'pull_request' && startsWith(github.ref, 'refs/tags/v')"
+sign_job_is_the_only_one_that_names_the_signing_secrets() {
+  local all in_sign
+  all="$(grep -cE '^[^#]*(TAURI_SIGNING|secrets\.)' "$release_yml")"
+  in_sign="$(job_block sign | grep -cE '^[^#]*(TAURI_SIGNING|secrets\.)')"
+  [ "$in_sign" -ge 2 ] && [ "$all" -eq "$in_sign" ] &&
+    job_block sign | grep -Eq '^[^#]*TAURI_SIGNING_PRIVATE_KEY:' &&
+    job_block sign | grep -Eq '^[^#]*TAURI_SIGNING_PRIVATE_KEY_PASSWORD:'
+}
+assert_true release_sign_job_is_the_only_one_that_names_the_signing_secrets sign_job_is_the_only_one_that_names_the_signing_secrets
+signing_secrets_only_in_env_of_one_step() {
+  job_block sign | awk '
+    /^      - / { step++; inenv = 0 }
+    /^        env:$/ { inenv = 1; next }
+    /^        [a-z-]+:/ { inenv = 0 }
+    /^[^#]*TAURI_SIGNING/ { n++; if (!inenv) bad = 1; steps[step] = 1 }
+    END { c = 0; for (s in steps) c++; exit (bad || n != 2 || c != 1) }'
+}
+assert_true release_signing_secrets_only_in_env_of_one_step signing_secrets_only_in_env_of_one_step
+sign_job_has_only_contents_read() {
+  local perms
+  perms="$(job_block sign | awk '/^    permissions:$/ { p = 1; next } p && /^      [a-z-]+:/ { print; next } p { exit }')"
+  [ "$perms" = '      contents: read' ] &&
+    job_block sign | grep -Fxq '    environment: release-signing' &&
+    job_block sign | grep -Fxq '    needs: build'
+}
+assert_true release_sign_job_has_only_contents_read sign_job_has_only_contents_read
+publish_needs_verify_signatures() {
+  job_block publish | awk '/^    needs:$/ { n = 1; next } n && /^      - / { sub(/^ +/, ""); print; next } n { exit }' | grep -Fxq -- '- verify-signatures' &&
+    job_block verify-signatures | grep -Fxq '    needs: sign'
+}
+assert_true release_publish_needs_verify_signatures publish_needs_verify_signatures
+pull_request_runs_skip_sign() {
+  local j
+  for j in sign verify-signatures publish; do
+    job_block "$j" | grep -Fxq "$tag_only_if" || return 1
+  done
+}
+assert_true release_pull_request_runs_skip_sign pull_request_runs_skip_sign
+verify_signatures_job_has_no_secret_and_no_write() {
+  local perms
+  perms="$(job_block verify-signatures | awk '/^    permissions:$/ { p = 1; next } p && /^      [a-z-]+:/ { print; next } p { exit }')"
+  [ "$perms" = '      contents: read' ] &&
+    ! job_block verify-signatures | grep -Eq '^[^#]*(secrets\.|environment:)' &&
+    [ "$(job_block verify-signatures | grep -c 'verify_update_signature')" -ge 1 ] &&
+    job_block verify-signatures | grep -Fq -- '--app-version'
+}
+assert_true release_verify_signatures_job_has_no_secret_and_no_write verify_signatures_job_has_no_secret_and_no_write
+sign_job_signs_the_four_update_files_with_the_version() {
+  local b
+  b="$(job_block sign)"
+  printf '%s\n' "$b" | grep -Fq 'pnpm tauri signer sign --app-version' &&
+    printf '%s\n' "$b" | grep -Fq 'pnpm install --frozen-lockfile --ignore-scripts' &&
+    printf '%s\n' "$b" | grep -Fq 'name: update-signatures' &&
+    ! printf '%s\n' "$b" | grep -Eq '^[^#]*(merge-multiple|actions/cache|rust-cache)'
+}
+assert_true release_sign_job_signs_with_the_app_version_and_runs_no_dependency_script sign_job_signs_the_four_update_files_with_the_version
+publish_writes_and_checks_latest_json_after_the_signatures() {
+  local b w r s
+  b="$(job_block publish)"
+  w="$(printf '%s\n' "$b" | grep -n 'write-latest-json.mjs "' | head -n 1 | cut -d: -f1)"
+  r="$(printf '%s\n' "$b" | grep -n -- '--release installers' | head -n 1 | cut -d: -f1)"
+  s="$(printf '%s\n' "$b" | grep -n 'sha256sum' | head -n 1 | cut -d: -f1)"
+  printf '%s\n' "$b" | grep -Fq 'name: update-signatures' &&
+    printf '%s\n' "$b" | grep -Fq 'node tools/write-latest-json.mjs "${TAG#v}" installers CHANGELOG.md' &&
+    printf '%s\n' "$b" | grep -Fq 'node tools/write-latest-json.mjs --check "${TAG#v}" installers' &&
+    printf '%s\n' "$b" | grep -Fq 'verify-installers.sh "${TAG#v}" --release installers' &&
+    [ -n "$w" ] && [ -n "$r" ] && [ -n "$s" ] && [ "$w" -lt "$r" ] && [ "$r" -lt "$s" ]
+}
+assert_true release_publish_writes_and_checks_latest_json_before_the_checksums publish_writes_and_checks_latest_json_after_the_signatures
+macos_builds_pack_the_app_bundle_as_a_tarball() {
+  local b
+  b="$(job_block build)"
+  [ "$(printf '%s\n' "$b" | grep -c 'bundles: dmg,app')" -eq 2 ] &&
+    printf '%s\n' "$b" | grep -Fq 'tar -C' &&
+    printf '%s\n' "$b" | grep -Fq 'app.tar.gz' &&
+    printf '%s\n' "$b" | grep -Fq 'bundle/*.app.tar.gz'
+}
+assert_true release_macos_builds_pack_the_app_bundle_as_a_tarball macos_builds_pack_the_app_bundle_as_a_tarball
+
+# check-workflows.sh: the only environment a workflow may name is release-signing.
+env_fixture() { # <name> <lines inserted under runs-on>
+  local d="$tmp/wf-env-$1"
+  mkdir -p "$d"
+  good_workflow | awk -v add="$2" '{ print } /^    runs-on:/ { print add }' >"$d/w.yml"
+  echo "$d"
+}
+assert_exit environment_key_accepted_for_release_signing 0 "" bash "$check_workflows" "$(env_fixture ok '    environment: release-signing')"
+assert_exit environment_key_refused_for_another_name 1 "environment" bash "$check_workflows" "$(env_fixture other '    environment: production')"
+assert_exit environment_key_refused_in_object_form 1 "environment" bash "$check_workflows" "$(env_fixture object $'    environment:\n      name: release-signing')"
+assert_exit environment_key_refused_in_flow_form 1 "environment" bash "$check_workflows" "$(env_fixture flow '    environment: { name: release-signing }')"
 
 # --- hub Containerfile ---
 hub_containerfile="$root/crates/fernjo-hub/Containerfile"

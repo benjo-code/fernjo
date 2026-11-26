@@ -67,14 +67,14 @@ jobs:
             installers: target/release/bundle/nsis/*-setup.exe
           - name: macos-arm64
             os: macos-latest
-            bundles: dmg
+            bundles: dmg,app
             target: aarch64-apple-darwin
-            installers: target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+            installers: target/aarch64-apple-darwin/release/bundle/dmg/*.dmg target/aarch64-apple-darwin/release/bundle/*.app.tar.gz
           - name: macos-x64
             os: macos-latest
-            bundles: dmg
+            bundles: dmg,app
             target: x86_64-apple-darwin
-            installers: target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+            installers: target/x86_64-apple-darwin/release/bundle/dmg/*.dmg target/x86_64-apple-darwin/release/bundle/*.app.tar.gz
           - name: linux
             os: ubuntu-22.04
             bundles: appimage,deb
@@ -168,6 +168,29 @@ jobs:
           bin="$dir/fernjo"
           if [ -f "$bin.exe" ]; then bin="$bin.exe"; fi
           bash tools/check-no-build-paths.sh "$bin"
+
+      # The updater installs a macOS update from a gzip tarball whose one top-level entry is
+      # fernjo.app/ (no ./ prefix, no extra entries; found by the M13 spike). COPYFILE_DISABLE keeps
+      # bsdtar from adding ._ metadata entries, and the listing is checked. The version is the app
+      # version (on a release the tag check above has proven it equals the tag).
+      - name: Pack the app bundle for the updater (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          COPYFILE_DISABLE: '1'
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          case "$TARGET" in
+            aarch64-apple-darwin) arch=aarch64 ;;
+            x86_64-apple-darwin) arch=x64 ;;
+            *) echo "::error::unexpected macOS target $TARGET"; exit 1 ;;
+          esac
+          dir="target/$TARGET/release/bundle"
+          out="$dir/fernjo_${version}_${arch}.app.tar.gz"
+          tar -C "$dir/macos" -czf "$out" fernjo.app
+          tar -tzf "$out" | awk -F/ '$1 != "fernjo.app" { bad = 1; print "unexpected entry: " $0 } END { exit bad }'
+          ls -l "$out"
 
       # Fails loudly when a glob matches nothing, listing what the bundler actually produced,
       # so a naming surprise shows up in the first run instead of as an empty release.
@@ -398,13 +421,140 @@ jobs:
           subject-digest: ${{ steps.digest.outputs.digest }}
           push-to-registry: true
 
+  # Signs the four update files (the NSIS installer, both macOS tarballs, the AppImage) with the
+  # owner's update key, which exists only as the two secrets of the `release-signing` environment
+  # (restricted to `v*` tags). This is the only job that names them, and only in the `env:` of the one
+  # signing step; the steps before it run without the secrets. Dependencies install with
+  # --ignore-scripts so no package script runs in a job that later holds the key: the Tauri CLI is a
+  # native binary shipped in an optional platform package, which needs no install script. Nothing here
+  # writes to the repository or to a release (contents: read only); `publish` attaches the signatures
+  # after `verify-signatures` has checked them. The signature is bound to the release version
+  # (--app-version), because the app's updater runs with requireSignedVersion.
+  # Not proven by any test: the first signed run is the v0.4.0 release. The dry run of a pull
+  # request skips this job; a wrong key or password shows up first in that release's run.
+  sign:
+    name: sign update files
+    needs: build
+    if: github.event_name != 'pull_request' && startsWith(github.ref, 'refs/tags/v')
+    environment: release-signing
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ format('refs/tags/{0}', env.RELEASE_TAG) }}
+          persist-credentials: false
+
+      # Same layout and checks as `publish`: one folder per artifact, nothing extra or foreign.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: installers-*
+          path: artifacts
+
+      - name: Verify the installer set
+        env:
+          TAG: ${{ env.RELEASE_TAG }}
+        run: bash tools/verify-installers.sh "${TAG#v}" --artifacts artifacts installers
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      # No dependency cache here: a restored cache is input to a job that holds the signing key.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+
+      # The Tauri CLI reads the key and its password from these two variables. The signature lands
+      # next to each file as <file>.sig.
+      - name: Sign the update files
+        shell: bash
+        env:
+          TAG: ${{ env.RELEASE_TAG }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          version="${TAG#v}"
+          for file in "fernjo_${version}_x64-setup.exe" "fernjo_${version}_aarch64.app.tar.gz" "fernjo_${version}_x64.app.tar.gz" "fernjo_${version}_amd64.AppImage"; do
+            pnpm tauri signer sign --app-version "$version" "installers/$file"
+            if ! [ -s "installers/$file.sig" ]; then
+              echo "::error::no signature was written for $file"
+              exit 1
+            fi
+          done
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: update-signatures
+          path: installers/*.sig
+          if-no-files-found: error
+          retention-days: 7
+
+  # Checks every signature against the public key pinned in tauri.conf.json, with the same
+  # verification the app's updater runs (and the signed version), before `publish` may write
+  # latest.json from them. No secret and no write access: a wrong key, a truncated file or a
+  # signature for another file fails the run here.
+  verify-signatures:
+    name: verify update signatures
+    needs: sign
+    if: github.event_name != 'pull_request' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ format('refs/tags/{0}', env.RELEASE_TAG) }}
+          persist-credentials: false
+
+      # Installs the channel and components pinned in rust-toolchain.toml.
+      - name: Install the pinned Rust toolchain
+        run: |
+          rustup toolchain install
+          rustc --version
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: installers-*
+          path: artifacts
+
+      - name: Verify the installer set
+        env:
+          TAG: ${{ env.RELEASE_TAG }}
+        run: bash tools/verify-installers.sh "${TAG#v}" --artifacts artifacts installers
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: update-signatures
+          path: signatures
+
+      - name: Verify the signatures
+        env:
+          TAG: ${{ env.RELEASE_TAG }}
+        run: |
+          version="${TAG#v}"
+          if [ "$(find signatures -type f | wc -l)" -ne 4 ]; then
+            echo "::error::expected exactly four signature files"
+            find signatures -type f
+            exit 1
+          fi
+          cargo build --locked -p fernjo-core --example verify_update_signature
+          for file in "fernjo_${version}_x64-setup.exe" "fernjo_${version}_aarch64.app.tar.gz" "fernjo_${version}_x64.app.tar.gz" "fernjo_${version}_amd64.AppImage"; do
+            cargo run --locked -p fernjo-core --example verify_update_signature -- src-tauri/tauri.conf.json "installers/$file" "signatures/$file.sig" --app-version "$version"
+          done
+
   publish:
     name: publish
     # The release is immutable once published and its deploy files pin the hub image, so it is not
-    # published while the image is missing: a failed push leaves a draft to repeat.
+    # published while the image is missing: a failed push leaves a draft to repeat. It also waits for
+    # the signature check, so latest.json is only written from signatures that verified.
     needs:
       - build
       - hub-image
+      - verify-signatures
     if: github.event_name != 'pull_request' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -448,6 +598,23 @@ jobs:
         env:
           TAG: ${{ env.RELEASE_TAG }}
         run: bash tools/verify-installers.sh "${TAG#v}" --artifacts artifacts installers
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: update-signatures
+          path: signatures
+
+      # The signatures sit next to their files in the verified folder; latest.json is written from
+      # them and from the CHANGELOG section of this version, checked, and the finished folder (seven
+      # files, four signatures, latest.json, nothing else) is verified before anything is attached.
+      - name: Add the signatures and write latest.json
+        env:
+          TAG: ${{ env.RELEASE_TAG }}
+        run: |
+          cp signatures/*.sig installers/
+          node tools/write-latest-json.mjs "${TAG#v}" installers CHANGELOG.md
+          node tools/write-latest-json.mjs --check "${TAG#v}" installers
+          bash tools/verify-installers.sh "${TAG#v}" --release installers
 
       - name: Write SHA256SUMS
         run: (cd installers && sha256sum -- *) > SHA256SUMS

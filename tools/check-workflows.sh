@@ -5,6 +5,8 @@
 #   - mentions self-hosted runners,
 #   - triggers on pull_request_target or workflow_run,
 #   - has no top-level `permissions:`,
+#   - names a job `environment:` other than exactly `release-signing` (the signing job of the release
+#     workflow; an object or flow form, or any other name, is refused),
 #   - uses a ${{ }} expression inside a `run:` script that mentions, anywhere in it, anything but
 #     matrix.*, runner.*, env.*, secrets.*, github.event_name, github.sha, github.repository or
 #     github.workspace (so github.event.*, inputs.*, github.head_ref, github.ref_name, github.ref,
@@ -128,6 +130,14 @@ for f in "${files[@]}"; do
       }
       if (!canonical && (line ~ /(^|[ [{,])[&*][A-Za-z0-9_]/ || line ~ /<<[ ]*:/))
         report("YAML anchors, aliases and merge keys are not allowed (an alias hides what it expands to)")
+
+      if (line ~ /^[ ]*environment:/) {
+        v = line
+        sub(/^[ ]*environment:[ ]*/, "", v)
+        sub(/[ ]+#.*$/, "", v)
+        if (v != "release-signing")
+          report("environment \"" v "\" is not allowed: only the plain form environment: release-signing is accepted")
+      }
 
       if (line ~ /^[ ]*(- )?uses:/) {
         v = line
