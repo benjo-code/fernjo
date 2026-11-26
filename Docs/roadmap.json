@@ -77,6 +77,11 @@
       "date": "2026-11-25",
       "context": "M12 implementation",
       "text": "The release workflow job named `hub-image` in the first task is two jobs: `hub-image-build` (matrix amd64 and arm64, `contents: read`, also the pull request dry run, builds, smoke-tests and saves an OCI archive) and `hub-image` (tag push only, the only job with `packages: write`; pushes exactly those archives as one manifest list). The roadmap rule that only the pushing job gets `packages: write` holds; the split makes the pushed bits the tested bits. Both jobs sit before `publish`, and `publish` also needs `hub-image`, so a release whose deploy files pin the image is not published while the image is missing (a published release is immutable). The attestation command gains `--signer-workflow` and `--source-ref`, the same pins the installers use. No new action was added."
+    },
+    {
+      "date": "2026-11-26",
+      "context": "M12 owner checks",
+      "text": "The owner check of the Quadlet unit (`systemctl --user stop fernjo-hub` within about a second) is replaced by the same Compose files run as a systemd user service (`fernjo-hub-compose.service`), because the owner set the hub VM up with Compose and removed the Quadlet test setup. The Quadlet unit stays in the repository, with the published image, but its start from GHCR and its stop time are not verified (listed in `Docs/hub.md`, \"Not verified yet\"); the open owner check of M9 about the Quadlet stop stays open for the same reason."
     }
   ],
   "subprojects": [
@@ -526,7 +531,8 @@
         {
           "id": "12",
           "title": "Hub image on GitHub",
-          "status": "in-progress",
+          "status": "done",
+          "completedOn": "2026-11-26",
           "plan": "superpowers/plans/2026-11-25-milestone-12-hub-image.md",
           "prerequisites": ["9", "11"],
           "goal": "The sync hub can be set up from a ready-made image on the GitHub container registry with Compose (main path) or Quadlet, without building it from the source code first.",
@@ -544,12 +550,12 @@
           "acceptance": [
             { "text": "Build, test and lint are green: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `bash tools/check-workflows.sh`, `bash tools/test-release-scripts.sh`, `dotnet run tools/roadmap.cs -- check`", "done": true, "evidence": "2026-11-25 on Windows, branch feature/m12-hub-image: `cargo fmt --all --check` exit 0, `cargo clippy --workspace --all-targets -- -D warnings` exit 0, `cargo test --workspace` exit 0 (1252 passed, 0 failed, 2 ignored; the SSH integration tests skip without the container), `bash tools/check-workflows.sh` exit 0, `bash tools/test-release-scripts.sh` 114/114 passed, `dotnet run tools/roadmap.cs -- check` valid. CI on pull request 57: rust, ui, tauri-build, cargo-deny, workflows and roadmap jobs green" },
             { "text": "The pull request dry run builds the image for amd64 and arm64, passes the smoke test and pushes nothing (CI run named as evidence)", "done": true, "evidence": "Pull request 57, workflow `Release` run 45712770086 (https://github.com/benjo-code/fernjo/actions/runs/45712770086): jobs `hub image (amd64)` (native `ubuntu-latest`) and `hub image (arm64)` (native `ubuntu-24.04-arm`) succeeded with rootless Podman, and the smoke test step printed `smoke: ok` on both; job `hub image (push)` and `publish` were skipped, so nothing was pushed, and the four installer builds succeeded too. The push step's commands were also rehearsed against a local registry with the two archives of this run (Podman 4.9.3 and 6.2.0): one shared digest on `0.3.1`, `0.3` and `latest`, amd64 and arm64 in the list; the GHCR login and the attestation run only on a tag push" },
-            { "text": "After the tag push of v0.3.1 the image `ghcr.io/benjo-code/fernjo-hub` exists with the tags `0.3.1`, `0.3` and `latest`, and its manifest lists both architectures (`docker buildx imagetools inspect ghcr.io/benjo-code/fernjo-hub:0.3.1`)", "done": false },
-            { "text": "`gh attestation verify oci://ghcr.io/benjo-code/fernjo-hub:0.3.1 --repo benjo-code/fernjo --signer-workflow benjo-code/fernjo/.github/workflows/release.yml --source-ref refs/tags/v0.3.1` passes for the pushed digest", "done": false },
-            { "text": "Manual, owner: the GHCR package is public and `podman pull ghcr.io/benjo-code/fernjo-hub:0.3.1` works on a machine that is not logged in to GitHub", "done": false },
-            { "text": "Manual, owner: rootless Podman with Compose is the main path: `podman compose` with `compose.yaml` and `compose.podman.yaml` runs the pulled image, `init` prints the secret, `curl` with the secret answers `/v1/info`, `podman compose down` stops it with exit status 0 within about a second, and one fernjo device syncs against it through the owner's Caddy", "done": false },
-            { "text": "Manual, owner: the updated Quadlet unit starts the pulled image rootless and `systemctl --user stop fernjo-hub` ends it within about a second (this also closes that open owner check of M9)", "done": false },
-            { "text": "`docker compose` with `compose.yaml` alone runs the pulled image with `init`, `serve` and a stop with exit status 0 (checked where Docker is available, otherwise open with the command)", "done": false }
+            { "text": "After the tag push of v0.3.1 the image `ghcr.io/benjo-code/fernjo-hub` exists with the tags `0.3.1`, `0.3` and `latest`, and its manifest lists both architectures (`docker buildx imagetools inspect ghcr.io/benjo-code/fernjo-hub:0.3.1`)", "done": true, "evidence": "2026-11-26: release run 45720295139 (jobs `hub image (amd64)`, `hub image (arm64)`, `hub image (push)` and `publish` green); `docker buildx imagetools inspect ghcr.io/benjo-code/fernjo-hub:0.3.1` lists linux/amd64 and linux/arm64 under index digest `sha256:62c7ac5a32f679ea488eb43daa0769b46ada05440fcc7edccbbf83482d8fe023`; the workflow's own check found `0.3.1`, `0.3` and `latest` on that one digest." },
+            { "text": "`gh attestation verify oci://ghcr.io/benjo-code/fernjo-hub:0.3.1 --repo benjo-code/fernjo --signer-workflow benjo-code/fernjo/.github/workflows/release.yml --source-ref refs/tags/v0.3.1` passes for the pushed digest", "done": true, "evidence": "2026-11-26: the command exits 0 for the digest above (attestation 72407592, signer workflow `release.yml`, source ref `refs/tags/v0.3.1`)." },
+            { "text": "Manual, owner: the GHCR package is public and `podman pull ghcr.io/benjo-code/fernjo-hub:0.3.1` works on a machine that is not logged in to GitHub", "done": true, "evidence": "2026-11-26, reported by the owner: `podman pull` of the image works without a login on the hub VM; also an anonymous `docker pull` on the development machine after `docker logout ghcr.io`, and anonymous token and manifest requests answered 200 (package public)." },
+            { "text": "Manual, owner: rootless Podman with Compose is the main path: `podman compose` with `compose.yaml` and `compose.podman.yaml` runs the pulled image, `init` prints the secret, `curl` with the secret answers `/v1/info`, `podman compose down` stops it with exit status 0 within about a second, and one fernjo device syncs against it through the owner's Caddy", "done": true, "evidence": "2026-11-26: on the owner's hub VM (Podman 5.7.0, podman-compose 1.5.0) `podman compose` with `compose.yaml` and `compose.podman.yaml` (the override with `x-podman: { in_pod: false }`) ran the pulled image, `init` printed the secret, `/v1/info` answered `{\"protocol\":1,\"maxBytes\":67108864}` on the LAN address, `down` took 0.5 s and 0.7 s; one fernjo device synced through the owner's Caddy (reported by the owner)." },
+            { "text": "Manual, owner: Compose runs as a systemd user service (`crates/fernjo-hub/deploy/fernjo-hub-compose.service`, `enable --now`, `enable-linger`) and the hub is up after a reboot without a login (replaces the Quadlet check, see Scope changes)", "done": true, "evidence": "2026-11-26, reported by the owner: the service runs after a reboot on the hub VM (Podman 5.7.0, podman-compose 1.5.0). The stop time was not reported." },
+            { "text": "`docker compose` with `compose.yaml` alone runs the pulled image with `init`, `serve` and a stop with exit status 0 (checked where Docker is available, otherwise open with the command)", "done": true, "evidence": "2026-11-26 on Docker Desktop (Docker 29.9.3), after `docker logout ghcr.io`: anonymous `docker pull ghcr.io/benjo-code/fernjo-hub:0.3.1` worked; `docker compose` with `compose.yaml` alone ran `init`, `up -d` (401 on `/v1/info` without a secret) and `stop` (2.5 s including Compose overhead) with container exit status 0." }
           ]
         }
       ]
@@ -595,7 +601,8 @@
     {
       "version": "0.3.1",
       "title": "Hub image on GitHub",
-      "status": "open",
+      "status": "done",
+      "date": "2026-11-26",
       "afterMilestone": "12",
       "covers": ["12"],
       "intro": "The sync hub comes as a ready-made image on the GitHub container registry (amd64 and arm64), with a Compose file and an updated Quadlet unit. The app is unchanged."

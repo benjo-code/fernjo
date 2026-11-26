@@ -1,0 +1,23 @@
+# systemd user unit that runs the Compose files next to it (compose.yaml, compose.podman.yaml)
+# with podman-compose. Install it as ~/.config/systemd/user/fernjo-hub.service, set
+# WorkingDirectory to the folder that holds the two files, then:
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now fernjo-hub
+#   loginctl enable-linger "$USER"     # start at boot without a login
+# Use either this unit or the Quadlet unit (fernjo-hub.container), never both.
+[Unit]
+Description=fernjo sync hub (podman-compose)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=%h/fernjo-hub
+ExecStart=/usr/bin/podman-compose -f compose.yaml -f compose.podman.yaml up -d
+ExecStop=/usr/bin/podman-compose -f compose.yaml -f compose.podman.yaml down
+TimeoutStartSec=120
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target
