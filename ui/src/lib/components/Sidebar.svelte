@@ -3,6 +3,7 @@
   import type { SessionStore } from "../sessions.svelte";
   import type { TreeStore } from "../store.svelte";
   import type { SyncStore } from "../sync.svelte";
+  import type { UpdateStore } from "../update.svelte";
   import type { VaultStore } from "../vault.svelte";
   import { LayoutStore, SIDEBAR_MIN, sidebarMax } from "../layout.svelte";
   import { syncLine } from "../sync-line";
@@ -26,6 +27,8 @@
     sync,
     onsyncdetails,
     onreseed,
+    update,
+    onupdate,
     restartPending = false,
     onRestart,
     layout = new LayoutStore(),
@@ -46,6 +49,10 @@
     onsyncdetails?: () => void;
     /** "Re-seed…" of a hub that is older than this device. */
     onreseed?: () => void;
+    /** Its marker sits above the sync line while an update is on offer or failed. */
+    update?: UpdateStore;
+    /** The update marker was clicked: open the update window. */
+    onupdate?: () => void;
     restartPending?: boolean;
     onRestart?: () => void;
     layout?: LayoutStore;
@@ -73,6 +80,20 @@
   let note: VaultNote | undefined = $state();
   let noteOpen = $state(false);
 
+  const MARKER_TEXT: Partial<Record<string, string>> = {
+    available: "Update available",
+    ready: "Update available",
+    downloading: "Updating…",
+    installing: "Updating…",
+    failed: "Update failed",
+  };
+  const marker = $derived(update?.status ? (MARKER_TEXT[update.status.state] ?? null) : null);
+  const markerTitle = $derived(
+    update?.status?.version
+      ? `fernjo ${update.status.version} (you have ${update.status.currentVersion})`
+      : "Updates",
+  );
+
   // Any bar above the tree or the sync line below the panel takes height the 23-row minimum has
   // no room for, so the tree may shrink to 6 rows and the properties panel stays reachable.
   const barsOpen = $derived(
@@ -82,7 +103,8 @@
       store.notices.length > 0 ||
       restartPending ||
       (sync?.status?.findings.length ?? 0) > 0 ||
-      syncLine(sync?.status ?? null) !== null,
+      syncLine(sync?.status ?? null) !== null ||
+      marker !== null,
   );
 </script>
 
@@ -102,6 +124,19 @@
   <NoticeBar {store} {sync} {restartPending} {onRestart} />
   <div class="tree-slot"><TreeView {store} {sessions} {onimport} /></div>
   {@render children?.()}
+  {#if marker}
+    <div class="update" class:attention={update?.status?.state === "failed"}>
+      <button
+        type="button"
+        class="act"
+        data-update-marker
+        title={markerTitle}
+        onclick={() => onupdate?.()}
+      >
+        {marker}
+      </button>
+    </div>
+  {/if}
   {#if sync}
     <SyncStatusLine {sync} {onreseed} ondetails={onsyncdetails} />
   {/if}
@@ -163,6 +198,39 @@
     gap: var(--space-2);
     padding: var(--space-2) var(--space-3);
     border-top: 1px solid var(--color-border);
+  }
+
+  .update {
+    display: flex;
+    flex: none;
+    padding: var(--space-1) var(--space-3);
+    border-top: 1px solid var(--color-border);
+    font-size: var(--text-sm);
+  }
+
+  .update .act {
+    min-width: 0;
+    height: 28px;
+    padding: 0 var(--space-3);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text);
+    font: inherit;
+    cursor: default;
+  }
+
+  .update.attention .act {
+    color: var(--color-warning);
+  }
+
+  .update .act:hover {
+    background: var(--color-hover);
+  }
+
+  .update .act:focus-visible {
+    outline: 1px solid var(--color-focus);
+    outline-offset: -1px;
   }
 
   .foot-btn {

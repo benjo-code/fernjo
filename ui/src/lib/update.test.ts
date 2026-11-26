@@ -1,0 +1,92 @@
+import { describe, expect, test } from "vitest";
+import { deferred, mockApi, updateStatus } from "./testing";
+import { UpdateStore } from "./update.svelte";
+
+describe("UpdateStore", () => {
+  test("store_follows_update_status_events", async () => {
+    const m = mockApi();
+    const store = new UpdateStore(m.api);
+    await store.init();
+    expect(store.status?.state).toBe("idle");
+    m.emitUpdate(updateStatus({ state: "available", version: "0.5.0" }));
+    expect(store.status?.state).toBe("available");
+    expect(store.status?.version).toBe("0.5.0");
+    store.dispose();
+    m.emitUpdate(updateStatus({ state: "failed" }));
+    expect(store.status?.state).toBe("available");
+  });
+
+  test("ignores_second_action_while_busy", async () => {
+    const gate = deferred<ReturnType<typeof updateStatus>>();
+    const m = mockApi([], { updateCheck: () => gate.promise });
+    const store = new UpdateStore(m.api);
+    await store.init();
+    const first = store.check();
+    expect(store.busy).toBe(true);
+    await store.check();
+    await store.install();
+    await store.skip();
+    expect(m.calls.updateCheck).toHaveLength(1);
+    expect(m.calls.updateInstall).toHaveLength(0);
+    expect(m.calls.updateSkip).toHaveLength(0);
+    gate.resolve(updateStatus({ state: "upToDate" }));
+    await first;
+    expect(store.busy).toBe(false);
+    expect(store.status?.state).toBe("upToDate");
+  });
+
+  test("init_reads_status_once", async () => {
+    const m = mockApi();
+    const store = new UpdateStore(m.api);
+    await store.init();
+    await store.init();
+    expect(m.calls.updateStatus).toHaveLength(1);
+    expect(m.calls.onUpdateStatus).toHaveLength(1);
+  });
+
+  test("check_is_always_manual", async () => {
+    const m = mockApi();
+    const store = new UpdateStore(m.api);
+    await store.check();
+    expect(m.calls.updateCheck).toEqual([[true]]);
+  });
+
+  test("a_failed_command_sets_the_error_and_the_next_action_clears_it", async () => {
+    let fail = true;
+    const m = mockApi([], {
+      updateSkip: async () => {
+        if (fail) throw { code: "settings_unusable", message: "no" };
+        return updateStatus({ state: "available", skipped: true });
+      },
+    });
+    const store = new UpdateStore(m.api);
+    expect(await store.skip()).toBe(false);
+    expect(store.error?.code).toBe("settings_unusable");
+    fail = false;
+    expect(await store.skip()).toBe(true);
+    expect(store.error).toBeNull();
+  });
+
+  test("set_enabled_sends_the_flag", async () => {
+    const m = mockApi();
+    const store = new UpdateStore(m.api);
+    await store.setEnabled(false);
+    expect(m.calls.setCheckForUpdates).toEqual([[false]]);
+    expect(store.status?.checkEnabled).toBe(false);
+  });
+});
+
+const sources = import.meta.glob("../**/*.svelte", {
+  query: "?raw",
+  import: "default",
+  eager: true,
+}) as Record<string, string>;
+
+describe("UI hardening", () => {
+  test("no_html_injection_in_ui", () => {
+    const files = Object.keys(sources);
+    expect(files.length).toBeGreaterThan(10);
+    const offenders = files.filter((f) => /\{\s*@html/.test(sources[f]!));
+    expect(offenders).toEqual([]);
+  });
+});

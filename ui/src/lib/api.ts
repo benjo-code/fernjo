@@ -1,6 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { Channel, invoke, type InvokeArgs, type InvokeOptions } from "@tauri-apps/api/core";
-import type { Api, ApiError, SessionEvent, SyncStatus, VaultStatus } from "./types";
+import type { Api, ApiError, SessionEvent, SyncStatus, UpdateStatus, VaultStatus } from "./types";
 
 export type { Api } from "./types";
 
@@ -107,6 +107,13 @@ export const tauriApi: Api = {
   syncEditSecret: (secret) => call("sync_edit_secret", { secret }),
   syncLeave: () => call("sync_leave"),
   syncDismissFindings: () => call("sync_dismiss_findings"),
+  updateStatus: () => call("update_status"),
+  updateCheck: (manual) => call("update_check", { manual }),
+  updateInstall: () => call("update_install"),
+  updateSkip: () => call("update_skip"),
+  setCheckForUpdates: (on) => call("set_check_for_updates", { on }),
+  updateOpenReleasePage: () => call("update_open_release_page"),
+  onUpdateStatus: (handler) => listen<UpdateStatus>("update-status", (e) => handler(e.payload)),
   onSyncStatus: (handler) => listen<SyncStatus>("sync-status", (e) => handler(e.payload)),
   onVaultStatus: (handler) => listen<VaultStatus>("vault-status", (e) => handler(e.payload)),
 };
