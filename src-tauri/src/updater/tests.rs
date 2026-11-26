@@ -666,3 +666,182 @@ async fn a_returning_install_clears_sync_closing_so_the_window_closes_and_a_retr
     assert!(logged(&log).contains(&"install".to_owned()));
     assert!(!closing.load(SeqCst));
 }
+
+/// A backend whose chosen step panics, to prove the run slot is given back.
+struct Panicking {
+    inner: Arc<FakeBackend>,
+    on: &'static str,
+}
+
+impl UpdateBackend for Panicking {
+    type Handle = u32;
+    fn check(
+        &self,
+        c: &str,
+        s: Option<&str>,
+    ) -> impl Future<Output = Result<Option<Found<u32>>, FeedError>> + Send {
+        let panic_here = self.on == "check";
+        let inner = Arc::clone(&self.inner);
+        let (c, s) = (c.to_owned(), s.map(str::to_owned));
+        async move {
+            assert!(!panic_here, "backend panic in check");
+            inner.check(&c, s.as_deref()).await
+        }
+    }
+    fn download(
+        &self,
+        h: &u32,
+        p: Progress,
+    ) -> impl Future<Output = Result<Vec<u8>, FeedError>> + Send {
+        let panic_here = self.on == "download";
+        let inner = Arc::clone(&self.inner);
+        let h = *h;
+        async move {
+            assert!(!panic_here, "backend panic in download");
+            inner.download(&h, p).await
+        }
+    }
+    fn install(&self, h: &u32, b: Vec<u8>) -> Result<(), &'static str> {
+        assert!(self.on != "install", "backend panic in install");
+        self.inner.install(h, b)
+    }
+}
+
+#[tokio::test]
+async fn a_panic_in_a_check_gives_the_run_slot_back() {
+    let (inner, host, _) = setup();
+    let backend = Arc::new(Panicking {
+        inner: Arc::clone(&inner),
+        on: "check",
+    });
+    let (b, h) = (Arc::clone(&backend), host.clone());
+    let joined = tokio::spawn(async move { run_check(&*b, &h, true).await }).await;
+    assert!(joined.unwrap_err().is_panic());
+    assert_eq!(status_of(&host).state, UpdateState::Idle);
+    // the next check is not dropped as "already checking"
+    let status = run_check(&*inner, &host, true).await;
+    assert_eq!(status.state, UpdateState::Available);
+    assert_eq!(inner.checks.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_panic_in_a_check_from_ready_keeps_the_download_and_the_slot_free() {
+    let (inner, host, _) = setup();
+    host.0.connected.store(1, Ordering::SeqCst);
+    host.0.confirm.store(false, Ordering::SeqCst);
+    run_check(&*inner, &host, true).await;
+    run_install(&*inner, &host).await;
+    assert_eq!(status_of(&host).state, UpdateState::Ready);
+    let backend = Arc::new(Panicking {
+        inner: Arc::clone(&inner),
+        on: "check",
+    });
+    let (b, h) = (Arc::clone(&backend), host.clone());
+    let joined = tokio::spawn(async move { run_check(&*b, &h, true).await }).await;
+    assert!(joined.unwrap_err().is_panic());
+    assert_eq!(status_of(&host).state, UpdateState::Ready);
+    assert!(host.0.rt.lock().unwrap().bytes.is_some());
+    assert_eq!(
+        run_check(&*inner, &host, true).await.state,
+        UpdateState::Ready
+    );
+    assert_eq!(inner.checks.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn a_panic_in_a_download_returns_to_available_and_a_retry_runs() {
+    let (inner, host, log) = setup();
+    run_check(&*inner, &host, true).await;
+    let backend = Arc::new(Panicking {
+        inner: Arc::clone(&inner),
+        on: "download",
+    });
+    let (b, h) = (Arc::clone(&backend), host.clone());
+    let joined = tokio::spawn(async move { run_install(&*b, &h).await }).await;
+    assert!(joined.unwrap_err().is_panic());
+    let status = status_of(&host);
+    assert_eq!(status.state, UpdateState::Available);
+    assert_eq!((status.received, status.total), (None, None));
+    run_install(&*inner, &host).await;
+    assert_eq!(logged(&log).last().map(String::as_str), Some("restart"));
+}
+
+#[tokio::test]
+async fn a_panic_in_the_install_ends_in_failed_not_installing() {
+    let (inner, host, _) = setup();
+    let backend = Panicking {
+        inner: Arc::clone(&inner),
+        on: "install",
+    };
+    run_check(&backend, &host, true).await;
+    {
+        let mut g = host.0.rt.lock().unwrap();
+        g.state = UpdateState::Ready;
+        g.bytes = Some(vec![1, 2, 3]);
+    }
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        finish_install(&backend, &host);
+    }));
+    assert!(caught.is_err());
+    let status = status_of(&host);
+    assert_eq!(status.state, UpdateState::Failed);
+    assert_eq!(status.error.as_deref(), Some("install_failed"));
+    assert!(!install_blocks_exit(
+        status.state == UpdateState::Installing,
+        None
+    ));
+}
+
+#[tokio::test]
+async fn a_confirm_during_a_check_from_ready_still_installs_and_the_check_keeps_the_verdict() {
+    let (backend, host, log) = setup();
+    host.0.connected.store(1, Ordering::SeqCst);
+    host.0.confirm.store(false, Ordering::SeqCst);
+    run_check(&*backend, &host, true).await;
+    run_install(&*backend, &host).await;
+    assert_eq!(status_of(&host).state, UpdateState::Ready);
+
+    let gate = Arc::new(Notify::new());
+    *backend.gate.lock().unwrap() = Some(Arc::clone(&gate));
+    let (checked, ()) = tokio::join!(run_check(&*backend, &host, true), async {
+        while backend.checks.load(Ordering::SeqCst) < 2 {
+            tokio::task::yield_now().await;
+        }
+        // the held download stays installable while the check is out
+        assert_eq!(status_of(&host).state, UpdateState::Ready);
+        // a second check is still dropped by the run slot
+        let second = run_check(&*backend, &host, true).await;
+        assert_eq!(second.state, UpdateState::Ready);
+        assert_eq!(backend.checks.load(Ordering::SeqCst), 2);
+        finish_install(&*backend, &host);
+        gate.notify_one();
+    });
+    assert!(logged(&log).contains(&"install".to_owned()));
+    // the late answer of the check must not turn `Installing` back into `Ready`
+    assert_eq!(checked.state, UpdateState::Installing);
+    assert_eq!(status_of(&host).state, UpdateState::Installing);
+    assert!(host.0.rt.lock().unwrap().bytes.is_none());
+}
+
+#[test]
+fn an_install_in_progress_blocks_a_close_and_an_exit_without_a_code_only() {
+    // closing the window and Cmd+Q (no exit code) wait while the files are replaced
+    assert!(install_blocks_exit(true, None));
+    // the restart that follows a finished install carries an exit code and always passes
+    assert!(!install_blocks_exit(true, Some(0)));
+    assert!(!install_blocks_exit(true, Some(1)));
+    // nothing installing: the usual close and exit rules apply
+    assert!(!install_blocks_exit(false, None));
+    assert!(!install_blocks_exit(false, Some(0)));
+}
+
+#[test]
+fn only_the_installing_state_counts_as_an_install_in_progress() {
+    let log: Log = Arc::default();
+    let host = FakeHost::new(&FakeBackend::new(&log), &log);
+    assert!(!installing(&host.0.rt));
+    host.0.rt.lock().unwrap().state = UpdateState::Ready;
+    assert!(!installing(&host.0.rt));
+    host.0.rt.lock().unwrap().state = UpdateState::Installing;
+    assert!(installing(&host.0.rt));
+}

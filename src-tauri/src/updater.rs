@@ -12,7 +12,14 @@
 //!
 //! Rules:
 //! - One run slot: a check while checking, downloading or installing is dropped (the current
-//!   status comes back), and so is an install while downloading or installing.
+//!   status comes back), and so is an install while downloading or installing. A check that starts
+//!   in `Ready` leaves the state at `Ready` (its own `checking` flag holds the check slot), so a
+//!   confirmed dialog installs the held download while the check is out, and a late answer of that
+//!   check never overwrites `Installing`. A panic in a backend step gives its slot back (`SlotGuard`):
+//!   `Checking` and `Downloading` return to what they were, `Installing` ends in `Failed`.
+//! - While `Installing` the window close and an exit without an exit code are prevented (`lib.rs`,
+//!   [`install_blocks_exit`]), so the files are never cut off mid-write; the restart after a
+//!   finished install carries an exit code and passes.
 //! - An automatic check (`manual == false`) swallows every failure: the state returns to what it
 //!   was, no error, no event. It also does not announce "checking" and only emits when the status
 //!   changed. A manual check reports its failure as `failed` with the error code and finding
@@ -113,6 +120,9 @@ pub struct UpdaterRuntime<H = FeedUpdate> {
     error: Option<String>,
     /// The verified download, held only in `Ready` and `Installing`.
     bytes: Option<Vec<u8>>,
+    /// A check is out. The check slot, separate from `state` so a check that starts in `Ready`
+    /// leaves the held download installable (`state` stays `Ready` meanwhile).
+    checking: bool,
 }
 
 impl<H> Default for UpdaterRuntime<H> {
@@ -124,6 +134,7 @@ impl<H> Default for UpdaterRuntime<H> {
             total: None,
             error: None,
             bytes: None,
+            checking: false,
         }
     }
 }
@@ -268,6 +279,51 @@ fn is_busy(s: UpdateState) -> bool {
     )
 }
 
+/// Whether the files are being replaced right now. Closing the window or quitting then would cut
+/// the write (a half-written AppImage), so the window handlers wait; see [`install_blocks_exit`].
+pub(crate) fn installing<H>(rt: &Mutex<UpdaterRuntime<H>>) -> bool {
+    lock(rt).state == UpdateState::Installing
+}
+
+/// Whether a close or an exit request has to wait for an install in progress. An exit with an
+/// explicit code (the restart `after_install` asks for) always passes, like in
+/// [`exit_action`]; a window close has no code.
+pub(crate) fn install_blocks_exit(installing: bool, code: Option<i32>) -> bool {
+    installing && code.is_none()
+}
+
+/// Puts the runtime back when the future that holds a slot of the machine is dropped or panics
+/// before it finished (a panic in a backend future must not leave the state stuck at `Checking`,
+/// `Downloading` or `Installing`; `catch_unwind` in the check thread saves the thread only).
+/// A finished step takes `restore` away first. `busy` is the state the step set: a check from
+/// `Ready` leaves the state alone, so it only gives back its `checking` flag.
+struct SlotGuard<'a, Ho: Host> {
+    host: &'a Ho,
+    busy: UpdateState,
+    restore: Option<(UpdateState, Option<String>)>,
+    checking: bool,
+}
+
+impl<Ho: Host> Drop for SlotGuard<'_, Ho> {
+    fn drop(&mut self) {
+        let Some((state, error)) = self.restore.take() else {
+            return;
+        };
+        let (busy, checking) = (self.busy, self.checking);
+        change_emit(self.host, |g| {
+            if checking {
+                g.checking = false;
+            }
+            if g.state == busy {
+                g.state = state;
+                g.error = error;
+                g.received = None;
+                g.total = None;
+            }
+        });
+    }
+}
+
 /// One check. See the module comment for the manual and automatic rules.
 pub async fn run_check<B, Ho>(backend: &B, host: &Ho, manual: bool) -> UpdateStatus
 where
@@ -280,13 +336,26 @@ where
     let prev;
     {
         let mut g = lock(host.runtime());
-        if is_busy(g.state) || (!manual && !o.enabled) {
+        if is_busy(g.state) || g.checking || (!manual && !o.enabled) {
             return assemble(&g, &o);
         }
         before = assemble(&g, &o);
-        prev = (g.state, g.error.take());
-        g.state = UpdateState::Checking;
+        g.checking = true;
+        if g.state == UpdateState::Ready {
+            // the held download stays installable while the check is out (a confirmed dialog
+            // must still install it), so the state is left alone
+            prev = (UpdateState::Ready, None);
+        } else {
+            prev = (g.state, g.error.take());
+            g.state = UpdateState::Checking;
+        }
     }
+    let mut guard = SlotGuard {
+        host,
+        busy: UpdateState::Checking,
+        restore: Some(prev.clone()),
+        checking: true,
+    };
     if manual {
         host.emit(&status_of(host));
     }
@@ -296,8 +365,14 @@ where
         Ok(Some(_)) => Some(host.install_view()),
         _ => None,
     };
+    guard.restore = None;
     let after = change(host, |g| {
+        g.checking = false;
         let ready = prev.0 == UpdateState::Ready;
+        if ready && g.state != UpdateState::Ready {
+            // an install began (or failed) while the check was out: its verdict stands
+            return;
+        }
         match result {
             Ok(Some(f)) => {
                 let same = g.available.as_ref().is_some_and(|a| a.version == f.version);
@@ -348,7 +423,7 @@ where
     B: UpdateBackend,
     Ho: Host<Handle = B::Handle>,
 {
-    let handle = {
+    let started = {
         let current = host.current_version();
         let o = outside(host.state(), &current);
         let mut g = lock(host.runtime());
@@ -362,19 +437,27 @@ where
                     return assemble(&g, &o);
                 }
                 let handle = Arc::clone(&available.handle);
+                let prev = (g.state, g.error.take());
                 g.state = UpdateState::Downloading;
                 g.received = Some(0);
                 g.total = None;
-                g.error = None;
-                Some(handle)
+                Some((handle, prev))
             }
             _ => return assemble(&g, &o),
         }
     };
-    if let Some(handle) = handle {
+    if let Some((handle, prev)) = started {
+        let mut guard = SlotGuard {
+            host,
+            busy: UpdateState::Downloading,
+            restore: Some(prev),
+            checking: false,
+        };
         host.emit(&status_of(host));
         let progress = progress_sink(host.clone());
-        match backend.download(&handle, progress).await {
+        let downloaded = backend.download(&handle, progress).await;
+        guard.restore = None;
+        match downloaded {
             Ok(bytes) => {
                 change_emit(host, |g| {
                     g.state = UpdateState::Ready;
@@ -465,8 +548,17 @@ where
     let Some((handle, bytes)) = taken else {
         return;
     };
+    // a panic in the install ends in `Failed`, never in a stuck `Installing` (which blocks closing)
+    let mut guard = SlotGuard {
+        host,
+        busy: UpdateState::Installing,
+        restore: Some((UpdateState::Failed, Some("install_failed".to_owned()))),
+        checking: false,
+    };
     host.emit(&status_of(host));
-    match backend.install(&handle, bytes) {
+    let installed = backend.install(&handle, bytes);
+    guard.restore = None;
+    match installed {
         Ok(()) => host.after_install(),
         Err(code) => {
             change_emit(host, |g| {

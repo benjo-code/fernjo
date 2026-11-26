@@ -93,6 +93,11 @@ pub fn run() {
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let state = window.state::<AppState>();
+                // the update's files are being replaced: closing now could cut the write
+                if updater::install_blocks_exit(updater::installing(&state.updater), None) {
+                    api.prevent_close();
+                    return;
+                }
                 let connected = state.sessions.connected_count();
                 if !sessions::needs_close_confirmation(connected) {
                     // No session to ask about: with sync set up the window waits (at most a
@@ -189,6 +194,12 @@ pub fn run() {
             // window close does. An explicit exit code is never intercepted.
             if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
                 let state = app.state::<AppState>();
+                // an exit without a code waits for an install in progress; the restart that
+                // follows it carries a code and passes
+                if updater::install_blocks_exit(updater::installing(&state.updater), code) {
+                    api.prevent_exit();
+                    return;
+                }
                 let connected = state.sessions.connected_count();
                 let prompt_open = state.close_prompt_open.load(Ordering::SeqCst);
                 match sessions::exit_action(code, connected, prompt_open) {
