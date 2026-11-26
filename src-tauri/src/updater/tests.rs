@@ -545,9 +545,11 @@ fn the_status_serialises_in_camel_case() {
 }
 
 #[test]
-fn the_release_page_comes_from_the_version_on_offer_only() {
+fn the_release_page_is_the_tag_page_of_the_offer_or_the_generic_page() {
     let rt = Mutex::new(UpdaterRuntime::<u32>::default());
-    assert_eq!(release_page_of(&rt).unwrap_err().code, "no_update");
+    let latest = "https://github.com/benjo-code/fernjo/releases/latest";
+    assert_eq!(decide::RELEASES_LATEST_URL, latest);
+    assert_eq!(release_page_of(&rt), latest);
     let offer = |version: &str| Available {
         version: version.into(),
         notes: String::new(),
@@ -556,11 +558,13 @@ fn the_release_page_comes_from_the_version_on_offer_only() {
     };
     lock(&rt).available = Some(offer("0.4.1"));
     assert_eq!(
-        release_page_of(&rt).unwrap(),
+        release_page_of(&rt),
         "https://github.com/benjo-code/fernjo/releases/tag/v0.4.1"
     );
     lock(&rt).available = Some(offer("0.4.1-rc.1"));
-    assert_eq!(release_page_of(&rt).unwrap_err().code, "no_release_page");
+    assert_eq!(release_page_of(&rt), latest);
+    // the URL passes the same check the opener path applies
+    assert!(crate::sessions::check_external_url(latest).is_ok());
 }
 
 #[test]

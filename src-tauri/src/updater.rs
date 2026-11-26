@@ -517,19 +517,19 @@ pub fn set_check_for_updates(state: &AppState, on: bool) -> Result<UpdateStatus,
     Ok(update_status(state))
 }
 
-/// The release page of the version on offer, built from the validated version only.
-fn release_page_of<H>(rt: &Mutex<UpdaterRuntime<H>>) -> Result<String, CommandError> {
-    let version = lock(rt)
-        .available
-        .as_ref()
-        .map(|a| a.version.clone())
-        .ok_or_else(no_update)?;
-    decide::release_page_url(&version)
-        .ok_or_else(|| error("no_release_page", "this version has no release page"))
+/// The page `update_open_release_page` opens: the tag page of the version on offer, or the
+/// generic latest-releases page when no version is known (a failed manual check) or the version
+/// has no plain tag page. Built here from the validated version only, never from webview input.
+fn release_page_of<H>(rt: &Mutex<UpdaterRuntime<H>>) -> String {
+    let version = lock(rt).available.as_ref().map(|a| a.version.clone());
+    version
+        .as_deref()
+        .and_then(decide::release_page_url)
+        .unwrap_or_else(|| decide::RELEASES_LATEST_URL.to_owned())
 }
 
 pub fn update_open_release_page(app: &AppHandle) -> Result<(), CommandError> {
-    let url = release_page_of(&app.state::<AppState>().updater)?;
+    let url = release_page_of(&app.state::<AppState>().updater);
     // the same checks and the same opener as `open_external_url`
     let parsed = crate::sessions::check_external_url(&url)?;
     app.opener()

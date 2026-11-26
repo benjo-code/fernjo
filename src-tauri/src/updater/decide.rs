@@ -7,6 +7,8 @@ use semver::Version;
 
 pub const MAX_UPDATE_BYTES: u64 = 256 * 1024 * 1024;
 pub const MAX_NOTES_BYTES: usize = 16 * 1024;
+/// The generic releases page, opened when no version is known.
+pub const RELEASES_LATEST_URL: &str = "https://github.com/benjo-code/fernjo/releases/latest";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[expect(clippy::enum_variant_names, reason = "MacOs is the platform's name")]
