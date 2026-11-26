@@ -48,3 +48,13 @@ targetRules = ["private-key"]
 paths = [
   '''(^|/)crates/fernjo-rdp/tests/fixtures/[a-z0-9-]+\.key$''',
 ]
+
+# Update signature test fixtures: public key texts of a throw-away test key pair (the private half was
+# deleted; see the folder's README.md), not secrets.
+[[allowlists]]
+description = "Update signature test public keys"
+targetRules = ["generic-api-key"]
+paths = [
+  '''(^|/)crates/fernjo-core/tests/fixtures/update-sig/other-key\.pub$''',
+  '''(^|/)crates/fernjo-core/tests/fixtures/update-sig/other-conf\.json$''',
+]

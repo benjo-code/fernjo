@@ -33,6 +33,14 @@ assert_exit() {
   echo "ok   $name"
 }
 
+# assert_true <name> <command...>
+assert_true() {
+  local name="$1"
+  shift
+  total=$((total + 1))
+  if "$@"; then echo "ok   $name"; else echo "FAIL $name"; failures=$((failures + 1)); fi
+}
+
 sha=0123456789abcdef0123456789abcdef01234567
 
 # A workflow that satisfies every rule; bad fixtures are derived from it.
@@ -336,6 +344,8 @@ names=(
   "fernjo_${ver}_x64.dmg"
   "fernjo_${ver}_amd64.AppImage"
   "fernjo_${ver}_amd64.deb"
+  "fernjo_${ver}_aarch64.app.tar.gz"
+  "fernjo_${ver}_x64.app.tar.gz"
 )
 
 d="$tmp/inst-ok"
@@ -365,14 +375,16 @@ artifacts_fixture() {
   echo x64 >"$a/installers-macos-x64/${names[2]}"
   echo img >"$a/installers-linux/${names[3]}"
   echo deb >"$a/installers-linux/${names[4]}"
+  echo tara >"$a/installers-macos-arm64/${names[5]}"
+  echo tarx >"$a/installers-macos-x64/${names[6]}"
   echo "$a"
 }
 
 a="$(artifacts_fixture ok)"
-assert_exit verify_installers_artifacts_pass_and_collect_the_set 0 "all 5 installers present" \
+assert_exit verify_installers_artifacts_pass_and_collect_the_set 0 "all 7 files present" \
   bash "$verify" "$ver" --artifacts "$a" "$a.out"
 total=$((total + 1))
-if [ "$(cat "$a.out/${names[0]}" 2>/dev/null)" = win ] && [ "$(ls "$a.out" 2>/dev/null | wc -l)" -eq 5 ]; then
+if [ "$(cat "$a.out/${names[0]}" 2>/dev/null)" = win ] && [ "$(ls "$a.out" 2>/dev/null | wc -l)" -eq 7 ]; then
   echo "ok   verify_installers_artifacts_copy_each_platform_file_unchanged"
 else
   echo "FAIL verify_installers_artifacts_copy_each_platform_file_unchanged"
@@ -407,6 +419,38 @@ a="$(artifacts_fixture extra-file)"
 assert_exit verify_installers_artifacts_reject_an_extra_file_in_a_platform 1 "unexpected: installers-windows/readme.txt" \
   bash "$verify" "$ver" --artifacts "$a" "$a.out"
 
+total=$((total + 1))
+if [ "$(cat "$tmp/art-ok.out/${names[5]}" 2>/dev/null)" = tara ] && [ "$(cat "$tmp/art-ok.out/${names[6]}" 2>/dev/null)" = tarx ]; then
+  echo "ok   verify_installers_artifacts_form_includes_tarballs"
+else
+  echo "FAIL verify_installers_artifacts_form_includes_tarballs"
+  failures=$((failures + 1))
+fi
+
+# --release: the seven files, the four signatures of the update artifacts and latest.json.
+release_fixture() {
+  local d="$tmp/rel-$1"
+  mkdir -p "$d"
+  for n in "${names[@]}"; do : >"$d/$n"; done
+  for n in "${names[0]}" "${names[5]}" "${names[6]}" "${names[3]}"; do echo "sig of $n" >"$d/$n.sig"; done
+  echo '{}' >"$d/latest.json"
+  echo "$d"
+}
+d="$(release_fixture ok)"
+assert_exit verify_release_accepts_the_full_set 0 "all 12 files present" bash "$verify" "$ver" --release "$d"
+d="$(release_fixture missing-sig)"
+rm "$d/${names[3]}.sig"
+assert_exit verify_release_rejects_missing_sig 1 "missing: ${names[3]}.sig" bash "$verify" "$ver" --release "$d"
+d="$(release_fixture deb-sig)"
+echo sig >"$d/${names[4]}.sig"
+assert_exit verify_release_rejects_sig_for_deb 1 "unexpected: ${names[4]}.sig" bash "$verify" "$ver" --release "$d"
+d="$(release_fixture extra)"
+: >"$d/SHA256SUMS"
+assert_exit verify_release_rejects_extra_file 1 "unexpected: SHA256SUMS" bash "$verify" "$ver" --release "$d"
+d="$(release_fixture no-latest)"
+rm "$d/latest.json"
+assert_exit verify_release_rejects_missing_latest_json 1 "missing: latest.json" bash "$verify" "$ver" --release "$d"
+
 # The old merged layout (download-artifact with merge-multiple) must not pass.
 a="$tmp/art-flat"
 mkdir -p "$a"
@@ -419,15 +463,89 @@ mkdir -p "$a.out"
 assert_exit verify_installers_artifacts_refuse_an_existing_out_dir 1 "already exists" \
   bash "$verify" "$ver" --artifacts "$a" "$a.out"
 
+# --- write-latest-json.mjs ---
+latest="$root/tools/write-latest-json.mjs"
+# latest_fixture <name>: a release folder with fake files and signatures and a changelog.
+latest_fixture() {
+  local d="$tmp/lj-$1"
+  mkdir -p "$d"
+  for n in "${names[0]}" "${names[5]}" "${names[6]}" "${names[3]}"; do
+    echo "bytes of $n" >"$d/$n"
+    printf 'SIGNATURE-OF-%s
+' "$n" >"$d/$n.sig"
+  done
+  cat >"$d/CHANGELOG.md" <<MD
+# Changelog
+
+## [Unreleased]
+
+### Added
+
+- Something unreleased.
+
+## [$ver] – 2026-11-30
+
+### Added
+
+- Update check and install.
+
+### Fixed
+
+- A thing.
+
+## [1.2.2] - 2026-11-01
+
+- Older notes.
+MD
+  echo "$d"
+}
+d="$(latest_fixture four)"
+assert_exit latest_json_writes_the_file 0 "" env SOURCE_DATE_EPOCH=1795718275 node "$latest" "$ver" "$d" "$d/CHANGELOG.md"
+latest_has() { node -e '
+const j = JSON.parse(require("fs").readFileSync(process.argv[1] + "/latest.json", "utf8"));
+const want = ["darwin-aarch64", "darwin-x86_64", "linux-x86_64", "windows-x86_64"];
+const base = "https://github.com/benjo-code/fernjo/releases/download/v" + process.argv[2] + "/";
+const ok = j.version === process.argv[2] && JSON.stringify(Object.keys(j.platforms).sort()) === JSON.stringify(want)
+  && Object.values(j.platforms).every((p) => p.url.startsWith(base) && p.signature.startsWith("SIGNATURE-OF-"))
+  && j.pub_date === "2026-11-26T18:37:55Z";
+process.exit(ok ? 0 : 1);' "$d" "$ver"; }
+assert_true latest_json_has_four_platform_entries_with_release_urls latest_has
+notes_ok() { node -e '
+const j = JSON.parse(require("fs").readFileSync(process.argv[1] + "/latest.json", "utf8"));
+process.exit(j.notes.includes("Update check and install.") && j.notes.includes("A thing.")
+  && !j.notes.includes("unreleased") && !j.notes.includes("Older notes") ? 0 : 1);' "$d"; }
+assert_true latest_json_notes_come_from_the_version_section notes_ok
+assert_exit latest_json_check_accepts_the_written_file 0 "" node "$latest" --check "$ver" "$d"
+assert_exit latest_json_fails_without_the_changelog_section 1 "no [9.9.9] section" node "$latest" 9.9.9 "$d" "$d/CHANGELOG.md"
+assert_exit latest_json_check_rejects_other_version 1 "version" node "$latest" --check 1.2.4 "$d"
+
+tamper() { # tamper <name> <node expression on j>
+  local t="$tmp/lj-$1"
+  cp -r "$d" "$t"
+  node -e 'const fs=require("fs");const f=process.argv[1]+"/latest.json";const j=JSON.parse(fs.readFileSync(f,"utf8"));'"$2"';fs.writeFileSync(f,JSON.stringify(j));' "$t"
+  echo "$t"
+}
+t="$(tamper other-tag 'j.platforms["linux-x86_64"].url=j.platforms["linux-x86_64"].url.replace("/v'"$ver"'/","/v9.9.9/")')"
+assert_exit latest_json_check_rejects_other_tag_url 1 "linux-x86_64" node "$latest" --check "$ver" "$t"
+t="$(tamper bad-sig 'j.platforms["windows-x86_64"].signature="SIGNATURE-OF-SOMETHING-ELSE"')"
+assert_exit latest_json_check_rejects_signature_that_differs_from_sig_file 1 "windows-x86_64" node "$latest" --check "$ver" "$t"
+t="$(tamper unknown-platform 'j.platforms["freebsd-x86_64"]=j.platforms["linux-x86_64"]')"
+assert_exit latest_json_check_rejects_unknown_platform 1 "freebsd-x86_64" node "$latest" --check "$ver" "$t"
+t="$(tamper missing-platform 'delete j.platforms["darwin-x86_64"]')"
+assert_exit latest_json_check_rejects_missing_platform 1 "darwin-x86_64" node "$latest" --check "$ver" "$t"
+t="$(tamper empty-notes 'j.notes="  "')"
+assert_exit latest_json_check_rejects_empty_notes 1 "notes" node "$latest" --check "$ver" "$t"
+t="$(tamper other-file 'j.platforms["linux-x86_64"].url=j.platforms["windows-x86_64"].url')"
+assert_exit latest_json_check_rejects_a_url_of_another_platforms_file 1 "linux-x86_64" node "$latest" --check "$ver" "$t"
+d2="$tmp/lj-nosig"
+cp -r "$d" "$d2"
+rm "$d2/${names[3]}.sig" "$d2/latest.json"
+assert_exit latest_json_fails_without_a_sig_file 1 "${names[3]}.sig" node "$latest" "$ver" "$d2" "$d2/CHANGELOG.md"
+total=$((total + 1))
+if [ ! -e "$d2/latest.json" ]; then echo "ok   latest_json_leaves_no_file_on_error"; else echo "FAIL latest_json_leaves_no_file_on_error"; failures=$((failures + 1)); fi
+
 # --- release.yml: pins for the M11 review fixes #70, #72 and #73 (the behaviour needs a real run) ---
 release_yml="$root/.github/workflows/release.yml"
-# assert_true <name> <command...>
-assert_true() {
-  local name="$1"
-  shift
-  total=$((total + 1))
-  if "$@"; then echo "ok   $name"; else echo "FAIL $name"; failures=$((failures + 1)); fi
-}
 checkout_refs_are_full_tag_refs() {
   local refs
   refs="$(awk '/uses: actions\/checkout@/ { c = 1; next } c && /^ *ref:/ { print; c = 0 } /^ *- / { c = 0 }' "$release_yml")"

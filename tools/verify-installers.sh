@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # Usage: tools/verify-installers.sh <version> <dir>
 #        tools/verify-installers.sh <version> --artifacts <artifacts-dir> <out-dir>
-# The first form exits 1 unless <dir> holds exactly the expected installers, naming each missing
-# or unexpected file.
+#        tools/verify-installers.sh <version> --release <dir>
+# The first form exits 1 unless <dir> holds exactly the expected installers and macOS update
+# tarballs (seven files), naming each missing or unexpected file.
+# The --release form checks the folder the release is attached from: those seven files, the four
+# `.sig` files of the update artifacts (NSIS installer, both macOS tarballs, AppImage; none for the
+# `.deb` or the `.dmg`) and `latest.json`, nothing else.
 # The second form is what the release workflow's publish job runs on the downloaded artifacts,
 # one sub-folder per artifact (`installers-<matrix name>`). It exits 1 unless <artifacts-dir> holds
 # exactly the four platform folders and each holds exactly its own platform's installers, so one
@@ -16,10 +20,11 @@ set -euo pipefail
 usage() {
   echo "usage: verify-installers.sh <version> <dir>" >&2
   echo "       verify-installers.sh <version> --artifacts <artifacts-dir> <out-dir>" >&2
+  echo "       verify-installers.sh <version> --release <dir>" >&2
   exit 2
 }
 
-if [ "$#" -ne 2 ] && { [ "$#" -ne 4 ] || [ "$2" != "--artifacts" ]; }; then
+if [ "$#" -ne 2 ] && { [ "$#" -ne 4 ] || [ "$2" != "--artifacts" ]; } && { [ "$#" -ne 3 ] || [ "$2" != "--release" ]; }; then
   usage
 fi
 version="$1"
@@ -33,8 +38,8 @@ platforms=(windows macos-arm64 macos-x64 linux)
 platform_installers() {
   case "$1" in
     windows) echo "fernjo_${version}_x64-setup.exe" ;;
-    macos-arm64) echo "fernjo_${version}_aarch64.dmg" ;;
-    macos-x64) echo "fernjo_${version}_x64.dmg" ;;
+    macos-arm64) echo "fernjo_${version}_aarch64.dmg fernjo_${version}_aarch64.app.tar.gz" ;;
+    macos-x64) echo "fernjo_${version}_x64.dmg fernjo_${version}_x64.app.tar.gz" ;;
     linux) echo "fernjo_${version}_amd64.AppImage fernjo_${version}_amd64.deb" ;;
   esac
 }
@@ -44,6 +49,17 @@ for p in "${platforms[@]}"; do
   read -ra files <<<"$(platform_installers "$p")"
   expected+=("${files[@]}")
 done
+
+# The update artifacts that carry a signature (the release form lists their .sig files).
+signed=(
+  "fernjo_${version}_x64-setup.exe"
+  "fernjo_${version}_aarch64.app.tar.gz"
+  "fernjo_${version}_x64.app.tar.gz"
+  "fernjo_${version}_amd64.AppImage"
+)
+release_files=("${expected[@]}")
+for f in "${signed[@]}"; do release_files+=("$f.sig"); done
+release_files+=("latest.json")
 
 # check_exact <-f|-d> <dir> <name...>: every name present as a regular file (-f) or a folder (-d),
 # not a symlink, and nothing else in <dir>.
@@ -106,6 +122,9 @@ if [ "$#" -eq 4 ]; then
     done
   done
   dir="$out"
+elif [ "$#" -eq 3 ]; then
+  dir="$3"
+  expected=("${release_files[@]}")
 else
   dir="$2"
 fi
@@ -135,5 +154,5 @@ for path in "$dir"/*; do
     status=1
   fi
 done
-[ "$status" -eq 0 ] && echo "all ${#expected[@]} installers present in $dir"
+[ "$status" -eq 0 ] && echo "all ${#expected[@]} files present in $dir"
 exit "$status"

@@ -1753,8 +1753,10 @@ dependencies = [
 name = "fernjo-core"
 version = "0.3.1"
 dependencies = [
+ "base64 0.23.1",
  "directories",
  "fernjo-fs",
+ "minisign-verify",
  "serde",
  "serde_json",
  "sha2 0.11.1",
