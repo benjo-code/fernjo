@@ -148,6 +148,7 @@ Every change "in the roadmap" (linking a plan, setting status, ticking off tasks
 
 - Versioning according to SemVer (`vMAJOR.MINOR.PATCH`).
 - `CHANGELOG.md` → `[Unreleased]` is updated in every PR with a notable user-facing change (not for pure planning, roadmap or internal cleanup PRs).
+- Every release is preceded by its own gate milestone in the roadmap (security check and release readiness: threat model update, independent review per changed area, `/security-review`, dependency checks, findings triaged in `Docs/release-checklist.md`, open owner checks listed, go or no-go verdict; owner decision 2026-11-26). The gate prepares the release and does not perform it. Not every milestone is a release: a release covers one or more milestones and ends with its gate.
 - Procedure (only on instruction):
   1. Branch `release/vX.Y.Z` from `dev`, turn `[Unreleased]` in `CHANGELOG.md` into `[X.Y.Z] – YYYY-MM-DD` (naming the milestones it contains) and add a new, empty `[Unreleased]` above it; bump the hub image tag in `crates/fernjo-hub/deploy/compose.yaml` and `fernjo-hub.container` to the same version (together with `Cargo.toml` and `package.json`; `check-release-version.sh` fails the build otherwise).
   2. PR `release/vX.Y.Z` → `main` (merge commit).
