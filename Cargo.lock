@@ -1714,6 +1714,7 @@ dependencies = [
  "fernjo-sync",
  "fernjo-vault",
  "secrecy",
+ "semver",
  "serde",
  "serde_json",
  "tauri",

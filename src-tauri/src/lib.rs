@@ -16,6 +16,7 @@ mod state;
 mod sync_commands;
 mod sync_port;
 mod sync_runner;
+mod updater;
 mod vault_commands;
 
 use std::sync::atomic::Ordering;

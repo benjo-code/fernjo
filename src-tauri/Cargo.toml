@@ -20,6 +20,7 @@ tauri-build = { version = "2.7", features = [] }
 
 [dependencies]
 tauri = { version = "2.12", features = [] }
+semver = "1"
 fernjo-core = { path = "../crates/fernjo-core" }
 fernjo-vault = { path = "../crates/fernjo-vault" }
 fernjo-ssh = { path = "../crates/fernjo-ssh" }
