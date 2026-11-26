@@ -64,6 +64,7 @@ pub fn run() {
             // Background sync (a no-op while sync is off). `AppState` is built, and with it the
             // startup auto-unlock tried, before `setup` runs.
             sync_runner::spawn_triggers(app.handle());
+            updater::spawn(app.handle().clone());
             idle_lock::spawn(app.handle().clone());
             Ok(())
         })

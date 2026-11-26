@@ -50,6 +50,7 @@ use feed::{FeedError, FeedUpdate};
 
 pub(crate) mod decide;
 pub mod feed;
+pub mod schedule;
 #[cfg(test)]
 mod tests;
 
@@ -538,6 +539,37 @@ pub fn update_open_release_page(app: &AppHandle) -> Result<(), CommandError> {
 
 pub async fn update_check(app: &AppHandle, manual: bool) -> UpdateStatus {
     run_check(&RealBackend(app.clone()), &AppHost(app.clone()), manual).await
+}
+
+/// Starts the thread of automatic checks (first one a minute after the start, then every 24
+/// hours; see [`schedule`]). Call once, from the app's `setup`. It re-reads whether checks are
+/// allowed every second, and a manual check does not move its clock.
+pub fn spawn(app: AppHandle) {
+    let spawned = std::thread::Builder::new()
+        .name("fernjo-update".to_owned())
+        .spawn(move || run_loop(&app));
+    // Without the thread there are no automatic checks; the commands still work.
+    drop(spawned);
+}
+
+fn run_loop(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let epoch = Instant::now();
+    let mut scheduler = schedule::Scheduler::new(schedule::automatic_checks_allowed(&state));
+    loop {
+        std::thread::sleep(Duration::from_secs(1));
+        scheduler.set_enabled(schedule::automatic_checks_allowed(&state));
+        let now = epoch.elapsed();
+        if !scheduler.due(now) {
+            continue;
+        }
+        // A panic in one check must not end the thread; a check in progress is dropped by the
+        // state machine's run slot.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tauri::async_runtime::block_on(update_check(app, false));
+        }));
+        scheduler.ran(epoch.elapsed());
+    }
 }
 
 pub async fn update_install(app: &AppHandle) -> UpdateStatus {
