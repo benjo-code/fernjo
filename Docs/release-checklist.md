@@ -731,7 +731,7 @@ Asked at the start of M14 (2026-11-27). Results are recorded under each check.
 
 | Check | What | Decision |
 |---|---|---|
-| A | Key copy check (below) | run now; **result pending** |
+| A | Key copy check (below) | run now; **passed** (2026-11-27) |
 | B | Cmd+Q on the Mac (below) | run now; **result pending** |
 | C | "Check now" right after the v0.4.0 release on Windows, macOS and Linux (fix check 4) | run at the release |
 | D | Fix checks 1 to 3 | deferred to the release after v0.4.0 |
@@ -765,6 +765,8 @@ A newer release than v0.4.0 is needed for the install itself, so checks 1 to 3 r
 4. **Right after the v0.4.0 release, on Windows, macOS and Linux (row 83):** in the installed v0.4.0, Settings, "Updates", "Check now". Expected: "up to date". "Could not reach the update server" on one platform means that platform cannot update itself and needs a fix before users rely on it.
 
 ### Key copy check
+
+**Result (2026-11-27): passed.** The owner signed the copy and sent the `.sig` content (not recorded here). At `f7a8e85`, `cargo run -p fernjo-core --example verify_update_signature -- src-tauri/tauri.conf.json crates/fernjo-core/tests/fixtures/update-sig/payload.bin <sig> --app-version 0.0.0` in the Linux build container printed `signature ok` (exit 0). Both controls failed as they must (exit 1): `--app-version 0.0.1` ("the signature is for version 0.0.0, expected 0.0.1") and the test configuration `crates/fernjo-core/tests/fixtures/update-sig/tauri.conf.json` ("created with a different key"). This proves the owner's copy of key and password, not the values stored in the GitHub secrets; those are first used at the release.
 
 Shows that your copy of the update signing key and its password match the public key built into the app. It signs a copy of a committed test file as version `0.0.0`, which no installed app would accept. Run it on any machine with the repository, from its root. No key file is written, and the key and password do not reach the shell history.
 
@@ -853,7 +855,6 @@ The real update check against GitHub over HTTPS (`the_real_release_host_is_reach
 
 | Gap | Disposition |
 |---|---|
-| **Check A, key copy check**: that the owner's key and password match the public key in the app | **Pending. Blocks "go"** (pass, or waived in writing) |
 | **Check B, Cmd+Q on the Mac** (row 105) | **Pending.** If it confirms the path, it is rated and handled like any finding |
 | The `release-signing` secrets on GitHub, the job wiring, and the draft, attestation, upload and publish steps | Never run; first at the release (check E). A failure leaves a draft; a workflow fix needs a new tag |
 | A tag build without cache (row 96) | Never run; the first is the release (job timeout 60 minutes; cached builds took 11 to 17) |
@@ -879,11 +880,11 @@ The real update check against GitHub over HTTPS (`the_real_release_host_is_reach
 | Area | Verdict |
 |---|---|
 | Security review | **Not yet:** no High or Medium open (81, 82 and 83 fixed and read a second time); every Low fixed or accepted except row 105, which waits for check B |
-| Signing and pipeline | **Not yet:** the rehearsal passed; the key copy check (A) is pending |
+| Signing and pipeline | Go: the rehearsal and the key copy check (A) passed; the GitHub secrets, the job wiring and publishing are first run at the release (known gaps) |
 | Installers | Go: dry run builds, smoke tests and build path check pass on all four platforms |
 | Documentation | Go |
 | Repository settings | Go: environment, tag policy, secrets and immutable releases read back as documented; the Windows check is still to be made required (not a release condition) |
-| **Overall** | **No go yet.** It waits for check A (key copy) and check B (Cmd+Q). Nothing else is open that blocks the release |
+| **Overall** | **No go yet.** It waits for check B (Cmd+Q). Nothing else is open that blocks the release |
 
 ## v0.1.0 security review
 
