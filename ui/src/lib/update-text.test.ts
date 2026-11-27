@@ -9,9 +9,11 @@ describe("update texts", () => {
       stageText(
         updateStatus({ state: "downloading", received: 12 * 1048576, total: 48 * 1048576 }),
       ),
-    ).toBe("Downloading… 12 of 48 MB. fernjo restarts when the download is done.");
+    ).toBe(
+      "Downloading… 12 of 48 MB. fernjo then restarts; with sessions connected it waits for you.",
+    );
     expect(stageText(updateStatus({ state: "downloading", received: 5 * 1048576 }))).toBe(
-      "Downloading… 5 MB. fernjo restarts when the download is done.",
+      "Downloading… 5 MB. fernjo then restarts; with sessions connected it waits for you.",
     );
     expect(stageText(updateStatus({ state: "installing" }))).toBe(
       "Installing… the app restarts when done",

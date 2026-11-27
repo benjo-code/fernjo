@@ -31,9 +31,9 @@
 //!   filter, so it is never offered again. A manual check ignores the skipped version (it is
 //!   offered again) and `skipped` in the status says that it is the skipped one.
 //! - Install order: click, download (the app stays usable), `ready`, then `connected_count` is
-//!   read at that moment; nothing connected installs at once, otherwise the dialog asks
-//!   (`CloseThen::Install`). "Keep open" leaves `ready` with the bytes held; a second
-//!   `update_install` skips the download and asks again. Confirmed: sessions closed, last sync
+//!   read at that moment; nothing connected installs at once. With sessions connected a fresh
+//!   download stays in `ready`, and the next `update_install` ("Restart to update") skips the
+//!   download and asks (`CloseThen::Install`); "Keep open" leaves `ready` with the bytes held. Confirmed: sessions closed, last sync
 //!   push, `install`. The plugin's install on Windows hands over to the setup and exits the
 //!   process; macOS and Linux replace the files and return, then a restart is requested
 //!   (`request_restart`, never `AppHandle::restart`). `download_and_install` is never used.
@@ -457,6 +457,7 @@ where
             _ => return assemble(&g, &o),
         }
     };
+    let downloaded_now = started.is_some();
     if let Some((handle, prev)) = started {
         let mut guard = SlotGuard {
             host,
@@ -490,6 +491,11 @@ where
     }
     // read now, not when the click happened: sessions may have connected during the download
     let connected = host.connected_count();
+    if downloaded_now && connected > 0 {
+        // the download ends whenever it ends: a dialog opening by itself would take an Enter meant
+        // for a shell, so "Restart to update" asks (M14 review #87)
+        return status_of(host);
+    }
     match exit_action(None, connected, host.prompt_open()) {
         ExitAction::Allow => host.go(),
         ExitAction::Ask => host.ask(connected),

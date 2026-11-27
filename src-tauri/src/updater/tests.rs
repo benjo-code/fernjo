@@ -299,6 +299,12 @@ async fn install_with_connected_sessions_waits_for_confirmation_then_closes_sess
     let (backend, host, log) = setup();
     host.0.connected.store(2, Ordering::SeqCst);
     run_check(&*backend, &host, true).await;
+    // the download ends on its own time: no dialog opens by itself, where an Enter meant for a
+    // shell would confirm it
+    let status = run_install(&*backend, &host).await;
+    assert_eq!(status.state, UpdateState::Ready);
+    assert_eq!(logged(&log), ["download"]);
+    // "Restart to update" asks
     run_install(&*backend, &host).await;
     assert_eq!(
         logged(&log),
@@ -319,6 +325,7 @@ async fn keep_open_keeps_ready_and_second_install_skips_download() {
     host.0.connected.store(1, Ordering::SeqCst);
     host.0.confirm.store(false, Ordering::SeqCst);
     run_check(&*backend, &host, true).await;
+    run_install(&*backend, &host).await;
     let status = run_install(&*backend, &host).await;
     assert_eq!(status.state, UpdateState::Ready);
     assert!(host.0.rt.lock().unwrap().bytes.is_some());
@@ -349,10 +356,10 @@ async fn connected_count_is_read_at_install_time() {
     let h = host.clone();
     *backend.on_download.lock().unwrap() =
         Some(Box::new(move || h.0.connected.store(1, Ordering::SeqCst)));
-    host.0.confirm.store(false, Ordering::SeqCst);
     let status = run_install(&*backend, &host).await;
     assert_eq!(status.state, UpdateState::Ready);
-    assert_eq!(logged(&log), ["download", "dialog"]);
+    // the session that connected meanwhile counts: nothing is asked or ended by itself
+    assert_eq!(logged(&log), ["download"]);
 }
 
 #[tokio::test]
