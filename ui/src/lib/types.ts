@@ -322,10 +322,50 @@ export interface Api {
   syncEditSecret(secret: string): Promise<SyncStatus>;
   syncLeave(): Promise<SyncStatus>;
   syncDismissFindings(): Promise<void>;
+  updateStatus(): Promise<UpdateStatus>;
+  /** `manual` is true only for a click on "Check now" or "Retry": it reports failures and ignores a skip. */
+  updateCheck(manual: boolean): Promise<UpdateStatus>;
+  updateInstall(): Promise<UpdateStatus>;
+  updateSkip(): Promise<UpdateStatus>;
+  setCheckForUpdates(on: boolean): Promise<UpdateStatus>;
+  /** Rust builds the URL from the version on offer; the webview never supplies one. */
+  updateOpenReleasePage(): Promise<void>;
+  /** Subscribes to the `update-status` event; resolves with the function that unsubscribes. */
+  onUpdateStatus(handler: (status: UpdateStatus) => void): Promise<() => void>;
   /** Subscribes to the `sync-status` event; resolves with the function that unsubscribes. */
   onSyncStatus(handler: (status: SyncStatus) => void): Promise<() => void>;
   /** Subscribes to the `vault-status` event (Rust locked the vault); resolves with the unsubscribe function. */
   onVaultStatus(handler: (status: VaultStatus) => void): Promise<() => void>;
+}
+
+export type UpdateState =
+  | "idle"
+  | "checking"
+  | "upToDate"
+  | "available"
+  | "downloading"
+  | "ready"
+  | "installing"
+  | "failed";
+
+export type UpdateInstall =
+  { kind: "selfUpdate" } | { kind: "releasePage"; reason: "package_install" | "not_writable" };
+
+/** The wire type of `update_status` and the `update-status` event (see `updater.rs`). */
+export interface UpdateStatus {
+  state: UpdateState;
+  currentVersion: string;
+  version: string | null;
+  /** Release notes: shown as plain text only. */
+  notes: string | null;
+  install: UpdateInstall | null;
+  received: number | null;
+  total: number | null;
+  /** A fixed code, only in `failed`. */
+  error: string | null;
+  checkEnabled: boolean;
+  skipped: boolean;
+  unsavedReason: UnsavedReason | null;
 }
 
 export type SyncState =

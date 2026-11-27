@@ -33,6 +33,14 @@ assert_exit() {
   echo "ok   $name"
 }
 
+# assert_true <name> <command...>
+assert_true() {
+  local name="$1"
+  shift
+  total=$((total + 1))
+  if "$@"; then echo "ok   $name"; else echo "FAIL $name"; failures=$((failures + 1)); fi
+}
+
 sha=0123456789abcdef0123456789abcdef01234567
 
 # A workflow that satisfies every rule; bad fixtures are derived from it.
@@ -336,6 +344,8 @@ names=(
   "fernjo_${ver}_x64.dmg"
   "fernjo_${ver}_amd64.AppImage"
   "fernjo_${ver}_amd64.deb"
+  "fernjo_${ver}_aarch64.app.tar.gz"
+  "fernjo_${ver}_x64.app.tar.gz"
 )
 
 d="$tmp/inst-ok"
@@ -365,14 +375,16 @@ artifacts_fixture() {
   echo x64 >"$a/installers-macos-x64/${names[2]}"
   echo img >"$a/installers-linux/${names[3]}"
   echo deb >"$a/installers-linux/${names[4]}"
+  echo tara >"$a/installers-macos-arm64/${names[5]}"
+  echo tarx >"$a/installers-macos-x64/${names[6]}"
   echo "$a"
 }
 
 a="$(artifacts_fixture ok)"
-assert_exit verify_installers_artifacts_pass_and_collect_the_set 0 "all 5 installers present" \
+assert_exit verify_installers_artifacts_pass_and_collect_the_set 0 "all 7 files present" \
   bash "$verify" "$ver" --artifacts "$a" "$a.out"
 total=$((total + 1))
-if [ "$(cat "$a.out/${names[0]}" 2>/dev/null)" = win ] && [ "$(ls "$a.out" 2>/dev/null | wc -l)" -eq 5 ]; then
+if [ "$(cat "$a.out/${names[0]}" 2>/dev/null)" = win ] && [ "$(ls "$a.out" 2>/dev/null | wc -l)" -eq 7 ]; then
   echo "ok   verify_installers_artifacts_copy_each_platform_file_unchanged"
 else
   echo "FAIL verify_installers_artifacts_copy_each_platform_file_unchanged"
@@ -407,6 +419,38 @@ a="$(artifacts_fixture extra-file)"
 assert_exit verify_installers_artifacts_reject_an_extra_file_in_a_platform 1 "unexpected: installers-windows/readme.txt" \
   bash "$verify" "$ver" --artifacts "$a" "$a.out"
 
+total=$((total + 1))
+if [ "$(cat "$tmp/art-ok.out/${names[5]}" 2>/dev/null)" = tara ] && [ "$(cat "$tmp/art-ok.out/${names[6]}" 2>/dev/null)" = tarx ]; then
+  echo "ok   verify_installers_artifacts_form_includes_tarballs"
+else
+  echo "FAIL verify_installers_artifacts_form_includes_tarballs"
+  failures=$((failures + 1))
+fi
+
+# --release: the seven files, the four signatures of the update artifacts and latest.json.
+release_fixture() {
+  local d="$tmp/rel-$1"
+  mkdir -p "$d"
+  for n in "${names[@]}"; do : >"$d/$n"; done
+  for n in "${names[0]}" "${names[5]}" "${names[6]}" "${names[3]}"; do echo "sig of $n" >"$d/$n.sig"; done
+  echo '{}' >"$d/latest.json"
+  echo "$d"
+}
+d="$(release_fixture ok)"
+assert_exit verify_release_accepts_the_full_set 0 "all 12 files present" bash "$verify" "$ver" --release "$d"
+d="$(release_fixture missing-sig)"
+rm "$d/${names[3]}.sig"
+assert_exit verify_release_rejects_missing_sig 1 "missing: ${names[3]}.sig" bash "$verify" "$ver" --release "$d"
+d="$(release_fixture deb-sig)"
+echo sig >"$d/${names[4]}.sig"
+assert_exit verify_release_rejects_sig_for_deb 1 "unexpected: ${names[4]}.sig" bash "$verify" "$ver" --release "$d"
+d="$(release_fixture extra)"
+: >"$d/SHA256SUMS"
+assert_exit verify_release_rejects_extra_file 1 "unexpected: SHA256SUMS" bash "$verify" "$ver" --release "$d"
+d="$(release_fixture no-latest)"
+rm "$d/latest.json"
+assert_exit verify_release_rejects_missing_latest_json 1 "missing: latest.json" bash "$verify" "$ver" --release "$d"
+
 # The old merged layout (download-artifact with merge-multiple) must not pass.
 a="$tmp/art-flat"
 mkdir -p "$a"
@@ -419,19 +463,109 @@ mkdir -p "$a.out"
 assert_exit verify_installers_artifacts_refuse_an_existing_out_dir 1 "already exists" \
   bash "$verify" "$ver" --artifacts "$a" "$a.out"
 
+# --- write-latest-json.mjs ---
+latest="$root/tools/write-latest-json.mjs"
+# latest_fixture <name>: a release folder with fake files and signatures and a changelog.
+latest_fixture() {
+  local d="$tmp/lj-$1"
+  mkdir -p "$d"
+  for n in "${names[0]}" "${names[5]}" "${names[6]}" "${names[3]}"; do
+    echo "bytes of $n" >"$d/$n"
+    printf 'SIGNATURE-OF-%s
+' "$n" >"$d/$n.sig"
+  done
+  cat >"$d/CHANGELOG.md" <<MD
+# Changelog
+
+## [Unreleased]
+
+### Added
+
+- Something unreleased.
+
+## [$ver] – 2026-11-30
+
+### Added
+
+- Update check and install.
+
+### Fixed
+
+- A thing.
+
+## [1.2.2] - 2026-11-01
+
+- Older notes.
+MD
+  echo "$d"
+}
+d="$(latest_fixture four)"
+assert_exit latest_json_writes_the_file 0 "" env SOURCE_DATE_EPOCH=1795718275 node "$latest" "$ver" "$d" "$d/CHANGELOG.md"
+latest_has() { node -e '
+const j = JSON.parse(require("fs").readFileSync(process.argv[1] + "/latest.json", "utf8"));
+const want = ["darwin-aarch64", "darwin-x86_64", "linux-x86_64", "windows-x86_64"];
+const base = "https://github.com/benjo-code/fernjo/releases/download/v" + process.argv[2] + "/";
+const ok = j.version === process.argv[2] && JSON.stringify(Object.keys(j.platforms).sort()) === JSON.stringify(want)
+  && Object.values(j.platforms).every((p) => p.url.startsWith(base) && p.signature.startsWith("SIGNATURE-OF-"))
+  && j.pub_date === "2026-11-26T18:37:55Z";
+process.exit(ok ? 0 : 1);' "$d" "$ver"; }
+assert_true latest_json_has_four_platform_entries_with_release_urls latest_has
+notes_ok() { node -e '
+const j = JSON.parse(require("fs").readFileSync(process.argv[1] + "/latest.json", "utf8"));
+process.exit(j.notes.includes("Update check and install.") && j.notes.includes("A thing.")
+  && !j.notes.includes("unreleased") && !j.notes.includes("Older notes") ? 0 : 1);' "$d"; }
+assert_true latest_json_notes_come_from_the_version_section notes_ok
+# The version is compared as text and never turned into a pattern (CodeQL js/regex-injection).
+# The module path is not the first argument: the script would take that as being run directly.
+notes_literal() { node -e '
+import(require("url").pathToFileURL(process.argv[2]).href).then(({ sectionNotes }) => {
+  const log = "## [1.2.3]x\nnear miss\n## [1x2x3]\nother\n## [1.2.3] - 2026-11-30\nright\n";
+  if (sectionNotes(log, "1.2.3") !== "right") process.exit(1);
+  for (const pattern of ["1.2.\\d", "1.2.(3|4)", "1.2.[0-9]"]) {
+    try {
+      sectionNotes(log, pattern);
+      process.exit(1);
+    } catch (error) {
+      if (!error.message.includes("section")) process.exit(1);
+    }
+  }
+});' import "$latest"; }
+assert_true latest_json_matches_the_changelog_version_as_text notes_literal
+assert_exit latest_json_check_accepts_the_written_file 0 "" node "$latest" --check "$ver" "$d"
+assert_exit latest_json_fails_without_the_changelog_section 1 "no [9.9.9] section" node "$latest" 9.9.9 "$d" "$d/CHANGELOG.md"
+assert_exit latest_json_check_rejects_other_version 1 "version" node "$latest" --check 1.2.4 "$d"
+
+tamper() { # tamper <name> <node expression on j>
+  local t="$tmp/lj-$1"
+  cp -r "$d" "$t"
+  node -e 'const fs=require("fs");const f=process.argv[1]+"/latest.json";const j=JSON.parse(fs.readFileSync(f,"utf8"));'"$2"';fs.writeFileSync(f,JSON.stringify(j));' "$t"
+  echo "$t"
+}
+t="$(tamper other-tag 'j.platforms["linux-x86_64"].url=j.platforms["linux-x86_64"].url.replace("/v'"$ver"'/","/v9.9.9/")')"
+assert_exit latest_json_check_rejects_other_tag_url 1 "linux-x86_64" node "$latest" --check "$ver" "$t"
+t="$(tamper bad-sig 'j.platforms["windows-x86_64"].signature="SIGNATURE-OF-SOMETHING-ELSE"')"
+assert_exit latest_json_check_rejects_signature_that_differs_from_sig_file 1 "windows-x86_64" node "$latest" --check "$ver" "$t"
+t="$(tamper unknown-platform 'j.platforms["freebsd-x86_64"]=j.platforms["linux-x86_64"]')"
+assert_exit latest_json_check_rejects_unknown_platform 1 "freebsd-x86_64" node "$latest" --check "$ver" "$t"
+t="$(tamper missing-platform 'delete j.platforms["darwin-x86_64"]')"
+assert_exit latest_json_check_rejects_missing_platform 1 "darwin-x86_64" node "$latest" --check "$ver" "$t"
+t="$(tamper empty-notes 'j.notes="  "')"
+assert_exit latest_json_check_rejects_empty_notes 1 "notes" node "$latest" --check "$ver" "$t"
+t="$(tamper other-file 'j.platforms["linux-x86_64"].url=j.platforms["windows-x86_64"].url')"
+assert_exit latest_json_check_rejects_a_url_of_another_platforms_file 1 "linux-x86_64" node "$latest" --check "$ver" "$t"
+d2="$tmp/lj-nosig"
+cp -r "$d" "$d2"
+rm "$d2/${names[3]}.sig" "$d2/latest.json"
+assert_exit latest_json_fails_without_a_sig_file 1 "${names[3]}.sig" node "$latest" "$ver" "$d2" "$d2/CHANGELOG.md"
+total=$((total + 1))
+if [ ! -e "$d2/latest.json" ]; then echo "ok   latest_json_leaves_no_file_on_error"; else echo "FAIL latest_json_leaves_no_file_on_error"; failures=$((failures + 1)); fi
+
 # --- release.yml: pins for the M11 review fixes #70, #72 and #73 (the behaviour needs a real run) ---
 release_yml="$root/.github/workflows/release.yml"
-# assert_true <name> <command...>
-assert_true() {
-  local name="$1"
-  shift
-  total=$((total + 1))
-  if "$@"; then echo "ok   $name"; else echo "FAIL $name"; failures=$((failures + 1)); fi
-}
 checkout_refs_are_full_tag_refs() {
   local refs
   refs="$(awk '/uses: actions\/checkout@/ { c = 1; next } c && /^ *ref:/ { print; c = 0 } /^ *- / { c = 0 }' "$release_yml")"
-  [ "$(printf '%s\n' "$refs" | grep -c .)" -eq 4 ] && ! printf '%s\n' "$refs" | grep -vq "refs/tags/"
+  [ "$(printf '%s\n' "$refs" | grep -c .)" -eq 6 ] && ! printf '%s\n' "$refs" | grep -vq "refs/tags/"
 }
 assert_true release_checkouts_use_full_tag_refs checkout_refs_are_full_tag_refs
 upload_skips_forks() {
@@ -507,7 +641,7 @@ assert_true release_hub_image_pushes_with_a_digest_check hub_image_pushes_with_a
 # release is immutable and its deploy files pin that image.
 publish_waits_for_the_hub_image() {
   job_block publish | awk '/^    needs:$/ { n = 1; next } n && /^      - / { sub(/^ +/, ""); print; next } n { exit }' | sort | tr '\n' ' ' |
-    grep -Fxq -- '- build - hub-image '
+    grep -Fxq -- '- build - hub-image - verify-signatures '
 }
 assert_true release_publish_waits_for_the_hub_image publish_waits_for_the_hub_image
 hub_image_checks_the_registry_digests() {
@@ -518,6 +652,114 @@ hub_image_annotates_the_index_with_the_source() {
   job_block hub-image | grep -Fq 'podman manifest annotate --index --annotation org.opencontainers.image.source=https://github.com/benjo-code/fernjo'
 }
 assert_true release_hub_image_annotates_the_index_with_the_source hub_image_annotates_the_index_with_the_source
+
+# --- release.yml: update signing (M13) ---
+# The update files are signed in their own job: the only place that names the signing secrets, with
+# read-only permissions, behind the `release-signing` environment, for a tag run only. The first
+# signed run is the v0.4.0 release, so these pins describe the shape, they cannot prove the signing.
+tag_only_if="    if: github.event_name != 'pull_request' && startsWith(github.ref, 'refs/tags/v')"
+sign_job_is_the_only_one_that_names_the_signing_secrets() {
+  local all in_sign
+  all="$(grep -cE '^[^#]*(TAURI_SIGNING|secrets\.)' "$release_yml")"
+  in_sign="$(job_block sign | grep -cE '^[^#]*(TAURI_SIGNING|secrets\.)')"
+  [ "$in_sign" -ge 2 ] && [ "$all" -eq "$in_sign" ] &&
+    job_block sign | grep -Eq '^[^#]*TAURI_SIGNING_PRIVATE_KEY:' &&
+    job_block sign | grep -Eq '^[^#]*TAURI_SIGNING_PRIVATE_KEY_PASSWORD:'
+}
+assert_true release_sign_job_is_the_only_one_that_names_the_signing_secrets sign_job_is_the_only_one_that_names_the_signing_secrets
+signing_secrets_only_in_env_of_one_step() {
+  job_block sign | awk '
+    /^      - / { step++; inenv = 0 }
+    /^        env:$/ { inenv = 1; next }
+    /^        [a-z-]+:/ { inenv = 0 }
+    /^[^#]*TAURI_SIGNING/ { n++; if (!inenv) bad = 1; steps[step] = 1 }
+    END { c = 0; for (s in steps) c++; exit (bad || n != 2 || c != 1) }'
+}
+assert_true release_signing_secrets_only_in_env_of_one_step signing_secrets_only_in_env_of_one_step
+sign_job_has_only_contents_read() {
+  local perms
+  perms="$(job_block sign | awk '/^    permissions:$/ { p = 1; next } p && /^      [a-z-]+:/ { print; next } p { exit }')"
+  [ "$perms" = '      contents: read' ] &&
+    job_block sign | grep -Fxq '    environment: release-signing' &&
+    job_block sign | grep -Fxq '    needs: build'
+}
+assert_true release_sign_job_has_only_contents_read sign_job_has_only_contents_read
+publish_needs_verify_signatures() {
+  job_block publish | awk '/^    needs:$/ { n = 1; next } n && /^      - / { sub(/^ +/, ""); print; next } n { exit }' | grep -Fxq -- '- verify-signatures' &&
+    job_block verify-signatures | grep -Fxq '    needs: sign'
+}
+assert_true release_publish_needs_verify_signatures publish_needs_verify_signatures
+pull_request_runs_skip_sign() {
+  local j
+  for j in sign verify-signatures publish; do
+    job_block "$j" | grep -Fxq "$tag_only_if" || return 1
+  done
+}
+assert_true release_pull_request_runs_skip_sign pull_request_runs_skip_sign
+verify_signatures_job_has_no_secret_and_no_write() {
+  local perms
+  perms="$(job_block verify-signatures | awk '/^    permissions:$/ { p = 1; next } p && /^      [a-z-]+:/ { print; next } p { exit }')"
+  [ "$perms" = '      contents: read' ] &&
+    ! job_block verify-signatures | grep -Eq '^[^#]*(secrets\.|environment:)' &&
+    [ "$(job_block verify-signatures | grep -c 'verify_update_signature')" -ge 1 ] &&
+    job_block verify-signatures | grep -Fq -- '--app-version'
+}
+assert_true release_verify_signatures_job_has_no_secret_and_no_write verify_signatures_job_has_no_secret_and_no_write
+sign_job_signs_the_four_update_files_with_the_version() {
+  local b
+  b="$(job_block sign)"
+  printf '%s\n' "$b" | grep -Fq 'pnpm tauri signer sign --app-version' &&
+    printf '%s\n' "$b" | grep -Fq 'pnpm install --frozen-lockfile --ignore-scripts' &&
+    printf '%s\n' "$b" | grep -Fq 'name: update-signatures' &&
+    ! printf '%s\n' "$b" | grep -Eq '^[^#]*(merge-multiple|actions/cache|rust-cache|[[:space:]]cache[[:space:]]*:)'
+}
+assert_true release_sign_job_signs_with_the_app_version_and_runs_no_dependency_script sign_job_signs_the_four_update_files_with_the_version
+publish_writes_and_checks_latest_json_after_the_signatures() {
+  local b w r s
+  b="$(job_block publish)"
+  w="$(printf '%s\n' "$b" | grep -n 'write-latest-json.mjs "' | head -n 1 | cut -d: -f1)"
+  r="$(printf '%s\n' "$b" | grep -n -- '--release installers' | head -n 1 | cut -d: -f1)"
+  s="$(printf '%s\n' "$b" | grep -n 'sha256sum' | head -n 1 | cut -d: -f1)"
+  printf '%s\n' "$b" | grep -Fq 'name: update-signatures' &&
+    printf '%s\n' "$b" | grep -Fq 'node tools/write-latest-json.mjs "${TAG#v}" installers CHANGELOG.md' &&
+    printf '%s\n' "$b" | grep -Fq 'node tools/write-latest-json.mjs --check "${TAG#v}" installers' &&
+    printf '%s\n' "$b" | grep -Fq 'verify-installers.sh "${TAG#v}" --release installers' &&
+    [ -n "$w" ] && [ -n "$r" ] && [ -n "$s" ] && [ "$w" -lt "$r" ] && [ "$r" -lt "$s" ]
+}
+assert_true release_publish_writes_and_checks_latest_json_before_the_checksums publish_writes_and_checks_latest_json_after_the_signatures
+macos_builds_pack_the_app_bundle_as_a_tarball() {
+  local b
+  b="$(job_block build)"
+  [ "$(printf '%s\n' "$b" | grep -c 'bundles: dmg,app')" -eq 2 ] &&
+    printf '%s\n' "$b" | grep -Fq 'tar -C' &&
+    printf '%s\n' "$b" | grep -Fq 'app.tar.gz' &&
+    printf '%s\n' "$b" | grep -Fq 'bundle/*.app.tar.gz'
+}
+assert_true release_macos_builds_pack_the_app_bundle_as_a_tarball macos_builds_pack_the_app_bundle_as_a_tarball
+
+# check-workflows.sh: the only environment a workflow may name is release-signing.
+env_fixture() { # <name> <lines inserted under runs-on>
+  local d="$tmp/wf-env-$1"
+  mkdir -p "$d"
+  good_workflow | awk -v add="$2" '{ print } /^    runs-on:/ { print add }' >"$d/w.yml"
+  echo "$d"
+}
+assert_exit environment_key_accepted_for_release_signing 0 "" bash "$check_workflows" "$(env_fixture ok '    environment: release-signing')"
+assert_exit environment_key_refused_for_another_name 1 "environment" bash "$check_workflows" "$(env_fixture other '    environment: production')"
+assert_exit environment_key_refused_in_object_form 1 "environment" bash "$check_workflows" "$(env_fixture object $'    environment:\n      name: release-signing')"
+assert_exit environment_key_refused_in_flow_form 1 "environment" bash "$check_workflows" "$(env_fixture flow '    environment: { name: release-signing }')"
+assert_exit environment_key_refused_when_double_quoted 1 "environment" bash "$check_workflows" "$(env_fixture dquoted '    "environment": release-signing')"
+assert_exit environment_key_refused_when_single_quoted 1 "environment" bash "$check_workflows" "$(env_fixture squoted "    'environment': release-signing")"
+assert_exit environment_key_refused_with_a_space_before_the_colon 1 "environment" bash "$check_workflows" "$(env_fixture spaced '    environment : release-signing')"
+assert_exit environment_key_refused_in_a_list_item 1 "environment" bash "$check_workflows" "$(env_fixture listed '    - environment: release-signing')"
+
+# The real release workflow names an environment exactly once: the signing job's own line.
+release_names_the_environment_only_in_the_sign_job() {
+  [ "$(grep -cE '^[^#]*environment[[:space:]]*:' "$release_yml")" -eq 1 ] &&
+    [ "$(job_block sign | grep -cE '^[^#]*environment[[:space:]]*:')" -eq 1 ] &&
+    job_block sign | grep -Fxq '    environment: release-signing'
+}
+assert_true release_names_the_environment_only_in_the_sign_job release_names_the_environment_only_in_the_sign_job
 
 # --- hub Containerfile ---
 hub_containerfile="$root/crates/fernjo-hub/Containerfile"

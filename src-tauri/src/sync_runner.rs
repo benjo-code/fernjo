@@ -262,6 +262,8 @@ fn finish(window: &tauri::Window, then: CloseThen) {
             let _ = window.destroy();
         }
         CloseThen::Restart => window.app_handle().request_restart(),
+        // Windows: the plugin hands over to the setup and exits the process in here
+        CloseThen::Install => crate::updater::install_now(window.app_handle()),
     }
 }
 

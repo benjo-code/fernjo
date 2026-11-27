@@ -26,6 +26,13 @@
       "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'; img-src 'self' data:; form-action 'none'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'"
     }
   },
+  "plugins": {
+    "updater": {
+      "endpoints": ["https://github.com/benjo-code/fernjo/releases/latest/download/latest.json"],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE1NDkzQ0M0RjM1RDA4OUYKUldTZkNGM3p4RHhKRmZYQjlQaGNSZVRCNWdKejJvZTg0TWh1bEl3VWorRmJKWCtEM0I1VTlKVSsK",
+      "requireSignedVersion": true
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["nsis", "dmg", "appimage", "deb"],

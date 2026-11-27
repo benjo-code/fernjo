@@ -16,6 +16,7 @@ import type {
   SessionEvent,
   Snapshot,
   SyncStatus,
+  UpdateStatus,
   OpenTabsInfo,
   TerminalSettings,
   Theme,
@@ -126,6 +127,23 @@ export function openTabsInfo(partial: Partial<OpenTabsInfo> = {}): OpenTabsInfo 
 
 export function autoLockInfo(partial: Partial<AutoLockInfo> = {}): AutoLockInfo {
   return { minutes: null, persistent: true, unsavedReason: null, ...partial };
+}
+
+export function updateStatus(partial: Partial<UpdateStatus> = {}): UpdateStatus {
+  return {
+    state: "idle",
+    currentVersion: "0.4.0",
+    version: null,
+    notes: null,
+    install: null,
+    received: null,
+    total: null,
+    error: null,
+    checkEnabled: true,
+    skipped: false,
+    unsavedReason: null,
+    ...partial,
+  };
 }
 
 export function syncStatus(partial: Partial<SyncStatus> = {}): SyncStatus {
@@ -251,10 +269,18 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     syncEditSecret: [],
     syncLeave: [],
     syncDismissFindings: [],
+    updateStatus: [],
+    updateCheck: [],
+    updateInstall: [],
+    updateSkip: [],
+    setCheckForUpdates: [],
+    updateOpenReleasePage: [],
+    onUpdateStatus: [],
     onSyncStatus: [],
     onVaultStatus: [],
   };
   const syncHandlers = new Set<(status: SyncStatus) => void>();
+  const updateHandlers = new Set<(status: UpdateStatus) => void>();
   const vaultHandlers = new Set<(status: VaultStatus) => void>();
   let current = initial;
   const mutation = (id: string | null): Mutation => ({ id, snapshot: snapshot(current) });
@@ -555,6 +581,40 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
       calls.syncDismissFindings.push([]);
       if (impl.syncDismissFindings) await impl.syncDismissFindings();
     },
+    updateStatus: async () => {
+      calls.updateStatus.push([]);
+      return impl.updateStatus ? impl.updateStatus() : updateStatus();
+    },
+    updateCheck: async (...args) => {
+      calls.updateCheck.push(args);
+      return impl.updateCheck ? impl.updateCheck(...args) : updateStatus({ state: "upToDate" });
+    },
+    updateInstall: async () => {
+      calls.updateInstall.push([]);
+      return impl.updateInstall ? impl.updateInstall() : updateStatus({ state: "installing" });
+    },
+    updateSkip: async () => {
+      calls.updateSkip.push([]);
+      return impl.updateSkip
+        ? impl.updateSkip()
+        : updateStatus({ state: "available", skipped: true });
+    },
+    setCheckForUpdates: async (...args) => {
+      calls.setCheckForUpdates.push(args);
+      return impl.setCheckForUpdates
+        ? impl.setCheckForUpdates(...args)
+        : updateStatus({ checkEnabled: args[0] });
+    },
+    updateOpenReleasePage: async () => {
+      calls.updateOpenReleasePage.push([]);
+      if (impl.updateOpenReleasePage) await impl.updateOpenReleasePage();
+    },
+    onUpdateStatus: async (handler) => {
+      calls.onUpdateStatus.push([]);
+      if (impl.onUpdateStatus) return impl.onUpdateStatus(handler);
+      updateHandlers.add(handler);
+      return () => void updateHandlers.delete(handler);
+    },
     onSyncStatus: async (handler) => {
       calls.onSyncStatus.push([]);
       if (impl.onSyncStatus) return impl.onSyncStatus(handler);
@@ -574,6 +634,10 @@ export function mockApi(initial: TreeNode[] = [], impl: Partial<Api> = {}) {
     /** Plays the part of Rust's `vault-status` event. */
     emitVault(status: VaultStatus) {
       for (const h of [...vaultHandlers]) h(status);
+    },
+    /** Plays the part of Rust's `update-status` event. */
+    emitUpdate(status: UpdateStatus) {
+      for (const h of [...updateHandlers]) h(status);
     },
     /** Plays the part of Rust's `sync-status` event. */
     emitSync(status: SyncStatus) {

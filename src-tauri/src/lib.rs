@@ -16,6 +16,7 @@ mod state;
 mod sync_commands;
 mod sync_port;
 mod sync_runner;
+pub mod updater;
 mod vault_commands;
 
 use std::sync::atomic::Ordering;
@@ -44,6 +45,7 @@ pub fn run() {
             }
         }))
         .plugin(nav_guard::plugin())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             // terminal links open through `open_external_url` in Rust; the plugin's JS
@@ -62,6 +64,7 @@ pub fn run() {
             // Background sync (a no-op while sync is off). `AppState` is built, and with it the
             // startup auto-unlock tried, before `setup` runs.
             sync_runner::spawn_triggers(app.handle());
+            updater::spawn(app.handle().clone());
             idle_lock::spawn(app.handle().clone());
             Ok(())
         })
@@ -90,6 +93,11 @@ pub fn run() {
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let state = window.state::<AppState>();
+                // the update's files are being replaced: closing now could cut the write
+                if updater::install_blocks_exit(updater::installing(&state.updater), None) {
+                    api.prevent_close();
+                    return;
+                }
                 let connected = state.sessions.connected_count();
                 if !sessions::needs_close_confirmation(connected) {
                     // No session to ask about: with sync set up the window waits (at most a
@@ -172,6 +180,12 @@ pub fn run() {
             sync_commands::handlers::sync_edit_secret,
             sync_commands::handlers::sync_leave,
             sync_commands::handlers::sync_dismiss_findings,
+            updater::handlers::update_status,
+            updater::handlers::update_check,
+            updater::handlers::update_install,
+            updater::handlers::update_skip,
+            updater::handlers::set_check_for_updates,
+            updater::handlers::update_open_release_page,
         ])
         .build(tauri::generate_context!())
         .expect("error while building fernjo")
@@ -180,6 +194,12 @@ pub fn run() {
             // window close does. An explicit exit code is never intercepted.
             if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
                 let state = app.state::<AppState>();
+                // an exit without a code waits for an install in progress; the restart that
+                // follows it carries a code and passes
+                if updater::install_blocks_exit(updater::installing(&state.updater), code) {
+                    api.prevent_exit();
+                    return;
+                }
                 let connected = state.sessions.connected_count();
                 let prompt_open = state.close_prompt_open.load(Ordering::SeqCst);
                 match sessions::exit_action(code, connected, prompt_open) {

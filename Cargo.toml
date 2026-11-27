@@ -33,6 +33,7 @@ aes-gcm = { version = "0.11.1", features = ["zeroize"] }
 pbkdf2 = { version = "0.13.0", features = ["hmac"] }
 sha1 = "0.11.0"
 base64 = "0.23.1"
+minisign-verify = "0.3.0"
 hkdf = "0.13"
 sha2 = "0.11.1"
 # RDP (Milestone 8): the IronRDP crates come from one generation and are pinned exactly (every one

@@ -37,6 +37,9 @@ jobs:
 
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # The self dev-dependency of fernjo-app turns on update-test-hooks for every --all-targets run, so
+      # the line above never compiles the shipped configuration (feature off); this one does.
+      - run: cargo clippy -p fernjo-app --lib --bins -- -D warnings
       # Throwaway OpenSSH container for the fernjo-ssh integration tests. The script prints
       # `export NAME=value` lines; they become environment variables of the later steps.
       - name: Start the SSH test server

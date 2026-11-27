@@ -63,11 +63,64 @@ fn global_tauri_is_off() {
     );
 }
 
+/// Every capability file in `capabilities/`, as (file name, parsed JSON).
+fn capability_files() -> Vec<(String, Value)> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+    let mut files: Vec<(String, Value)> = fs::read_dir(&dir)
+        .expect("read capabilities")
+        .map(|e| e.expect("entry").path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .map(|p| {
+            let name = p.file_name().expect("name").to_string_lossy().into_owned();
+            let text = fs::read_to_string(&p).expect("read capability");
+            (name, serde_json::from_str(&text).expect("capability json"))
+        })
+        .collect();
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    files
+}
+
+fn permissions_of(cap: &Value) -> Vec<String> {
+    cap["permissions"]
+        .as_array()
+        .expect("permissions array")
+        .iter()
+        .map(|p| p.as_str().expect("string permission").to_owned())
+        .collect()
+}
+
 #[test]
-fn default_capability_is_core_only() {
-    let cap = load("capabilities/default.json");
-    assert_eq!(cap["permissions"], serde_json::json!(["core:default"]));
+fn capability_has_no_core_default_and_no_updater_permission() {
+    let files = capability_files();
+    assert!(!files.is_empty());
+    for (name, cap) in &files {
+        for permission in permissions_of(cap) {
+            assert_ne!(permission, "core:default", "{name} grants core:default");
+            assert!(
+                !permission.starts_with("updater:"),
+                "{name} grants {permission}: the update flow runs in Rust commands"
+            );
+        }
+    }
+}
+
+/// The webview needs two permissions: `listen`/`unlisten` of `@tauri-apps/api/event`
+/// (`plugin:event|listen`, `plugin:event|unlisten`). App commands (`invoke`) need none while the
+/// app has no ACL manifest, and a `Channel` fetch is exempt from the ACL. The UI uses no window,
+/// webview, app, path, menu, tray, image or resources API (full screen is a CSS layout change).
+/// Details: `Docs/DECISIONS.md` "M13: capability narrowing".
+#[test]
+fn capability_lists_exactly_the_pinned_permissions() {
+    let files = capability_files();
+    let names: Vec<&str> = files.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["default.json"], "no other capability file");
+    let cap = &files[0].1;
+    assert_eq!(
+        permissions_of(cap),
+        ["core:event:allow-listen", "core:event:allow-unlisten"]
+    );
     assert_eq!(cap["windows"], serde_json::json!(["main"]));
+    assert!(cap.get("webviews").is_none() && cap.get("remote").is_none());
 }
 
 #[test]
@@ -122,18 +175,173 @@ fn version_comes_from_cargo_not_from_the_conf() {
     );
 }
 
+const ENDPOINT: &str = "https://github.com/benjo-code/fernjo/releases/latest/download/latest.json";
+/// The owner's update public key (key id 15493CC4F35D089F, Docs/DECISIONS.md, "M13: update signing
+/// and the updater plugin"). The private half is never in the repository.
+const UPDATE_PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE1NDkzQ0M0RjM1RDA4OUYKUldTZkNGM3p4RHhKRmZYQjlQaGNSZVRCNWdKejJvZTg0TWh1bEl3VWorRmJKWCtEM0I1VTlKVSsK";
+
 #[test]
-fn no_updater_and_no_signing_material() {
+fn updater_config_is_pinned() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
     let conf = load("tauri.conf.json");
-    assert!(conf["plugins"]["updater"].is_null(), "no updater plugin");
+    let updater = conf["plugins"]["updater"]
+        .as_object()
+        .expect("plugins.updater must be set");
+    let mut keys: Vec<&str> = updater.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        ["endpoints", "pubkey", "requireSignedVersion"],
+        "no other updater keys (no dangerous* switch, no allowDowngrades)"
+    );
+    assert_eq!(updater["endpoints"], serde_json::json!([ENDPOINT]));
+    assert_eq!(updater["requireSignedVersion"], Value::Bool(true));
+    let pubkey = updater["pubkey"].as_str().unwrap();
+    assert_eq!(pubkey, UPDATE_PUBKEY);
+    let text = String::from_utf8(STANDARD.decode(pubkey).expect("base64")).expect("utf-8");
+    assert!(
+        text.starts_with("untrusted comment: minisign public key: "),
+        "a minisign public key text: {text}"
+    );
+    // the committed test key must never be the real one
+    let test_key = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/update-test-key/test-only.pub"),
+    )
+    .unwrap();
+    assert_ne!(
+        pubkey,
+        test_key.trim(),
+        "the test key is not the update key"
+    );
     assert!(
         conf["bundle"]["createUpdaterArtifacts"].is_null(),
-        "no updater artifacts"
+        "no updater artifacts: the build job needs no private key"
     );
     let text = serde_json::to_string(&conf).unwrap();
-    for key in ["signCommand", "signingIdentity", "certificateThumbprint"] {
+    for key in [
+        "dangerousInsecureTransportProtocol",
+        "signCommand",
+        "signingIdentity",
+        "certificateThumbprint",
+        "TAURI_SIGNING_PRIVATE_KEY",
+        "untrusted comment: rsign encrypted secret key",
+    ] {
         assert!(!text.contains(key), "{key} must not appear in the conf");
     }
+}
+
+#[test]
+fn update_test_hooks_are_not_a_default_feature() {
+    let text =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")).unwrap();
+    let mut in_features = false;
+    for line in text.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_features = line == "[features]";
+        } else if in_features && line.starts_with("default") {
+            assert!(!line.contains("update-test-hooks"), "{line}");
+        }
+    }
+    assert!(
+        text.contains("update-test-hooks = []"),
+        "the feature exists and enables nothing else"
+    );
+}
+
+/// A JSON merge patch (RFC 7396), which is how Tauri applies a `--config` file (`json_patch::merge`):
+/// objects merge key by key, everything else is replaced, `null` removes a key.
+fn merge_patch(target: &mut Value, patch: &Value) {
+    let Value::Object(patch) = patch else {
+        *target = patch.clone();
+        return;
+    };
+    if !target.is_object() {
+        *target = Value::Object(serde_json::Map::new());
+    }
+    let map = target.as_object_mut().expect("an object");
+    for (key, value) in patch {
+        if value.is_null() {
+            map.remove(key);
+        } else {
+            merge_patch(map.entry(key.clone()).or_insert(Value::Null), value);
+        }
+    }
+}
+
+/// The merge file of the owner's update check against a local feed (`Docs/release-checklist.md`)
+/// changes the feed and its key and allows plain HTTP, and nothing else. `requireSignedVersion`
+/// survives the merge, and the plugin accepts the merged block.
+#[test]
+fn update_test_config_changes_only_the_updater_feed() {
+    const TEST_ENDPOINT: &str = "http://127.0.0.1:8765/latest.json";
+    let test_key = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/update-test-key/test-only.pub"),
+    )
+    .unwrap();
+    let overlay = load("../tools/update-test.conf.json");
+    assert_eq!(
+        overlay,
+        serde_json::json!({ "plugins": { "updater": {
+            "endpoints": [TEST_ENDPOINT],
+            "pubkey": test_key.trim(),
+            "dangerousInsecureTransportProtocol": true,
+        } } })
+    );
+    let shipped = load("tauri.conf.json");
+    let mut merged = shipped.clone();
+    merge_patch(&mut merged, &overlay);
+    let mut rest = merged.clone();
+    rest["plugins"]["updater"] = shipped["plugins"]["updater"].clone();
+    assert_eq!(rest, shipped, "nothing outside plugins.updater changes");
+    let config: tauri_plugin_updater::Config =
+        serde_json::from_value(merged["plugins"]["updater"].clone())
+            .expect("the plugin accepts the merged block");
+    assert!(config.require_signed_version);
+    assert!(config.dangerous_insecure_transport_protocol);
+    assert!(!config.dangerous_accept_invalid_certs);
+    assert!(!config.dangerous_accept_invalid_hostnames);
+    assert!(!config.allow_downgrades);
+    assert_eq!(config.pubkey, test_key.trim());
+    let endpoints: Vec<&str> = config.endpoints.iter().map(|u| u.as_str()).collect();
+    assert_eq!(endpoints, [TEST_ENDPOINT]);
+}
+
+/// The test feed never reaches a release: no workflow names the merge file, the release workflow
+/// passes no extra configuration and enables no test feature, and `src-tauri` holds no second
+/// configuration file that the CLI would merge on its own (`tauri.<platform>.conf.json`).
+#[test]
+fn update_test_config_is_never_used_by_a_release() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut workflows = Vec::new();
+    for entry in fs::read_dir(manifest.join("../.github/workflows")).expect("read workflows") {
+        let path = entry.expect("entry").path();
+        let name = path
+            .file_name()
+            .expect("name")
+            .to_string_lossy()
+            .into_owned();
+        let text = fs::read_to_string(&path).expect("read workflow");
+        assert!(!text.contains("update-test.conf"), "{name}");
+        if name == "release.yml" {
+            for banned in ["update-test", "--config", "TAURI_CONFIG", "all-features"] {
+                assert!(!text.contains(banned), "{name} contains {banned}");
+            }
+            for line in text.lines().filter(|l| l.contains("tauri build")) {
+                assert!(!line.contains(" -c "), "{name}: {line}");
+            }
+        }
+        workflows.push(name);
+    }
+    assert!(
+        workflows.iter().any(|n| n == "release.yml"),
+        "{workflows:?}"
+    );
+    let configs: Vec<String> = fs::read_dir(manifest)
+        .expect("read src-tauri")
+        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+        .filter(|n| n.to_ascii_lowercase().starts_with("tauri"))
+        .collect();
+    assert_eq!(configs, ["tauri.conf.json"]);
 }
 
 #[test]
