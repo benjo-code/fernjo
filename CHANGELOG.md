@@ -8,7 +8,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 
 ### Added
 
-- The app can now check for a newer version and update itself with one click (Settings, "Updates"; milestone 13).
+- The app can now check for a newer version and update itself with one click (Settings, "Updates"; milestone 13). It asks GitHub shortly after start and then once a day unless you switch that off there; nothing is downloaded or installed without your click.
 
 ### Fixed
 
