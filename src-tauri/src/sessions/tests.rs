@@ -926,8 +926,23 @@ struct Srv {
     password: String,
 }
 
-/// `None` (with a message) without a configured server; panics when `CI` is set. Hides the SSH
-/// agent from this process (it holds the authorised key and would log in without the vault).
+/// The skip rule shared with the `fernjo-ssh` integration tests.
+#[path = "../../../crates/fernjo-ssh/tests/support/gate.rs"]
+mod ssh_gate;
+
+#[test]
+fn a_missing_ssh_server_is_skipped_in_ci_only_on_windows_with_the_flag() {
+    for windows in [false, true] {
+        for flag in [false, true] {
+            assert!(ssh_gate::skip_allowed(windows, false, flag));
+            assert_eq!(ssh_gate::skip_allowed(windows, true, flag), windows && flag);
+        }
+    }
+}
+
+/// `None` (with a message) without a configured server; panics when `CI` is set (the one
+/// exception is in `ssh_gate`). Hides the SSH agent from this process (it holds the authorised key
+/// and would log in without the vault).
 fn server() -> Option<Srv> {
     static HIDE_AGENT: std::sync::Once = std::sync::Once::new();
     HIDE_AGENT.call_once(|| {
@@ -936,7 +951,11 @@ fn server() -> Option<Srv> {
     });
     let Ok(addr) = std::env::var("FERNJO_TEST_SSH_ADDR") else {
         assert!(
-            std::env::var_os("CI").is_none(),
+            ssh_gate::skip_allowed(
+                cfg!(windows),
+                std::env::var_os("CI").is_some(),
+                std::env::var_os("FERNJO_TEST_NO_SSH_SERVER").is_some(),
+            ),
             "FERNJO_TEST_SSH_ADDR is not set but CI is: the SSH test server must be running"
         );
         eprintln!("skipped: FERNJO_TEST_SSH_ADDR is not set (tools/ssh-test-server.sh start)");
