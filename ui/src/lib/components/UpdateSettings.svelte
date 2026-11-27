@@ -71,7 +71,7 @@
     <span>Check for updates automatically</span>
   </label>
   <p class="note">
-    A check is one request to the release feed on GitHub, a minute after start and then once a day.
+    A check asks GitHub for the latest release, a minute after start and then once a day.
     Nothing is installed without your click.
   </p>
   {#if checksNote}
