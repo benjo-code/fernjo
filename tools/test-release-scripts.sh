@@ -716,14 +716,34 @@ sign_job_signs_the_four_update_files_with_the_version() {
 assert_true release_sign_job_signs_with_the_app_version_and_runs_no_dependency_script sign_job_signs_the_four_update_files_with_the_version
 # The step that holds the key starts the CLI with node directly. Through pnpm, node_modules/.bin is
 # first on PATH, so a dependency's `node` or `sh` program would run with the key (M14 review #81).
-signing_step_starts_the_cli_without_a_package_manager() {
-  local step
-  step="$(job_block sign | awk '/^      - / { if (hit) exit; block = "" } { block = block $0 ORS } /TAURI_SIGNING_PRIVATE_KEY:/ { hit = 1 } END { if (hit) printf "%s", block }')"
-  [ -n "$step" ] &&
-    printf '%s' "$step" | grep -Fq 'node node_modules/@tauri-apps/cli/tauri.js signer sign --app-version "$version"' &&
-    ! printf '%s' "$step" | grep -Eq '^[^#]*(pnpm|npm|npx|yarn|corepack)([^a-z_.-]|$)'
+# The whole step is compared (comments aside), and nothing in the job may change how `node` is
+# found. A change to the step is made here too, on purpose.
+signing_step_is_exactly_the_reviewed_one() {
+  local step want
+  step="$(job_block sign | awk '/^      - name: Sign the update files$/ { p = 1 } p && /^      - uses:/ { exit } p' | grep -vE '^[[:space:]]*(#|$)')"
+  want="$(
+    cat <<'EOF'
+      - name: Sign the update files
+        shell: bash
+        env:
+          TAG: ${{ env.RELEASE_TAG }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          version="${TAG#v}"
+          for file in "fernjo_${version}_x64-setup.exe" "fernjo_${version}_aarch64.app.tar.gz" "fernjo_${version}_x64.app.tar.gz" "fernjo_${version}_amd64.AppImage"; do
+            node node_modules/@tauri-apps/cli/tauri.js signer sign --app-version "$version" "installers/$file"
+            if ! [ -s "installers/$file.sig" ]; then
+              echo "::error::no signature was written for $file"
+              exit 1
+            fi
+          done
+EOF
+  )"
+  [ "$step" = "$want" ] &&
+    ! job_block sign | grep -vE '^[[:space:]]*#' | grep -qE 'PATH|GITHUB_ENV|BASH_ENV|NODE_OPTIONS|node_modules/\.bin'
 }
-assert_true release_signing_step_starts_the_cli_without_a_package_manager signing_step_starts_the_cli_without_a_package_manager
+assert_true release_signing_step_is_exactly_the_reviewed_one signing_step_is_exactly_the_reviewed_one
 publish_writes_and_checks_latest_json_after_the_signatures() {
   local b w r s
   b="$(job_block publish)"
