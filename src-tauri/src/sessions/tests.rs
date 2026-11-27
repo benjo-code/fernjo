@@ -1478,7 +1478,7 @@ fn a_restart_asks_like_a_close_while_a_session_is_connected() {
         .unwrap()
         .insert("live".to_string(), entry_in(Phase::Connected));
     assert_eq!(manager.restart_action(false), ExitAction::Ask);
-    // one dialog at a time, shared with the window close and Cmd+Q
+    // one dialog at a time, shared with the window close
     assert_eq!(manager.restart_action(true), ExitAction::Prevent);
 }
 

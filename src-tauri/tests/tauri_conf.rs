@@ -434,3 +434,21 @@ fn main_window_turns_general_autofill_off() {
         "app.windows[0].generalAutofillEnabled must be false"
     );
 }
+
+/// The predefined Quit item of the default macOS menu sends `terminate:`, which ends the process
+/// without asking about connected sessions or waiting for an update install (M14 review #105). No
+/// test builds the menu (it needs a Mac), so its source and its registration are pinned.
+#[test]
+fn the_mac_menu_quits_through_fernjos_own_item() {
+    let read = |relative: &str| {
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(relative))
+            .unwrap_or_else(|e| panic!("read {relative}: {e}"))
+    };
+    let menu = read("src/mac_menu.rs");
+    assert!(!menu.contains("PredefinedMenuItem::quit"));
+    assert!(menu.contains("MenuItem::with_id(app, QUIT_ID"));
+    assert!(menu.contains("\"CmdOrCtrl+Q\""));
+    let lib = read("src/lib.rs");
+    assert!(lib.contains("builder.menu(mac_menu::build)"));
+    assert!(lib.contains(".on_menu_event(mac_menu::on_event)"));
+}

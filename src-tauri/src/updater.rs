@@ -20,9 +20,9 @@
 //! - While `Installing` the window close and an exit without an exit code are prevented (`lib.rs`,
 //!   [`install_blocks_exit`]) and `sync_runner::finish_after_push` does nothing ("Restart now",
 //!   a close dialog confirmed late), so the app does not cut the files off mid-write; the restart
-//!   after a finished install carries an exit code and passes. A macOS quit through the menu
-//!   (Cmd+Q) is likely not held, see `Docs/DECISIONS.md` "M10 quit confirmation on
-//!   ExitRequested".
+//!   after a finished install carries an exit code and passes. On macOS, Cmd+Q and the menu's
+//!   Quit close the window (`mac_menu`) and are held with it; Quit from the Dock, a log out and a
+//!   shutdown are not.
 //! - An automatic check (`manual == false`) swallows every failure: the state returns to what it
 //!   was, no error. It does not announce "checking" and only emits when the status changed or a
 //!   status answer said `checking` meanwhile; a "Check now" during it is run after it. A manual check reports its failure as `failed` with the error code and finding

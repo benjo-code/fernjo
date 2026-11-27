@@ -1004,7 +1004,7 @@ async fn a_confirm_during_a_check_from_ready_still_installs_and_the_check_keeps_
 
 #[test]
 fn an_install_in_progress_blocks_a_close_and_an_exit_without_a_code_only() {
-    // closing the window and Cmd+Q (no exit code) wait while the files are replaced
+    // closing the window and an exit without a code wait while the files are replaced
     assert!(install_blocks_exit(true, None));
     // the restart that follows a finished install carries an exit code and always passes
     assert!(!install_blocks_exit(true, Some(0)));
