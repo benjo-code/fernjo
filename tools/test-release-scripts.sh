@@ -761,6 +761,17 @@ release_names_the_environment_only_in_the_sign_job() {
 }
 assert_true release_names_the_environment_only_in_the_sign_job release_names_the_environment_only_in_the_sign_job
 
+# The release job's signature check has its own tests, and `cargo test --workspace` runs the tests
+# of an example only when the manifest says `test = true`.
+verify_example_tests_run_with_cargo_test() {
+  awk '{ sub(/\r$/, "") }
+    /^\[/ { inside = ($0 == "[[example]]"); named = 0 }
+    inside && $0 == "name = \"verify_update_signature\"" { named = 1 }
+    inside && named && $0 == "test = true" { found = 1 }
+    END { exit !found }' "$root/crates/fernjo-core/Cargo.toml"
+}
+assert_true verify_example_tests_run_with_cargo_test verify_example_tests_run_with_cargo_test
+
 # --- hub Containerfile ---
 hub_containerfile="$root/crates/fernjo-hub/Containerfile"
 containerfile_final_stage_is_scratch_as_10001() {

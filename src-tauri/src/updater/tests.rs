@@ -7,6 +7,7 @@ use fernjo_core::{AppSettings, DataDirSource, settings};
 use tokio::sync::Notify;
 
 use super::*;
+use crate::sync_runner::finish_is_dropped;
 
 type Log = Arc<Mutex<Vec<String>>>;
 
@@ -837,6 +838,27 @@ fn an_install_in_progress_blocks_a_close_and_an_exit_without_a_code_only() {
     // nothing installing: the usual close and exit rules apply
     assert!(!install_blocks_exit(false, None));
     assert!(!install_blocks_exit(false, Some(0)));
+}
+
+#[test]
+fn nothing_closes_or_restarts_the_app_while_an_install_runs() {
+    let log: Log = Arc::default();
+    let host = FakeHost::new(&FakeBackend::new(&log), &log);
+    let state = host.state();
+    let set = |next| state.updater.lock().unwrap().state = next;
+    assert!(!finish_is_dropped(state));
+    // the install itself starts from `Ready` through the same path and has to go ahead
+    set(UpdateState::Ready);
+    assert!(!finish_is_dropped(state));
+    // "Restart now" or a confirmed close dialog would cut the replacement of the files
+    set(UpdateState::Installing);
+    assert!(finish_is_dropped(state));
+    // a failed install leaves the window closable
+    set(UpdateState::Failed);
+    assert!(!finish_is_dropped(state));
+    // a push that is already under way ends the window itself
+    state.sync_closing.store(true, Ordering::SeqCst);
+    assert!(finish_is_dropped(state));
 }
 
 #[test]

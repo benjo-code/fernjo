@@ -18,8 +18,11 @@
 //!   check never overwrites `Installing`. A panic in a backend step gives its slot back (`SlotGuard`):
 //!   `Checking` and `Downloading` return to what they were, `Installing` ends in `Failed`.
 //! - While `Installing` the window close and an exit without an exit code are prevented (`lib.rs`,
-//!   [`install_blocks_exit`]), so the files are never cut off mid-write; the restart after a
-//!   finished install carries an exit code and passes.
+//!   [`install_blocks_exit`]) and `sync_runner::finish_after_push` does nothing ("Restart now",
+//!   a close dialog confirmed late), so the app does not cut the files off mid-write; the restart
+//!   after a finished install carries an exit code and passes. A macOS quit through the menu
+//!   (Cmd+Q) is likely not held, see `Docs/DECISIONS.md` "M10 quit confirmation on
+//!   ExitRequested".
 //! - An automatic check (`manual == false`) swallows every failure: the state returns to what it
 //!   was, no error, no event. It also does not announce "checking" and only emits when the status
 //!   changed. A manual check reports its failure as `failed` with the error code and finding
