@@ -864,10 +864,10 @@
       "version": "0.4.0",
       "title": "Automatic updates",
       "status": "done",
-      "date": "2026-11-27",
+      "date": "2026-11-28",
       "afterMilestone": "14",
       "covers": ["13","14"],
-      "intro": "The app checks for new versions, shows when one is ready and updates itself with one click in an app-themed window (M13), after an independent security check of the update path (M14). Installing this version by hand is the last manual update.",
+      "intro": "The app checks for new versions, shows when one is ready and updates itself with one click in an app-themed window (M13), after an independent security check of the update path (M14). Installing this version by hand is the last manual update, except for a `.deb` install and a copy in a folder fernjo cannot write to.",
       "acceptance": [
         { "text": "The release has the five installers, `latest.json` with its signatures and `SHA256SUMS`; `gh attestation verify` passes for each installer and `latest.json` carries a valid signature for the pinned public key", "done": false },
         { "text": "The go verdict for v0.4.0 in `Docs/release-checklist.md` names every gap and every owner check that was deferred", "done": false }

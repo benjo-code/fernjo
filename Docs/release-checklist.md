@@ -900,7 +900,7 @@ The real update check against GitHub over HTTPS (`the_real_release_host_is_reach
 
 ## v0.4.0 result
 
-Date 2026-11-27. Branch `release/v0.4.0` from `dev` (`dbde162`); plan `Docs/superpowers/plans/2026-11-27-release-v0.4.0.md`, design `Docs/superpowers/specs/2026-11-27-release-v0.4.0-design.md`. The commands ran on the planning commit `d01fec6` plus the release edits: version `0.4.0` in `Cargo.toml` (`Cargo.lock`: nine workspace crates, only their `version` lines changed), `package.json` and both hub deploy files, `CHANGELOG.md` `[0.4.0] - 2026-11-27`, README (status line and the file list under "Install"), `Docs/hub.md` (image tag in its commands; the "Verify the image" command held a literal `\n` instead of a line break since M12) and roadmap release `0.4.0` done. `tools/test-release-scripts.sh`, `tools/check-workflows.sh` and gitleaks ran again at `7902a85`.
+Date 2026-11-27. Branch `release/v0.4.0` from `dev` (`dbde162`); plan `Docs/superpowers/plans/2026-11-27-release-v0.4.0.md`, design `Docs/superpowers/specs/2026-11-27-release-v0.4.0-design.md`. The commands ran on the planning commit `d01fec6` plus the release edits: version `0.4.0` in `Cargo.toml` (`Cargo.lock`: nine workspace crates, only their `version` lines changed), `package.json` and both hub deploy files, `CHANGELOG.md` `[0.4.0] - 2026-11-28` (the expected publishing day), README (status line and the file list under "Install"), `Docs/hub.md` (image tag in its commands; the "Verify the image" command held a literal `\n` instead of a line break since M12) and roadmap release `0.4.0` done. `tools/test-release-scripts.sh`, `tools/check-workflows.sh` and gitleaks ran again at `7902a85`.
 
 | Command | Where | Result |
 |---|---|---|
@@ -923,6 +923,8 @@ Date 2026-11-27. Branch `release/v0.4.0` from `dev` (`dbde162`); plan `Docs/supe
 Not run here: the live SSH container tests (CI job `rust`), the RDP tests that need a host (skip without `FERNJO_TEST_RDP_ADDR`, also in CI) and the Windows-only Rust code (CI job `rust (windows)`).
 
 **Found by this gate.** The first run of `tools/test-release-scripts.sh` failed with 160/162: two hub deploy checks had the image tag `0.3.1` written into them, so the version bump failed them (this is the first bump since M12 added the checks). On the owner's decision (2026-11-27) they now accept any `X.Y.Z` tag that both deploy files share (`7902a85`); `check-release-version.sh` still compares that tag with the release version. Nine scratch variants of the two deploy files behaved as expected, three of them wrong before the change.
+
+**Branch review** (a fresh reviewer over `dbde162..7fe54ef`): nothing Critical. Fixed afterwards: the release was dated the day of the gate although it cannot be published before 2026-11-28, and "it is the last manual update" did not except the installs that cannot update themselves. Not changed: the hub deploy checks no longer catch both deploy files drifting to the same wrong version between releases (the release run still does), and the gate table's gitleaks run is on `7902a85`.
 
 **Delta since the M14 evidence** (`c140113`): documents, the version files and the two deploy files, plus `tools/test-release-scripts.sh` (the change above). No file under `crates/*/src`, `src-tauri/src` or `ui/src`; `release.yml` unchanged. The `security-review` skill, scoped to that change, found nothing.
 
