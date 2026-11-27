@@ -128,7 +128,10 @@ pub async fn check<R: Runtime>(
     skipped: Option<&str>,
     endpoint_override: Option<&Url>,
 ) -> Result<Option<FeedUpdate>, FeedError> {
-    let builder = app.updater_builder();
+    // The plugin's default `on_before_exit` hides every window and drops the single-instance lock
+    // before it starts the Windows setup; a start that fails (antivirus, application control) would
+    // leave the app running unseen. After a successful start the process exits at once anyway.
+    let builder = app.updater_builder().on_before_exit(|| {});
     #[cfg(feature = "update-test-hooks")]
     let builder = match endpoint_override {
         Some(url) => builder

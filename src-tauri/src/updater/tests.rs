@@ -394,6 +394,15 @@ async fn a_refused_download_leaves_nothing_to_install() {
     }
 }
 
+/// The plugin's own hook hides every window and drops the single-instance lock before it starts
+/// the Windows setup, so a start that fails would leave fernjo running unseen (M14 review #82).
+/// The hook cannot be observed from outside the plugin, so the override is pinned in the source.
+#[test]
+fn the_plugin_exit_hook_is_replaced_so_a_failed_setup_start_keeps_the_app_usable() {
+    let feed = include_str!("feed.rs");
+    assert!(feed.contains("app.updater_builder().on_before_exit(|| {});"));
+}
+
 #[tokio::test]
 async fn release_page_only_install_never_downloads() {
     let (backend, host, log) = setup();

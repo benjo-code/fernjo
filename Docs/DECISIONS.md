@@ -20,6 +20,7 @@ Log of architecture and technology decisions. Newest entries on top.
 **Context:** The M14 reviews of `v0.3.1..HEAD` (findings from row 81 in `Docs/release-checklist.md`). This entry records the fixes that involve a decision; the table names the commit and test of each.
 **Decision:**
 - **Signing step (row 81).** `sign` starts the Tauri CLI as `node node_modules/@tauri-apps/cli/tauri.js signer sign`, never through `pnpm`: pnpm puts the project's `node_modules/.bin` first on `PATH`, so a direct dependency declaring a `node` or `sh` program ran with the signing key in its environment, and `pretauri`/`posttauri` scripts would have too. The same applies to any hand signing with the real key. The install stays `pnpm install --frozen-lockfile --ignore-scripts`, which runs before the key is present. Not taken: a separate signer-only `package.json` and lock file (it would also keep other packages off the job's disk, but nothing of theirs runs there).
+- **Exit hook (row 82).** `feed::check` replaces the plugin's `on_before_exit` (`AppHandle::cleanup_before_exit`: hides every window, clears the resource tables, which hold the single-instance lock) with an empty hook. On success the plugin calls `std::process::exit(0)` right after starting the setup, so nothing needs cleaning; on a failed start the app stays visible, shows the failure and keeps its lock. Pinned in the source by `the_plugin_exit_hook_is_replaced_so_a_failed_setup_start_keeps_the_app_usable`; the behaviour itself is an owner check on Windows.
 
 ## 2026-11-27 – M14 threat model
 
