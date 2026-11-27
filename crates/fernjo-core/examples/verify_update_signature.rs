@@ -78,7 +78,8 @@ fn verify(
         base64_to_string(signature_text.trim()).map_err(|e| format!("signature: {e}"))?;
     let signature = Signature::decode(&signature_decoded).map_err(|e| format!("signature: {e}"))?;
     public_key
-        .verify(data, &signature, true)
+        // no legacy mode: the app refuses it too (M14 review #85)
+        .verify(data, &signature, false)
         .map_err(|e| format!("signature does not verify: {e}"))?;
     // Only after `verify` is the trusted comment usable (its global signature was checked there).
     if let Some(wanted) = app_version {
@@ -175,6 +176,38 @@ mod tests {
             ),
             Ok(())
         );
+    }
+
+    /// BLAKE2b-512 of `payload.bin` (`b2sum`): what a prehashed signature of it really signs.
+    const PAYLOAD_BLAKE2B: &str = "1dd1daa565d43df90bed59272794b990cce97df593cc90a04955a14684030a64b4398d9b050c3b45b12c116ec573081f5e382ce8366bd628d9e3befa923185b0";
+
+    fn payload_hash() -> Vec<u8> {
+        (0..PAYLOAD_BLAKE2B.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&PAYLOAD_BLAKE2B[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// The signature with its algorithm bytes switched from `ED` (prehashed) to `Ed` (legacy), which
+    /// neither signature inside it covers.
+    fn switched_to_legacy(signature: &str) -> String {
+        let b64 = &base64::engine::general_purpose::STANDARD;
+        let text = String::from_utf8(b64.decode(signature.trim()).unwrap()).unwrap();
+        let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+        let mut raw = b64.decode(&lines[1]).unwrap();
+        assert_eq!(&raw[..2], b"ED");
+        raw[1] = b'd';
+        lines[1] = b64.encode(raw);
+        b64.encode(lines.join("\n") + "\n")
+    }
+
+    #[test]
+    fn rejects_a_signature_switched_to_legacy_mode() {
+        let conf = fixture("tauri.conf.json");
+        let signature = switched_to_legacy(&fixture("with-app-version.sig"));
+        // in legacy mode the 64-byte hash of the signed file would pass as if it were the file
+        let result = verify(&conf, &payload_hash(), &signature, Some("9.9.9"));
+        assert!(result.unwrap_err().contains("does not verify"));
     }
 
     #[test]

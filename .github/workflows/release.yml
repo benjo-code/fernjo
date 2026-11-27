@@ -52,7 +52,8 @@ jobs:
   build:
     name: build (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    # a tag build restores no cache and compiles everything
+    timeout-minutes: 60
     permissions:
       contents: read
     strategy:
@@ -105,7 +106,8 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          cache: pnpm
+          # no cache on a tag build: what it restores ends up in the signed files
+          cache: ${{ env.RELEASE_TAG == '' && 'pnpm' || '' }}
 
       - run: pnpm install --frozen-lockfile
 
@@ -120,10 +122,11 @@ jobs:
           rustc --version
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: env.RELEASE_TAG == ''
         with:
           key: ${{ matrix.name }}
 
-      # Pinned and --locked: a release must not pick up a newer, unreviewed tool. Cached by rust-cache.
+      # Pinned and --locked: a release must not pick up a newer, unreviewed tool.
       - name: Install cargo-about
         shell: bash
         run: cargo install --locked cargo-about@0.9.3 --features cli
@@ -468,7 +471,9 @@ jobs:
       - run: pnpm install --frozen-lockfile --ignore-scripts
 
       # The Tauri CLI reads the key and its password from these two variables. The signature lands
-      # next to each file as <file>.sig.
+      # next to each file as <file>.sig. The CLI is started with node directly, never through a
+      # package manager: that would put node_modules/.bin first on PATH, and a dependency's `node`
+      # or `sh` program would run with the key.
       - name: Sign the update files
         shell: bash
         env:
@@ -478,7 +483,7 @@ jobs:
         run: |
           version="${TAG#v}"
           for file in "fernjo_${version}_x64-setup.exe" "fernjo_${version}_aarch64.app.tar.gz" "fernjo_${version}_x64.app.tar.gz" "fernjo_${version}_amd64.AppImage"; do
-            pnpm tauri signer sign --app-version "$version" "installers/$file"
+            node node_modules/@tauri-apps/cli/tauri.js signer sign --app-version "$version" "installers/$file"
             if ! [ -s "installers/$file.sig" ]; then
               echo "::error::no signature was written for $file"
               exit 1

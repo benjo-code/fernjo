@@ -5,6 +5,8 @@
     reason = "every test binary compiles this module but uses a different subset of it (auth, connect, timeout and agent each need other helpers); an item is unused in at least one of them"
 )]
 
+mod gate;
+
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -36,7 +38,11 @@ fn var(name: &str) -> String {
 fn server_from_env() -> Option<TestServer> {
     let Ok(addr) = std::env::var("FERNJO_TEST_SSH_ADDR") else {
         assert!(
-            std::env::var_os("CI").is_none(),
+            gate::skip_allowed(
+                cfg!(windows),
+                std::env::var_os("CI").is_some(),
+                std::env::var_os("FERNJO_TEST_NO_SSH_SERVER").is_some(),
+            ),
             "FERNJO_TEST_SSH_ADDR is not set but CI is: the SSH test server must be running"
         );
         eprintln!("skipped: FERNJO_TEST_SSH_ADDR is not set (tools/ssh-test-server.sh start)");
@@ -58,7 +64,7 @@ fn server_from_env() -> Option<TestServer> {
 }
 
 /// `None` (with a message) when no server is configured; panics in CI, where a missing server
-/// would otherwise let every test pass by skipping. Also hides the SSH agent from this test
+/// would otherwise let every test pass by skipping (the one exception is in `gate`). Also hides the SSH agent from this test
 /// process: the agent holds the authorised key, so it would otherwise log in for tests that mean
 /// to exercise another method. Only the `agent` test binary uses `agent_server` instead.
 pub fn server() -> Option<TestServer> {

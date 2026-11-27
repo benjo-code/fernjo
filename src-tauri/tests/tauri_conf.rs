@@ -63,19 +63,30 @@ fn global_tauri_is_off() {
     );
 }
 
-/// Every capability file in `capabilities/`, as (file name, parsed JSON).
+/// Every file `tauri-build` reads as a capability (`capabilities/**/*`), as (relative path,
+/// parsed JSON). Anything else than JSON fails here: these tests would not see what it grants.
 fn capability_files() -> Vec<(String, Value)> {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
-    let mut files: Vec<(String, Value)> = fs::read_dir(&dir)
-        .expect("read capabilities")
-        .map(|e| e.expect("entry").path())
-        .filter(|p| p.extension().is_some_and(|x| x == "json"))
-        .map(|p| {
-            let name = p.file_name().expect("name").to_string_lossy().into_owned();
-            let text = fs::read_to_string(&p).expect("read capability");
-            (name, serde_json::from_str(&text).expect("capability json"))
-        })
-        .collect();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+    let mut folders = vec![root.clone()];
+    let mut files: Vec<(String, Value)> = Vec::new();
+    while let Some(folder) = folders.pop() {
+        for entry in fs::read_dir(folder).expect("read capabilities") {
+            let path = entry.expect("entry").path();
+            if path.is_dir() {
+                folders.push(path);
+                continue;
+            }
+            let name = path
+                .strip_prefix(&root)
+                .expect("below capabilities")
+                .to_string_lossy()
+                .replace('\\', "/");
+            let text = fs::read_to_string(&path).expect("read capability");
+            let parsed = serde_json::from_str(&text)
+                .unwrap_or_else(|e| panic!("{name}: not a JSON capability: {e}"));
+            files.push((name, parsed));
+        }
+    }
     files.sort_by(|a, b| a.0.cmp(&b.0));
     files
 }
@@ -121,6 +132,14 @@ fn capability_lists_exactly_the_pinned_permissions() {
     );
     assert_eq!(cap["windows"], serde_json::json!(["main"]));
     assert!(cap.get("webviews").is_none() && cap.get("remote").is_none());
+}
+
+/// A capability can also be written into the configuration itself, past the folder.
+#[test]
+fn the_configuration_defines_no_capability_of_its_own() {
+    let conf = load("tauri.conf.json");
+    let inline = &conf["app"]["security"]["capabilities"];
+    assert!(inline.is_null(), "app.security.capabilities: {inline}");
 }
 
 #[test]
@@ -234,17 +253,25 @@ fn updater_config_is_pinned() {
 fn update_test_hooks_are_not_a_default_feature() {
     let text =
         fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")).unwrap();
+    // the whole `[features]` table without comments, so an array over several lines counts too
     let mut in_features = false;
+    let mut features = String::new();
     for line in text.lines().map(str::trim) {
         if line.starts_with('[') {
             in_features = line == "[features]";
-        } else if in_features && line.starts_with("default") {
-            assert!(!line.contains("update-test-hooks"), "{line}");
+        } else if in_features && !line.starts_with('#') {
+            features.push_str(line);
+            features.push('\n');
         }
     }
     assert!(
-        text.contains("update-test-hooks = []"),
+        features.contains("update-test-hooks = []"),
         "the feature exists and enables nothing else"
+    );
+    assert_eq!(
+        features.matches("update-test-hooks").count(),
+        1,
+        "no feature, `default` included, switches it on: {features}"
     );
 }
 
@@ -406,4 +433,22 @@ fn main_window_turns_general_autofill_off() {
         Value::Bool(false),
         "app.windows[0].generalAutofillEnabled must be false"
     );
+}
+
+/// The predefined Quit item of the default macOS menu sends `terminate:`, which ends the process
+/// without asking about connected sessions or waiting for an update install (M14 review #105). No
+/// test builds the menu (it needs a Mac), so its source and its registration are pinned.
+#[test]
+fn the_mac_menu_quits_through_fernjos_own_item() {
+    let read = |relative: &str| {
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(relative))
+            .unwrap_or_else(|e| panic!("read {relative}: {e}"))
+    };
+    let menu = read("src/mac_menu.rs");
+    assert!(!menu.contains("PredefinedMenuItem::quit"));
+    assert!(menu.contains("MenuItem::with_id(app, QUIT_ID"));
+    assert!(menu.contains("\"CmdOrCtrl+Q\""));
+    let lib = read("src/lib.rs");
+    assert!(lib.contains("builder.menu(mac_menu::build)"));
+    assert!(lib.contains(".on_menu_event(mac_menu::on_event)"));
 }

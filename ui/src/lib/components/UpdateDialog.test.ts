@@ -73,7 +73,9 @@ describe("UpdateDialog", () => {
     expect(bar.value).toBe(12 * 1048576);
     expect(bar.max).toBe(48 * 1048576);
     expect(document.body.textContent).toContain("Downloading… 12 of 48 MB");
-    expect(document.body.textContent).toContain("fernjo restarts when the download is done");
+    expect(document.body.textContent).toContain(
+      "fernjo then restarts; with sessions connected it waits for you",
+    );
     // the app stays usable while it downloads: the window can be hidden, the download goes on.
     // It is not "Later": hiding does not cancel it.
     expect(labels()).toEqual(["Hide"]);

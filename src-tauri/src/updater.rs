@@ -20,23 +20,26 @@
 //! - While `Installing` the window close and an exit without an exit code are prevented (`lib.rs`,
 //!   [`install_blocks_exit`]) and `sync_runner::finish_after_push` does nothing ("Restart now",
 //!   a close dialog confirmed late), so the app does not cut the files off mid-write; the restart
-//!   after a finished install carries an exit code and passes. A macOS quit through the menu
-//!   (Cmd+Q) is likely not held, see `Docs/DECISIONS.md` "M10 quit confirmation on
-//!   ExitRequested".
+//!   after a finished install carries an exit code and passes. On macOS, Cmd+Q and the menu's
+//!   Quit close the window (`mac_menu`) and are held with it; Quit from the Dock, a log out and a
+//!   shutdown are not.
 //! - An automatic check (`manual == false`) swallows every failure: the state returns to what it
-//!   was, no error, no event. It also does not announce "checking" and only emits when the status
-//!   changed. A manual check reports its failure as `failed` with the error code and finding
+//!   was, no error. It does not announce "checking" and only emits when the status changed or a
+//!   status answer said `checking` meanwhile; a "Check now" during it is run after it. A manual check reports its failure as `failed` with the error code and finding
 //!   nothing as `upToDate`.
 //! - Skipping: `update_skip` stores the available version; automatic checks pass it to the feed
 //!   filter, so it is never offered again. A manual check ignores the skipped version (it is
 //!   offered again) and `skipped` in the status says that it is the skipped one.
 //! - Install order: click, download (the app stays usable), `ready`, then `connected_count` is
-//!   read at that moment; nothing connected installs at once, otherwise the dialog asks
-//!   (`CloseThen::Install`). "Keep open" leaves `ready` with the bytes held; a second
-//!   `update_install` skips the download and asks again. Confirmed: sessions closed, last sync
+//!   read at that moment; nothing connected installs at once. With sessions connected a fresh
+//!   download stays in `ready`, and the next `update_install` ("Restart to update") skips the
+//!   download and asks (`CloseThen::Install`); "Keep open" leaves `ready` with the bytes held. Confirmed: sessions closed, last sync
 //!   push, `install`. The plugin's install on Windows hands over to the setup and exits the
 //!   process; macOS and Linux replace the files and return, then a restart is requested
 //!   (`request_restart`, never `AppHandle::restart`). `download_and_install` is never used.
+//! - A confirmation commits the held download before the sessions end ([`commit_confirmed`]); one
+//!   that no longer applies ends nothing. When an install fails after the sessions ended, the UI
+//!   sees `installing` turn into `failed` and brings the tabs back disconnected.
 //! - A page-only install (`InstallView::ReleasePage`) never downloads: `update_install` returns
 //!   the status unchanged.
 //! - The runtime lock is a leaf: nothing else is locked while it is held, and it is never held
@@ -46,7 +49,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -127,6 +130,14 @@ pub struct UpdaterRuntime<H = FeedUpdate> {
     /// A check is out. The check slot, separate from `state` so a check that starts in `Ready`
     /// leaves the held download installable (`state` stays `Ready` meanwhile).
     checking: bool,
+    /// The user confirmed the install of the held download: a check that ends now leaves it.
+    committed: bool,
+    /// The running check is an automatic one.
+    silent: bool,
+    /// "Check now" arrived while an automatic check ran: a manual check follows it.
+    asked: bool,
+    /// A status answer said `checking` while this check ran, so its end must be announced.
+    observed: bool,
 }
 
 impl<H> Default for UpdaterRuntime<H> {
@@ -139,6 +150,10 @@ impl<H> Default for UpdaterRuntime<H> {
             error: None,
             bytes: None,
             checking: false,
+            committed: false,
+            silent: false,
+            asked: false,
+            observed: false,
         }
     }
 }
@@ -239,9 +254,18 @@ fn assemble<H>(rt: &UpdaterRuntime<H>, o: &Outside) -> UpdateStatus {
     }
 }
 
+/// The status as the answer to a command. Whoever is told `checking` has to be told how the check
+/// ended, so every answer goes through here (a silent automatic check announces nothing otherwise).
+fn answer<H>(g: &mut UpdaterRuntime<H>, o: &Outside) -> UpdateStatus {
+    if g.state == UpdateState::Checking {
+        g.observed = true;
+    }
+    assemble(g, o)
+}
+
 fn snapshot<H>(state: &AppState, rt: &Mutex<UpdaterRuntime<H>>, current: &str) -> UpdateStatus {
     let o = outside(state, current);
-    assemble(&lock(rt), &o)
+    answer(&mut lock(rt), &o)
 }
 
 /// Changes the runtime under its lock and returns the new status.
@@ -328,8 +352,25 @@ impl<Ho: Host> Drop for SlotGuard<'_, Ho> {
     }
 }
 
-/// One check. See the module comment for the manual and automatic rules.
+/// One check. See the module comment for the manual and automatic rules. A "Check now" that
+/// arrived while an automatic check ran is run after it (M14 review #88).
 pub async fn run_check<B, Ho>(backend: &B, host: &Ho, manual: bool) -> UpdateStatus
+where
+    B: UpdateBackend,
+    Ho: Host<Handle = B::Handle>,
+{
+    let mut manual = manual;
+    loop {
+        let (status, asked) = check_once(backend, host, manual).await;
+        if !asked {
+            return status;
+        }
+        manual = true;
+    }
+}
+
+/// The status after one check, and whether a manual check was asked for while it ran.
+async fn check_once<B, Ho>(backend: &B, host: &Ho, manual: bool) -> (UpdateStatus, bool)
 where
     B: UpdateBackend,
     Ho: Host<Handle = B::Handle>,
@@ -341,10 +382,16 @@ where
     {
         let mut g = lock(host.runtime());
         if is_busy(g.state) || g.checking || (!manual && !o.enabled) {
-            return assemble(&g, &o);
+            if manual && g.checking && g.silent {
+                g.asked = true;
+            }
+            return (answer(&mut g, &o), false);
         }
         before = assemble(&g, &o);
         g.checking = true;
+        g.silent = !manual;
+        g.asked = false;
+        g.observed = false;
         if g.state == UpdateState::Ready {
             // the held download stays installable while the check is out (a confirmed dialog
             // must still install it), so the state is left alone
@@ -370,11 +417,16 @@ where
         _ => None,
     };
     guard.restore = None;
+    let mut asked = false;
+    let mut observed = false;
     let after = change(host, |g| {
         g.checking = false;
+        asked = std::mem::take(&mut g.asked);
+        observed = std::mem::take(&mut g.observed);
         let ready = prev.0 == UpdateState::Ready;
-        if ready && g.state != UpdateState::Ready {
-            // an install began (or failed) while the check was out: its verdict stands
+        if ready && (g.state != UpdateState::Ready || g.committed) {
+            // an install was confirmed, began or failed while the check was out: its verdict
+            // stands
             return;
         }
         match result {
@@ -414,10 +466,10 @@ where
             }
         }
     });
-    if manual || after != before {
+    if manual || observed || after != before {
         host.emit(&after);
     }
-    after
+    (after, asked)
 }
 
 /// The first half of the install: download if needed, then decide. Returns the status after it;
@@ -447,9 +499,10 @@ where
                 g.total = None;
                 Some((handle, prev))
             }
-            _ => return assemble(&g, &o),
+            _ => return answer(&mut g, &o),
         }
     };
+    let downloaded_now = started.is_some();
     if let Some((handle, prev)) = started {
         let mut guard = SlotGuard {
             host,
@@ -483,6 +536,11 @@ where
     }
     // read now, not when the click happened: sessions may have connected during the download
     let connected = host.connected_count();
+    if downloaded_now && connected > 0 {
+        // the download ends whenever it ends: a dialog opening by itself would take an Enter meant
+        // for a shell, so "Restart to update" asks (M14 review #87)
+        return status_of(host);
+    }
     match exit_action(None, connected, host.prompt_open()) {
         ExitAction::Allow => host.go(),
         ExitAction::Ask => host.ask(connected),
@@ -514,6 +572,21 @@ fn progress_sink<Ho: Host>(host: Ho) -> Progress {
             host.emit(&status_of(&host));
         }
     })
+}
+
+/// What the close dialog asks before it ends the sessions: whether what the user confirmed still
+/// holds. For an install that is the held download, which is then committed, so a check that ends
+/// afterwards leaves it in place. A confirmation that arrives too late ends nothing.
+pub(crate) fn commit_confirmed<H>(then: CloseThen, rt: &Mutex<UpdaterRuntime<H>>) -> bool {
+    if then != CloseThen::Install {
+        return true;
+    }
+    let mut g = lock(rt);
+    let held = g.state == UpdateState::Ready;
+    if held {
+        g.committed = true;
+    }
+    held
 }
 
 /// The second half: installs the held bytes. Does nothing unless the state is `Ready`.
@@ -548,6 +621,7 @@ where
 {
     let taken = {
         let mut g = lock(host.runtime());
+        g.committed = false;
         match (g.state, g.available.as_ref().map(|a| Arc::clone(&a.handle))) {
             (UpdateState::Ready, Some(handle)) => g.bytes.take().map(|b| {
                 g.state = UpdateState::Installing;
@@ -663,7 +737,7 @@ fn run_loop(app: &AppHandle) {
         std::thread::sleep(Duration::from_secs(1));
         scheduler.set_enabled(schedule::automatic_checks_allowed(&state));
         let now = epoch.elapsed();
-        if !scheduler.due(now) {
+        if !scheduler.due(now, SystemTime::now()) {
             continue;
         }
         // A panic in one check must not end the thread; a check in progress is dropped by the
@@ -671,7 +745,7 @@ fn run_loop(app: &AppHandle) {
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tauri::async_runtime::block_on(update_check(app, false));
         }));
-        scheduler.ran(epoch.elapsed());
+        scheduler.ran(epoch.elapsed(), SystemTime::now());
     }
 }
 
@@ -771,6 +845,9 @@ impl Host for AppHost {
     }
 
     fn go(&self) {
+        if !commit_confirmed(CloseThen::Install, self.runtime()) {
+            return;
+        }
         self.state().sessions.close_all();
         match self.window() {
             Some(window) => crate::sync_runner::finish_after_push(window, CloseThen::Install),
@@ -810,6 +887,10 @@ fn real_install_view() -> InstallView {
         appimage: std::env::var_os("APPIMAGE")
             .filter(|v| !v.is_empty())
             .map(PathBuf::from),
+        bundled_as_appimage: matches!(
+            tauri::utils::platform::bundle_type(),
+            Some(tauri::utils::config::BundleType::AppImage)
+        ),
         exe: std::env::current_exe().unwrap_or_default(),
     };
     view_of(decide::install_kind(&env, &dir_is_writable))

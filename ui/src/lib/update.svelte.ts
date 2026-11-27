@@ -18,8 +18,12 @@ export class UpdateStore {
   #disposed = false;
   #unlisten: (() => void) | null = null;
 
-  constructor(api: Api) {
+  #onInstallFailed: () => void;
+
+  /** `onInstallFailed` runs when an install that had already ended the sessions failed. */
+  constructor(api: Api, onInstallFailed: () => void = () => {}) {
     this.#api = api;
+    this.#onInstallFailed = onInstallFailed;
   }
 
   /** True while a command of this store is in flight; the UI disables its buttons on it. */
@@ -116,6 +120,8 @@ export class UpdateStore {
 
   #adopt(status: UpdateStatus): void {
     this.#seq++;
+    const installFailed = this.status?.state === "installing" && status.state === "failed";
     this.status = status;
+    if (installFailed) this.#onInstallFailed();
   }
 }

@@ -1075,7 +1075,7 @@ pub(crate) fn needs_close_confirmation(connected: usize) -> bool {
     connected > 0
 }
 
-/// What an app exit request (`RunEvent::ExitRequested`, e.g. Cmd+Q on macOS) should do.
+/// What an app exit request (`RunEvent::ExitRequested`, e.g. the last window going) should do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExitAction {
     /// Let the exit proceed.

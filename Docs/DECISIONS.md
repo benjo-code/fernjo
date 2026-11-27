@@ -15,13 +15,132 @@ Log of architecture and technology decisions. Newest entries on top.
 **Rejected alternatives:** <What else was considered and why not>
 -->
 
+## 2026-11-27 – M14: Cmd+Q and the menu's Quit close the window
+
+**Context:** the owner's check on the Mac (2026-11-27, v0.3.1, SSH session connected): Cmd+Q and the menu's "Quit" both ended fernjo without a question (row 105 of the v0.4.0 review). This confirms the reading of the dependency sources in "M10 quit confirmation on ExitRequested": Tauri's default macOS menu uses the predefined Quit item (muda 0.20.0), which sends `terminate:`; the app delegate of tao 0.37.2 has no `applicationShouldTerminate:`, so no event reaches fernjo. A running update install was not held either.
+**Decision:** Rated Low (it takes the user's own quit) and fixed. On macOS `run` installs `mac_menu::build`: a copy of Tauri 2.12's default menu in which Quit is fernjo's own item (`QUIT_ID`, Cmd+Q). `mac_menu::on_event` brings the main window to the front and closes it, so the quit takes the close button's path: the dialog, the hold during an install and the last sync push. Without a main window it exits. The behaviour of the item is tested on every OS with the mock runtime (`src-tauri/tests/mac_menu.rs`), the menu and its registration are pinned by source (`the_mac_menu_quits_through_fernjos_own_item`); the menu itself needs a Mac.
+**Rationale:** one path for every close that fernjo can see, in safe Rust on public Tauri calls.
+**Rejected alternatives:** adding `applicationShouldTerminate:` to tao's app delegate class through the Objective-C runtime (it would also cover the Dock and a log out, but it is unsafe code that patches a dependency's internal class, cannot be tested here and would land just before a release); removing the last item of `Menu::default` (depends on its order, and a mismatch would only show on a Mac).
+**Remaining limit:** Quit from the Dock's menu, a log out, a shutdown and any other program that asks macOS to terminate fernjo still end connected sessions without a question and can cut an update install off. Accepted by the owner on 2026-11-27 for v0.4.0, after the owner's check of the fix on a Mac passed.
+
+## 2026-11-27 – M14: owner decisions on the security review
+
+**Context:** The v0.4.0 review left rows without a fix, two fixes that change behaviour, and open owner checks (`Docs/release-checklist.md`, "v0.4.0 security review" and "v0.4.0 owner checks"). The owner was asked in one batch and adopted the recommendations (2026-11-27).
+**Decision:**
+- **Kept:** row 83 (fernjo fetches the update feed itself, with a size cap; risk: if that fetch failed on a platform, installed copies there could not find updates; checked against GitHub on Linux and Windows, macOS only after the release) and row 87 (with sessions connected, a finished download waits for "Restart to update" instead of opening the dialog).
+- **Accepted, with the remaining risk:** row 86 (a feed holder can serve another platform's signed file; the app may then need a manual reinstall), row 91 (a damaged `settings.json` or a downgrade can turn update checks back on), row 97 (a hostile build dependency would be signed), row 98 (the publish job does not re-check what it attaches; accepted for v0.4.0, fix on the backlog), row 102 (anyone with write access, today one person, can push a `v*` tag; the key stays behind the environment's reviewer), row 103 (the download cap overshoots by a read slice), row 104 (rare races around the restart on macOS and Linux), row 106 (a withheld or stalled update goes unnoticed until a restart), row 107 (power loss during a Linux update can leave the AppImage missing), row 108 (with nothing connected the app restarts when the download ends, cutting off unsaved work).
+- **Row 100:** the Windows job becomes a required check, on `dev` now and on `main` with the release. A GitHub setting; made on `dev` by the owner on 2026-11-27.
+- **Row 105 (macOS quit):** the check failed on v0.3.1, Cmd+Q and the menu's Quit were fixed and the owner's re-check passed. The owner **accepted** the rest for v0.4.0: Quit from the Dock, a log out and a shutdown end connected sessions without a question and can cut an install off (covering them needs unsafe code on a library's internal class that cannot be tested here; backlog).
+**Rationale:** Each accepted row needs control the update signature already guards against, local access, or a fix riskier than the finding.
+**Rejected alternatives:** Reverting rows 83 and 87; changing the publish job before its first run.
+
+## 2026-11-27 – M14: fixes from the v0.4.0 security review
+
+**Context:** The M14 reviews of `v0.3.1..HEAD` (findings from row 81 in `Docs/release-checklist.md`). This entry records the fixes that involve a decision; the table names the commit and test of each.
+**Decision:**
+- **Signing step (row 81).** `sign` starts the Tauri CLI as `node node_modules/@tauri-apps/cli/tauri.js signer sign`, never through `pnpm`: pnpm puts the project's `node_modules/.bin` first on `PATH`, so a direct dependency declaring a `node` or `sh` program ran with the signing key in its environment, and `pretauri`/`posttauri` scripts would have too. The same applies to any hand signing with the real key. The install stays `pnpm install --frozen-lockfile --ignore-scripts`, which runs before the key is present. Not taken: a separate signer-only `package.json` and lock file (it would also keep other packages off the job's disk, but nothing of theirs runs there). The whole step is pinned line by line, and the job may not change `PATH`, `GITHUB_ENV`, `BASH_ENV` or `NODE_OPTIONS` (`release_signing_step_is_exactly_the_reviewed_one`). A new key pair is generated the same way, `node node_modules/@tauri-apps/cli/tauri.js signer generate -w <folder-outside-repo>/fernjo-update.key`; this replaces the `pnpm tauri signer generate` command in "M13: update signing and the updater plugin".
+- **Exit hook (row 82).** `feed::check` replaces the plugin's `on_before_exit` (`AppHandle::cleanup_before_exit`: hides every window, clears the resource tables, which hold the single-instance lock) with an empty hook. On success the plugin calls `std::process::exit(0)` right after starting the setup, so nothing needs cleaning; on a failed start the app stays visible, shows the failure and keeps its lock. Pinned in the source by `the_plugin_exit_hook_is_replaced_so_a_failed_setup_start_keeps_the_app_usable`; the behaviour itself is an owner check on Windows.
+- **Feed fetch (row 83).** `feed` fetches `latest.json` itself, stops at 256 KiB (`MAX_FEED_BYTES`; a release's feed is a few tens of KiB, notes are cut at 16 KiB) and hands the parsed value to the plugin's `Updater::restore_update`, which applies the same target selection and comparator and always requires a signed version. The request stays the plugin's: same user agent and `Accept`, reqwest's redirect and system proxy defaults, the same TLS stack (ring provider). `reqwest` and `rustls` are direct dependencies at the versions the plugin already locks; the user agent constant names the pinned plugin version. This is the one place the project reads foreign JSON into a `serde_json::Value`, under that cap. Risk taken: the check, without which no later update can reach a device, now runs through our code; the fake feed covers the logic and the ignored test `the_real_release_host_is_reached_over_https` covers TLS and the redirects against GitHub (run on Linux and on Windows, recorded in `Docs/release-checklist.md` row 83; not on macOS). `write-latest-json.mjs --check` refuses a feed over 128 KiB, half the cap, which installed copies keep for good. Rejected: the plugin's `check` with its unbounded body; a preflight request (the second request could answer differently).
+- **No cache on tag builds (row 96).** The release `build` jobs restore the pnpm and cargo caches only when no release tag is set (pull request and branch runs). Caches written by CI on the default branch are readable by a tag run, and what is restored into `target/` ends up in the files `sign` signs. A tag build therefore compiles everything (job timeout 60 minutes; cached builds took 11 to 17). Never run before the v0.4.0 tag in this form.
+- **Fork pull requests (row 101).** A `pull_request` run uses the workflow file of the pull request's merge commit, so the upload guard of "M11" row 73 (no artifacts from a fork's build) holds only for a fork that leaves `release.yml` alone; no secret, write token or release is reachable either way. What stands in front is the repository's approval setting for fork runs (all external contributors, read 2026-11-27): keep it, and read a fork's changes under `.github/` before approving a run.
+
+## 2026-11-27 – M14 threat model
+
+**Context:** M14 (`Docs/superpowers/specs/2026-11-27-m14-security-gate-v0.4.0-design.md`, section 1) reviews what changed since v0.3.1 before v0.4.0, the first version that updates itself. This entry adds to "M11 threat model" what that version brings, and is the reviewers' frame. It describes the code at the start of M14 (`feature/m14-security-gate-v0.4.0`, before any M14 fix). **Open** marks a point with no protection or with one that no decision has accepted; nothing here is a review result or a fix.
+
+**Decision:** the M11 model stays; the assets, assumptions and cells below are added to it.
+
+**Assets.** What each one touches:
+
+| Asset | Secrets | Data folder | Network | Webview |
+|---|---|---|---|---|
+| Update feed (`latest.json`: version, notes, URL and signature per platform) | none | none | one HTTPS GET to the pinned `releases/latest/download/latest.json`, plus its redirects; after the start and every 24 h, and on "Check now" | sees version and notes (cleaned, cut to 16 KiB) in `update-status` |
+| Signing key, its password, the pinned public key | the private key and password: the two secrets of the GitHub environment `release-signing` and the owner's own copy, never on a device that runs the app | none | the `sign` job only | none (the public key is in `tauri.conf.json`) |
+| Downloaded update bytes (held in memory) | none | none | one GET of the URL the feed names, plus its redirects | sees progress counts only |
+| Install handover (NSIS setup on Windows, replaced bundle on macOS, replaced AppImage on Linux) | none | must not change `connections.json`, the vault or `settings.json`; a last sync push runs before it | the sync push | starts it through `update_install` |
+| `checkForUpdates`, `skippedUpdateVersion` | none | in `settings.json` | `checkForUpdates` off stops the automatic request | reads and sets both through commands |
+| Webview capability (`core:event:allow-listen`, `core:event:allow-unlisten`) | none | none | none | the permissions the page holds besides the app's own commands |
+
+**Trust assumptions (accepted, not defended).** M11 assumptions 1 and 4 apply unchanged (the device and its OS account are trusted; a script that runs in the webview holds the whole command set). Added:
+1. The signature of the pinned key is the only thing that makes an update genuine. Whoever holds the private key and can change the feed controls every installed copy that checks.
+2. The owner's GitHub account and the repository's administrators are trusted: they can bypass the environment rules (`can_admins_bypass`) and change repository settings.
+3. GitHub delivers releases, runs the jobs as the workflow file at the tag says and keeps environment secrets to the jobs the environment admits.
+4. The pinned build tooling (actions by commit SHA, `Cargo.lock`, `pnpm-lock.yaml`, the Tauri CLI that signs) is trusted at the versions pinned.
+5. The first install is by hand from the release page; its integrity rests on HTTPS and, if the person checks, on `SHA256SUMS` and the build provenance. Installers carry no OS code signature.
+6. The device's TLS root certificates decide which server counts as GitHub.
+
+**Cells.** One table per adversary; assets not listed are out of its reach.
+
+*1. Hostile or compromised feed (whoever controls what the pinned URL answers)*
+
+| Asset | What it can do | What stops it | Accepted or open |
+|---|---|---|---|
+| Downloaded bytes, install | Announce any newer plain version with its own URL and notes, and pair it with a file and a signature. | The plugin verifies the bytes against the pinned key and, with `requireSignedVersion`, against the announced version, before it returns them. Only a strictly newer stable version is offered (`decide::is_offered`). The signature binds the bytes and the version; it names no platform and no file name that the app checks. | Accepted for a feed without the key (assumption 1). |
+| Update feed | Answer with a large or slow body; answer nothing; answer an old manifest so that no update is seen. | A check is dropped after 15 s. An automatic check fails silently, a manual one shows a fixed text. | **Open:** the body is read without a size cap; a withheld or stale feed is not detected. |
+| Memory of the app | Announce or send a download without end. | Cap of 256 MiB on the declared length and on the bytes received; dropped after 60 s without data. | **Open:** the cap is approximate (overshoot of a read slice); there is no bound on the whole download's duration. |
+| Webview | Choose the notes and the version string shown. | Notes lose control characters, are cut to 16 KiB and rendered as text (`{@html` is forbidden by a test); the release page URL is built in Rust from a plain version only. | Accepted: Unicode format characters pass through in notes. |
+
+*2. Network path (between the device and GitHub or the redirect target)*
+
+| Asset | What it can do | What stops it | Accepted or open |
+|---|---|---|---|
+| Update feed, downloaded bytes | Watch that a check happens (address, host name, timing); block it; with a TLS root the device trusts (an inspecting proxy), act as the feed. | HTTPS to the configured endpoint (a release build refuses a plain `http` endpoint at start); the request carries no identifier besides the User-Agent `tauri-plugin-updater/<version>`; the signature check as in cell 1. The system proxy is used. | Accepted: blocking and observing; a trusted root counts as the feed (assumption 6). |
+
+*3. Redirect target (the host a redirect leads to; GitHub's asset hosts in normal operation)*
+
+| Asset | What it can do | What stops it | Accepted or open |
+|---|---|---|---|
+| Update feed, downloaded bytes | Serve anything for the feed or the file. Redirects are followed to any host, up to 10 hops (reqwest's default; the plugin adds no rule), and the plugin's HTTPS rule is about the configured endpoint. | The signature check, as in cell 1. | Accepted: no host is pinned (the signature, not the host, protects the install). |
+
+*4. Pull request or fork*
+
+| Asset | What it can do | What stops it | Accepted or open |
+|---|---|---|---|
+| Signing key | Run changed workflow and build code in the dry run. | `sign`, `verify-signatures` and `publish` are skipped on a pull request; a fork's run gets a read-only token and no secrets; the secrets exist only in the environment, whose policy admits `v*` tags and asks a reviewer. | |
+| Release files | Produce installers in its own run. | A fork's artifacts are not uploaded; nothing is attached to a release. | **Open:** the check of that rule with a real fork pull request has not been run (M11 row 73). |
+| Build caches of a later tag build | Write a cache. | GitHub scopes caches written by pull request runs to that pull request (platform behaviour, not tested here). | Accepted. |
+
+*5. Build dependency (a hostile crate, npm package or action at a pinned or updated version)*
+
+| Asset | What it can do | What stops it | Accepted or open |
+|---|---|---|---|
+| Downloaded bytes (what gets signed) | Change the binary or installer during `build`; the changed file is then signed and published. | Pinned versions and lock files, `cargo deny`, `pnpm audit`, Dependabot updates merged only by the owner with a cooldown; the build jobs hold no secret and a read-only token. | **Open:** `sign` signs what `build` produced, caches included. |
+| Signing key | Run code in the job that holds the key. | `sign` installs with `--ignore-scripts`, restores no cache, compiles nothing and names the secrets in one step's `env:`; what runs there is `pnpm`, the Tauri CLI and the actions pinned by SHA. | Accepted: the Tauri CLI and the runner image see the key (assumption 4). |
+| Release files | Run code in `verify-signatures` (the dependency build scripts of the example) or `publish`. | `verify-signatures` has no secret and a read-only token; `publish` compiles nothing and runs the repository's scripts of the tag. | |
+
+*6. Tag pusher (anyone or anything with write access who pushes a `v*` tag)*
+
+| Asset | What it can do | What stops it | Accepted or open |
+|---|---|---|---|
+| Signing key | Push a tag whose workflow file says something else. | The secrets are only in the environment `release-signing`: a job gets them only by naming it, from a `v*` tag ref, after a required reviewer approves (self-review allowed). | Accepted: the reviewer must read what they approve. |
+| Release and feed | With a changed workflow, write a release with its own files and publish it as latest. | Installed copies take nothing without a valid signature (cell 1); published releases are immutable. The ruleset `release tags` blocks deleting and moving a `v*` tag; it has **no creation rule**, unlike what "M13: update feed, signing job, key lifecycle and scope changes" says (read back with `gh api` on 2026-11-27). | **Open:** who may create a `v*` tag is not restricted beyond write access. |
+
+*7. Repository administrator (or a taken-over owner account)*
+
+| Asset | What it can do | What stops it | Accepted or open |
+|---|---|---|---|
+| All of the above | Bypass the environment rules, change the ruleset, settings and workflows, replace the secrets, sign and publish any file. A published release takes no new files; a new release can. | Account security (outside the repository). A changed secret does not match the pinned key, so replacing it signs nothing installed copies accept. | Accepted (assumption 2). |
+
+*8. Local process of the same user*
+
+| Asset | What it can do | What stops it | Accepted or open |
+|---|---|---|---|
+| Install handover, settings, the app itself | Edit `settings.json` (stop checks, set a skipped version), replace the installed app (per-user install), change the environment the app starts with, swap the temporary setup file before it runs. | Nothing in fernjo. | Accepted (M11 assumption 1). |
+
+*9. Webview script*
+
+| Asset | What it can do | What stops it | Accepted or open |
+|---|---|---|---|
+| Install handover | Call `update_install`: downloads and installs the offered update; asks first only when sessions are connected. | Only a verified, strictly newer update can be installed; no argument chooses a file, URL or version. The capability grants no `updater:*` permission, so the plugin's own commands are closed. | Accepted (M11 assumption 4). |
+| Settings, feed requests, release page | Run checks (manual ones ignore the skipped version), skip the offered version, switch automatic checks off, open the release page. | `update_skip` stores only the version on offer; `update_open_release_page` takes no argument and builds the URL in Rust. | Accepted (M11 assumption 4). |
+
 ## 2026-11-27 – M13: final review fixes (run slot, install window, test feed, release notes)
 
 **Context:** The review of the whole M13 branch asked for fixes before the merge. This entry adds to the three M13 entries of 2026-11-26 below.
 **Decision:**
 - **Run slot.** A check that starts in `Ready` leaves the state at `Ready` and holds its own `checking` flag, so a confirmed dialog still installs the held download, and a late answer of that check never replaces `Installing`. A `SlotGuard` gives the slot back when a backend step panics (`Checking` and `Downloading` return to what they were, `Installing` ends in `Failed`), and `finish_install` clears `AppState.sync_closing` on every way out, a panic included.
 - **Residual race.** A check that finds another version while the "Install update?" dialog is open (or that finished just before the confirmation) replaces the held download: the confirmation then ends the sessions and installs nothing, and the new version is offered. The same holds for any confirmation that arrives after the state left `Ready`.
-- **Closing while installing.** The window close and an exit without an exit code are prevented while the state is `Installing` (`updater::install_blocks_exit`), and `sync_runner::finish_after_push` does nothing then (`finish_is_dropped`, added 2026-11-27), so neither "Restart now" of a data folder change nor a close dialog confirmed late can cut the replacement of an AppImage or a bundle. Such a request is dropped (a confirmed dialog has already ended the sessions): the install restarts the app itself, and after a failed one the window stays open and the request can be made again. Not covered: the process being killed by the system, and a quit on macOS that never raises `ExitRequested` (see "M10 quit confirmation on ExitRequested", update of 2026-11-27). `Update::install` still runs on the calling thread (no `spawn_blocking`).
+- **Closing while installing.** The window close and an exit without an exit code are prevented while the state is `Installing` (`updater::install_blocks_exit`), and `sync_runner::finish_after_push` does nothing then (`finish_is_dropped`, added 2026-11-27), so neither "Restart now" of a data folder change nor a close dialog confirmed late can cut the replacement of an AppImage or a bundle. Such a request is dropped (a confirmed dialog has already ended the sessions): the install restarts the app itself, and after a failed one the window stays open and the request can be made again. Not covered: the process being killed by the system, and a quit on macOS that never raises `ExitRequested` (see "M10 quit confirmation on ExitRequested", update of 2026-11-27; since M14 only the Dock's Quit, a log out and a shutdown, see "M14: Cmd+Q and the menu's Quit close the window"). `Update::install` still runs on the calling thread (no `spawn_blocking`).
 - **Skip.** A skipped offer shows no footer marker and Settings words it as skipped; the Rust status keeps `state: available` with `skipped: true`.
 - **Test feed.** The owner's update check uses `tools/update-test.conf.json`, merged with `pnpm tauri build --debug --config` into two local builds (endpoint on `127.0.0.1`, the published test key, `dangerousInsecureTransportProtocol`; the merge keeps `requireSignedVersion`), with a hand-written `latest.json` (steps in `Docs/release-checklist.md`). `tools/write-latest-json.mjs` got no override for the download URLs, so the release path has nothing to switch. `update_test_config_changes_only_the_updater_feed` and `update_test_config_is_never_used_by_a_release` pin the file, the merge, that the release workflow passes no extra configuration and that `src-tauri` has no second configuration file. A build made with the file trusts a key whose private half is public and must be removed after the check.
 - **gitleaks.** The unused fixture `other-key.pub` was deleted, but its allowlist line stays: `gitleaks detect` scans the history and reports the file there without it.
@@ -684,6 +803,8 @@ A restored tab that is still flagged `restored` shows no lamp in the tab strip (
 **Limits (owner checks on macOS):** real Cmd+Q with a connected session; logout or shutdown is also held until the dialog is answered; when no main window exists `Ask` prevents the exit and shows nothing (a hardening not done).
 
 **Update 2026-11-27 (read in the dependency sources, not run on a Mac):** a real Cmd+Q most likely never raises `ExitRequested`. The app sets no menu, so Tauri 2.12 installs its default macOS menu, whose Quit item (`PredefinedMenuItem::quit`) sends `terminate:` (muda 0.20.0); the app delegate of tao 0.37.2 implements `applicationWillTerminate:` but not `applicationShouldTerminate:`, so nothing can hold that quit, and tauri-runtime-wry 2.12.5 raises `ExitRequested` only when the last window was destroyed and for an exit the app itself asks for. Cmd+Q (and the Dock's Quit) would then end connected sessions without a question, and the M13 hold of an exit during an install would not apply to it. The macOS owner check decides; a fix is in the roadmap backlog.
+
+**Update 2026-11-27 (owner check on a Mac, v0.3.1):** confirmed for Cmd+Q and the menu's Quit and fixed for both, see "M14: Cmd+Q and the menu's Quit close the window".
 
 ## 2026-11-23 – M10 M4 follow-ups: what was done, what stayed in the backlog
 

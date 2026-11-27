@@ -19,8 +19,9 @@ export function stageText(status: UpdateStatus): string {
         status.total !== null
           ? `Downloading… ${mbDown(received)} of ${mbUp(status.total)} MB`
           : `Downloading… ${mbDown(received)} MB`;
-      // closing the window does not cancel the download, and the install follows on its own
-      return `${progress}. fernjo restarts when the download is done.`;
+      // closing the window does not cancel the download; the install follows on its own unless
+      // sessions are connected then
+      return `${progress}. fernjo then restarts; with sessions connected it waits for you.`;
     }
     case "ready":
       return "Download finished, ready to install";

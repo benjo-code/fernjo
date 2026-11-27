@@ -225,6 +225,77 @@ async fn second_check_while_checking_is_dropped() {
 }
 
 #[tokio::test]
+async fn check_now_during_an_automatic_check_runs_after_it_and_reports() {
+    let (backend, host, _) = setup();
+    *backend.announce.lock().unwrap() = Err(FeedError::Unreachable);
+    let gate = Arc::new(Notify::new());
+    *backend.gate.lock().unwrap() = Some(Arc::clone(&gate));
+    let (automatic, clicked) = tokio::join!(run_check(&*backend, &host, false), async {
+        while status_of(&host).state != UpdateState::Checking {
+            tokio::task::yield_now().await;
+        }
+        let clicked = run_check(&*backend, &host, true).await;
+        *backend.gate.lock().unwrap() = None;
+        gate.notify_one();
+        clicked
+    });
+    assert_eq!(clicked.state, UpdateState::Checking);
+    // the automatic check stayed silent about its failure; the one the click asked for does not
+    assert_eq!(backend.checks.load(Ordering::SeqCst), 2);
+    assert_eq!(automatic.state, UpdateState::Failed);
+    let last = host.events().pop().expect("an event");
+    assert_eq!(last.state, UpdateState::Failed);
+    assert_eq!(last.error.as_deref(), Some("feed_unreachable"));
+}
+
+#[tokio::test]
+async fn a_status_read_during_an_automatic_check_hears_how_it_ended() {
+    let (backend, host, _) = setup();
+    *backend.announce.lock().unwrap() = Err(FeedError::Unreachable);
+    let gate = Arc::new(Notify::new());
+    *backend.gate.lock().unwrap() = Some(Arc::clone(&gate));
+    tokio::join!(run_check(&*backend, &host, false), async {
+        while status_of(&host).state != UpdateState::Checking {
+            tokio::task::yield_now().await;
+        }
+        gate.notify_one();
+    });
+    // whoever was told "checking" is told that it is over
+    assert_eq!(
+        host.events().pop().map(|e| e.state),
+        Some(UpdateState::Idle)
+    );
+    assert_eq!(backend.checks.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn an_install_click_during_an_automatic_check_hears_how_it_ended() {
+    let (backend, host, log) = setup();
+    run_check(&*backend, &host, true).await;
+    let gate = Arc::new(Notify::new());
+    *backend.gate.lock().unwrap() = Some(Arc::clone(&gate));
+    let announced = host.events().len();
+    let (_, clicked) = tokio::join!(run_check(&*backend, &host, false), async {
+        // read the state itself: a status answer would count as one that heard "checking"
+        while host.0.rt.lock().unwrap().state != UpdateState::Checking {
+            tokio::task::yield_now().await;
+        }
+        // the window still shows "Update and restart", since an automatic check announces nothing
+        let clicked = run_install(&*backend, &host).await;
+        gate.notify_one();
+        clicked
+    });
+    assert_eq!(clicked.state, UpdateState::Checking);
+    // the check found the same version, so only the click makes it worth announcing
+    assert!(host.events().len() > announced, "no end was announced");
+    assert_eq!(
+        host.events().pop().map(|e| e.state),
+        Some(UpdateState::Available)
+    );
+    assert!(logged(&log).is_empty(), "{:?}", logged(&log));
+}
+
+#[tokio::test]
 async fn automatic_check_failure_leaves_state_idle_and_no_error() {
     for failure in [
         FeedError::Unreachable,
@@ -299,6 +370,12 @@ async fn install_with_connected_sessions_waits_for_confirmation_then_closes_sess
     let (backend, host, log) = setup();
     host.0.connected.store(2, Ordering::SeqCst);
     run_check(&*backend, &host, true).await;
+    // the download ends on its own time: no dialog opens by itself, where an Enter meant for a
+    // shell would confirm it
+    let status = run_install(&*backend, &host).await;
+    assert_eq!(status.state, UpdateState::Ready);
+    assert_eq!(logged(&log), ["download"]);
+    // "Restart to update" asks
     run_install(&*backend, &host).await;
     assert_eq!(
         logged(&log),
@@ -319,6 +396,7 @@ async fn keep_open_keeps_ready_and_second_install_skips_download() {
     host.0.connected.store(1, Ordering::SeqCst);
     host.0.confirm.store(false, Ordering::SeqCst);
     run_check(&*backend, &host, true).await;
+    run_install(&*backend, &host).await;
     let status = run_install(&*backend, &host).await;
     assert_eq!(status.state, UpdateState::Ready);
     assert!(host.0.rt.lock().unwrap().bytes.is_some());
@@ -349,10 +427,10 @@ async fn connected_count_is_read_at_install_time() {
     let h = host.clone();
     *backend.on_download.lock().unwrap() =
         Some(Box::new(move || h.0.connected.store(1, Ordering::SeqCst)));
-    host.0.confirm.store(false, Ordering::SeqCst);
     let status = run_install(&*backend, &host).await;
     assert_eq!(status.state, UpdateState::Ready);
-    assert_eq!(logged(&log), ["download", "dialog"]);
+    // the session that connected meanwhile counts: nothing is asked or ended by itself
+    assert_eq!(logged(&log), ["download"]);
 }
 
 #[tokio::test]
@@ -371,6 +449,102 @@ async fn oversize_download_sets_failed_download_refused() {
     run_install(&*backend, &host).await;
     assert_eq!(backend.downloads.load(Ordering::SeqCst), 2);
     assert_eq!(logged(&log).last().map(String::as_str), Some("restart"));
+}
+
+#[tokio::test]
+async fn a_refused_download_leaves_nothing_to_install() {
+    for refusal in [
+        FeedError::BadSignature,
+        FeedError::DownloadRefused("too_large"),
+        FeedError::DownloadRefused("failed"),
+        FeedError::DownloadRefused("stalled"),
+    ] {
+        let (backend, host, log) = setup();
+        host.0.connected.store(1, Ordering::SeqCst);
+        run_check(&*backend, &host, true).await;
+        *backend.download.lock().unwrap() = Err(refusal);
+        let status = run_install(&*backend, &host).await;
+        assert_eq!(status.state, UpdateState::Failed, "{refusal:?}");
+        assert!(host.0.rt.lock().unwrap().bytes.is_none());
+        finish_install(&*backend, &host);
+        // no dialog, no ended sessions, no install
+        assert_eq!(logged(&log), ["download"], "{refusal:?}");
+    }
+}
+
+/// Every non-comment line of the app's sources (test files aside) that holds `needle`.
+fn source_lines_with(needle: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut folders = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+    while let Some(folder) = folders.pop() {
+        for entry in std::fs::read_dir(folder).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                folders.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs")
+                && path.file_name().is_some_and(|n| n != "tests.rs")
+            {
+                let source = std::fs::read_to_string(&path).unwrap();
+                found.extend(
+                    source
+                        .lines()
+                        .map(str::trim)
+                        .filter(|l| !l.starts_with("//") && l.contains(needle))
+                        .map(str::to_owned),
+                );
+            }
+        }
+    }
+    found
+}
+
+/// The plugin's own hook hides every window and drops the single-instance lock before it starts
+/// the Windows setup, so a start that fails would leave fernjo running unseen (M14 review #82).
+/// The hook cannot be observed from outside the plugin, so the source is pinned: one place builds
+/// an updater, and it replaces the hook there.
+#[test]
+fn the_plugin_exit_hook_is_replaced_so_a_failed_setup_start_keeps_the_app_usable() {
+    assert_eq!(
+        source_lines_with("updater_builder("),
+        ["let builder = app.updater_builder().on_before_exit(|| {});"]
+    );
+    assert_eq!(source_lines_with(".updater()"), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_confirmation_that_no_longer_applies_ends_nothing() {
+    let (backend, host, _) = setup();
+    run_check(&*backend, &host, true).await;
+    // the download the dialog asked about was replaced: no session may end for it
+    assert!(!commit_confirmed(CloseThen::Install, &host.0.rt));
+    assert!(commit_confirmed(CloseThen::Exit, &host.0.rt));
+    assert!(commit_confirmed(CloseThen::Restart, &host.0.rt));
+    // the close dialog asks this before it ends the sessions
+    let lib = include_str!("../lib.rs");
+    let dialog = &lib[lib.find("pub(crate) fn ask_to_close").unwrap()..];
+    let asked = dialog
+        .find("updater::commit_confirmed(then,")
+        .expect("asked");
+    assert!(asked < dialog.find("sessions.close_all()").unwrap());
+}
+
+#[tokio::test]
+async fn a_check_that_ends_after_the_confirmation_keeps_the_committed_download() {
+    let (backend, host, log) = setup();
+    host.0.connected.store(1, Ordering::SeqCst);
+    host.0.confirm.store(false, Ordering::SeqCst);
+    run_check(&*backend, &host, true).await;
+    run_install(&*backend, &host).await;
+    assert!(commit_confirmed(CloseThen::Install, &host.0.rt));
+    // the sessions end and the last push runs; meanwhile a check finds yet another version
+    *backend.announce.lock().unwrap() = Ok(Some("0.4.2"));
+    run_check(&*backend, &host, true).await;
+    finish_install(&*backend, &host);
+    assert!(
+        logged(&log).contains(&"install".to_owned()),
+        "{:?}",
+        logged(&log)
+    );
 }
 
 #[tokio::test]
@@ -830,7 +1004,7 @@ async fn a_confirm_during_a_check_from_ready_still_installs_and_the_check_keeps_
 
 #[test]
 fn an_install_in_progress_blocks_a_close_and_an_exit_without_a_code_only() {
-    // closing the window and Cmd+Q (no exit code) wait while the files are replaced
+    // closing the window and an exit without a code wait while the files are replaced
     assert!(install_blocks_exit(true, None));
     // the restart that follows a finished install carries an exit code and always passes
     assert!(!install_blocks_exit(true, Some(0)));

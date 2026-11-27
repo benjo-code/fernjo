@@ -248,10 +248,15 @@ impl AppState {
             Some(l) => {
                 // `settings.json` is neither read nor written while the variable is set, and
                 // an unusable file yields the defaults.
-                let loaded = if l.source == DataDirSource::Env || l.settings_error.is_some() {
-                    None
-                } else {
-                    settings::load(&l.config_dir.join(settings::FILE_NAME)).ok()
+                let (loaded, settings_error) = match l.settings_error {
+                    Some(e) => (None, Some(e)),
+                    None if l.source == DataDirSource::Env => (None, None),
+                    // the second read of this start: a failure only now makes the file unusable
+                    // too, or the defaults (update checks on) would stand in for the stored choices
+                    None => match settings::load(&l.config_dir.join(settings::FILE_NAME)) {
+                        Ok(s) => (Some(s), None),
+                        Err(e) => (None, Some(e)),
+                    },
                 };
                 let terminal = loaded.as_ref().and_then(|s| s.terminal.clone());
                 let auto_lock = loaded.as_ref().and_then(|s| s.vault_auto_lock_minutes);
@@ -269,8 +274,8 @@ impl AppState {
                         device_dir: l.device_dir,
                         source: l.source,
                     },
-                    l.settings_error.is_some(),
-                    l.settings_error.map(|e| Notice::SettingsUnreadable {
+                    settings_error.is_some(),
+                    settings_error.map(|e| Notice::SettingsUnreadable {
                         message: e.to_string(),
                     }),
                     keystore,
@@ -515,6 +520,33 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
+    /// `open_for_app` reads `settings.json` a second time; a read that fails only then must not turn
+    /// a switched-off update check back on (M14 review #90).
+    #[test]
+    fn a_settings_file_that_fails_only_at_the_second_read_stops_automatic_checks() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = |name: &str| {
+            let path = root.path().join(name);
+            std::fs::create_dir_all(&path).unwrap();
+            path
+        };
+        let config_dir = folder("config");
+        std::fs::write(
+            config_dir.join(fernjo_core::settings::FILE_NAME),
+            r#"{"schemaVersion":99}"#,
+        )
+        .unwrap();
+        let state = super::AppState::open_for_app(Some(fernjo_core::Location {
+            data_dir: folder("data"),
+            config_dir,
+            source: fernjo_core::DataDirSource::Default,
+            settings_error: None,
+            device_dir: Some(folder("device")),
+        }));
+        assert!(state.settings_unusable);
+        assert!(!crate::updater::schedule::automatic_checks_allowed(&state));
+    }
+
     use super::*;
     use fernjo_core::{DataDirSource, Notice};
 

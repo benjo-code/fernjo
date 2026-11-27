@@ -16,6 +16,24 @@ describe("UpdateStore", () => {
     expect(store.status?.state).toBe("available");
   });
 
+  test("a_failed_install_tells_the_app_that_its_sessions_ended", async () => {
+    const m = mockApi();
+    let ended = 0;
+    const store = new UpdateStore(m.api, () => ended++);
+    await store.init();
+    // a refused download ended nothing
+    m.emitUpdate(updateStatus({ state: "downloading", version: "0.5.0" }));
+    m.emitUpdate(updateStatus({ state: "failed", error: "download_refused" }));
+    expect(ended).toBe(0);
+    m.emitUpdate(updateStatus({ state: "installing", version: "0.5.0" }));
+    expect(ended).toBe(0);
+    m.emitUpdate(updateStatus({ state: "failed", error: "install_failed" }));
+    // the same status again (a command's answer after the event) is not a second failure
+    m.emitUpdate(updateStatus({ state: "failed", error: "install_failed" }));
+    expect(ended).toBe(1);
+    store.dispose();
+  });
+
   test("ignores_second_action_while_busy", async () => {
     const gate = deferred<ReturnType<typeof updateStatus>>();
     const m = mockApi([], { updateCheck: () => gate.promise });

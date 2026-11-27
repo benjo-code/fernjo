@@ -553,6 +553,8 @@ t="$(tamper empty-notes 'j.notes="  "')"
 assert_exit latest_json_check_rejects_empty_notes 1 "notes" node "$latest" --check "$ver" "$t"
 t="$(tamper other-file 'j.platforms["linux-x86_64"].url=j.platforms["windows-x86_64"].url')"
 assert_exit latest_json_check_rejects_a_url_of_another_platforms_file 1 "linux-x86_64" node "$latest" --check "$ver" "$t"
+t="$(tamper too-large 'j.padding="x".repeat(200 * 1024)')"
+assert_exit latest_json_check_rejects_a_file_over_the_size_limit 1 "bytes" node "$latest" --check "$ver" "$t"
 d2="$tmp/lj-nosig"
 cp -r "$d" "$d2"
 rm "$d2/${names[3]}.sig" "$d2/latest.json"
@@ -708,12 +710,52 @@ assert_true release_verify_signatures_job_has_no_secret_and_no_write verify_sign
 sign_job_signs_the_four_update_files_with_the_version() {
   local b
   b="$(job_block sign)"
-  printf '%s\n' "$b" | grep -Fq 'pnpm tauri signer sign --app-version' &&
+  printf '%s\n' "$b" | grep -Fq 'node node_modules/@tauri-apps/cli/tauri.js signer sign --app-version' &&
     printf '%s\n' "$b" | grep -Fq 'pnpm install --frozen-lockfile --ignore-scripts' &&
     printf '%s\n' "$b" | grep -Fq 'name: update-signatures' &&
     ! printf '%s\n' "$b" | grep -Eq '^[^#]*(merge-multiple|actions/cache|rust-cache|[[:space:]]cache[[:space:]]*:)'
 }
 assert_true release_sign_job_signs_with_the_app_version_and_runs_no_dependency_script sign_job_signs_the_four_update_files_with_the_version
+# The step that holds the key starts the CLI with node directly. Through pnpm, node_modules/.bin is
+# first on PATH, so a dependency's `node` or `sh` program would run with the key (M14 review #81).
+# The whole step is compared (comments aside), and nothing in the job may change how `node` is
+# found. A change to the step is made here too, on purpose.
+signing_step_is_exactly_the_reviewed_one() {
+  local step want
+  step="$(job_block sign | awk '/^      - name: Sign the update files$/ { p = 1 } p && /^      - uses:/ { exit } p' | grep -vE '^[[:space:]]*(#|$)')"
+  want="$(
+    cat <<'EOF'
+      - name: Sign the update files
+        shell: bash
+        env:
+          TAG: ${{ env.RELEASE_TAG }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          version="${TAG#v}"
+          for file in "fernjo_${version}_x64-setup.exe" "fernjo_${version}_aarch64.app.tar.gz" "fernjo_${version}_x64.app.tar.gz" "fernjo_${version}_amd64.AppImage"; do
+            node node_modules/@tauri-apps/cli/tauri.js signer sign --app-version "$version" "installers/$file"
+            if ! [ -s "installers/$file.sig" ]; then
+              echo "::error::no signature was written for $file"
+              exit 1
+            fi
+          done
+EOF
+  )"
+  [ "$step" = "$want" ] &&
+    ! job_block sign | grep -vE '^[[:space:]]*#' | grep -qE 'PATH|GITHUB_ENV|BASH_ENV|NODE_OPTIONS|node_modules/\.bin'
+}
+assert_true release_signing_step_is_exactly_the_reviewed_one signing_step_is_exactly_the_reviewed_one
+# What a cache restores is compiled into the files `sign` signs, and code run by CI on the default
+# branch can write to those caches: a tag build restores none (M14 review #96).
+builds_restore_no_cache_on_a_tag() {
+  local b
+  b="$(job_block build)"
+  printf '%s\n' "$b" | grep -Fxq "          cache: \${{ env.RELEASE_TAG == '' && 'pnpm' || '' }}" &&
+    printf '%s\n' "$b" | grep -A1 'uses: Swatinem/rust-cache@' | grep -Fxq "        if: env.RELEASE_TAG == ''" &&
+    [ "$(grep -cE '^[^#]*(uses: (actions/cache|Swatinem/rust-cache)[@/]|[[:space:]]cache[[:space:]]*:)' "$release_yml")" -eq 2 ]
+}
+assert_true release_builds_restore_no_cache_on_a_tag builds_restore_no_cache_on_a_tag
 publish_writes_and_checks_latest_json_after_the_signatures() {
   local b w r s
   b="$(job_block publish)"

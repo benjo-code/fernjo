@@ -14,6 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use base64::Engine as _;
 use fake_feed::{FakeFeed, Route};
 use fernjo_app_lib::updater::feed::{self, FeedError, FeedUpdate, Limits};
 use serde_json::{Value, json};
@@ -56,7 +57,15 @@ fn conf() -> Value {
 /// chosen by the test. `dangerousInsecureTransportProtocol` is only here so that an HTTP fake
 /// feed also works in a release-profile test run.
 fn app(pubkey: &str, version: &str) -> tauri::App<MockRuntime> {
+    app_configured(pubkey, version, None)
+}
+
+/// `app` with the configured endpoint replaced, for a check without an override.
+fn app_configured(pubkey: &str, version: &str, endpoint: Option<&str>) -> tauri::App<MockRuntime> {
     let mut updater = conf()["plugins"]["updater"].clone();
+    if let Some(endpoint) = endpoint {
+        updater["endpoints"] = json!([endpoint]);
+    }
     updater["pubkey"] = json!(pubkey);
     updater["dangerousInsecureTransportProtocol"] = json!(true);
     let mut ctx = tauri::test::mock_context(tauri::test::noop_assets());
@@ -217,6 +226,40 @@ async fn tampered_download_is_refused() {
     assert_eq!(err.code(), "signature_invalid");
 }
 
+/// BLAKE2b-512 of `payload.bin` (`b2sum`): what a prehashed signature of it really signs.
+const PAYLOAD_BLAKE2B: &str = "1dd1daa565d43df90bed59272794b990cce97df593cc90a04955a14684030a64b4398d9b050c3b45b12c116ec573081f5e382ce8366bd628d9e3befa923185b0";
+
+fn payload_hash() -> Vec<u8> {
+    (0..PAYLOAD_BLAKE2B.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&PAYLOAD_BLAKE2B[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+/// The signature with its algorithm bytes switched from `ED` (prehashed) to `Ed` (legacy), which
+/// neither signature inside it covers.
+fn switched_to_legacy(signature: &str) -> String {
+    let b64 = &base64::engine::general_purpose::STANDARD;
+    let text = String::from_utf8(b64.decode(signature.trim()).unwrap()).unwrap();
+    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    let mut raw = b64.decode(&lines[1]).unwrap();
+    assert_eq!(&raw[..2], b"ED");
+    raw[1] = b'd';
+    lines[1] = b64.encode(raw);
+    b64.encode(lines.join("\n") + "\n")
+}
+
+#[tokio::test]
+async fn a_signature_switched_to_legacy_mode_is_refused() {
+    // in legacy mode the 64-byte hash of the signed file would pass as if it were the file
+    let signature = switched_to_legacy(&payload_signature());
+    let server = serve("9.9.9", &signature, "", payload_hash());
+    let err = download_of(&server, &test_pubkey(), Limits::production())
+        .await
+        .unwrap_err();
+    assert_eq!(err, FeedError::BadSignature);
+}
+
 #[tokio::test]
 async fn signed_version_must_match_the_announced_one() {
     // a valid signature for 9.9.9 paired with an announced 10.0.0 (a tampered feed)
@@ -298,6 +341,88 @@ async fn platforms_without_this_target_is_feed_invalid() {
     })
     .to_string();
     assert_eq!(bad_feed(body).await, FeedError::BadFeed);
+}
+
+#[tokio::test]
+async fn the_configured_endpoint_is_what_a_release_build_asks() {
+    // a release build passes no override: the endpoint comes from the configuration
+    let server = serve("0.4.1", &payload_signature(), "", payload());
+    let app = app_configured(&test_pubkey(), "0.4.0", Some(&server.url("/latest.json")));
+    let update = feed::check(app.handle(), "0.4.0", None, None)
+        .await
+        .expect("check")
+        .expect("offered");
+    assert_eq!(update.version, "0.4.1");
+    assert_eq!(server.log().len(), 1);
+}
+
+/// An installed app refuses a larger feed for good, so the release script stops well below.
+#[test]
+fn the_release_script_keeps_the_feed_well_under_the_cap() {
+    let script = fs::read_to_string(manifest_dir().join("../tools/write-latest-json.mjs")).unwrap();
+    assert!(script.contains("const MAX_FEED_FILE_BYTES = 128 * 1024;"));
+    assert_eq!(feed::MAX_FEED_BYTES, 2 * 128 * 1024);
+}
+
+#[tokio::test]
+async fn an_oversized_feed_is_feed_invalid_and_offers_nothing() {
+    // a valid manifest padded past the cap: parsing it would cost many times its size
+    let mut body: Value = serde_json::from_str(&manifest(
+        "0.4.1",
+        "http://127.0.0.1:9/x",
+        &payload_signature(),
+        "",
+    ))
+    .unwrap();
+    body["pad"] = json!("x".repeat(feed::MAX_FEED_BYTES));
+    assert_eq!(bad_feed(body.to_string()).await, FeedError::BadFeed);
+}
+
+#[tokio::test]
+async fn an_endless_feed_is_cut_off_at_the_cap() {
+    // no Content-Length: only the received bytes can stop it
+    let total = 64 * 1024 * 1024;
+    let sent = Arc::new(AtomicUsize::new(0));
+    let done = Arc::new(AtomicBool::new(false));
+    let server = FakeFeed::start(vec![(
+        "/latest.json",
+        Route::Endless {
+            total,
+            sent: sent.clone(),
+            done: done.clone(),
+        },
+    )]);
+    let result = check_with_feed(&server, "0.4.0", None).await;
+    assert_eq!(result.err(), Some(FeedError::BadFeed));
+    let waited = Instant::now();
+    while !done.load(Ordering::SeqCst) && waited.elapsed() < Duration::from_secs(20) {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        sent.load(Ordering::SeqCst) < total / 2,
+        "the server kept sending: {} bytes",
+        sent.load(Ordering::SeqCst)
+    );
+}
+
+#[tokio::test]
+async fn a_feed_with_the_longest_release_notes_is_accepted() {
+    let notes = "\"".repeat(16 * 1024);
+    let server = serve("0.4.1", &payload_signature(), &notes, payload());
+    assert_eq!(offered(&server, "0.4.0").await.notes.len(), 16 * 1024);
+}
+
+/// An installed v0.4.0 can only ever be updated if the check works against GitHub itself: its TLS
+/// and the redirects to the asset host. The fake feed is plain HTTP, so this asks the real host
+/// for a release file that exists and is not a manifest.
+#[tokio::test]
+#[ignore = "talks to github.com: run with --ignored"]
+async fn the_real_release_host_is_reached_over_https() {
+    let app = app(&test_pubkey(), "0.4.0");
+    let endpoint = url("https://github.com/benjo-code/fernjo/releases/latest/download/SHA256SUMS");
+    let result = feed::check(app.handle(), "0.4.0", None, Some(&endpoint)).await;
+    // fetched and then refused as a manifest; a TLS or network failure would be `Unreachable`
+    assert_eq!(result.err(), Some(FeedError::BadFeed));
 }
 
 fn limits(cap: u64, stall_ms: u64) -> Limits {
@@ -431,6 +556,12 @@ async fn check_sends_exactly_one_get_to_the_pinned_path() {
         .map(|(_, v)| v.as_str())
         .unwrap_or_default();
     assert!(agent.starts_with("tauri-plugin-updater/"), "{agent}");
+    let accept = request
+        .headers
+        .iter()
+        .find(|(n, _)| n == "accept")
+        .map(|(_, v)| v.as_str());
+    assert_eq!(accept, Some("application/json"));
 }
 
 #[tokio::test]
@@ -451,6 +582,82 @@ async fn redirect_hops_are_counted_and_followed() {
     let paths: Vec<&str> = log.iter().map(|r| r.path.as_str()).collect();
     assert_eq!(paths, ["/latest.json", "/cdn/feed.json"]);
     assert!(log.iter().all(|r| r.query.is_none()));
+}
+
+/// A URL of `server` under another host name than the `127.0.0.1` the feed is configured with.
+fn on_another_host(server: &FakeFeed, path: &str) -> String {
+    format!("http://localhost:{}{path}", server.addr.port())
+}
+
+#[tokio::test]
+async fn redirect_to_another_host_accepts_only_signed_bytes() {
+    // GitHub answers the feed and the file with redirects to its asset host, so another host is
+    // normal and only the signature decides
+    let mut tampered = payload();
+    tampered[100] ^= 0x01;
+    for (served, expected) in [
+        (payload(), Ok(payload())),
+        (tampered, Err(FeedError::BadSignature)),
+    ] {
+        let files = FakeFeed::start(vec![("/cdn/payload.bin", Route::Body(served))]);
+        let file = on_another_host(&files, "/cdn/payload.bin");
+        let mid = FakeFeed::start_with(|addr| {
+            let download = format!("http://localhost:{}/dl/payload.bin", addr.port());
+            vec![
+                (
+                    "/cdn/feed.json",
+                    Route::Json(manifest("9.9.9", &download, &payload_signature(), "")),
+                ),
+                ("/dl/payload.bin", Route::Redirect(file)),
+            ]
+        });
+        let front = FakeFeed::start(vec![(
+            "/latest.json",
+            Route::Redirect(on_another_host(&mid, "/cdn/feed.json")),
+        )]);
+        let result = download_of(&front, &test_pubkey(), Limits::production()).await;
+        assert_eq!(result, expected);
+        let reached: Vec<String> = files.log().into_iter().map(|r| r.path).collect();
+        assert_eq!(
+            reached,
+            ["/cdn/payload.bin"],
+            "the other host served the file"
+        );
+    }
+}
+
+#[tokio::test]
+async fn truncated_download_is_refused() {
+    let short = payload()[..4096].to_vec();
+    // the server says the short body is the whole file: only the signature can tell
+    let (result, _server) =
+        download_from_route(Route::Body(short.clone()), Limits::production()).await;
+    assert_eq!(result.unwrap_err(), FeedError::BadSignature);
+    // the connection ends before the announced length
+    let (result, _server) = download_from_route(
+        Route::Truncated {
+            declared: 8192,
+            body: short,
+        },
+        Limits::production(),
+    )
+    .await;
+    assert_eq!(result.unwrap_err(), FeedError::DownloadRefused("failed"));
+}
+
+#[tokio::test]
+async fn signature_without_a_version_is_refused() {
+    // a genuine signature of this very file by the pinned (test) key, made without
+    // `--app-version`, so nothing binds it to the announced version
+    let signature = fs::read_to_string(
+        manifest_dir().join("../crates/fernjo-core/tests/fixtures/update-sig/no-app-version.sig"),
+    )
+    .unwrap();
+    let server = serve("9.9.9", signature.trim(), "", payload());
+    let err = download_of(&server, &test_pubkey(), Limits::production())
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "signature_invalid");
 }
 
 #[tokio::test]

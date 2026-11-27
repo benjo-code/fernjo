@@ -45,6 +45,31 @@ afterEach(() => {
 });
 
 describe("OpenTabsStore", () => {
+  test("after_a_failed_install_the_tabs_come_back_disconnected_and_nothing_is_saved", async () => {
+    const t = setup();
+    await t.openTabs.load();
+    t.sessions.open("a");
+    t.sessions.open("b");
+    t.sessions.activate(t.sessions.tabs[0]!.id);
+    settle(1000);
+    const saves = t.calls.saveOpenTabs.length;
+    const before = t.sessions.tabs.map((tab) => tab.id);
+
+    t.sessions.endedByRust();
+    settle(1000);
+
+    const tabs = t.sessions.tabs;
+    expect(tabs.map((tab) => [tab.nodeId, tab.title])).toEqual([
+      ["a", "name-a"],
+      ["b", "name-b"],
+    ]);
+    // new tabs, so their views attach again and ask Rust for a disconnected session
+    expect(tabs.some((tab) => before.includes(tab.id))).toBe(false);
+    expect(tabs.every((tab) => tab.state === "disconnected" && tab.restored)).toBe(true);
+    expect(t.sessions.activeId).toBe(tabs[0]!.id);
+    expect(t.calls.saveOpenTabs).toHaveLength(saves);
+  });
+
   test("nothing_is_saved_before_the_restore_has_finished", async () => {
     const answer = deferred<OpenTabsInfo>();
     const t = setup(undefined, { getOpenTabs: () => answer.promise });
