@@ -668,12 +668,12 @@ Four independent reviewers (fresh, read-only, each with only its own brief: the 
 | 97 | Release pipeline | **`sign` signs whatever `build` produced** (K3, the rest): a hostile build dependency ends up signed. | known → Low | owner: inherent in signing after building; pinned lock files, `cargo deny` and reviewed updates stand in front | accepted by the owner 2026-11-27 |
 | 98 | Release pipeline | **`publish` does not check that it attaches what was signed, nor what else the draft holds** (R2): a swapped unsigned installer (`.dmg`, `.deb`) or a stray draft file would become immutable. Needs code running in the release run. | Low → Low | owner: new steps in jobs that have never run could cost the v0.4.0 version number; proposed for after v0.4.0 | accepted by the owner 2026-11-27 for v0.4.0; fix on the backlog |
 | 99 | Repository | **The secret scan does not see a committed update signing key** (R3; reproduced with the test key). | Low → Low | fix | `63a5006`; gitleaks 8.30.1: five forms of the test key missed before, all found after; history still clean |
-| 100 | Repository settings | **`rust (windows)` is not a required check** on `dev` or `main` (R4). | Low → Low | owner (GitHub setting) | the owner agreed (2026-11-27) to require it: on `dev` now, on `main` with the release. **Not yet set** (the change was blocked in the working session; command in "v0.4.0 owner checks") |
+| 100 | Repository settings | **`rust (windows)` is not a required check** on `dev` or `main` (R4). | Low → Low | owner (GitHub setting) | required on `dev` since 2026-11-27 (set by the owner, read back); on `main` with the release |
 | 101 | Documentation | **The fork rule of M11 row 73 holds only for forks that leave the workflow alone** (R5, K8): what stands in the way is the approval setting for fork runs. | Low → Low | fix (record it) | `cc7a190`; recorded in `Docs/DECISIONS.md` |
 | 102 | Repository settings | **No creation rule for `v*` tags** (K11): anyone with write access (today one person) can push a release tag; the key stays behind the environment's reviewer. | known → Low | owner (GitHub setting) | accepted by the owner 2026-11-27 |
 | 103 | Updater | **The download cap overshoots by a read slice** (K2; confirmed not worse). | known → Low | owner: bounded; changing it means changing the plugin | accepted by the owner 2026-11-27 |
 | 104 | Updater (macOS, Linux) | **The install returns and the app restarts itself** (K4): rare races around that return; the review found no further defect. | known → Low | owner | accepted by the owner 2026-11-27 |
-| 105 | Updater (macOS) | **Cmd+Q is likely held back by neither the close confirmation nor a running install** (K6). | known → open | owner: waits for the check on the Mac | **open**: waits for the Cmd+Q check on the Mac |
+| 105 | Updater (macOS) | **Cmd+Q and the menu's Quit are held back by neither the close confirmation nor a running install** (K6; confirmed by check B on v0.3.1). | known → Low | fix; the rest (Quit from the Dock, log out, shutdown) goes to the owner | `be54b68`; `the_quit_item_asks_the_main_window_to_close`, `another_menu_item_closes_nothing`, `the_mac_menu_quits_through_fernjos_own_item` (seen failing first). Re-check on a Mac pending |
 | 106 | Updater | **A withheld or stale feed is not detected, and a trickling download has no overall time limit and no cancel** (threat model, U). A restart ends it. | Low → Low | owner | accepted by the owner 2026-11-27 |
 | 107 | Updater (Linux) | **The AppImage replacement is not atomic** (U, in the plugin): power loss in between leaves it missing, with the old one in a temporary folder. | Low → Low | owner: plugin behaviour; reinstall by hand | accepted by the owner 2026-11-27 |
 | 108 | Updater | **With nothing connected the install starts as soon as the download ends** (W, outside its area): an import, a sign-in prompt or an unsaved form is cut off. This is the one-click design of M13. | Low → Low | owner | accepted by the owner 2026-11-27 |
@@ -732,7 +732,7 @@ Asked at the start of M14 (2026-11-27). Results are recorded under each check.
 | Check | What | Decision |
 |---|---|---|
 | A | Key copy check (below) | run now; **passed** (2026-11-27) |
-| B | Cmd+Q on the Mac (below) | run now; **result pending** |
+| B | Cmd+Q on the Mac (below) | run 2026-11-27: **failed** on v0.3.1 (row 105); fixed, re-check of the fix **pending** |
 | C | "Check now" right after the v0.4.0 release on Windows, macOS and Linux (fix check 4) | run at the release |
 | D | Fix checks 1 to 3 | deferred to the release after v0.4.0 |
 | E | M13 check 3: the first signed release run | run at the release (it cannot run earlier) |
@@ -740,7 +740,7 @@ Asked at the start of M14 (2026-11-27). Results are recorded under each check.
 | G | M13 checks 5 to 7 | stay deferred to the release after v0.4.0 |
 | H | Earlier open checks: M7, M8 and M10 (roadmap blocks "Open manual checks (owner)"), and what "v0.3.1 result" lists as still unverified | deferred |
 
-**GitHub setting still to make (row 100):** require the Windows job on `dev`:
+**GitHub setting (row 100):** the Windows job is required on `dev` since 2026-11-27 (set by the owner; the contexts read back include `rust (windows)`). The command was:
 
 ```
 gh api -X POST repos/benjo-code/fernjo/branches/dev/protection/required_status_checks/contexts -f "contexts[]=rust (windows)"
@@ -754,6 +754,15 @@ The same command with `branches/main/` belongs to the release, once `main` holds
 2. Open fernjo again, connect, and use "Quit" in the app menu. Does the dialog appear?
 
 Report each of the two with yes or no.
+
+**Result (2026-11-27, owner, v0.3.1, SSH session connected): failed.** Cmd+Q and the menu's "Quit" both quit without asking (row 105).
+
+**Re-check of the fix (pending):** on the Mac, run the app from the macOS download of a `release.yml` run of this branch (close the installed fernjo first; the build is unsigned like a release and uses the same data).
+
+1. Connect an SSH session and press Cmd+Q: "Close fernjo?" appears. Choose "Keep open": the session still works.
+2. Menu "fernjo", "Quit fernjo": the same dialog. Choose "Close": fernjo quits.
+3. Open it again without connecting and press Cmd+Q: it quits at once.
+4. In a text field (the quick connect field), Cmd+C and Cmd+V still copy and paste, and the menu bar still has Edit and Window.
 
 ### Checks for the fixes (not run)
 
@@ -855,7 +864,8 @@ The real update check against GitHub over HTTPS (`the_real_release_host_is_reach
 
 | Gap | Disposition |
 |---|---|
-| **Check B, Cmd+Q on the Mac** (row 105) | **Pending.** If it confirms the path, it is rated and handled like any finding |
+| **The fix for row 105 on a Mac**: the new menu and the dialog from Cmd+Q and "Quit fernjo" | Built by the release runs, never run. **Blocks "go"** (pass, or waived in writing) |
+| Quit from the Dock, log out and shutdown on macOS (rest of row 105) | Still without a question and able to cut an install off; **waits for the owner's acceptance** |
 | The `release-signing` secrets on GitHub, the job wiring, and the draft, attestation, upload and publish steps | Never run; first at the release (check E). A failure leaves a draft; a workflow fix needs a new tag |
 | A tag build without cache (row 96) | Never run; the first is the release (job timeout 60 minutes; cached builds took 11 to 17) |
 | The install handover on Windows, macOS and Linux, the real window, and the failed-install and second-click behaviour (rows 82, 84, 87, 92) | Not run in a real app; checks D and G deferred to the release after v0.4.0 |
@@ -864,7 +874,7 @@ The real update check against GitHub over HTTPS (`the_real_release_host_is_reach
 | M13 check 4 on macOS and Linux (webview capability) | Deferred (check F) |
 | Earlier open checks (M7, M8, M10, and "v0.3.1 result", still unverified) | Deferred (check H) |
 | The fork pull request check of M11 row 73 (see row 101) | Not run |
-| `rust (windows)` as a required check (row 100) | Agreed, **not yet set**; command in "v0.4.0 owner checks"; `main` with the release |
+| `rust (windows)` as a required check on `main` (row 100) | Set on `dev`; `main` with the release |
 | Accepted findings: rows 86, 91, 97, 98, 102, 103, 104, 106, 107, 108 | Accepted by the owner 2026-11-27 (`Docs/DECISIONS.md`) |
 | Earlier accepted items: administrators can bypass the signing environment, unsigned installers, `glib` Dependabot alert | Accepted |
 
@@ -879,12 +889,12 @@ The real update check against GitHub over HTTPS (`the_real_release_host_is_reach
 
 | Area | Verdict |
 |---|---|
-| Security review | **Not yet:** no High or Medium open (81, 82 and 83 fixed and read a second time); every Low fixed or accepted except row 105, which waits for check B |
+| Security review | **Not yet:** no High or Medium open (81, 82 and 83 fixed and read a second time); every Low fixed or accepted, except that row 105 waits for the re-check on the Mac and the owner's word on its rest |
 | Signing and pipeline | Go: the rehearsal and the key copy check (A) passed; the GitHub secrets, the job wiring and publishing are first run at the release (known gaps) |
 | Installers | Go: dry run builds, smoke tests and build path check pass on all four platforms |
 | Documentation | Go |
-| Repository settings | Go: environment, tag policy, secrets and immutable releases read back as documented; the Windows check is still to be made required (not a release condition) |
-| **Overall** | **No go yet.** It waits for check B (Cmd+Q). Nothing else is open that blocks the release |
+| Repository settings | Go: environment, tag policy, secrets and immutable releases read back as documented; the Windows check is required on `dev` |
+| **Overall** | **No go yet.** It waits for the re-check of the Cmd+Q fix on the Mac and the owner's word on the Dock, log out and shutdown rest. Nothing else is open that blocks the release |
 
 ## v0.1.0 security review
 

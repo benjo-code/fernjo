@@ -12,6 +12,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 
 ### Fixed
 
+- On macOS, Cmd+Q and “Quit fernjo” now ask before they end connected sessions; until now fernjo quit at once. Quitting from the Dock, logging out and shutting down still do not ask.
 - The hub's Compose override for rootless Podman now also works with `podman-compose`, which failed with "--userns and --pod cannot be set together" (it puts the project into a pod by default; the override turns that off).
 
 ## [0.3.1] - 2026-11-26
