@@ -269,6 +269,33 @@ async fn a_status_read_during_an_automatic_check_hears_how_it_ended() {
 }
 
 #[tokio::test]
+async fn an_install_click_during_an_automatic_check_hears_how_it_ended() {
+    let (backend, host, log) = setup();
+    run_check(&*backend, &host, true).await;
+    let gate = Arc::new(Notify::new());
+    *backend.gate.lock().unwrap() = Some(Arc::clone(&gate));
+    let announced = host.events().len();
+    let (_, clicked) = tokio::join!(run_check(&*backend, &host, false), async {
+        // read the state itself: a status answer would count as one that heard "checking"
+        while host.0.rt.lock().unwrap().state != UpdateState::Checking {
+            tokio::task::yield_now().await;
+        }
+        // the window still shows "Update and restart", since an automatic check announces nothing
+        let clicked = run_install(&*backend, &host).await;
+        gate.notify_one();
+        clicked
+    });
+    assert_eq!(clicked.state, UpdateState::Checking);
+    // the check found the same version, so only the click makes it worth announcing
+    assert!(host.events().len() > announced, "no end was announced");
+    assert_eq!(
+        host.events().pop().map(|e| e.state),
+        Some(UpdateState::Available)
+    );
+    assert!(logged(&log).is_empty(), "{:?}", logged(&log));
+}
+
+#[tokio::test]
 async fn automatic_check_failure_leaves_state_idle_and_no_error() {
     for failure in [
         FeedError::Unreachable,

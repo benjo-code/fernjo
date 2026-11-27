@@ -254,13 +254,18 @@ fn assemble<H>(rt: &UpdaterRuntime<H>, o: &Outside) -> UpdateStatus {
     }
 }
 
-fn snapshot<H>(state: &AppState, rt: &Mutex<UpdaterRuntime<H>>, current: &str) -> UpdateStatus {
-    let o = outside(state, current);
-    let mut g = lock(rt);
+/// The status as the answer to a command. Whoever is told `checking` has to be told how the check
+/// ended, so every answer goes through here (a silent automatic check announces nothing otherwise).
+fn answer<H>(g: &mut UpdaterRuntime<H>, o: &Outside) -> UpdateStatus {
     if g.state == UpdateState::Checking {
         g.observed = true;
     }
-    assemble(&g, &o)
+    assemble(g, o)
+}
+
+fn snapshot<H>(state: &AppState, rt: &Mutex<UpdaterRuntime<H>>, current: &str) -> UpdateStatus {
+    let o = outside(state, current);
+    answer(&mut lock(rt), &o)
 }
 
 /// Changes the runtime under its lock and returns the new status.
@@ -380,7 +385,7 @@ where
             if manual && g.checking && g.silent {
                 g.asked = true;
             }
-            return (assemble(&g, &o), false);
+            return (answer(&mut g, &o), false);
         }
         before = assemble(&g, &o);
         g.checking = true;
@@ -494,7 +499,7 @@ where
                 g.total = None;
                 Some((handle, prev))
             }
-            _ => return assemble(&g, &o),
+            _ => return answer(&mut g, &o),
         }
     };
     let downloaded_now = started.is_some();
