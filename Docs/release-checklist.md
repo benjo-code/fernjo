@@ -607,7 +607,7 @@ The feed body is read without a size cap by the plugin (bounded by the 15 s chec
 
 ## v0.4.0 attack on the update path
 
-Run 2026-11-27 on `feature/m14-security-gate-v0.4.0`, headless: the real updater plugin in a Tauri mock app against a local fake feed signed with the published test key (`src-tauri/tests/updater_feed.rs`, 24 tests), the update state machine over a fake backend (`src-tauri/src/updater/tests.rs`, in the 49 tests of `--lib updater`) and the UI tests (`pnpm test`, 855 passed). Rust ran in the Linux build container; CI also runs them on Windows (job `rust (windows)`). No product code changed for this section.
+Run 2026-11-27 on `feature/m14-security-gate-v0.4.0`, headless: the real updater plugin in a Tauri mock app against a local fake feed signed with the published test key (`src-tauri/tests/updater_feed.rs`, 24 tests), the update state machine over a fake backend (`src-tauri/src/updater/tests.rs`, in the 49 tests of `--lib updater`) and the UI tests (`pnpm test`, 855 passed). Rust ran in the Linux build container; CI also runs them on Windows (job `rust (windows)`, run 46036986618: the four new tests passed there). No product code changed for this section.
 
 | Scenario | Test | Result | Proof that the test can fail |
 |---|---|---|---|
@@ -644,14 +644,14 @@ Shows that your copy of the update signing key and its password match the public
 PowerShell 7:
 
 ```powershell
-git switch dev; git pull; pnpm install --frozen-lockfile
+git switch dev; git pull; pnpm install --frozen-lockfile --ignore-scripts
 Get-FileHash crates/fernjo-core/tests/fixtures/update-sig/payload.bin
 # expected: 1953C943FBA181D485BBCCC8F3F41D0E660127B1F79548DE46530DB826E99A63
 $dir = Join-Path $env:TEMP fernjo-key-check; New-Item -ItemType Directory -Force $dir
 Copy-Item crates/fernjo-core/tests/fixtures/update-sig/payload.bin $dir
 $env:TAURI_SIGNING_PRIVATE_KEY = Read-Host -MaskInput 'private key'
 $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = Read-Host -MaskInput 'password'
-pnpm tauri signer sign --app-version 0.0.0 "$dir\payload.bin"
+node node_modules/@tauri-apps/cli/tauri.js signer sign --app-version 0.0.0 "$dir\payload.bin"
 Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY, Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 Get-Content "$dir\payload.bin.sig"
 ```
@@ -659,7 +659,7 @@ Get-Content "$dir\payload.bin.sig"
 bash (on macOS start `bash` first):
 
 ```bash
-git switch dev && git pull && pnpm install --frozen-lockfile
+git switch dev && git pull && pnpm install --frozen-lockfile --ignore-scripts
 shasum -a 256 crates/fernjo-core/tests/fixtures/update-sig/payload.bin   # or sha256sum
 # expected: 1953c943fba181d485bbccc8f3f41d0e660127b1f79548de46530db826e99a63
 dir="$(mktemp -d)"
@@ -667,12 +667,13 @@ cp crates/fernjo-core/tests/fixtures/update-sig/payload.bin "$dir/"
 read -rsp 'private key: ' TAURI_SIGNING_PRIVATE_KEY; echo
 read -rsp 'password: ' TAURI_SIGNING_PRIVATE_KEY_PASSWORD; echo
 export TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-pnpm tauri signer sign --app-version 0.0.0 "$dir/payload.bin"
+node node_modules/@tauri-apps/cli/tauri.js signer sign --app-version 0.0.0 "$dir/payload.bin"
 unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 cat "$dir/payload.bin.sig"
 ```
 
 - The "private key" is the content of the key file (one line); paste it at the prompt, never into a command.
+- Run the commands as written: the signing tool is started with `node` directly, not through `pnpm`, so no other package's program can run while the key is set. (Changed 2026-11-27; the first version of these steps used `pnpm tauri`.)
 - Send only the content of `payload.bin.sig`. If signing fails, send only the error line, never a screenshot of the session.
 - Afterwards clear the clipboard and the clipboard history, delete the folder with `payload.bin` and close the terminal.
 
