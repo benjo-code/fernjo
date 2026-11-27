@@ -250,7 +250,9 @@ pub(crate) fn ask_to_close(window: &tauri::Window, connected: usize, then: sessi
                     .state::<AppState>()
                     .close_prompt_open
                     .store(false, Ordering::SeqCst);
-                if confirmed {
+                // an install confirmed after the download was replaced ends nothing
+                if confirmed && updater::commit_confirmed(then, &window.state::<AppState>().updater)
+                {
                     window.state::<AppState>().sessions.close_all();
                     sync_runner::finish_after_push(window.clone(), then);
                 }

@@ -72,7 +72,7 @@
   );
 
   // svelte-ignore state_referenced_locally
-  const update = new UpdateStore(api);
+  const update = new UpdateStore(api, () => sessions.endedByRust());
   let updateOpen = $state(false);
 
   const layout = new LayoutStore();

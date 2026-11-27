@@ -37,6 +37,9 @@
 //!   push, `install`. The plugin's install on Windows hands over to the setup and exits the
 //!   process; macOS and Linux replace the files and return, then a restart is requested
 //!   (`request_restart`, never `AppHandle::restart`). `download_and_install` is never used.
+//! - A confirmation commits the held download before the sessions end ([`commit_confirmed`]); one
+//!   that no longer applies ends nothing. When an install fails after the sessions ended, the UI
+//!   sees `installing` turn into `failed` and brings the tabs back disconnected.
 //! - A page-only install (`InstallView::ReleasePage`) never downloads: `update_install` returns
 //!   the status unchanged.
 //! - The runtime lock is a leaf: nothing else is locked while it is held, and it is never held
@@ -127,6 +130,8 @@ pub struct UpdaterRuntime<H = FeedUpdate> {
     /// A check is out. The check slot, separate from `state` so a check that starts in `Ready`
     /// leaves the held download installable (`state` stays `Ready` meanwhile).
     checking: bool,
+    /// The user confirmed the install of the held download: a check that ends now leaves it.
+    committed: bool,
 }
 
 impl<H> Default for UpdaterRuntime<H> {
@@ -139,6 +144,7 @@ impl<H> Default for UpdaterRuntime<H> {
             error: None,
             bytes: None,
             checking: false,
+            committed: false,
         }
     }
 }
@@ -373,8 +379,9 @@ where
     let after = change(host, |g| {
         g.checking = false;
         let ready = prev.0 == UpdateState::Ready;
-        if ready && g.state != UpdateState::Ready {
-            // an install began (or failed) while the check was out: its verdict stands
+        if ready && (g.state != UpdateState::Ready || g.committed) {
+            // an install was confirmed, began or failed while the check was out: its verdict
+            // stands
             return;
         }
         match result {
@@ -516,6 +523,21 @@ fn progress_sink<Ho: Host>(host: Ho) -> Progress {
     })
 }
 
+/// What the close dialog asks before it ends the sessions: whether what the user confirmed still
+/// holds. For an install that is the held download, which is then committed, so a check that ends
+/// afterwards leaves it in place. A confirmation that arrives too late ends nothing.
+pub(crate) fn commit_confirmed<H>(then: CloseThen, rt: &Mutex<UpdaterRuntime<H>>) -> bool {
+    if then != CloseThen::Install {
+        return true;
+    }
+    let mut g = lock(rt);
+    let held = g.state == UpdateState::Ready;
+    if held {
+        g.committed = true;
+    }
+    held
+}
+
 /// The second half: installs the held bytes. Does nothing unless the state is `Ready`.
 ///
 /// `finish_after_push` sets `sync_closing` before it gets here and nothing else resets it, because
@@ -548,6 +570,7 @@ where
 {
     let taken = {
         let mut g = lock(host.runtime());
+        g.committed = false;
         match (g.state, g.available.as_ref().map(|a| Arc::clone(&a.handle))) {
             (UpdateState::Ready, Some(handle)) => g.bytes.take().map(|b| {
                 g.state = UpdateState::Installing;
@@ -771,6 +794,9 @@ impl Host for AppHost {
     }
 
     fn go(&self) {
+        if !commit_confirmed(CloseThen::Install, self.runtime()) {
+            return;
+        }
         self.state().sessions.close_all();
         match self.window() {
             Some(window) => crate::sync_runner::finish_after_push(window, CloseThen::Install),

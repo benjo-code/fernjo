@@ -434,6 +434,42 @@ fn the_plugin_exit_hook_is_replaced_so_a_failed_setup_start_keeps_the_app_usable
 }
 
 #[tokio::test]
+async fn a_confirmation_that_no_longer_applies_ends_nothing() {
+    let (backend, host, _) = setup();
+    run_check(&*backend, &host, true).await;
+    // the download the dialog asked about was replaced: no session may end for it
+    assert!(!commit_confirmed(CloseThen::Install, &host.0.rt));
+    assert!(commit_confirmed(CloseThen::Exit, &host.0.rt));
+    assert!(commit_confirmed(CloseThen::Restart, &host.0.rt));
+    // the close dialog asks this before it ends the sessions
+    let lib = include_str!("../lib.rs");
+    let dialog = &lib[lib.find("pub(crate) fn ask_to_close").unwrap()..];
+    let asked = dialog
+        .find("updater::commit_confirmed(then,")
+        .expect("asked");
+    assert!(asked < dialog.find("sessions.close_all()").unwrap());
+}
+
+#[tokio::test]
+async fn a_check_that_ends_after_the_confirmation_keeps_the_committed_download() {
+    let (backend, host, log) = setup();
+    host.0.connected.store(1, Ordering::SeqCst);
+    host.0.confirm.store(false, Ordering::SeqCst);
+    run_check(&*backend, &host, true).await;
+    run_install(&*backend, &host).await;
+    assert!(commit_confirmed(CloseThen::Install, &host.0.rt));
+    // the sessions end and the last push runs; meanwhile a check finds yet another version
+    *backend.announce.lock().unwrap() = Ok(Some("0.4.2"));
+    run_check(&*backend, &host, true).await;
+    finish_install(&*backend, &host);
+    assert!(
+        logged(&log).contains(&"install".to_owned()),
+        "{:?}",
+        logged(&log)
+    );
+}
+
+#[tokio::test]
 async fn release_page_only_install_never_downloads() {
     let (backend, host, log) = setup();
     *host.0.view.lock().unwrap() = InstallView::ReleasePage {
