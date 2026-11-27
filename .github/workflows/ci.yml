@@ -77,6 +77,8 @@ jobs:
 
       # --no-fail-fast: one run names every failing test binary, not only the first.
       - run: cargo test --workspace --no-fail-fast
+      # ONE-OFF, reverted by the next commit: the update check against real GitHub, on Windows.
+      - run: cargo test -p fernjo-app --test updater_feed -- --ignored
 
   ui:
     name: ui
