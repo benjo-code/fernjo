@@ -605,6 +605,63 @@ Run the commands from the repository root (Git Bash on Windows). `<feed>` is an 
 
 The feed body is read without a size cap by the plugin (bounded by the 15 s check timeout and the pinned HTTPS endpoint); the download cap overshoots by one read slice; `sign` trusts the output of `build` including its caches (existing pipeline behaviour); a macOS or Linux install that returns instead of exiting and a confirm that arrives after the state left Ready (for example because a check found a newer version while the dialog was open) are rare races; a quit on macOS through the menu (Cmd+Q) is likely held back by neither the close confirmation nor a running install (read in the dependency sources, roadmap backlog); all noted in `Docs/DECISIONS.md`.
 
+## v0.4.0 owner checks
+
+Asked at the start of M14 (2026-11-27). Results are recorded under each check.
+
+### Cmd+Q on the Mac (installed v0.3.x)
+
+1. Connect an SSH session and press Cmd+Q. Does "Close fernjo?" appear?
+2. Open fernjo again, connect, and use "Quit" in the app menu. Does the dialog appear?
+
+Report each of the two with yes or no.
+
+### Key copy check
+
+Shows that your copy of the update signing key and its password match the public key built into the app. It signs a copy of a committed test file as version `0.0.0`, which no installed app would accept. Run it on any machine with the repository, from its root. No key file is written, and the key and password do not reach the shell history.
+
+PowerShell 7:
+
+```powershell
+git switch dev; git pull; pnpm install --frozen-lockfile
+Get-FileHash crates/fernjo-core/tests/fixtures/update-sig/payload.bin
+# expected: 1953C943FBA181D485BBCCC8F3F41D0E660127B1F79548DE46530DB826E99A63
+$dir = Join-Path $env:TEMP fernjo-key-check; New-Item -ItemType Directory -Force $dir
+Copy-Item crates/fernjo-core/tests/fixtures/update-sig/payload.bin $dir
+$env:TAURI_SIGNING_PRIVATE_KEY = Read-Host -MaskInput 'private key'
+$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = Read-Host -MaskInput 'password'
+pnpm tauri signer sign --app-version 0.0.0 "$dir\payload.bin"
+Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY, Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+Get-Content "$dir\payload.bin.sig"
+```
+
+bash (on macOS start `bash` first):
+
+```bash
+git switch dev && git pull && pnpm install --frozen-lockfile
+shasum -a 256 crates/fernjo-core/tests/fixtures/update-sig/payload.bin   # or sha256sum
+# expected: 1953c943fba181d485bbccc8f3f41d0e660127b1f79548de46530db826e99a63
+dir="$(mktemp -d)"
+cp crates/fernjo-core/tests/fixtures/update-sig/payload.bin "$dir/"
+read -rsp 'private key: ' TAURI_SIGNING_PRIVATE_KEY; echo
+read -rsp 'password: ' TAURI_SIGNING_PRIVATE_KEY_PASSWORD; echo
+export TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+pnpm tauri signer sign --app-version 0.0.0 "$dir/payload.bin"
+unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+cat "$dir/payload.bin.sig"
+```
+
+- The "private key" is the content of the key file (one line); paste it at the prompt, never into a command.
+- Send only the content of `payload.bin.sig`. If signing fails, send only the error line, never a screenshot of the session.
+- Afterwards clear the clipboard and the clipboard history, delete the folder with `payload.bin` and close the terminal.
+
+Optional, only after the check passed: set both secrets again from the verified copy, pasting each value at the prompt (never as an argument):
+
+```
+gh secret set TAURI_SIGNING_PRIVATE_KEY --env release-signing --repo benjo-code/fernjo
+gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --env release-signing --repo benjo-code/fernjo
+```
+
 ## v0.1.0 security review
 
 Review date: 2026-11-18 (Windows 11; CI dry-run installers of run `44205574554`, PR #10). The checks of Steps 1-4 ran on `target/release/fernjo.exe` built from commit `1bc2762` (built after the last commit that touched `src-tauri`, `crates` or `ui`). The fix commits of this review (`64aa818`, `6648cff`, `5791506`) and the later import fixes (`36c3be0`, `de2a615`, `c809677`) post-date that binary; the real-app checks were not repeated on a rebuild, so they say nothing about those changes (the code fixes have their own tests). Every check below records its command, its result and the date. Real-app checks ran with a scratch `FERNJO_DATA_DIR`; the owner's real data folder was not read, printed or modified, and "Unlock automatically on this device" was never ticked.

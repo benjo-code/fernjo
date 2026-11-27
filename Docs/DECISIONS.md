@@ -15,6 +15,96 @@ Log of architecture and technology decisions. Newest entries on top.
 **Rejected alternatives:** <What else was considered and why not>
 -->
 
+## 2026-11-27 – M14 threat model
+
+**Context:** M14 (`Docs/superpowers/specs/2026-11-27-m14-security-gate-v0.4.0-design.md`, section 1) reviews what changed since v0.3.1 before v0.4.0, the first version that updates itself. This entry adds to "M11 threat model" what that version brings, and is the reviewers' frame. It describes the code at the start of M14 (`feature/m14-security-gate-v0.4.0`, before any M14 fix). **Open** marks a point with no protection or with one that no decision has accepted; nothing here is a review result or a fix.
+
+**Decision:** the M11 model stays; the assets, assumptions and cells below are added to it.
+
+**Assets.** What each one touches:
+
+| Asset | Secrets | Data folder | Network | Webview |
+|---|---|---|---|---|
+| Update feed (`latest.json`: version, notes, URL and signature per platform) | none | none | one HTTPS GET to the pinned `releases/latest/download/latest.json`, plus its redirects; after the start and every 24 h, and on "Check now" | sees version and notes (cleaned, cut to 16 KiB) in `update-status` |
+| Signing key, its password, the pinned public key | the private key and password: the two secrets of the GitHub environment `release-signing` and the owner's own copy, never on a device that runs the app | none | the `sign` job only | none (the public key is in `tauri.conf.json`) |
+| Downloaded update bytes (held in memory) | none | none | one GET of the URL the feed names, plus its redirects | sees progress counts only |
+| Install handover (NSIS setup on Windows, replaced bundle on macOS, replaced AppImage on Linux) | none | must not change `connections.json`, the vault or `settings.json`; a last sync push runs before it | the sync push | starts it through `update_install` |
+| `checkForUpdates`, `skippedUpdateVersion` | none | in `settings.json` | `checkForUpdates` off stops the automatic request | reads and sets both through commands |
+| Webview capability (`core:event:allow-listen`, `core:event:allow-unlisten`) | none | none | none | the permissions the page holds besides the app's own commands |
+
+**Trust assumptions (accepted, not defended).** M11 assumptions 1 and 4 apply unchanged (the device and its OS account are trusted; a script that runs in the webview holds the whole command set). Added:
+1. The signature of the pinned key is the only thing that makes an update genuine. Whoever holds the private key and can change the feed controls every installed copy that checks.
+2. The owner's GitHub account and the repository's administrators are trusted: they can bypass the environment rules (`can_admins_bypass`) and change repository settings.
+3. GitHub delivers releases, runs the jobs as the workflow file at the tag says and keeps environment secrets to the jobs the environment admits.
+4. The pinned build tooling (actions by commit SHA, `Cargo.lock`, `pnpm-lock.yaml`, the Tauri CLI that signs) is trusted at the versions pinned.
+5. The first install is by hand from the release page; its integrity rests on HTTPS and, if the person checks, on `SHA256SUMS` and the build provenance. Installers carry no OS code signature.
+6. The device's TLS root certificates decide which server counts as GitHub.
+
+**Cells.** One table per adversary; assets not listed are out of its reach.
+
+*1. Hostile or compromised feed (whoever controls what the pinned URL answers)*
+
+| Asset | What it can do | What stops it | Accepted or open |
+|---|---|---|---|
+| Downloaded bytes, install | Announce any newer plain version with its own URL and notes, and pair it with a file and a signature. | The plugin verifies the bytes against the pinned key and, with `requireSignedVersion`, against the announced version, before it returns them. Only a strictly newer stable version is offered (`decide::is_offered`). The signature binds the bytes and the version; it names no platform and no file name that the app checks. | Accepted for a feed without the key (assumption 1). |
+| Update feed | Answer with a large or slow body; answer nothing; answer an old manifest so that no update is seen. | A check is dropped after 15 s. An automatic check fails silently, a manual one shows a fixed text. | **Open:** the body is read without a size cap; a withheld or stale feed is not detected. |
+| Memory of the app | Announce or send a download without end. | Cap of 256 MiB on the declared length and on the bytes received; dropped after 60 s without data. | **Open:** the cap is approximate (overshoot of a read slice); there is no bound on the whole download's duration. |
+| Webview | Choose the notes and the version string shown. | Notes lose control characters, are cut to 16 KiB and rendered as text (`{@html` is forbidden by a test); the release page URL is built in Rust from a plain version only. | Accepted: Unicode format characters pass through in notes. |
+
+*2. Network path (between the device and GitHub or the redirect target)*
+
+| Asset | What it can do | What stops it | Accepted or open |
+|---|---|---|---|
+| Update feed, downloaded bytes | Watch that a check happens (address, host name, timing); block it; with a TLS root the device trusts (an inspecting proxy), act as the feed. | HTTPS to the configured endpoint (a release build refuses a plain `http` endpoint at start); the request carries no identifier besides the User-Agent `tauri-plugin-updater/<version>`; the signature check as in cell 1. The system proxy is used. | Accepted: blocking and observing; a trusted root counts as the feed (assumption 6). |
+
+*3. Redirect target (the host a redirect leads to; GitHub's asset hosts in normal operation)*
+
+| Asset | What it can do | What stops it | Accepted or open |
+|---|---|---|---|
+| Update feed, downloaded bytes | Serve anything for the feed or the file. Redirects are followed to any host, up to 10 hops (reqwest's default; the plugin adds no rule), and the plugin's HTTPS rule is about the configured endpoint. | The signature check, as in cell 1. | Accepted: no host is pinned (the signature, not the host, protects the install). |
+
+*4. Pull request or fork*
+
+| Asset | What it can do | What stops it | Accepted or open |
+|---|---|---|---|
+| Signing key | Run changed workflow and build code in the dry run. | `sign`, `verify-signatures` and `publish` are skipped on a pull request; a fork's run gets a read-only token and no secrets; the secrets exist only in the environment, whose policy admits `v*` tags and asks a reviewer. | |
+| Release files | Produce installers in its own run. | A fork's artifacts are not uploaded; nothing is attached to a release. | **Open:** the check of that rule with a real fork pull request has not been run (M11 row 73). |
+| Build caches of a later tag build | Write a cache. | GitHub scopes caches written by pull request runs to that pull request (platform behaviour, not tested here). | Accepted. |
+
+*5. Build dependency (a hostile crate, npm package or action at a pinned or updated version)*
+
+| Asset | What it can do | What stops it | Accepted or open |
+|---|---|---|---|
+| Downloaded bytes (what gets signed) | Change the binary or installer during `build`; the changed file is then signed and published. | Pinned versions and lock files, `cargo deny`, `pnpm audit`, Dependabot updates merged only by the owner with a cooldown; the build jobs hold no secret and a read-only token. | **Open:** `sign` signs what `build` produced, caches included. |
+| Signing key | Run code in the job that holds the key. | `sign` installs with `--ignore-scripts`, restores no cache, compiles nothing and names the secrets in one step's `env:`; what runs there is `pnpm`, the Tauri CLI and the actions pinned by SHA. | Accepted: the Tauri CLI and the runner image see the key (assumption 4). |
+| Release files | Run code in `verify-signatures` (the dependency build scripts of the example) or `publish`. | `verify-signatures` has no secret and a read-only token; `publish` compiles nothing and runs the repository's scripts of the tag. | |
+
+*6. Tag pusher (anyone or anything with write access who pushes a `v*` tag)*
+
+| Asset | What it can do | What stops it | Accepted or open |
+|---|---|---|---|
+| Signing key | Push a tag whose workflow file says something else. | The secrets are only in the environment `release-signing`: a job gets them only by naming it, from a `v*` tag ref, after a required reviewer approves (self-review allowed). | Accepted: the reviewer must read what they approve. |
+| Release and feed | With a changed workflow, write a release with its own files and publish it as latest. | Installed copies take nothing without a valid signature (cell 1); published releases are immutable. The ruleset `release tags` blocks deleting and moving a `v*` tag; it has **no creation rule**, unlike what "M13: update feed, signing job, key lifecycle and scope changes" says (read back with `gh api` on 2026-11-27). | **Open:** who may create a `v*` tag is not restricted beyond write access. |
+
+*7. Repository administrator (or a taken-over owner account)*
+
+| Asset | What it can do | What stops it | Accepted or open |
+|---|---|---|---|
+| All of the above | Bypass the environment rules, change the ruleset, settings and workflows, replace the secrets, sign and publish any file. A published release takes no new files; a new release can. | Account security (outside the repository). A changed secret does not match the pinned key, so replacing it signs nothing installed copies accept. | Accepted (assumption 2). |
+
+*8. Local process of the same user*
+
+| Asset | What it can do | What stops it | Accepted or open |
+|---|---|---|---|
+| Install handover, settings, the app itself | Edit `settings.json` (stop checks, set a skipped version), replace the installed app (per-user install), change the environment the app starts with, swap the temporary setup file before it runs. | Nothing in fernjo. | Accepted (M11 assumption 1). |
+
+*9. Webview script*
+
+| Asset | What it can do | What stops it | Accepted or open |
+|---|---|---|---|
+| Install handover | Call `update_install`: downloads and installs the offered update; asks first only when sessions are connected. | Only a verified, strictly newer update can be installed; no argument chooses a file, URL or version. The capability grants no `updater:*` permission, so the plugin's own commands are closed. | Accepted (M11 assumption 4). |
+| Settings, feed requests, release page | Run checks (manual ones ignore the skipped version), skip the offered version, switch automatic checks off, open the release page. | `update_skip` stores only the version on offer; `update_open_release_page` takes no argument and builds the URL in Rust. | Accepted (M11 assumption 4). |
+
 ## 2026-11-27 – M13: final review fixes (run slot, install window, test feed, release notes)
 
 **Context:** The review of the whole M13 branch asked for fixes before the merge. This entry adds to the three M13 entries of 2026-11-26 below.

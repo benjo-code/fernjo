@@ -42,7 +42,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 | 12 | Hub image on GitHub | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-25-milestone-12-hub-image.md) | 2026-11-26 |
 | – | **Release `v0.3.1`** – Hub image on GitHub (M12) | – | ✅ done | – | 2026-11-26 |
 | 13 | Automatic updates | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-26-milestone-13-auto-update.md) | 2026-11-27 |
-| 14 | Security check and release readiness for v0.4.0 | 1 – fernjo app | 🟡 planned | [Plan](superpowers/plans/2026-11-27-milestone-14-security-gate.md) | – |
+| 14 | Security check and release readiness for v0.4.0 | 1 – fernjo app | 🔵 in progress | [Plan](superpowers/plans/2026-11-27-milestone-14-security-gate.md) | – |
 | – | **Release `v0.4.0`** – Automatic updates (M13 to M14) | – | ⬜ open | – | – |
 | 15 | Export to mRemoteNG format | 1 – fernjo app | ⬜ open | – | – |
 | 16 | SFTP file browser | 1 – fernjo app | ⬜ open | – | – |
@@ -689,7 +689,7 @@ Goal: The app notices that a new version is available, shows it in the UI, and o
 - [x] The capability list contains no `core:default` and the app still works in a real release build (tree loads, session opens and its output arrives, events arrive, shown by `vault-status` after the idle auto-lock), checked by hand in a release build – 2026-11-27, reported by the owner ("each one worked as expected"): the Windows installer of release dry run 46013300816 (the code of pull request 63), started with a scratch `FERNJO_DATA_DIR`. Steps: a folder and an SSH connection created and shown in the tree; the session connected and `seq 1 200000` arrived up to its last line; a vault with "Lock the vault after" 1 minute showed "Vault: locked" by itself without any input (the `vault-status` event, behind the same `core:event:allow-listen` as `update-status` and `sync-status`); remote desktop full screen with Ctrl+Shift+F11 on and off. `capability_lists_exactly_the_pinned_permissions` and `capability_has_no_core_default_and_no_updater_permission` pin the list (workspace run of pull request 63). Not observed: `update-status` and `sync-status` themselves; macOS and Linux
 
 ## Milestone 14 – Security check and release readiness for v0.4.0
-**Status:** 🟡 planned · **Plan:** [2026-11-27-milestone-14-security-gate.md](superpowers/plans/2026-11-27-milestone-14-security-gate.md) · **Prerequisites:** M13
+**Status:** 🔵 in progress · **Plan:** [2026-11-27-milestone-14-security-gate.md](superpowers/plans/2026-11-27-milestone-14-security-gate.md) · **Prerequisites:** M13
 
 Goal: v0.4.0 is only released after an independent security check of what changed since v0.3.1 and a written go or no-go verdict; the milestone prepares the release and does not perform it.
 
