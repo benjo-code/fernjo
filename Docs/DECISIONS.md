@@ -15,6 +15,17 @@ Log of architecture and technology decisions. Newest entries on top.
 **Rejected alternatives:** <What else was considered and why not>
 -->
 
+## 2026-11-27 – M14: owner decisions on the security review
+
+**Context:** The v0.4.0 review left rows without a fix, two fixes that change behaviour, and open owner checks (`Docs/release-checklist.md`, "v0.4.0 security review" and "v0.4.0 owner checks"). The owner was asked in one batch and adopted the recommendations (2026-11-27).
+**Decision:**
+- **Kept:** row 83 (fernjo fetches the update feed itself, with a size cap; risk: if that fetch failed on a platform, installed copies there could not find updates; checked against GitHub on Linux and Windows, macOS only after the release) and row 87 (with sessions connected, a finished download waits for "Restart to update" instead of opening the dialog).
+- **Accepted, with the remaining risk:** row 86 (a feed holder can serve another platform's signed file; the app may then need a manual reinstall), row 91 (a damaged `settings.json` or a downgrade can turn update checks back on), row 97 (a hostile build dependency would be signed), row 98 (the publish job does not re-check what it attaches; accepted for v0.4.0, fix on the backlog), row 102 (anyone with write access, today one person, can push a `v*` tag; the key stays behind the environment's reviewer), row 103 (the download cap overshoots by a read slice), row 104 (rare races around the restart on macOS and Linux), row 106 (a withheld or stalled update goes unnoticed until a restart), row 107 (power loss during a Linux update can leave the AppImage missing), row 108 (with nothing connected the app restarts when the download ends, cutting off unsaved work).
+- **Row 100:** the Windows job becomes a required check, on `dev` now and on `main` with the release. A GitHub setting; not yet made.
+- **Row 105 (macOS Cmd+Q):** not decided; it waits for the owner's check.
+**Rationale:** Each accepted row needs control the update signature already guards against, local access, or a fix riskier than the finding.
+**Rejected alternatives:** Reverting rows 83 and 87; changing the publish job before its first run.
+
 ## 2026-11-27 – M14: fixes from the v0.4.0 security review
 
 **Context:** The M14 reviews of `v0.3.1..HEAD` (findings from row 81 in `Docs/release-checklist.md`). This entry records the fixes that involve a decision; the table names the commit and test of each.

@@ -654,29 +654,29 @@ Four independent reviewers (fresh, read-only, each with only its own brief: the 
 | 83 | Updater | **A large feed costs about 192 bytes of memory per byte** (U2, worse than K1): 32 MiB took 6 GB and stayed allocated while the update was on offer; the 15 s timeout cannot interrupt the parse. Needs control of the feed or a trusted TLS root. | Medium → Medium | fix | `01de9e9`, `a2af4c9`; `an_oversized_feed_is_feed_invalid_and_offers_nothing`, `an_endless_feed_is_cut_off_at_the_cap`, `the_configured_endpoint_is_what_a_release_build_asks`; against real GitHub over HTTPS: Linux (container) and Windows (CI run 46047410980); macOS: owner check. Second read: holds; untested endpoint and unchecked script limit fixed |
 | 84 | Updater, UI | **After an install that installs nothing the tabs still look connected** (U3, W2, K5): the sessions are ended silently before the outcome is known; typing is swallowed and Reconnect fails. A confirmation that arrives late ends the sessions for nothing. | Low → Low | fix | `115cfd4`; `a_confirmation_that_no_longer_applies_ends_nothing`, `a_check_that_ends_after_the_confirmation_keeps_the_committed_download`, `after_a_failed_install_the_tabs_come_back_disconnected_and_nothing_is_saved`, `a_failed_install_tells_the_app_that_its_sessions_ended`. In the real app: owner check |
 | 85 | Updater | **A signature switched to minisign's legacy mode is accepted** (U4): the 64-byte hash of a signed file then passes verification. The attacker does not choose those bytes, so the format checks fail the install. | Low → Low | fix | `8a467a2`; `a_signature_switched_to_legacy_mode_is_refused`, `rejects_a_signature_switched_to_legacy_mode` |
-| 86 | Updater | **The signature names no platform** (U5): a feed that lists the Apple Silicon bundle for Intel Macs installs an app that cannot start. Needs control of the feed. | Low → Low | owner: binding the file name would make the installer names part of the update contract, so a later rename would stop every installed copy from updating | |
+| 86 | Updater | **The signature names no platform** (U5): a feed that lists the Apple Silicon bundle for Intel Macs installs an app that cannot start. Needs control of the feed. | Low → Low | owner: binding the file name would make the installer names part of the update contract, so a later rename would stop every installed copy from updating | accepted by the owner 2026-11-27 |
 | 87 | Updater | **"Install update?" opens by itself when the download ends, with "Install" as the default button** (U6, W3): an Enter meant for a shell ends all sessions. | Low → Low | fix | `e1a35f9`; `install_with_connected_sessions_waits_for_confirmation_then_closes_sessions_first`, `downloading_shows_progress_and_stage`. Changes the M13 flow: with sessions connected, a second click ("Restart to update") |
 | 88 | Updater, UI | **"Check now" during a silent automatic check leaves "Checking…" on screen** (W4): no event follows when the check changes nothing. | Low → Low | fix | `6796ecb`; `check_now_during_an_automatic_check_runs_after_it_and_reports`, `a_status_read_during_an_automatic_check_hears_how_it_ended` |
 | 89 | Updater | **"Every 24 hours" does not count sleep on macOS and Linux** (P2; recorded as a limit in M13): checks can be days apart on a laptop. | Low → Low | fix | `7703af5`; `a_day_asleep_counts_towards_the_next_check` |
 | 90 | Settings | **A failed second read of `settings.json` at start turns checks back on** (P3, third case). | Low → Low | fix | `00c7444`; `a_settings_file_that_fails_only_at_the_second_read_stops_automatic_checks` |
-| 91 | Settings | **The update opt-out can be lost** (P3, first two cases): a damaged `settings.json` falls back to its backup, which may still have checks on; going back to v0.3.1 and saving drops the setting. | Low → Low | owner: this is how every setting behaves; the switch can be set again | |
+| 91 | Settings | **The update opt-out can be lost** (P3, first two cases): a damaged `settings.json` falls back to its backup, which may still have checks on; going back to v0.3.1 and saving drops the setting. | Low → Low | owner: this is how every setting behaves; the switch can be set again | accepted by the owner 2026-11-27 |
 | 92 | Updater (Linux) | **A `.deb` or self-built binary that inherits `APPIMAGE` offers a self-update** (P5): it can fail every time, or replace another program's AppImage. | Low → Low | fix | `b4d2056`; `install_kind_table`. A real AppImage still updating itself: owner check |
 | 93 | Webview tests | **The capability guard tests miss TOML files, subfolders and inline capabilities** (W5). The shipped configuration is correct. | Low → Low | fix | `eb13690`; the tests of `tauri_conf.rs` fail on a TOML capability, a subfolder, an inline capability and a multi-line `default` feature |
 | 94 | Documentation | **The privacy statement says less than the app does** (P1): a check is a chain of requests to two GitHub hosts with the usual headers, the operating system may contact a certificate authority, the WebView2 measurement predates the updater, and "the same release" is not enforced. | Low → Low | fix | `238242a`, `3f9b53f`; checked against the redirect chain of a real release URL (github.com, then release-assets.githubusercontent.com) |
 | 95 | Documentation | **The release note does not say that checks are on by default** (P4). | Low → Low | fix | `c6d2c48`; read against the defaults |
 | 96 | Release pipeline | **Release builds restore build caches** (K3, with R's detail): code run by CI on `dev` can leave something in a cache that a later tag build compiles into the signed files. | known → Low | fix: no restored cache on tag builds | `7caa948`; `release_builds_restore_no_cache_on_a_tag`. A tag build without cache has not run yet |
-| 97 | Release pipeline | **`sign` signs whatever `build` produced** (K3, the rest): a hostile build dependency ends up signed. | known → Low | owner: inherent in signing after building; pinned lock files, `cargo deny` and reviewed updates stand in front | |
-| 98 | Release pipeline | **`publish` does not check that it attaches what was signed, nor what else the draft holds** (R2): a swapped unsigned installer (`.dmg`, `.deb`) or a stray draft file would become immutable. Needs code running in the release run. | Low → Low | owner: new steps in jobs that have never run could cost the v0.4.0 version number; proposed for after v0.4.0 | |
+| 97 | Release pipeline | **`sign` signs whatever `build` produced** (K3, the rest): a hostile build dependency ends up signed. | known → Low | owner: inherent in signing after building; pinned lock files, `cargo deny` and reviewed updates stand in front | accepted by the owner 2026-11-27 |
+| 98 | Release pipeline | **`publish` does not check that it attaches what was signed, nor what else the draft holds** (R2): a swapped unsigned installer (`.dmg`, `.deb`) or a stray draft file would become immutable. Needs code running in the release run. | Low → Low | owner: new steps in jobs that have never run could cost the v0.4.0 version number; proposed for after v0.4.0 | accepted by the owner 2026-11-27 for v0.4.0; fix on the backlog |
 | 99 | Repository | **The secret scan does not see a committed update signing key** (R3; reproduced with the test key). | Low → Low | fix | `63a5006`; gitleaks 8.30.1: five forms of the test key missed before, all found after; history still clean |
-| 100 | Repository settings | **`rust (windows)` is not a required check** on `dev` or `main` (R4). | Low → Low | owner (GitHub setting) | |
+| 100 | Repository settings | **`rust (windows)` is not a required check** on `dev` or `main` (R4). | Low → Low | owner (GitHub setting) | the owner agreed (2026-11-27) to require it: on `dev` now, on `main` with the release. **Not yet set** (the change was blocked in the working session; command in "v0.4.0 owner checks") |
 | 101 | Documentation | **The fork rule of M11 row 73 holds only for forks that leave the workflow alone** (R5, K8): what stands in the way is the approval setting for fork runs. | Low → Low | fix (record it) | `cc7a190`; recorded in `Docs/DECISIONS.md` |
-| 102 | Repository settings | **No creation rule for `v*` tags** (K11): anyone with write access (today one person) can push a release tag; the key stays behind the environment's reviewer. | known → Low | owner (GitHub setting) | |
-| 103 | Updater | **The download cap overshoots by a read slice** (K2; confirmed not worse). | known → Low | owner: bounded; changing it means changing the plugin | |
-| 104 | Updater (macOS, Linux) | **The install returns and the app restarts itself** (K4): rare races around that return; the review found no further defect. | known → Low | owner | |
-| 105 | Updater (macOS) | **Cmd+Q is likely held back by neither the close confirmation nor a running install** (K6). | known → open | owner: waits for the check on the Mac | |
-| 106 | Updater | **A withheld or stale feed is not detected, and a trickling download has no overall time limit and no cancel** (threat model, U). A restart ends it. | Low → Low | owner | |
-| 107 | Updater (Linux) | **The AppImage replacement is not atomic** (U, in the plugin): power loss in between leaves it missing, with the old one in a temporary folder. | Low → Low | owner: plugin behaviour; reinstall by hand | |
-| 108 | Updater | **With nothing connected the install starts as soon as the download ends** (W, outside its area): an import, a sign-in prompt or an unsaved form is cut off. This is the one-click design of M13. | Low → Low | owner | |
+| 102 | Repository settings | **No creation rule for `v*` tags** (K11): anyone with write access (today one person) can push a release tag; the key stays behind the environment's reviewer. | known → Low | owner (GitHub setting) | accepted by the owner 2026-11-27 |
+| 103 | Updater | **The download cap overshoots by a read slice** (K2; confirmed not worse). | known → Low | owner: bounded; changing it means changing the plugin | accepted by the owner 2026-11-27 |
+| 104 | Updater (macOS, Linux) | **The install returns and the app restarts itself** (K4): rare races around that return; the review found no further defect. | known → Low | owner | accepted by the owner 2026-11-27 |
+| 105 | Updater (macOS) | **Cmd+Q is likely held back by neither the close confirmation nor a running install** (K6). | known → open | owner: waits for the check on the Mac | **open**: waits for the Cmd+Q check on the Mac |
+| 106 | Updater | **A withheld or stale feed is not detected, and a trickling download has no overall time limit and no cancel** (threat model, U). A restart ends it. | Low → Low | owner | accepted by the owner 2026-11-27 |
+| 107 | Updater (Linux) | **The AppImage replacement is not atomic** (U, in the plugin): power loss in between leaves it missing, with the old one in a temporary folder. | Low → Low | owner: plugin behaviour; reinstall by hand | accepted by the owner 2026-11-27 |
+| 108 | Updater | **With nothing connected the install starts as soon as the download ends** (W, outside its area): an import, a sign-in prompt or an unsaved form is cut off. This is the one-click design of M13. | Low → Low | owner | accepted by the owner 2026-11-27 |
 
 Known items with an earlier disposition were not rated again: K7 (administrators can bypass the environment), K9 (unsigned installers), K10 (`glib` alert).
 
@@ -726,6 +726,27 @@ Differences from the jobs: the shell and operating system; `verify_update_signat
 ## v0.4.0 owner checks
 
 Asked at the start of M14 (2026-11-27). Results are recorded under each check.
+
+**Owner's answer (2026-11-27)** to the batch of open points, adopting the recommendations:
+
+| Check | What | Decision |
+|---|---|---|
+| A | Key copy check (below) | run now; **result pending** |
+| B | Cmd+Q on the Mac (below) | run now; **result pending** |
+| C | "Check now" right after the v0.4.0 release on Windows, macOS and Linux (fix check 4) | run at the release |
+| D | Fix checks 1 to 3 | deferred to the release after v0.4.0 |
+| E | M13 check 3: the first signed release run | run at the release (it cannot run earlier) |
+| F | M13 check 4 on macOS and Linux (capability in the real app) | deferred |
+| G | M13 checks 5 to 7 | stay deferred to the release after v0.4.0 |
+| H | Earlier open checks: M7, M8 and M10 (roadmap blocks "Open manual checks (owner)"), and what "v0.3.1 result" lists as still unverified | deferred |
+
+**GitHub setting still to make (row 100):** require the Windows job on `dev`:
+
+```
+gh api -X POST repos/benjo-code/fernjo/branches/dev/protection/required_status_checks/contexts -f "contexts[]=rust (windows)"
+```
+
+The same command with `branches/main/` belongs to the release, once `main` holds the job; set earlier it would block a hotfix of v0.3.x.
 
 ### Cmd+Q on the Mac (installed v0.3.x)
 
