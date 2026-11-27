@@ -757,7 +757,7 @@ Report each of the two with yes or no.
 
 **Result (2026-11-27, owner, v0.3.1, SSH session connected): failed.** Cmd+Q and the menu's "Quit" both quit without asking (row 105).
 
-**Re-check of the fix (pending):** on the Mac, run the app from the macOS download of a `release.yml` run of this branch (close the installed fernjo first; the build is unsigned like a release and uses the same data).
+**Re-check of the fix (pending):** on the Mac, run the app from the download `installers-macos-x64` (Intel) or `installers-macos-arm64` (Apple Silicon) of `release.yml` run 46074522164, kept until 2026-12-04 (close the installed fernjo first; the build is unsigned like a release and uses the same data).
 
 1. Connect an SSH session and press Cmd+Q: "Close fernjo?" appears. Choose "Keep open": the session still works.
 2. Menu "fernjo", "Quit fernjo": the same dialog. Choose "Close": fernjo quits.
@@ -824,7 +824,7 @@ gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --env release-signing --repo be
 
 ## v0.4.0 readiness
 
-Date 2026-11-27. Branch `feature/m14-security-gate-v0.4.0`, pull request #65 to `dev`. Evidence taken at `3c5d5fb` (the pipeline rehearsal at `5fd26dd`; `tools/` and `release.yml` are unchanged since); only documents change after it. This section prepares the release and does not perform it.
+Date 2026-11-27. Branch `feature/m14-security-gate-v0.4.0`, pull request #65 to `dev`. Evidence taken at `c140113` (code at `be54b68`; the pipeline rehearsal at `5fd26dd`; `tools/` and `release.yml` are unchanged since); only documents change after it. This section prepares the release and does not perform it.
 
 ### Reusable checklist
 
@@ -832,15 +832,16 @@ Date 2026-11-27. Branch `feature/m14-security-gate-v0.4.0`, pull request #65 to 
 - **Step 2, documentation:** `README.md` ("Updating", "Privacy") and `SECURITY.md` ("Updates") were corrected against review P (row 94) and describe the second click with sessions connected; the shortcut table's source (`ui/src/lib/shortcuts.ts`) and the issue templates are unchanged since `v0.3.1`; `[Unreleased]` names milestone 13; `CLAUDE.md` records the lasting facts of this gate; `dotnet run tools/roadmap.cs -- check` is valid.
 - **Step 3, build and test evidence:** the table below.
 - **Step 4, security review:** "v0.4.0 security review" above (four independent reviewers, `/security-review`, rows 81 to 108). 0 open code-scanning alerts on the pull request, gitleaks over the history clean.
-- **Step 8, no build paths:** "Check the binary for build paths" passed in all four app builds of dry run 46054857639; the pull request's dry run 46054864438 passed too.
+- **Step 8, no build paths:** "Check the binary for build paths" passed and the installer smoke tests passed in all four app builds of dry run 46074522164.
 - **Final review of the branch** (a fresh reviewer over `5c59800..c8bd599`): nothing Critical or Important; one of its five Minors, an "Update and restart" click during a silent automatic check leaving the update window stuck, was raised to a gap of row 88 and fixed (`3c5d5fb`, `an_install_click_during_an_automatic_check_hears_how_it_ended`, seen failing first). Not changed: the M13 "Known residual limits" paragraph still names the uncapped feed (superseded by row 83); the commit-before-close order of `AppHost::go` is not pinned by a test; `USER_AGENT` is only checked by prefix; the tabs come back only when the UI's event subscription worked.
+- **After the final review:** the fix for row 105 (`be54b68`, found by the owner's check B). Rated Low, so no second read; its tests and the gate below cover it, the menu itself only a Mac can show.
 
-### Commands (at `3c5d5fb`)
+### Commands (at `c140113`)
 
 | Command | Where | Result |
 |---|---|---|
 | `cargo build --workspace` | Linux build container | exit 0 |
-| `cargo test --workspace` | Linux build container | exit 0: 1390 passed, 0 failed, 3 ignored (45 result lines; `fernjo-app` lib 455, `updater_feed` 30, `tauri_conf` 18, `verify_update_signature` 10); the SSH container tests skip here and run in CI |
+| `cargo test --workspace` | Linux build container | exit 0: 1393 passed, 0 failed, 3 ignored (46 result lines; `fernjo-app` lib 455, `mac_menu` 2, `updater_feed` 30, `tauri_conf` 19, `verify_update_signature` 10); the SSH container tests skip here and run in CI |
 | `cargo fmt --all --check` | Linux build container | exit 0 |
 | `cargo clippy --workspace --all-targets -- -D warnings` | Linux build container | exit 0 |
 | `cargo clippy -p fernjo-app --lib --bins -- -D warnings` | Linux build container | exit 0 |
@@ -851,10 +852,10 @@ Date 2026-11-27. Branch `feature/m14-security-gate-v0.4.0`, pull request #65 to 
 | `bash tools/check-workflows.sh` | Windows dev machine | exit 0 |
 | `bash tools/test-release-scripts.sh` | Windows dev machine | 162/162 passed |
 | `dotnet run tools/roadmap.cs -- check` | Windows dev machine | valid and up to date |
-| gitleaks 8.30.1 `detect` | container | 99 commits scanned, no leaks |
-| CI run 46054864371 | GitHub | all jobs pass: `rust` (with the SSH container) 1390 passed, 3 ignored; `rust (windows)` 1362 passed, 3 ignored; `ui`, `tauri-build`, `cargo-deny`, `workflows` |
+| gitleaks 8.30.1 `detect` | container | 103 commits scanned, no leaks |
+| CI run 46074522221 | GitHub | all jobs pass: `rust` (with the SSH container) 1393 passed, 3 ignored; `rust (windows)` 1365 passed, 3 ignored; `ui`, `tauri-build`, `cargo-deny`, `workflows` |
 | CodeQL on the pull request | GitHub | `actions`, `javascript-typescript`, `rust` pass, 0 open alerts |
-| `release.yml` dry run, 46054857639 (branch) and 46054864438 (pull request) | GitHub | four app builds with smoke tests and both hub image builds pass; sign, verify, publish and image push skipped |
+| `release.yml` dry run, 46074522164 (pull request) | GitHub | four app builds with smoke tests and both hub image builds pass; sign, verify, publish and image push skipped |
 | Pipeline rehearsal on the artifacts of 46049705785 | dev machine and container | as in "v0.4.0 release pipeline rehearsal", now signing with `node node_modules/@tauri-apps/cli/tauri.js` as the workflow does: 0.3.1 and 0.4.0, 4 × `signature ok`, shipped key refused, `latest.json` written and checked (3,058 bytes; notes 565 bytes, the whole section), 12 files and 12 checksum lines |
 | Key material and bundle type in the same run | dev machine and container | no test key header and no `TAURI_SIGNING` in the log or in the installers, the unpacked tarballs, `.deb` and AppImage; the AppImage binary is marked as AppImage and the `.deb` binary as deb (row 92 depends on it) |
 
