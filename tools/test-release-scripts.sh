@@ -746,6 +746,16 @@ EOF
     ! job_block sign | grep -vE '^[[:space:]]*#' | grep -qE 'PATH|GITHUB_ENV|BASH_ENV|NODE_OPTIONS|node_modules/\.bin'
 }
 assert_true release_signing_step_is_exactly_the_reviewed_one signing_step_is_exactly_the_reviewed_one
+# What a cache restores is compiled into the files `sign` signs, and code run by CI on the default
+# branch can write to those caches: a tag build restores none (M14 review #96).
+builds_restore_no_cache_on_a_tag() {
+  local b
+  b="$(job_block build)"
+  printf '%s\n' "$b" | grep -Fxq "          cache: \${{ env.RELEASE_TAG == '' && 'pnpm' || '' }}" &&
+    printf '%s\n' "$b" | grep -A1 'uses: Swatinem/rust-cache@' | grep -Fxq "        if: env.RELEASE_TAG == ''" &&
+    [ "$(grep -cE '^[^#]*(uses: (actions/cache|Swatinem/rust-cache)[@/]|[[:space:]]cache[[:space:]]*:)' "$release_yml")" -eq 2 ]
+}
+assert_true release_builds_restore_no_cache_on_a_tag builds_restore_no_cache_on_a_tag
 publish_writes_and_checks_latest_json_after_the_signatures() {
   local b w r s
   b="$(job_block publish)"
