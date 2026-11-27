@@ -374,6 +374,27 @@ async fn oversize_download_sets_failed_download_refused() {
 }
 
 #[tokio::test]
+async fn a_refused_download_leaves_nothing_to_install() {
+    for refusal in [
+        FeedError::BadSignature,
+        FeedError::DownloadRefused("too_large"),
+        FeedError::DownloadRefused("failed"),
+        FeedError::DownloadRefused("stalled"),
+    ] {
+        let (backend, host, log) = setup();
+        host.0.connected.store(1, Ordering::SeqCst);
+        run_check(&*backend, &host, true).await;
+        *backend.download.lock().unwrap() = Err(refusal);
+        let status = run_install(&*backend, &host).await;
+        assert_eq!(status.state, UpdateState::Failed, "{refusal:?}");
+        assert!(host.0.rt.lock().unwrap().bytes.is_none());
+        finish_install(&*backend, &host);
+        // no dialog, no ended sessions, no install
+        assert_eq!(logged(&log), ["download"], "{refusal:?}");
+    }
+}
+
+#[tokio::test]
 async fn release_page_only_install_never_downloads() {
     let (backend, host, log) = setup();
     *host.0.view.lock().unwrap() = InstallView::ReleasePage {

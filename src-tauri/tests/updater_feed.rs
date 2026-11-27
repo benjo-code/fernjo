@@ -453,6 +453,82 @@ async fn redirect_hops_are_counted_and_followed() {
     assert!(log.iter().all(|r| r.query.is_none()));
 }
 
+/// A URL of `server` under another host name than the `127.0.0.1` the feed is configured with.
+fn on_another_host(server: &FakeFeed, path: &str) -> String {
+    format!("http://localhost:{}{path}", server.addr.port())
+}
+
+#[tokio::test]
+async fn redirect_to_another_host_accepts_only_signed_bytes() {
+    // GitHub answers the feed and the file with redirects to its asset host, so another host is
+    // normal and only the signature decides
+    let mut tampered = payload();
+    tampered[100] ^= 0x01;
+    for (served, expected) in [
+        (payload(), Ok(payload())),
+        (tampered, Err(FeedError::BadSignature)),
+    ] {
+        let files = FakeFeed::start(vec![("/cdn/payload.bin", Route::Body(served))]);
+        let file = on_another_host(&files, "/cdn/payload.bin");
+        let mid = FakeFeed::start_with(|addr| {
+            let download = format!("http://localhost:{}/dl/payload.bin", addr.port());
+            vec![
+                (
+                    "/cdn/feed.json",
+                    Route::Json(manifest("9.9.9", &download, &payload_signature(), "")),
+                ),
+                ("/dl/payload.bin", Route::Redirect(file)),
+            ]
+        });
+        let front = FakeFeed::start(vec![(
+            "/latest.json",
+            Route::Redirect(on_another_host(&mid, "/cdn/feed.json")),
+        )]);
+        let result = download_of(&front, &test_pubkey(), Limits::production()).await;
+        assert_eq!(result, expected);
+        let reached: Vec<String> = files.log().into_iter().map(|r| r.path).collect();
+        assert_eq!(
+            reached,
+            ["/cdn/payload.bin"],
+            "the other host served the file"
+        );
+    }
+}
+
+#[tokio::test]
+async fn truncated_download_is_refused() {
+    let short = payload()[..4096].to_vec();
+    // the server says the short body is the whole file: only the signature can tell
+    let (result, _server) =
+        download_from_route(Route::Body(short.clone()), Limits::production()).await;
+    assert_eq!(result.unwrap_err(), FeedError::BadSignature);
+    // the connection ends before the announced length
+    let (result, _server) = download_from_route(
+        Route::Truncated {
+            declared: 8192,
+            body: short,
+        },
+        Limits::production(),
+    )
+    .await;
+    assert_eq!(result.unwrap_err(), FeedError::DownloadRefused("failed"));
+}
+
+#[tokio::test]
+async fn signature_without_a_version_is_refused() {
+    // a genuine signature of this very file by the pinned (test) key, made without
+    // `--app-version`, so nothing binds it to the announced version
+    let signature = fs::read_to_string(
+        manifest_dir().join("../crates/fernjo-core/tests/fixtures/update-sig/no-app-version.sig"),
+    )
+    .unwrap();
+    let server = serve("9.9.9", signature.trim(), "", payload());
+    let err = download_of(&server, &test_pubkey(), Limits::production())
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "signature_invalid");
+}
+
 #[tokio::test]
 async fn notes_come_back_cleaned() {
     let server = serve(

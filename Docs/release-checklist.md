@@ -605,6 +605,27 @@ Run the commands from the repository root (Git Bash on Windows). `<feed>` is an 
 
 The feed body is read without a size cap by the plugin (bounded by the 15 s check timeout and the pinned HTTPS endpoint); the download cap overshoots by one read slice; `sign` trusts the output of `build` including its caches (existing pipeline behaviour); a macOS or Linux install that returns instead of exiting and a confirm that arrives after the state left Ready (for example because a check found a newer version while the dialog was open) are rare races; a quit on macOS through the menu (Cmd+Q) is likely held back by neither the close confirmation nor a running install (read in the dependency sources, roadmap backlog); all noted in `Docs/DECISIONS.md`.
 
+## v0.4.0 attack on the update path
+
+Run 2026-11-27 on `feature/m14-security-gate-v0.4.0`, headless: the real updater plugin in a Tauri mock app against a local fake feed signed with the published test key (`src-tauri/tests/updater_feed.rs`, 24 tests), the update state machine over a fake backend (`src-tauri/src/updater/tests.rs`, in the 49 tests of `--lib updater`) and the UI tests (`pnpm test`, 855 passed). Rust ran in the Linux build container; CI also runs them on Windows (job `rust (windows)`). No product code changed for this section.
+
+| Scenario | Test | Result | Proof that the test can fail |
+|---|---|---|---|
+| Feed announces the same or a lower version | `same_and_older_version_are_not_offered` | nothing offered | M13 test |
+| Signature made with another key | `wrong_key_signature_is_refused` | `signature_invalid` | M13 test |
+| Modified file behind a valid `latest.json` | `tampered_download_is_refused` | `signature_invalid` | failed with the plugin's verification switched off |
+| Feed and file redirected to another host | `redirect_to_another_host_accepts_only_signed_bytes` (new) | the genuine file is accepted from the other host, a modified one is refused | failed with the plugin's verification switched off |
+| Download cut short, the server calling it complete | `truncated_download_is_refused` (new) | `signature_invalid` | failed with the plugin's verification switched off |
+| Connection closed before the announced length | `truncated_download_is_refused` (new) | `download_refused` | the HTTP client's length check; there is no protection of our own to remove |
+| Older signed file announced as a newer version | `signed_version_must_match_the_announced_one` | `signature_invalid` | M13 test |
+| Genuine signature that names no version | `signature_without_a_version_is_refused` (new) | `signature_invalid` | failed with `requireSignedVersion` off |
+| Release notes with markup | `notes_keep_markup_as_literal_text`, `notes_with_markup_render_as_text`, `no_html_injection_in_ui` | shown as text | M13 tests |
+| A refused download (bad signature, too large, failed, stalled) with a session connected | `a_refused_download_leaves_nothing_to_install` (new) | state `failed`, no held bytes, no dialog, no ended session, no install | failed when the refused download was kept as `ready` with bytes |
+
+The three removals were temporary: a copy of `tauri-plugin-updater` 2.14.1 whose `verify_signature` returns early, patched in through `[patch.crates-io]`; `requireSignedVersion: false` in the test's app; and a changed error arm of `run_install`. All were undone, after which `updater_feed` (24) and `--lib updater` (49) passed again and `Cargo.toml` and `Cargo.lock` were byte-identical to before.
+
+Not covered: the platform's install handover (NSIS setup, bundle and AppImage replacement), GitHub's real redirects and release files, and the real window.
+
 ## v0.4.0 owner checks
 
 Asked at the start of M14 (2026-11-27). Results are recorded under each check.

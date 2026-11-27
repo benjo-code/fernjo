@@ -31,6 +31,8 @@ pub enum Route {
     Redirect(String),
     /// Announces `declared` bytes, sends `first`, then sends nothing more until the server stops.
     Stall { declared: u64, first: Vec<u8> },
+    /// 200 that announces `declared` bytes, sends `body` and closes the connection.
+    Truncated { declared: u64, body: Vec<u8> },
     /// No `Content-Length` (chunked); sends zero bytes in 1 KiB chunks, `total` in all.
     /// `sent` counts the body bytes written; `done` is set when the handler ends (the client went
     /// away, an error, or all `total` bytes sent).
@@ -185,6 +187,13 @@ fn respond(out: &mut TcpStream, route: &Route, stop: &AtomicBool) -> std::io::Re
             while !stop.load(Ordering::SeqCst) && Instant::now() < until {
                 thread::sleep(Duration::from_millis(50));
             }
+        }
+        Route::Truncated { declared, body } => {
+            write!(
+                out,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {declared}\r\nConnection: close\r\n\r\n"
+            )?;
+            out.write_all(body)?;
         }
         Route::Endless { total, sent, done } => {
             let result = stream_endless(out, *total, sent);
