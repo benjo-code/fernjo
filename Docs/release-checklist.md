@@ -626,6 +626,23 @@ The three removals were temporary: a copy of `tauri-plugin-updater` 2.14.1 whose
 
 Not covered: the platform's install handover (NSIS setup, bundle and AppImage replacement), GitHub's real redirects and release files, and the real window.
 
+## v0.4.0 security review
+
+### Checks (2026-11-27, at `ab43bb8`)
+
+| Check | Where | Result |
+|---|---|---|
+| `/security-review` over `v0.3.1..HEAD` (run by a fresh agent; `origin/HEAD` is `origin/main` = `v0.3.1`, and `git diff --name-only origin/HEAD...HEAD` lists the same 82 files as `v0.3.1..HEAD`) | dev machine | no High or Medium finding at the skill's reporting threshold (8 of 10); 16 candidates examined and rejected |
+| `cargo deny check` (cargo-deny 0.22.0) | dev machine, native | `advisories ok, bans ok, licenses ok, sources ok`; no new ignore |
+| `pnpm audit --prod` | dev machine | no known vulnerabilities |
+| `gh api "repos/benjo-code/fernjo/code-scanning/alerts?state=open"`, and for `ref=refs/pull/65/merge` | GitHub | 0 and 0 |
+| CodeQL on pull request 65 (`actions`, `javascript-typescript`, `rust`) | CI | passed, 0 results each |
+| `gh api "repos/benjo-code/fernjo/dependabot/alerts?state=open"` | GitHub | 1: `glib` GHSA-wrw7-89jp-8q8g (medium), accepted since M0 |
+| `bash tools/check-workflows.sh` | dev machine | exit 0 |
+| gitleaks 8.30.1 `detect` with `.gitleaks.toml` | container | 68 commits scanned, no leaks (finding R2-P3 of the pipeline review is about what this rule set cannot see) |
+| `command_table_covers_every_tauri_command`, `no_response_contains_a_secret` | container | both pass; `update_status`, `update_skip` and `set_check_for_updates` are in `table()`, `update_check`, `update_install` and `update_open_release_page` in `APP_HANDLE_EXEMPT` with a reason |
+| Secrets in update data, by reading `updater.rs`, `updater/`, `app_settings.rs` and searching them and the update UI for logging and web storage calls | dev machine | nothing secret reaches them: the status event carries versions, cleaned notes, progress and fixed error codes; `settings.json` gains `checkForUpdates` and `skippedUpdateVersion`; no log, `console` or web storage call |
+
 ## v0.4.0 owner checks
 
 Asked at the start of M14 (2026-11-27). Results are recorded under each check.
