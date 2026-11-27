@@ -811,6 +811,79 @@ gh secret set TAURI_SIGNING_PRIVATE_KEY --env release-signing --repo benjo-code/
 gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --env release-signing --repo benjo-code/fernjo
 ```
 
+## v0.4.0 readiness
+
+Date 2026-11-27. Branch `feature/m14-security-gate-v0.4.0`, pull request #65 to `dev`. Evidence taken at `5fd26dd`; only documents change after it. This section prepares the release and does not perform it.
+
+### Reusable checklist
+
+- **Step 1, version and metadata:** not bumped here. The release branch changes `Cargo.toml` (`[workspace.package] version`, then commits the refreshed `Cargo.lock`), `package.json`, `CHANGELOG.md`, `crates/fernjo-hub/deploy/compose.yaml` and `fernjo-hub.container`; `bash tools/check-release-version.sh v0.4.0` runs there (all still say `0.3.1`). `cargo metadata --locked` and `pnpm install --frozen-lockfile` succeed; `LICENSE-MIT` and `LICENSE-APACHE` exist; the generated `THIRD-PARTY-NOTICES.md` (538,580 bytes) is in the `.deb` and both macOS tarballs of the dry run (the setup and the dmg files were not unpacked).
+- **Step 2, documentation:** `README.md` ("Updating", "Privacy") and `SECURITY.md` ("Updates") were corrected against review P (row 94) and describe the second click with sessions connected; the shortcut table's source (`ui/src/lib/shortcuts.ts`) and the issue templates are unchanged since `v0.3.1`; `[Unreleased]` names milestone 13; `CLAUDE.md` records the lasting facts of this gate; `dotnet run tools/roadmap.cs -- check` is valid.
+- **Step 3, build and test evidence:** the table below.
+- **Step 4, security review:** "v0.4.0 security review" above (four independent reviewers, `/security-review`, rows 81 to 108). 0 open code-scanning alerts on the pull request, gitleaks over the history clean.
+- **Step 8, no build paths:** "Check the binary for build paths" passed in all four app builds of dry run 46049705785 and of the pull request's dry run 46049685136.
+
+### Commands (at `5fd26dd`)
+
+| Command | Where | Result |
+|---|---|---|
+| `cargo build --workspace` | Linux build container | exit 0 |
+| `cargo test --workspace` | Linux build container | exit 0: 1389 passed, 0 failed, 3 ignored (45 result lines; `fernjo-app` lib 454, `updater_feed` 30, `tauri_conf` 18, `verify_update_signature` 10); the SSH container tests skip here and run in CI |
+| `cargo fmt --all --check` | Linux build container | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | Linux build container | exit 0 |
+| `cargo clippy -p fernjo-app --lib --bins -- -D warnings` | Linux build container | exit 0 |
+| `cargo deny check` | Windows dev machine | `advisories ok, bans ok, licenses ok, sources ok` |
+| `pnpm test` | Windows dev machine | 64 files, 857 tests passed |
+| `pnpm lint` | Windows dev machine | 281 files, 0 errors, 0 warnings |
+| `pnpm audit --prod` | Windows dev machine | no known vulnerabilities |
+| `bash tools/check-workflows.sh` | Windows dev machine | exit 0 |
+| `bash tools/test-release-scripts.sh` | Windows dev machine | 162/162 passed |
+| `dotnet run tools/roadmap.cs -- check` | Windows dev machine | valid and up to date |
+| gitleaks 8.30.1 `detect` | container | 97 commits scanned, no leaks |
+| CI run 46049685068 | GitHub | all jobs pass: `rust` (with the SSH container) 1389 passed, 3 ignored; `rust (windows)` 1361 passed, 3 ignored; `ui`, `tauri-build`, `cargo-deny`, `workflows` |
+| CodeQL on the pull request | GitHub | `actions`, `javascript-typescript`, `rust` pass, 0 open alerts |
+| `release.yml` dry run, 46049705785 (branch) and 46049685136 (pull request) | GitHub | four app builds with smoke tests and both hub image builds pass; sign, verify, publish and image push skipped |
+| Pipeline rehearsal on the artifacts of 46049705785 | dev machine and container | as in "v0.4.0 release pipeline rehearsal", now signing with `node node_modules/@tauri-apps/cli/tauri.js` as the workflow does: 0.3.1 and 0.4.0, 4 × `signature ok`, shipped key refused, `latest.json` written and checked (3,058 bytes; notes 565 bytes, the whole section), 12 files and 12 checksum lines |
+| Key material and bundle type in the same run | dev machine and container | no test key header and no `TAURI_SIGNING` in the log or in the installers, the unpacked tarballs, `.deb` and AppImage; the AppImage binary is marked as AppImage and the `.deb` binary as deb (row 92 depends on it) |
+
+The real update check against GitHub over HTTPS (`the_real_release_host_is_reached_over_https`) passed on Linux and, in CI run 46047410980, on Windows; `updater/feed.rs` has not changed since that run.
+
+### Known gaps
+
+| Gap | Disposition |
+|---|---|
+| **Check A, key copy check**: that the owner's key and password match the public key in the app | **Pending. Blocks "go"** (pass, or waived in writing) |
+| **Check B, Cmd+Q on the Mac** (row 105) | **Pending.** If it confirms the path, it is rated and handled like any finding |
+| The `release-signing` secrets on GitHub, the job wiring, and the draft, attestation, upload and publish steps | Never run; first at the release (check E). A failure leaves a draft; a workflow fix needs a new tag |
+| A tag build without cache (row 96) | Never run; the first is the release (job timeout 60 minutes; cached builds took 11 to 17) |
+| The install handover on Windows, macOS and Linux, the real window, and the failed-install and second-click behaviour (rows 82, 84, 87, 92) | Not run in a real app; checks D and G deferred to the release after v0.4.0 |
+| The update check on macOS against GitHub (row 83) | Check C, right after the release |
+| Tests on macOS | None: CI tests on Linux and Windows only; macOS code is compiled by the release builds |
+| M13 check 4 on macOS and Linux (webview capability) | Deferred (check F) |
+| Earlier open checks (M7, M8, M10, and "v0.3.1 result", still unverified) | Deferred (check H) |
+| The fork pull request check of M11 row 73 (see row 101) | Not run |
+| `rust (windows)` as a required check (row 100) | Agreed, **not yet set**; command in "v0.4.0 owner checks"; `main` with the release |
+| Accepted findings: rows 86, 91, 97, 98, 102, 103, 104, 106, 107, 108 | Accepted by the owner 2026-11-27 (`Docs/DECISIONS.md`) |
+| Earlier accepted items: administrators can bypass the signing environment, unsigned installers, `glib` Dependabot alert | Accepted |
+
+### For the release run
+
+- Do not use the version number of a rejected release again: its signed files are downloadable once `sign` has run.
+- A hotfix of an older line is published with `--latest=false` ("M13: final review fixes").
+- If re-running `sign` fails on its earlier artifact, dispatch the workflow on the tag instead.
+- Run check C as soon as the release is published; a platform that cannot reach the feed cannot be repaired by an update.
+
+### Verdict
+
+| Area | Verdict |
+|---|---|
+| Security review | **Not yet:** no High or Medium open (81, 82 and 83 fixed and read a second time); every Low fixed or accepted except row 105, which waits for check B |
+| Signing and pipeline | **Not yet:** the rehearsal passed; the key copy check (A) is pending |
+| Installers | Go: dry run builds, smoke tests and build path check pass on all four platforms |
+| Documentation | Go |
+| Repository settings | Go: environment, tag policy, secrets and immutable releases read back as documented; the Windows check is still to be made required (not a release condition) |
+| **Overall** | **No go yet.** It waits for check A (key copy) and check B (Cmd+Q). Nothing else is open that blocks the release |
+
 ## v0.1.0 security review
 
 Review date: 2026-11-18 (Windows 11; CI dry-run installers of run `44205574554`, PR #10). The checks of Steps 1-4 ran on `target/release/fernjo.exe` built from commit `1bc2762` (built after the last commit that touched `src-tauri`, `crates` or `ui`). The fix commits of this review (`64aa818`, `6648cff`, `5791506`) and the later import fixes (`36c3be0`, `de2a615`, `c809677`) post-date that binary; the real-app checks were not repeated on a rebuild, so they say nothing about those changes (the code fixes have their own tests). Every check below records its command, its result and the date. Real-app checks ran with a scratch `FERNJO_DATA_DIR`; the owner's real data folder was not read, printed or modified, and "Unlock automatically on this device" was never ticked.
