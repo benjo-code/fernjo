@@ -673,7 +673,7 @@ Four independent reviewers (fresh, read-only, each with only its own brief: the 
 | 102 | Repository settings | **No creation rule for `v*` tags** (K11): anyone with write access (today one person) can push a release tag; the key stays behind the environment's reviewer. | known → Low | owner (GitHub setting) | accepted by the owner 2026-11-27 |
 | 103 | Updater | **The download cap overshoots by a read slice** (K2; confirmed not worse). | known → Low | owner: bounded; changing it means changing the plugin | accepted by the owner 2026-11-27 |
 | 104 | Updater (macOS, Linux) | **The install returns and the app restarts itself** (K4): rare races around that return; the review found no further defect. | known → Low | owner | accepted by the owner 2026-11-27 |
-| 105 | Updater (macOS) | **Cmd+Q and the menu's Quit are held back by neither the close confirmation nor a running install** (K6; confirmed by check B on v0.3.1). | known → Low | fix; the rest (Quit from the Dock, log out, shutdown) goes to the owner | `be54b68`; `the_quit_item_asks_the_main_window_to_close`, `another_menu_item_closes_nothing`, `the_mac_menu_quits_through_fernjos_own_item` (seen failing first). Re-check on a Mac pending |
+| 105 | Updater (macOS) | **Cmd+Q and the menu's Quit are held back by neither the close confirmation nor a running install** (K6; confirmed by check B on v0.3.1). | known → Low | fix; the rest (Quit from the Dock, log out, shutdown) accepted by the owner 2026-11-27 | `be54b68`; `the_quit_item_asks_the_main_window_to_close`, `another_menu_item_closes_nothing`, `the_mac_menu_quits_through_fernjos_own_item` (seen failing first). Re-check on a Mac passed (owner, 2026-11-27) |
 | 106 | Updater | **A withheld or stale feed is not detected, and a trickling download has no overall time limit and no cancel** (threat model, U). A restart ends it. | Low → Low | owner | accepted by the owner 2026-11-27 |
 | 107 | Updater (Linux) | **The AppImage replacement is not atomic** (U, in the plugin): power loss in between leaves it missing, with the old one in a temporary folder. | Low → Low | owner: plugin behaviour; reinstall by hand | accepted by the owner 2026-11-27 |
 | 108 | Updater | **With nothing connected the install starts as soon as the download ends** (W, outside its area): an import, a sign-in prompt or an unsaved form is cut off. This is the one-click design of M13. | Low → Low | owner | accepted by the owner 2026-11-27 |
@@ -732,7 +732,7 @@ Asked at the start of M14 (2026-11-27). Results are recorded under each check.
 | Check | What | Decision |
 |---|---|---|
 | A | Key copy check (below) | run now; **passed** (2026-11-27) |
-| B | Cmd+Q on the Mac (below) | run 2026-11-27: **failed** on v0.3.1 (row 105); fixed, re-check of the fix **pending** |
+| B | Cmd+Q on the Mac (below) | run 2026-11-27: failed on v0.3.1 (row 105); fixed, **re-check passed**; the rest of the row accepted |
 | C | "Check now" right after the v0.4.0 release on Windows, macOS and Linux (fix check 4) | run at the release |
 | D | Fix checks 1 to 3 | deferred to the release after v0.4.0 |
 | E | M13 check 3: the first signed release run | run at the release (it cannot run earlier) |
@@ -757,7 +757,7 @@ Report each of the two with yes or no.
 
 **Result (2026-11-27, owner, v0.3.1, SSH session connected): failed.** Cmd+Q and the menu's "Quit" both quit without asking (row 105).
 
-**Re-check of the fix (pending):** on the Mac, run the app from the download `installers-macos-x64` (Intel) or `installers-macos-arm64` (Apple Silicon) of `release.yml` run 46074522164, kept until 2026-12-04 (close the installed fernjo first; the build is unsigned like a release and uses the same data).
+**Re-check of the fix (2026-11-27, owner): passed**, all four steps below behaved as expected. Instructions: on the Mac, run the app from the download `installers-macos-x64` (Intel) or `installers-macos-arm64` (Apple Silicon) of `release.yml` run 46074522164, kept until 2026-12-04 (close the installed fernjo first; the build is unsigned like a release and uses the same data).
 
 1. Connect an SSH session and press Cmd+Q: "Close fernjo?" appears. Choose "Keep open": the session still works.
 2. Menu "fernjo", "Quit fernjo": the same dialog. Choose "Close": fernjo quits.
@@ -865,8 +865,7 @@ The real update check against GitHub over HTTPS (`the_real_release_host_is_reach
 
 | Gap | Disposition |
 |---|---|
-| **The fix for row 105 on a Mac**: the new menu and the dialog from Cmd+Q and "Quit fernjo" | Built by the release runs, never run. **Blocks "go"** (pass, or waived in writing) |
-| Quit from the Dock, log out and shutdown on macOS (rest of row 105) | Still without a question and able to cut an install off; **waits for the owner's acceptance** |
+| Quit from the Dock, log out and shutdown on macOS (rest of row 105) | Still without a question and able to cut an install off; accepted by the owner 2026-11-27, on the backlog |
 | The `release-signing` secrets on GitHub, the job wiring, and the draft, attestation, upload and publish steps | Never run; first at the release (check E). A failure leaves a draft; a workflow fix needs a new tag |
 | A tag build without cache (row 96) | Never run; the first is the release (job timeout 60 minutes; cached builds took 11 to 17) |
 | The install handover on Windows, macOS and Linux, the real window, and the failed-install and second-click behaviour (rows 82, 84, 87, 92) | Not run in a real app; checks D and G deferred to the release after v0.4.0 |
@@ -885,17 +884,19 @@ The real update check against GitHub over HTTPS (`the_real_release_host_is_reach
 - A hotfix of an older line is published with `--latest=false` ("M13: final review fixes").
 - If re-running `sign` fails on its earlier artifact, dispatch the workflow on the tag instead.
 - Run check C as soon as the release is published; a platform that cannot reach the feed cannot be repaired by an update.
+- Once `main` holds the job, require `rust (windows)` there (row 100; command in "v0.4.0 owner checks" with `branches/main/`).
 
 ### Verdict
 
 | Area | Verdict |
 |---|---|
-| Security review | **Not yet:** no High or Medium open (81, 82 and 83 fixed and read a second time); every Low fixed or accepted, except that row 105 waits for the re-check on the Mac and the owner's word on its rest |
+| Security review | Go: no High or Medium open (81, 82 and 83 fixed and read a second time); every Low fixed or accepted (the rest of row 105 on 2026-11-27); the `main` half of row 100 belongs to the release |
 | Signing and pipeline | Go: the rehearsal and the key copy check (A) passed; the GitHub secrets, the job wiring and publishing are first run at the release (known gaps) |
 | Installers | Go: dry run builds, smoke tests and build path check pass on all four platforms |
 | Documentation | Go |
 | Repository settings | Go: environment, tag policy, secrets and immutable releases read back as documented; the Windows check is required on `dev` |
-| **Overall** | **No go yet.** It waits for the re-check of the Cmd+Q fix on the Mac and the owner's word on the Dock, log out and shutdown rest. Nothing else is open that blocks the release |
+| Owner checks | A and the re-check of B passed. **Open, run at the release:** C ("Check now" on Windows, macOS and Linux) and E (the first signed release run). **Deferred by the owner:** D (fix checks 1 to 3), F (M13 check 4 on macOS and Linux), G (M13 checks 5 to 7) and H (the earlier open checks of M7, M8, M10 and "v0.3.1 result") |
+| **Overall** | **Go** for releasing v0.4.0, with the known gaps above, on the owner's instruction. Signing in GitHub, publishing and the update itself have never run |
 
 ## v0.1.0 security review
 
