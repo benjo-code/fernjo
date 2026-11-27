@@ -15,6 +15,12 @@ Log of architecture and technology decisions. Newest entries on top.
 **Rejected alternatives:** <What else was considered and why not>
 -->
 
+## 2026-11-27 – M14: fixes from the v0.4.0 security review
+
+**Context:** The M14 reviews of `v0.3.1..HEAD` (findings from row 81 in `Docs/release-checklist.md`). This entry records the fixes that involve a decision; the table names the commit and test of each.
+**Decision:**
+- **Signing step (row 81).** `sign` starts the Tauri CLI as `node node_modules/@tauri-apps/cli/tauri.js signer sign`, never through `pnpm`: pnpm puts the project's `node_modules/.bin` first on `PATH`, so a direct dependency declaring a `node` or `sh` program ran with the signing key in its environment, and `pretauri`/`posttauri` scripts would have too. The same applies to any hand signing with the real key. The install stays `pnpm install --frozen-lockfile --ignore-scripts`, which runs before the key is present. Not taken: a separate signer-only `package.json` and lock file (it would also keep other packages off the job's disk, but nothing of theirs runs there).
+
 ## 2026-11-27 – M14 threat model
 
 **Context:** M14 (`Docs/superpowers/specs/2026-11-27-m14-security-gate-v0.4.0-design.md`, section 1) reviews what changed since v0.3.1 before v0.4.0, the first version that updates itself. This entry adds to "M11 threat model" what that version brings, and is the reviewers' frame. It describes the code at the start of M14 (`feature/m14-security-gate-v0.4.0`, before any M14 fix). **Open** marks a point with no protection or with one that no decision has accepted; nothing here is a review result or a fix.
