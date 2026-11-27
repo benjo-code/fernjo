@@ -219,8 +219,7 @@ pub fn destroy_after_push(window: tauri::Window) {
 pub fn finish_after_push(window: tauri::Window, then: CloseThen) {
     let app = window.app_handle().clone();
     let state = app.state::<AppState>();
-    if state.sync_closing.load(Ordering::SeqCst) {
-        // a push is already under way; its thread closes the window
+    if finish_is_dropped(&state) {
         return;
     }
     if !ready(&state) {
@@ -252,6 +251,14 @@ pub fn finish_after_push(window: tauri::Window, then: CloseThen) {
         // no thread: close at once rather than never
         finish(&fallback, then);
     }
+}
+
+/// Whether [`finish_after_push`] does nothing: a push is already under way and its thread closes
+/// the window, or an update is being installed. Ending the window or restarting then ("Restart
+/// now", a close dialog confirmed late) could cut the replacement of the files; the install
+/// restarts the app itself, and after a failed one the request can be made again.
+pub(crate) fn finish_is_dropped(state: &AppState) -> bool {
+    state.sync_closing.load(Ordering::SeqCst) || crate::updater::installing(&state.updater)
 }
 
 /// Ends the window, or restarts through the event loop (`request_restart`, safe from any thread;
