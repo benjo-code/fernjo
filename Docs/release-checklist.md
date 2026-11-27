@@ -517,7 +517,7 @@ Not run here: the live SSH container tests (`cargo test -p fernjo-ssh`; they run
 
 Still unverified after the release: an installer started on a real machine (the smoke tests prove that it starts on the runner), sync on Linux and the Linux Secret Service keychain item, `fernjo-fs` on macOS, performance for 0.3.0, the M10 and earlier owner checks, and row 73 (the other known gaps are in the table above).
 
-## M13 automatic updates (evidence for the gate of v0.4.0)
+## M13 automatic updates (evidence and open checks)
 
 Evidence recorded 2026-11-26 on branch `feature/m13-auto-update` (Windows 11 host). Windows blocks freshly built native binaries on this machine (application control), so the Rust commands ran in a Linux container (Ubuntu 22.04 with the WebKitGTK build dependencies, the repository mounted, `cargo` 1.100.0); `pnpm`, `node`, `bash tools/...` and `dotnet` ran natively. Windows-only code is compiled by CI only.
 
@@ -536,6 +536,8 @@ Evidence recorded 2026-11-26 on branch `feature/m13-auto-update` (Windows 11 hos
 | `bash tools/test-release-scripts.sh` | 152/152 passed |
 | `dotnet run tools/roadmap.cs -- check` | see the roadmap evidence of M13 |
 
+Re-run on 2026-11-27 after the final review fixes, same setup: `cargo fmt --all --check` and both clippy commands exit 0; `cargo test --workspace` 1359 passed, 0 failed, 2 ignored (fernjo-app lib 444, `tauri_conf` 17, `updater_feed` 21; the SSH integration tests skip without the throwaway container); `cargo test -p fernjo-core --example verify_update_signature` 9 passed (an example, so the workspace run does not include it); `pnpm test` 64 files, 855 tests passed; `pnpm lint` 0 errors and 0 warnings; `bash tools/check-workflows.sh` exit 0; `bash tools/test-release-scripts.sh` 157/157 passed (the `chmod 000` check is skipped on Windows); `gitleaks detect` over the history no leaks. `cargo deny check` was not repeated: no manifest, lock file or deny list changed since the run above.
+
 ### What the tests pin
 
 - Fake feed (`src-tauri/tests/updater_feed.rs`, 21 tests): newer version offered, same, older, pre-release and skipped version not offered; missing, wrong-key and tampered signatures and a signed-version mismatch refused; unreachable feed changes nothing (`feed_unreachable`), 404 and broken body told apart; oversize declared length, a stream past the cap and a stalled download cut off; `check_sends_exactly_one_get_to_the_pinned_path` (one `GET /latest.json`, no query, no cookie, no authorization) and `redirect_hops_are_counted_and_followed`.
@@ -550,7 +552,7 @@ Evidence recorded 2026-11-26 on branch `feature/m13-auto-update` (Windows 11 hos
 2. The pull request dry run of `release.yml` (build jobs green, `sign`, `verify-signatures` and `publish` skipped, the macOS `.app.tar.gz` step and the collect step succeed); the run id goes into the roadmap evidence.
 3. The first signed release run (v0.4.0): `sign` accepts key and password, `verify-signatures` passes, `latest.json` is attached to the draft (`gh release view vX.Y.Z --json assets`). Nothing proves signing before then.
 4. Real-app capability check in a `pnpm tauri build --no-bundle` binary with a scratch `FERNJO_DATA_DIR` and the DevTools-port recipe in `CLAUDE.md`: tree loads, an SSH session from `tools/ssh-test-server.sh` opens and terminal data arrives, `sync-status` and `update-status` events arrive, remote desktop full screen toggles, the update window opens. Only the static proof exists (`Docs/DECISIONS.md` "M13: capability narrowing").
-5. An update through the window on Windows, macOS and a Linux AppImage against a test feed (needs a test build with a merged configuration file under `tools/`, which does not exist yet; write it first: test endpoint, test public key, `dangerousInsecureTransportProtocol`, built in a debug profile or with `update-test-hooks`, never used by the release workflow): the app closes, the new version starts, `connections.json`, the vault and `settings.json` are untouched, Windows asks for no administrator rights, no SmartScreen or Gatekeeper warning for the updated app.
+5. An update through the window on Windows, macOS and a Linux AppImage against a local test feed (steps in "Update check against a local test feed" below; the HTTP feed is accepted because the merge file `tools/update-test.conf.json` sets `dangerousInsecureTransportProtocol`, not because of the cargo feature `update-test-hooks`): the app closes, the new version starts, `connections.json`, the vault and `settings.json` are untouched, Windows asks for no administrator rights, no SmartScreen or Gatekeeper warning for the updated app.
 6. A `.deb` install and a read-only AppImage location offer the release page and install nothing.
 7. Visual look of the update window, progress bar and sidebar marker in the real app (WebView2, WebKit) at 1280x800, light and dark.
 
@@ -571,7 +573,7 @@ Run the commands from the repository root (Git Bash on Windows). `<feed>` is an 
 | Linux | `appimage` | `appimage/fernjo_<version>_amd64.AppImage` | `linux-x86_64` |
 | macOS | `app` | `macos/fernjo.app` | `darwin-aarch64` or `darwin-x86_64` |
 
-1. **Old version.** Set `version` under `[workspace.package]` in the root `Cargo.toml` to `0.0.1`, run `pnpm tauri build --debug --config tools/update-test.conf.json --bundles <bundle>`, move the result to a folder outside the repository and `<feed>` (the next build overwrites `fernjo.app`), then `git checkout -- Cargo.toml Cargo.lock`.
+1. **Old version.** Set `version` under `[workspace.package]` in the root `Cargo.toml` to `0.0.1`, run `pnpm tauri build --debug --config tools/update-test.conf.json --bundles <bundle>`, move the result to a third folder, outside the repository and not `<feed>` (the next build overwrites `fernjo.app`), then `git checkout -- Cargo.toml Cargo.lock`.
 2. **New version.** Run the same build command without the edit and put the update file into `<feed>`: the setup or the AppImage as it is; on macOS `COPYFILE_DISABLE=1 tar -C target/debug/bundle/macos -czf <feed>/fernjo_<NEW>_<aarch64 or x64>.app.tar.gz fernjo.app`.
 3. **Sign** it with the test key (empty password):
 
@@ -601,7 +603,7 @@ Run the commands from the repository root (Git Bash on Windows). `<feed>` is an 
 
 ### Known residual limits
 
-The feed body is read without a size cap by the plugin (bounded by the 15 s check timeout and the pinned HTTPS endpoint); the download cap overshoots by one read slice; `sign` trusts the output of `build` including its caches (existing pipeline behaviour); a macOS or Linux install that returns instead of exiting and a confirm that arrives after the state left Ready are rare races noted in `Docs/DECISIONS.md`.
+The feed body is read without a size cap by the plugin (bounded by the 15 s check timeout and the pinned HTTPS endpoint); the download cap overshoots by one read slice; `sign` trusts the output of `build` including its caches (existing pipeline behaviour); a macOS or Linux install that returns instead of exiting and a confirm that arrives after the state left Ready (for example because a check found a newer version while the dialog was open) are rare races, and "Restart now" of a pending data folder change is not held back by a running install; all noted in `Docs/DECISIONS.md`.
 
 ## v0.1.0 security review
 
