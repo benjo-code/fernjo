@@ -554,6 +554,51 @@ Evidence recorded 2026-11-26 on branch `feature/m13-auto-update` (Windows 11 hos
 6. A `.deb` install and a read-only AppImage location offer the release page and install nothing.
 7. Visual look of the update window, progress bar and sidebar marker in the real app (WebView2, WebKit) at 1280x800, light and dark.
 
+### Update check against a local test feed (owner check 5)
+
+`tools/update-test.conf.json` is merged into the configuration of two local debug builds. It points the updater at `http://127.0.0.1:8765/latest.json` (8765 is a placeholder port: change it in that file and in the steps below together), pins the published TEST key of `src-tauri/tests/fixtures/update-test-key/` and sets `dangerousInsecureTransportProtocol`; `requireSignedVersion` stays on. No release uses it (`update_test_config_is_never_used_by_a_release` in `src-tauri/tests/tauri_conf.rs`).
+
+Before you start:
+
+- Such a build accepts any update signed with a key whose private half is public. Never hand it to anyone, and remove it afterwards.
+- It has the identifier and the data folder of the real fernjo. Close the installed app, back up the data folder (`<OS config dir>/fernjo`, `%APPDATA%\fernjo` on Windows, or the folder chosen in Settings) and note the SHA-256 of `connections.json`, `vault.fernjo` and `settings.json`. On Windows the test build replaces the installed fernjo. Do not rely on `FERNJO_DATA_DIR` here: it switches the automatic check off, and the restarted app may not inherit it.
+
+Run the commands from the repository root (Git Bash on Windows). `<feed>` is an empty folder outside the repository, given as an absolute path; `<NEW>` is the version in the root `Cargo.toml`.
+
+| OS | `<bundle>` | Built below `target/debug/bundle/` | Platform key |
+|---|---|---|---|
+| Windows | `nsis` | `nsis/fernjo_<version>_x64-setup.exe` | `windows-x86_64` |
+| Linux | `appimage` | `appimage/fernjo_<version>_amd64.AppImage` | `linux-x86_64` |
+| macOS | `app` | `macos/fernjo.app` | `darwin-aarch64` or `darwin-x86_64` |
+
+1. **Old version.** Set `version` under `[workspace.package]` in the root `Cargo.toml` to `0.0.1`, run `pnpm tauri build --debug --config tools/update-test.conf.json --bundles <bundle>`, move the result to a folder outside the repository and `<feed>` (the next build overwrites `fernjo.app`), then `git checkout -- Cargo.toml Cargo.lock`.
+2. **New version.** Run the same build command without the edit and put the update file into `<feed>`: the setup or the AppImage as it is; on macOS `COPYFILE_DISABLE=1 tar -C target/debug/bundle/macos -czf <feed>/fernjo_<NEW>_<aarch64 or x64>.app.tar.gz fernjo.app`.
+3. **Sign** it with the test key (empty password):
+
+       env -u TAURI_SIGNING_PRIVATE_KEY -u TAURI_SIGNING_PRIVATE_KEY_PASSWORD \
+         pnpm tauri signer sign -f src-tauri/tests/fixtures/update-test-key/test-only.privkey -p "" \
+         --app-version <NEW> <feed>/<file>
+
+4. **Feed.** Write `<feed>/latest.json` by hand (`tools/write-latest-json.mjs` is for releases only: it needs all four files and writes the release URLs, and it has no override on purpose):
+
+       {
+         "version": "<NEW>",
+         "notes": "Update test",
+         "platforms": {
+           "<platform key>": {
+             "signature": "<the whole content of <file>.sig>",
+             "url": "http://127.0.0.1:8765/<file>"
+           }
+         }
+       }
+
+5. **Serve** the folder, on this machine only (run inside `<feed>`, stop with Ctrl+C):
+
+       node -e 'const http=require("http"),fs=require("fs"),path=require("path");http.createServer((q,s)=>{console.log(q.method,q.url);fs.readFile(path.basename(q.url.split("?")[0]),(e,d)=>{if(e){s.writeHead(404);return s.end()}s.writeHead(200,{"Content-Length":d.length});s.end(d)})}).listen(8765,"127.0.0.1")'
+
+6. **Update.** Install or start the old build (Windows: run its setup; Linux: `chmod +x` and start the AppImage from a writable folder; macOS: start `fernjo.app` from a writable folder). Settings, "Updates" shows 0.0.1. Use "Check now" (or wait a minute), then "Update and restart". Expected: the server logs one request for `latest.json` per check and one for the update file; the app closes; the new version starts and Settings shows `<NEW>`; the three hashes are unchanged (change no setting during the run); Windows asks for no administrator rights; no SmartScreen or Gatekeeper warning for the updated app. To see the confirmation, repeat from the old build with a session connected: "Install update?" appears, and "Keep open" leaves the download ready.
+7. **Clean up.** Stop the server, uninstall or delete every test build, install the released version again, check that `git status` shows no change to `Cargo.toml` and `Cargo.lock`, and delete `<feed>`.
+
 ### Known residual limits
 
 The feed body is read without a size cap by the plugin (bounded by the 15 s check timeout and the pinned HTTPS endpoint); the download cap overshoots by one read slice; `sign` trusts the output of `build` including its caches (existing pipeline behaviour); a macOS or Linux install that returns instead of exiting and a confirm that arrives after the state left Ready are rare races noted in `Docs/DECISIONS.md`.

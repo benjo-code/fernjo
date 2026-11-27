@@ -248,6 +248,102 @@ fn update_test_hooks_are_not_a_default_feature() {
     );
 }
 
+/// A JSON merge patch (RFC 7396), which is how Tauri applies a `--config` file (`json_patch::merge`):
+/// objects merge key by key, everything else is replaced, `null` removes a key.
+fn merge_patch(target: &mut Value, patch: &Value) {
+    let Value::Object(patch) = patch else {
+        *target = patch.clone();
+        return;
+    };
+    if !target.is_object() {
+        *target = Value::Object(serde_json::Map::new());
+    }
+    let map = target.as_object_mut().expect("an object");
+    for (key, value) in patch {
+        if value.is_null() {
+            map.remove(key);
+        } else {
+            merge_patch(map.entry(key.clone()).or_insert(Value::Null), value);
+        }
+    }
+}
+
+/// The merge file of the owner's update check against a local feed (`Docs/release-checklist.md`)
+/// changes the feed and its key and allows plain HTTP, and nothing else. `requireSignedVersion`
+/// survives the merge, and the plugin accepts the merged block.
+#[test]
+fn update_test_config_changes_only_the_updater_feed() {
+    const TEST_ENDPOINT: &str = "http://127.0.0.1:8765/latest.json";
+    let test_key = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/update-test-key/test-only.pub"),
+    )
+    .unwrap();
+    let overlay = load("../tools/update-test.conf.json");
+    assert_eq!(
+        overlay,
+        serde_json::json!({ "plugins": { "updater": {
+            "endpoints": [TEST_ENDPOINT],
+            "pubkey": test_key.trim(),
+            "dangerousInsecureTransportProtocol": true,
+        } } })
+    );
+    let shipped = load("tauri.conf.json");
+    let mut merged = shipped.clone();
+    merge_patch(&mut merged, &overlay);
+    let mut rest = merged.clone();
+    rest["plugins"]["updater"] = shipped["plugins"]["updater"].clone();
+    assert_eq!(rest, shipped, "nothing outside plugins.updater changes");
+    let config: tauri_plugin_updater::Config =
+        serde_json::from_value(merged["plugins"]["updater"].clone())
+            .expect("the plugin accepts the merged block");
+    assert!(config.require_signed_version);
+    assert!(config.dangerous_insecure_transport_protocol);
+    assert!(!config.dangerous_accept_invalid_certs);
+    assert!(!config.dangerous_accept_invalid_hostnames);
+    assert!(!config.allow_downgrades);
+    assert_eq!(config.pubkey, test_key.trim());
+    let endpoints: Vec<&str> = config.endpoints.iter().map(|u| u.as_str()).collect();
+    assert_eq!(endpoints, [TEST_ENDPOINT]);
+}
+
+/// The test feed never reaches a release: no workflow names the merge file, the release workflow
+/// passes no extra configuration and enables no test feature, and `src-tauri` holds no second
+/// configuration file that the CLI would merge on its own (`tauri.<platform>.conf.json`).
+#[test]
+fn update_test_config_is_never_used_by_a_release() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut workflows = Vec::new();
+    for entry in fs::read_dir(manifest.join("../.github/workflows")).expect("read workflows") {
+        let path = entry.expect("entry").path();
+        let name = path
+            .file_name()
+            .expect("name")
+            .to_string_lossy()
+            .into_owned();
+        let text = fs::read_to_string(&path).expect("read workflow");
+        assert!(!text.contains("update-test.conf"), "{name}");
+        if name == "release.yml" {
+            for banned in ["update-test", "--config", "TAURI_CONFIG", "all-features"] {
+                assert!(!text.contains(banned), "{name} contains {banned}");
+            }
+            for line in text.lines().filter(|l| l.contains("tauri build")) {
+                assert!(!line.contains(" -c "), "{name}: {line}");
+            }
+        }
+        workflows.push(name);
+    }
+    assert!(
+        workflows.iter().any(|n| n == "release.yml"),
+        "{workflows:?}"
+    );
+    let configs: Vec<String> = fs::read_dir(manifest)
+        .expect("read src-tauri")
+        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+        .filter(|n| n.to_ascii_lowercase().starts_with("tauri"))
+        .collect();
+    assert_eq!(configs, ["tauri.conf.json"]);
+}
+
 #[test]
 fn notices_are_a_bundle_resource() {
     let conf = load("tauri.conf.json");
