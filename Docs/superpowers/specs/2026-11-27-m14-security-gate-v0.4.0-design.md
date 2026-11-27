@@ -1,6 +1,6 @@
 # Milestone 14: security check and release readiness for v0.4.0 — design
 
-Date: 2026-11-27 · Status: awaiting the owner's approval · Roadmap: milestone 14 in `Docs/ROADMAP.md` · Branch: `feature/m14-security-gate-v0.4.0`
+Date: 2026-11-27 · Status: approved by the owner on 2026-11-27 · Roadmap: milestone 14 in `Docs/ROADMAP.md` · Branch: `feature/m14-security-gate-v0.4.0`
 
 ## Intent
 

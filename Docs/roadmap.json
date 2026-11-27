@@ -112,6 +112,11 @@
       "date": "2026-11-27",
       "context": "M13 capability check",
       "text": "The capability criterion was reworded when it was checked: \"Check now\" cannot show that `update-status` arrives, because the screen also follows the command's reply, so the event proof is the `vault-status` event after the idle auto-lock (same permission). The check was run by hand with the installer of a release dry run instead of the DevTools-port recipe on a `--no-bundle` binary."
+    },
+    {
+      "date": "2026-11-27",
+      "context": "M14 planning",
+      "text": "Decisions while planning M14 (design `superpowers/specs/2026-11-27-m14-security-gate-v0.4.0-design.md`, plan `superpowers/plans/2026-11-27-milestone-14-security-gate.md`): added are a Windows test job in CI (no test of the M13 updater had run on Windows), the owner's key copy check and a local rehearsal of the signing and publishing commands with the test key (signing, signature verification and `latest.json` have never run on GitHub; a rehearsal on GitHub was rejected because it needs the tag-only rule of the `release-signing` environment loosened). The release gate takes its dry run on the milestone's final head, and the version bump and version check stay with the release branch. Known mismatch left for the planning of M17: its task and criterion say an installed v0.4.0 updates to a v0.5.0 candidate through a test feed, but a released v0.4.0 only reads the real GitHub feed (no runtime override), so that run needs the published release, as the v0.5.0 release criterion already says."
     }
   ],
   "subprojects": [
@@ -617,19 +622,25 @@
         {
           "id": "14",
           "title": "Security check and release readiness for v0.4.0",
-          "status": "open",
+          "status": "planned",
+          "plan": "superpowers/plans/2026-11-27-milestone-14-security-gate.md",
           "prerequisites": ["13"],
           "goal": "v0.4.0 is only released after an independent security check of what changed since v0.3.1 and a written go or no-go verdict; the milestone prepares the release and does not perform it.",
           "tasks": [
+            { "text": "Windows test job in `ci.yml` (`rust (windows)`, `cargo test --workspace` on `windows-latest`); the SSH container tests are skipped there only (`FERNJO_TEST_NO_SSH_SERVER`, honoured on Windows only) and stay in the Linux job; a defect the first run shows is triaged like a finding", "done": false },
+            { "text": "First-run risk of the signed release: the owner signs a test file with their own copy of the update key and the signature is verified against the pinned public key, and the commands of the `sign`, `verify-signatures` and `publish` jobs are rehearsed locally with the test key on the artifacts of a dry run; the environment protection, secret names and tag ruleset are read back", "done": false },
             { "text": "Update the threat model for what v0.4.0 adds (the update feed, the update signing key and the install handover): what touches secrets, the data folder, the network and the webview, and what a hostile peer, server, feed, file or other local process can do; record it in `Docs/DECISIONS.md`", "done": false },
             { "text": "Independent review per changed area, each by a reviewer that has not seen the others’ findings: the updater (hostile or compromised feed, downgrade, redirect, tampered or truncated download, release notes as text, the handover to the installer and its file paths), the release pipeline and key handling (secrets only in the signing step, fork pull requests, artifact contents, `latest.json`), the webview capability and command list after the narrowing, and the settings and privacy statements", "done": false },
             { "text": "`/security-review` of the whole diff since v0.3.1, and a dependency check: `cargo deny check`, `pnpm audit --prod`, open Dependabot and CodeQL alerts, `tools/check-workflows.sh`", "done": false },
             { "text": "Triage every finding in `Docs/release-checklist.md` (severity, disposition, evidence): fix all High and Medium findings, fix or have the owner accept each Low with the reason recorded in `Docs/DECISIONS.md`", "done": false },
             { "text": "Check that secrets still stay in Rust: the no-secret guard covers every command added since v0.3.1, and nothing secret reaches `connections.json`, `settings.json`, logs, sync data, update or transfer data or webview storage", "done": false },
             { "text": "List every owner check that is still open for the milestones in this release (roadmap block \"Open manual checks (owner)\" and the criteria marked \"Manual, owner\") with the command or steps for each; the owner runs them or consciously defers each one, and the verdict names what was deferred", "done": false },
-            { "text": "Release-readiness gate for v0.4.0: version and metadata (`Cargo.toml`, `package.json`, hub image tags as in the release procedure), `CHANGELOG.md` `[Unreleased]` reads short and user-friendly, `README.md`, `SECURITY.md` and the privacy statement match what the app really does, the release workflow dry run on the release pull request is green (installers, smoke tests, hub image, `tools/check-no-build-paths.sh`), evidence on the final head, known gaps, and a go or no-go verdict for the owner", "done": false }
+            { "text": "Release-readiness gate for v0.4.0: version and metadata (the files the release branch bumps are named: `Cargo.toml`, `package.json`, hub image tags as in the release procedure; the bump and `check-release-version.sh v0.4.0` belong to the release branch), `CHANGELOG.md` `[Unreleased]` reads short and user-friendly, `README.md`, `SECURITY.md` and the privacy statement match what the app really does, a release workflow dry run on the milestone’s final head is green (installers, smoke tests, hub image, `tools/check-no-build-paths.sh`; the release pull request’s own run is recorded at release time), evidence on the final head, known gaps, and a go or no-go verdict for the owner", "done": false }
           ],
           "acceptance": [
+            { "text": "CI job `rust (windows)` is green on the final head and its log shows the updater tests ran", "done": false },
+            { "text": "The pipeline rehearsal with the test key passed for the dry run version and as 0.4.0 with the real release notes", "done": false },
+            { "text": "Manual, owner: the key copy check passed (a signature from the owner’s own key copy verifies against the pinned public key), or the owner waived it in writing in the verdict", "done": false },
             { "text": "Every area named in the tasks has a written review, and all findings are in `Docs/release-checklist.md` with severity and disposition", "done": false },
             { "text": "No High finding is open; every Medium is fixed or its remaining risk is recorded in `Docs/DECISIONS.md` with the owner’s acceptance; every Low is fixed or accepted with the reason recorded", "done": false },
             { "text": "Each fix has a test or a recorded check that fails without the fix; commands and results are listed as evidence", "done": false },
