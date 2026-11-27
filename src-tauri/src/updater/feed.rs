@@ -109,7 +109,7 @@ fn check_error(e: &PluginError) -> FeedError {
         | PluginError::UrlParse(_)
         | PluginError::TargetNotFound(_)
         | PluginError::TargetsNotFound(_) => FeedError::BadFeed,
-        // a status other than success surfaces as `ReleaseNotFound`
+        // anything else the builder or the manifest can raise
         _ => FeedError::Unreachable,
     }
 }

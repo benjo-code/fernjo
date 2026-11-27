@@ -56,7 +56,15 @@ fn conf() -> Value {
 /// chosen by the test. `dangerousInsecureTransportProtocol` is only here so that an HTTP fake
 /// feed also works in a release-profile test run.
 fn app(pubkey: &str, version: &str) -> tauri::App<MockRuntime> {
+    app_configured(pubkey, version, None)
+}
+
+/// `app` with the configured endpoint replaced, for a check without an override.
+fn app_configured(pubkey: &str, version: &str, endpoint: Option<&str>) -> tauri::App<MockRuntime> {
     let mut updater = conf()["plugins"]["updater"].clone();
+    if let Some(endpoint) = endpoint {
+        updater["endpoints"] = json!([endpoint]);
+    }
     updater["pubkey"] = json!(pubkey);
     updater["dangerousInsecureTransportProtocol"] = json!(true);
     let mut ctx = tauri::test::mock_context(tauri::test::noop_assets());
@@ -298,6 +306,27 @@ async fn platforms_without_this_target_is_feed_invalid() {
     })
     .to_string();
     assert_eq!(bad_feed(body).await, FeedError::BadFeed);
+}
+
+#[tokio::test]
+async fn the_configured_endpoint_is_what_a_release_build_asks() {
+    // a release build passes no override: the endpoint comes from the configuration
+    let server = serve("0.4.1", &payload_signature(), "", payload());
+    let app = app_configured(&test_pubkey(), "0.4.0", Some(&server.url("/latest.json")));
+    let update = feed::check(app.handle(), "0.4.0", None, None)
+        .await
+        .expect("check")
+        .expect("offered");
+    assert_eq!(update.version, "0.4.1");
+    assert_eq!(server.log().len(), 1);
+}
+
+/// An installed app refuses a larger feed for good, so the release script stops well below.
+#[test]
+fn the_release_script_keeps_the_feed_well_under_the_cap() {
+    let script = fs::read_to_string(manifest_dir().join("../tools/write-latest-json.mjs")).unwrap();
+    assert!(script.contains("const MAX_FEED_FILE_BYTES = 128 * 1024;"));
+    assert_eq!(feed::MAX_FEED_BYTES, 2 * 128 * 1024);
 }
 
 #[tokio::test]

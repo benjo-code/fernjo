@@ -18,6 +18,9 @@ import { join } from "node:path";
 
 const REPO_URL = "https://github.com/benjo-code/fernjo/releases/download";
 const MAX_NOTES_BYTES = 16 * 1024;
+// Installed apps refuse a feed over 256 KiB for good (src-tauri/src/updater/feed.rs); half of that
+// leaves room.
+const MAX_FEED_FILE_BYTES = 128 * 1024;
 
 // Platform key of the updater -> artifact name for a version.
 export const platformFiles = (version) => ({
@@ -92,9 +95,13 @@ export function check(version, dir) {
   checkVersion(version);
   const path = join(dir, "latest.json");
   if (!existsSync(path)) return ["missing: latest.json"];
+  const bytes = readFileSync(path);
+  if (bytes.length > MAX_FEED_FILE_BYTES) {
+    return [`latest.json is ${bytes.length} bytes, over ${MAX_FEED_FILE_BYTES}`];
+  }
   let doc;
   try {
-    doc = JSON.parse(readFileSync(path, "utf8"));
+    doc = JSON.parse(bytes.toString("utf8"));
   } catch (error) {
     return [`latest.json is not valid JSON: ${error.message}`];
   }
