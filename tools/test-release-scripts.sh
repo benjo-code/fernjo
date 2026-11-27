@@ -516,8 +516,9 @@ process.exit(j.notes.includes("Update check and install.") && j.notes.includes("
   && !j.notes.includes("unreleased") && !j.notes.includes("Older notes") ? 0 : 1);' "$d"; }
 assert_true latest_json_notes_come_from_the_version_section notes_ok
 # The version is compared as text and never turned into a pattern (CodeQL js/regex-injection).
+# The module path is not the first argument: the script would take that as being run directly.
 notes_literal() { node -e '
-import(require("url").pathToFileURL(process.argv[1]).href).then(({ sectionNotes }) => {
+import(require("url").pathToFileURL(process.argv[2]).href).then(({ sectionNotes }) => {
   const log = "## [1.2.3]x\nnear miss\n## [1x2x3]\nother\n## [1.2.3] - 2026-11-30\nright\n";
   if (sectionNotes(log, "1.2.3") !== "right") process.exit(1);
   for (const pattern of ["1.2.\\d", "1.2.(3|4)", "1.2.[0-9]"]) {
@@ -528,7 +529,7 @@ import(require("url").pathToFileURL(process.argv[1]).href).then(({ sectionNotes 
       if (!error.message.includes("section")) process.exit(1);
     }
   }
-});' "$latest"; }
+});' import "$latest"; }
 assert_true latest_json_matches_the_changelog_version_as_text notes_literal
 assert_exit latest_json_check_accepts_the_written_file 0 "" node "$latest" --check "$ver" "$d"
 assert_exit latest_json_fails_without_the_changelog_section 1 "no [9.9.9] section" node "$latest" 9.9.9 "$d" "$d/CHANGELOG.md"
