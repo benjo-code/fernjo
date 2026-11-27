@@ -43,7 +43,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 | – | **Release `v0.3.1`** – Hub image on GitHub (M12) | – | ✅ done | – | 2026-11-26 |
 | 13 | Automatic updates | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-26-milestone-13-auto-update.md) | 2026-11-27 |
 | 14 | Security check and release readiness for v0.4.0 | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-27-milestone-14-security-gate.md) | 2026-11-27 |
-| – | **Release `v0.4.0`** – Automatic updates (M13 to M14) | – | ⬜ open | – | – |
+| – | **Release `v0.4.0`** – Automatic updates (M13 to M14) | – | ✅ done | – | 2026-11-27 |
 | 15 | Export to mRemoteNG format | 1 – fernjo app | ⬜ open | – | – |
 | 16 | SFTP file browser | 1 – fernjo app | ⬜ open | – | – |
 | 17 | Security check and release readiness for v0.5.0 | 1 – fernjo app | ⬜ open | – | – |

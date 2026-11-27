@@ -4,7 +4,7 @@ A lightweight, cross-platform remote connection manager for **SSH and RDP** on W
 
 All your connections live in one folder tree in the sidebar, sessions open as tabs in a single window, and passwords and keys are kept in an encrypted vault. Existing connections can be imported from mRemoteNG, including saved passwords.
 
-**Status:** in development – see [Docs/ROADMAP.md](Docs/ROADMAP.md). The latest release, v0.3.1, is published: SSH and RDP sessions, multi-device sync through your own hub, quick connect, the vault, import and backup are implemented, and the installers for Windows, macOS and Linux are on the [releases page](https://github.com/benjo-code/fernjo/releases).
+**Status:** in development – see [Docs/ROADMAP.md](Docs/ROADMAP.md). The latest release, v0.4.0, is published: SSH and RDP sessions, multi-device sync through your own hub, quick connect, the vault, import and backup, and updates from inside the app are implemented, and the installers for Windows, macOS and Linux are on the [releases page](https://github.com/benjo-code/fernjo/releases).
 
 ## Features
 
@@ -26,7 +26,7 @@ Design and scope: [Docs/superpowers/specs/2026-11-15-fernjo-design.md](Docs/supe
 
 ## Install
 
-Each GitHub release holds five installers and a checksum file:
+Each GitHub release holds five installers and a checksum file. From v0.4.0 on it also holds the files of the in-app update, which you do not need to download: `fernjo_<version>_aarch64.app.tar.gz`, `fernjo_<version>_x64.app.tar.gz`, four `.sig` signatures (for these two archives, the Windows setup and the AppImage) and the update feed `latest.json`. The installers:
 
 | Platform | File |
 |---|---|

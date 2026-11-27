@@ -863,7 +863,8 @@
     {
       "version": "0.4.0",
       "title": "Automatic updates",
-      "status": "open",
+      "status": "done",
+      "date": "2026-11-27",
       "afterMilestone": "14",
       "covers": ["13","14"],
       "intro": "The app checks for new versions, shows when one is ready and updates itself with one click in an app-themed window (M13), after an independent security check of the update path (M14). Installing this version by hand is the last manual update.",
