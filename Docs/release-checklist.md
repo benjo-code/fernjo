@@ -656,7 +656,7 @@ Four independent reviewers (fresh, read-only, each with only its own brief: the 
 | 85 | Updater | **A signature switched to minisign's legacy mode is accepted** (U4): the 64-byte hash of a signed file then passes verification. The attacker does not choose those bytes, so the format checks fail the install. | Low → Low | fix | `8a467a2`; `a_signature_switched_to_legacy_mode_is_refused`, `rejects_a_signature_switched_to_legacy_mode` |
 | 86 | Updater | **The signature names no platform** (U5): a feed that lists the Apple Silicon bundle for Intel Macs installs an app that cannot start. Needs control of the feed. | Low → Low | owner: binding the file name would make the installer names part of the update contract, so a later rename would stop every installed copy from updating | accepted by the owner 2026-11-27 |
 | 87 | Updater | **"Install update?" opens by itself when the download ends, with "Install" as the default button** (U6, W3): an Enter meant for a shell ends all sessions. | Low → Low | fix | `e1a35f9`; `install_with_connected_sessions_waits_for_confirmation_then_closes_sessions_first`, `downloading_shows_progress_and_stage`. Changes the M13 flow: with sessions connected, a second click ("Restart to update") |
-| 88 | Updater, UI | **"Check now" during a silent automatic check leaves "Checking…" on screen** (W4): no event follows when the check changes nothing. | Low → Low | fix | `6796ecb`; `check_now_during_an_automatic_check_runs_after_it_and_reports`, `a_status_read_during_an_automatic_check_hears_how_it_ended` |
+| 88 | Updater, UI | **"Check now" during a silent automatic check leaves "Checking…" on screen** (W4): no event follows when the check changes nothing. | Low → Low | fix | `6796ecb`; `check_now_during_an_automatic_check_runs_after_it_and_reports`, `a_status_read_during_an_automatic_check_hears_how_it_ended`. The final review found the same gap on "Update and restart": `3c5d5fb`, `an_install_click_during_an_automatic_check_hears_how_it_ended` |
 | 89 | Updater | **"Every 24 hours" does not count sleep on macOS and Linux** (P2; recorded as a limit in M13): checks can be days apart on a laptop. | Low → Low | fix | `7703af5`; `a_day_asleep_counts_towards_the_next_check` |
 | 90 | Settings | **A failed second read of `settings.json` at start turns checks back on** (P3, third case). | Low → Low | fix | `00c7444`; `a_settings_file_that_fails_only_at_the_second_read_stops_automatic_checks` |
 | 91 | Settings | **The update opt-out can be lost** (P3, first two cases): a damaged `settings.json` falls back to its backup, which may still have checks on; going back to v0.3.1 and saving drops the setting. | Low → Low | owner: this is how every setting behaves; the switch can be set again | accepted by the owner 2026-11-27 |
@@ -813,7 +813,7 @@ gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --env release-signing --repo be
 
 ## v0.4.0 readiness
 
-Date 2026-11-27. Branch `feature/m14-security-gate-v0.4.0`, pull request #65 to `dev`. Evidence taken at `5fd26dd`; only documents change after it. This section prepares the release and does not perform it.
+Date 2026-11-27. Branch `feature/m14-security-gate-v0.4.0`, pull request #65 to `dev`. Evidence taken at `3c5d5fb` (the pipeline rehearsal at `5fd26dd`; `tools/` and `release.yml` are unchanged since); only documents change after it. This section prepares the release and does not perform it.
 
 ### Reusable checklist
 
@@ -821,14 +821,15 @@ Date 2026-11-27. Branch `feature/m14-security-gate-v0.4.0`, pull request #65 to 
 - **Step 2, documentation:** `README.md` ("Updating", "Privacy") and `SECURITY.md` ("Updates") were corrected against review P (row 94) and describe the second click with sessions connected; the shortcut table's source (`ui/src/lib/shortcuts.ts`) and the issue templates are unchanged since `v0.3.1`; `[Unreleased]` names milestone 13; `CLAUDE.md` records the lasting facts of this gate; `dotnet run tools/roadmap.cs -- check` is valid.
 - **Step 3, build and test evidence:** the table below.
 - **Step 4, security review:** "v0.4.0 security review" above (four independent reviewers, `/security-review`, rows 81 to 108). 0 open code-scanning alerts on the pull request, gitleaks over the history clean.
-- **Step 8, no build paths:** "Check the binary for build paths" passed in all four app builds of dry run 46049705785 and of the pull request's dry run 46049685136.
+- **Step 8, no build paths:** "Check the binary for build paths" passed in all four app builds of dry run 46054857639; the pull request's dry run 46054864438 passed too.
+- **Final review of the branch** (a fresh reviewer over `5c59800..c8bd599`): nothing Critical or Important; one of its five Minors, an "Update and restart" click during a silent automatic check leaving the update window stuck, was raised to a gap of row 88 and fixed (`3c5d5fb`, `an_install_click_during_an_automatic_check_hears_how_it_ended`, seen failing first). Not changed: the M13 "Known residual limits" paragraph still names the uncapped feed (superseded by row 83); the commit-before-close order of `AppHost::go` is not pinned by a test; `USER_AGENT` is only checked by prefix; the tabs come back only when the UI's event subscription worked.
 
-### Commands (at `5fd26dd`)
+### Commands (at `3c5d5fb`)
 
 | Command | Where | Result |
 |---|---|---|
 | `cargo build --workspace` | Linux build container | exit 0 |
-| `cargo test --workspace` | Linux build container | exit 0: 1389 passed, 0 failed, 3 ignored (45 result lines; `fernjo-app` lib 454, `updater_feed` 30, `tauri_conf` 18, `verify_update_signature` 10); the SSH container tests skip here and run in CI |
+| `cargo test --workspace` | Linux build container | exit 0: 1390 passed, 0 failed, 3 ignored (45 result lines; `fernjo-app` lib 455, `updater_feed` 30, `tauri_conf` 18, `verify_update_signature` 10); the SSH container tests skip here and run in CI |
 | `cargo fmt --all --check` | Linux build container | exit 0 |
 | `cargo clippy --workspace --all-targets -- -D warnings` | Linux build container | exit 0 |
 | `cargo clippy -p fernjo-app --lib --bins -- -D warnings` | Linux build container | exit 0 |
@@ -839,10 +840,10 @@ Date 2026-11-27. Branch `feature/m14-security-gate-v0.4.0`, pull request #65 to 
 | `bash tools/check-workflows.sh` | Windows dev machine | exit 0 |
 | `bash tools/test-release-scripts.sh` | Windows dev machine | 162/162 passed |
 | `dotnet run tools/roadmap.cs -- check` | Windows dev machine | valid and up to date |
-| gitleaks 8.30.1 `detect` | container | 97 commits scanned, no leaks |
-| CI run 46049685068 | GitHub | all jobs pass: `rust` (with the SSH container) 1389 passed, 3 ignored; `rust (windows)` 1361 passed, 3 ignored; `ui`, `tauri-build`, `cargo-deny`, `workflows` |
+| gitleaks 8.30.1 `detect` | container | 99 commits scanned, no leaks |
+| CI run 46054864371 | GitHub | all jobs pass: `rust` (with the SSH container) 1390 passed, 3 ignored; `rust (windows)` 1362 passed, 3 ignored; `ui`, `tauri-build`, `cargo-deny`, `workflows` |
 | CodeQL on the pull request | GitHub | `actions`, `javascript-typescript`, `rust` pass, 0 open alerts |
-| `release.yml` dry run, 46049705785 (branch) and 46049685136 (pull request) | GitHub | four app builds with smoke tests and both hub image builds pass; sign, verify, publish and image push skipped |
+| `release.yml` dry run, 46054857639 (branch) and 46054864438 (pull request) | GitHub | four app builds with smoke tests and both hub image builds pass; sign, verify, publish and image push skipped |
 | Pipeline rehearsal on the artifacts of 46049705785 | dev machine and container | as in "v0.4.0 release pipeline rehearsal", now signing with `node node_modules/@tauri-apps/cli/tauri.js` as the workflow does: 0.3.1 and 0.4.0, 4 × `signature ok`, shipped key refused, `latest.json` written and checked (3,058 bytes; notes 565 bytes, the whole section), 12 files and 12 checksum lines |
 | Key material and bundle type in the same run | dev machine and container | no test key header and no `TAURI_SIGNING` in the log or in the installers, the unpacked tarballs, `.deb` and AppImage; the AppImage binary is marked as AppImage and the `.deb` binary as deb (row 92 depends on it) |
 
