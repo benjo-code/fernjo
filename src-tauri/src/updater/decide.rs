@@ -22,6 +22,9 @@ pub enum Os {
 pub struct InstallEnv {
     pub os: Os,
     pub appimage: Option<PathBuf>,
+    /// This binary was bundled as an AppImage. `APPIMAGE` alone does not say so: every program an
+    /// AppImage starts inherits it (M14 review #92).
+    pub bundled_as_appimage: bool,
     pub exe: PathBuf,
 }
 
@@ -101,7 +104,7 @@ pub fn install_kind(env: &InstallEnv, writable: &dyn Fn(&Path) -> bool) -> Insta
                 _ => not_writable,
             }
         }
-        Os::Linux => match env.appimage.as_deref() {
+        Os::Linux => match env.appimage.as_deref().filter(|_| env.bundled_as_appimage) {
             None => InstallKind::ReleasePageOnly(ReleasePageReason::PackageInstall),
             Some(img) => match img.parent() {
                 Some(dir) if writable(dir) => InstallKind::SelfUpdate,
@@ -192,6 +195,7 @@ mod tests {
         InstallEnv {
             os,
             appimage: appimage.map(PathBuf::from),
+            bundled_as_appimage: true,
             exe: PathBuf::from(exe),
         }
     }
@@ -238,6 +242,21 @@ mod tests {
         );
         let dir = |p: &Path| p == Path::new("/home/u/Apps");
         assert_eq!(install_kind(&lin, &dir), InstallKind::SelfUpdate);
+
+        // a .deb or self-built binary started by an AppImage inherits that program's APPIMAGE:
+        // it must not replace somebody else's file
+        let inherited = InstallEnv {
+            bundled_as_appimage: false,
+            ..env(
+                Os::Linux,
+                Some("/home/u/Apps/other.AppImage"),
+                "/usr/bin/fernjo",
+            )
+        };
+        assert_eq!(
+            install_kind(&inherited, &yes),
+            InstallKind::ReleasePageOnly(ReleasePageReason::PackageInstall)
+        );
     }
 
     #[test]

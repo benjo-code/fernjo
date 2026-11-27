@@ -882,6 +882,10 @@ fn real_install_view() -> InstallView {
         appimage: std::env::var_os("APPIMAGE")
             .filter(|v| !v.is_empty())
             .map(PathBuf::from),
+        bundled_as_appimage: matches!(
+            tauri::utils::platform::bundle_type(),
+            Some(tauri::utils::config::BundleType::AppImage)
+        ),
         exe: std::env::current_exe().unwrap_or_default(),
     };
     view_of(decide::install_kind(&env, &dir_is_writable))
