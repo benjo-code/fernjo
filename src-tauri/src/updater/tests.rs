@@ -394,13 +394,43 @@ async fn a_refused_download_leaves_nothing_to_install() {
     }
 }
 
+/// Every non-comment line of the app's sources (test files aside) that holds `needle`.
+fn source_lines_with(needle: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut folders = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+    while let Some(folder) = folders.pop() {
+        for entry in std::fs::read_dir(folder).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                folders.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs")
+                && path.file_name().is_some_and(|n| n != "tests.rs")
+            {
+                let source = std::fs::read_to_string(&path).unwrap();
+                found.extend(
+                    source
+                        .lines()
+                        .map(str::trim)
+                        .filter(|l| !l.starts_with("//") && l.contains(needle))
+                        .map(str::to_owned),
+                );
+            }
+        }
+    }
+    found
+}
+
 /// The plugin's own hook hides every window and drops the single-instance lock before it starts
 /// the Windows setup, so a start that fails would leave fernjo running unseen (M14 review #82).
-/// The hook cannot be observed from outside the plugin, so the override is pinned in the source.
+/// The hook cannot be observed from outside the plugin, so the source is pinned: one place builds
+/// an updater, and it replaces the hook there.
 #[test]
 fn the_plugin_exit_hook_is_replaced_so_a_failed_setup_start_keeps_the_app_usable() {
-    let feed = include_str!("feed.rs");
-    assert!(feed.contains("app.updater_builder().on_before_exit(|| {});"));
+    assert_eq!(
+        source_lines_with("updater_builder("),
+        ["let builder = app.updater_builder().on_before_exit(|| {});"]
+    );
+    assert_eq!(source_lines_with(".updater()"), Vec::<String>::new());
 }
 
 #[tokio::test]
