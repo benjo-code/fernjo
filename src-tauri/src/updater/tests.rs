@@ -779,6 +779,8 @@ async fn a_panic_in_the_install_ends_in_failed_not_installing() {
         g.state = UpdateState::Ready;
         g.bytes = Some(vec![1, 2, 3]);
     }
+    // `finish_after_push` sets the flag before it gets here
+    host.state().sync_closing.store(true, Ordering::SeqCst);
     let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         finish_install(&backend, &host);
     }));
@@ -790,6 +792,8 @@ async fn a_panic_in_the_install_ends_in_failed_not_installing() {
         status.state == UpdateState::Installing,
         None
     ));
+    // a flag left set would make every later close wait for a push that never ends
+    assert!(!host.state().sync_closing.load(Ordering::SeqCst));
 }
 
 #[tokio::test]

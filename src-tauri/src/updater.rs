@@ -41,6 +41,7 @@
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -517,17 +518,24 @@ fn progress_sink<Ho: Host>(host: Ho) -> Progress {
 /// `finish_after_push` sets `sync_closing` before it gets here and nothing else resets it, because
 /// an exit or a restart ends the process. An install is the one path that can return (it failed,
 /// the state was no longer `Ready`, or macOS and Linux replaced the files and only request a
-/// restart), so every return clears the flag: the window stays closable and a retry runs again.
-/// On Windows a successful install never returns, which is fine.
+/// restart), so every way out, a panic included, clears the flag: the window stays closable and
+/// a retry runs again. On Windows a successful install never returns, which is fine.
 pub fn finish_install<B, Ho>(backend: &B, host: &Ho)
 where
     B: UpdateBackend,
     Ho: Host<Handle = B::Handle>,
 {
+    let _closing = ClearOnDrop(&host.state().sync_closing);
     install_held(backend, host);
-    host.state()
-        .sync_closing
-        .store(false, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Clears the flag when it goes out of scope, also while a panic unwinds.
+struct ClearOnDrop<'a>(&'a AtomicBool);
+
+impl Drop for ClearOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }
 
 fn install_held<B, Ho>(backend: &B, host: &Ho)
@@ -749,9 +757,7 @@ impl Host for AppHost {
     }
 
     fn prompt_open(&self) -> bool {
-        self.state()
-            .close_prompt_open
-            .load(std::sync::atomic::Ordering::SeqCst)
+        self.state().close_prompt_open.load(Ordering::SeqCst)
     }
 
     fn ask(&self, connected: usize) {
