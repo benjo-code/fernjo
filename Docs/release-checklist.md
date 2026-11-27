@@ -643,6 +643,40 @@ Not covered: the platform's install handover (NSIS setup, bundle and AppImage re
 | `command_table_covers_every_tauri_command`, `no_response_contains_a_secret` | container | both pass; `update_status`, `update_skip` and `set_check_for_updates` are in `table()`, `update_check`, `update_install` and `update_open_release_page` in `APP_HANDLE_EXEMPT` with a reason |
 | Secrets in update data, by reading `updater.rs`, `updater/`, `app_settings.rs` and searching them and the update UI for logging and web storage calls | dev machine | nothing secret reaches them: the status event carries versions, cleaned notes, progress and fixed error codes; `settings.json` gains `checkForUpdates` and `skippedUpdateVersion`; no log, `console` or web storage call |
 
+## v0.4.0 release pipeline rehearsal
+
+Run 2026-11-27 with the published test key; the real key was not involved. It shows that the commands of the `sign`, `verify-signatures` and `publish` jobs work on real build artifacts. It does not show the GitHub secrets, the job wiring, or the draft, attestation, upload and publish steps.
+
+**Dry run.** `gh workflow run release.yml --ref feature/m14-security-gate-v0.4.0`, run 46037126684 at `ab43bb8`: the four builds and both hub image builds passed; `sign`, `verify update signatures`, `publish` and the hub image push were skipped.
+
+**Commands, on the `installers-*` artifacts of that run** (Git Bash on the Windows dev machine; the jobs run bash on `ubuntu-latest`):
+
+| Step | Version 0.3.1, real names | The same files renamed to 0.4.0, with a changelog copy whose `[Unreleased]` became `[0.4.0]` |
+|---|---|---|
+| `verify-installers.sh --artifacts` | all 7 files present | not repeated (it takes the artifact folders) |
+| `pnpm tauri signer sign --app-version <v>` on the four update files | 4 signatures | 4 signatures |
+| `verify_update_signature` with the test configuration | 4 × `signature ok` | 4 × `signature ok` |
+| the same with `src-tauri/tauri.conf.json` (the shipped key) | exit 1, "created with a different key" | exit 1 |
+| `write-latest-json.mjs`, then `--check` | written, matches | written, matches; the four platforms, `notes` 359 bytes, equal to the whole changelog section |
+| `verify-installers.sh --release` | all 12 files present | all 12 files present |
+| `sha256sum -- *` | 12 lines | 12 lines |
+
+Differences from the jobs: the shell and operating system; `verify_update_signature` ran in the Linux build container with `cargo run` without `--locked`; the Git Bash `sha256sum` marks files as binary (`*`) where Linux writes two spaces.
+
+**No key material.** In the run's log (7279 lines) and in the seven installers as downloaded, plus the unpacked macOS tarballs and `.deb`, neither the first 40 characters of the test key file (the header every such key file starts with) nor the text `TAURI_SIGNING` occurs. The search does find the header in the key file itself. The compressed insides of the AppImage, the dmg files and the setup were not unpacked.
+
+**Repository settings, read back with `gh api` and `gh secret list` (read only):**
+
+| Setting | State |
+|---|---|
+| Environment `release-signing` | required reviewer (one user, self-review allowed); deployment policy: tag `v*` only; administrators can bypass (K7) |
+| Secrets | `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` in the environment; none in the repository, no organisation secret visible |
+| Ruleset `release tags` (`refs/tags/v*`) | active, no bypass actor; blocks deletion, update and non-fast-forward; **no creation rule** (K11) |
+| Immutable releases | enabled; `v0.3.1` and `v0.3.0` immutable |
+| Actions | default token read; SHA pinning required; fork pull request runs need approval for all external contributors |
+| Required checks on `dev` and `main` | `roadmap`, `rust`, `ui`, `tauri-build`, `cargo-deny`, `workflows`; `rust (windows)` is not among them |
+| Collaborators with write access | 1 |
+
 ## v0.4.0 owner checks
 
 Asked at the start of M14 (2026-11-27). Results are recorded under each check.
