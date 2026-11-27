@@ -49,7 +49,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -732,7 +732,7 @@ fn run_loop(app: &AppHandle) {
         std::thread::sleep(Duration::from_secs(1));
         scheduler.set_enabled(schedule::automatic_checks_allowed(&state));
         let now = epoch.elapsed();
-        if !scheduler.due(now) {
+        if !scheduler.due(now, SystemTime::now()) {
             continue;
         }
         // A panic in one check must not end the thread; a check in progress is dropped by the
@@ -740,7 +740,7 @@ fn run_loop(app: &AppHandle) {
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tauri::async_runtime::block_on(update_check(app, false));
         }));
-        scheduler.ran(epoch.elapsed());
+        scheduler.ran(epoch.elapsed(), SystemTime::now());
     }
 }
 
