@@ -695,7 +695,7 @@ sign_job_signs_the_four_update_files_with_the_version() {
   printf '%s\n' "$b" | grep -Fq 'pnpm tauri signer sign --app-version' &&
     printf '%s\n' "$b" | grep -Fq 'pnpm install --frozen-lockfile --ignore-scripts' &&
     printf '%s\n' "$b" | grep -Fq 'name: update-signatures' &&
-    ! printf '%s\n' "$b" | grep -Eq '^[^#]*(merge-multiple|actions/cache|rust-cache)'
+    ! printf '%s\n' "$b" | grep -Eq '^[^#]*(merge-multiple|actions/cache|rust-cache|[[:space:]]cache[[:space:]]*:)'
 }
 assert_true release_sign_job_signs_with_the_app_version_and_runs_no_dependency_script sign_job_signs_the_four_update_files_with_the_version
 publish_writes_and_checks_latest_json_after_the_signatures() {
@@ -732,6 +732,18 @@ assert_exit environment_key_accepted_for_release_signing 0 "" bash "$check_workf
 assert_exit environment_key_refused_for_another_name 1 "environment" bash "$check_workflows" "$(env_fixture other '    environment: production')"
 assert_exit environment_key_refused_in_object_form 1 "environment" bash "$check_workflows" "$(env_fixture object $'    environment:\n      name: release-signing')"
 assert_exit environment_key_refused_in_flow_form 1 "environment" bash "$check_workflows" "$(env_fixture flow '    environment: { name: release-signing }')"
+assert_exit environment_key_refused_when_double_quoted 1 "environment" bash "$check_workflows" "$(env_fixture dquoted '    "environment": release-signing')"
+assert_exit environment_key_refused_when_single_quoted 1 "environment" bash "$check_workflows" "$(env_fixture squoted "    'environment': release-signing")"
+assert_exit environment_key_refused_with_a_space_before_the_colon 1 "environment" bash "$check_workflows" "$(env_fixture spaced '    environment : release-signing')"
+assert_exit environment_key_refused_in_a_list_item 1 "environment" bash "$check_workflows" "$(env_fixture listed '    - environment: release-signing')"
+
+# The real release workflow names an environment exactly once: the signing job's own line.
+release_names_the_environment_only_in_the_sign_job() {
+  [ "$(grep -cE '^[^#]*environment[[:space:]]*:' "$release_yml")" -eq 1 ] &&
+    [ "$(job_block sign | grep -cE '^[^#]*environment[[:space:]]*:')" -eq 1 ] &&
+    job_block sign | grep -Fxq '    environment: release-signing'
+}
+assert_true release_names_the_environment_only_in_the_sign_job release_names_the_environment_only_in_the_sign_job
 
 # --- hub Containerfile ---
 hub_containerfile="$root/crates/fernjo-hub/Containerfile"

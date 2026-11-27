@@ -38,10 +38,11 @@ fn pubkey_of(conf_json: &str) -> Result<String, String> {
     Ok(conf.plugins.updater.pubkey)
 }
 
-/// Same as the plugin's `base64_to_string`.
+/// Same as the plugin's `base64_to_string` (no trimming: the plugin decodes the configured public
+/// key as it is, so a key with stray whitespace in the configuration fails here as it fails there).
 fn base64_to_string(text: &str) -> Result<String, String> {
     let bytes = base64::engine::general_purpose::STANDARD
-        .decode(text.trim())
+        .decode(text)
         .map_err(|e| format!("not valid base64: {e}"))?;
     String::from_utf8(bytes).map_err(|_| "not valid UTF-8 after base64".to_string())
 }
@@ -71,8 +72,10 @@ fn verify(
     let pubkey_text =
         base64_to_string(&pubkey_of(conf_json)?).map_err(|e| format!("pubkey: {e}"))?;
     let public_key = PublicKey::decode(&pubkey_text).map_err(|e| format!("pubkey: {e}"))?;
+    // A `.sig` file may end with a newline and `latest.json` carries its trimmed text, so the
+    // signature is trimmed here; the public key is not.
     let signature_decoded =
-        base64_to_string(signature_text).map_err(|e| format!("signature: {e}"))?;
+        base64_to_string(signature_text.trim()).map_err(|e| format!("signature: {e}"))?;
     let signature = Signature::decode(&signature_decoded).map_err(|e| format!("signature: {e}"))?;
     public_key
         .verify(data, &signature, true)
@@ -215,6 +218,19 @@ mod tests {
             Some("1.2.3")
         );
         assert_eq!(signed_version("timestamp:1\tfile:app-version:2.zip"), None);
+    }
+
+    #[test]
+    fn a_pubkey_with_stray_whitespace_is_refused_like_the_plugin_does() {
+        let conf = fixture("tauri.conf.json");
+        let sig = fixture("with-app-version.sig");
+        let padded = conf.replace("\"pubkey\": \"", "\"pubkey\": \" ");
+        assert_ne!(padded, conf);
+        let err = verify(&padded, &payload(), &sig, None).unwrap_err();
+        assert!(err.starts_with("pubkey: not valid base64"), "{err}");
+        // a signature file ends with a newline; the signature is trimmed, the public key is not
+        let with_newline = format!("{}\n", sig.trim());
+        assert_eq!(verify(&conf, &payload(), &with_newline, None), Ok(()));
     }
 
     #[test]
