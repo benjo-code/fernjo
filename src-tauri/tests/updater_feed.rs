@@ -14,6 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use base64::Engine as _;
 use fake_feed::{FakeFeed, Route};
 use fernjo_app_lib::updater::feed::{self, FeedError, FeedUpdate, Limits};
 use serde_json::{Value, json};
@@ -223,6 +224,40 @@ async fn tampered_download_is_refused() {
         .await
         .unwrap_err();
     assert_eq!(err.code(), "signature_invalid");
+}
+
+/// BLAKE2b-512 of `payload.bin` (`b2sum`): what a prehashed signature of it really signs.
+const PAYLOAD_BLAKE2B: &str = "1dd1daa565d43df90bed59272794b990cce97df593cc90a04955a14684030a64b4398d9b050c3b45b12c116ec573081f5e382ce8366bd628d9e3befa923185b0";
+
+fn payload_hash() -> Vec<u8> {
+    (0..PAYLOAD_BLAKE2B.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&PAYLOAD_BLAKE2B[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+/// The signature with its algorithm bytes switched from `ED` (prehashed) to `Ed` (legacy), which
+/// neither signature inside it covers.
+fn switched_to_legacy(signature: &str) -> String {
+    let b64 = &base64::engine::general_purpose::STANDARD;
+    let text = String::from_utf8(b64.decode(signature.trim()).unwrap()).unwrap();
+    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    let mut raw = b64.decode(&lines[1]).unwrap();
+    assert_eq!(&raw[..2], b"ED");
+    raw[1] = b'd';
+    lines[1] = b64.encode(raw);
+    b64.encode(lines.join("\n") + "\n")
+}
+
+#[tokio::test]
+async fn a_signature_switched_to_legacy_mode_is_refused() {
+    // in legacy mode the 64-byte hash of the signed file would pass as if it were the file
+    let signature = switched_to_legacy(&payload_signature());
+    let server = serve("9.9.9", &signature, "", payload_hash());
+    let err = download_of(&server, &test_pubkey(), Limits::production())
+        .await
+        .unwrap_err();
+    assert_eq!(err, FeedError::BadSignature);
 }
 
 #[tokio::test]

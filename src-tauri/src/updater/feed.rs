@@ -13,6 +13,7 @@
 
 use std::time::Duration;
 
+use base64::Engine as _;
 use reqwest::{StatusCode, header::ACCEPT};
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_updater::{Error as PluginError, Update, UpdaterExt};
@@ -231,6 +232,19 @@ pub async fn check<R: Runtime>(
     }))
 }
 
+/// Whether the signature is the prehashed kind (`ED`) that the Tauri CLI writes. The plugin also
+/// accepts minisign's legacy kind, and the two bytes that name the kind are covered by no
+/// signature: switched, the 64-byte hash of a signed file verifies as if it were the file
+/// (M14 review #85).
+fn is_prehashed(signature: &str) -> bool {
+    let b64 = &base64::engine::general_purpose::STANDARD;
+    b64.decode(signature.trim())
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .and_then(|text| b64.decode(text.lines().nth(1)?.trim()).ok())
+        .is_some_and(|raw| raw.starts_with(b"ED"))
+}
+
 /// Size and time bounds of a download. `production()` is what the app uses; the tests pass lower
 /// values so the suite stays fast and never sends 256 MiB.
 #[derive(Debug, Clone, Copy)]
@@ -265,6 +279,9 @@ pub async fn download_with(
     limits: Limits,
     on_progress: impl Fn(u64, Option<u64>) + Send + 'static,
 ) -> Result<Vec<u8>, FeedError> {
+    if !is_prehashed(&update.handle.signature) {
+        return Err(FeedError::BadSignature);
+    }
     let (tx, mut rx) = unbounded_channel::<(u64, Option<u64>)>();
     let download = update.handle.download(
         move |chunk, declared| {
