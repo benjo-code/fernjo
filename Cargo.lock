@@ -1733,6 +1733,8 @@ dependencies = [
  "fernjo-ssh",
  "fernjo-sync",
  "fernjo-vault",
+ "reqwest",
+ "rustls",
  "secrecy",
  "semver",
  "serde",

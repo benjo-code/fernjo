@@ -1,16 +1,19 @@
-//! The update feed client: one check against the pinned endpoint and one verified download,
-//! both through `tauri-plugin-updater` (Docs/DECISIONS.md, "M13: update signing and the updater
-//! plugin"). The signature check is the plugin's: `Update::download` verifies the bytes against
-//! the pinned public key and, with `requireSignedVersion`, against the version the signature was
-//! made for, before it returns anything.
+//! The update feed client: one check against the pinned endpoint and one verified download
+//! (Docs/DECISIONS.md, "M13: update signing and the updater plugin" and "M14: fixes from the
+//! v0.4.0 security review"). The signature check is the plugin's: `Update::download` verifies the
+//! bytes against the pinned public key and against the version the signature was made for, before
+//! it returns anything.
 //!
-//! What the plugin does not do and this module adds: the pre-release / skipped-version filter
-//! (`decide::is_offered`; the plugin's comparator is a plain `>`), a size cap (the plugin buffers
-//! the whole body without limit), a stall timeout and a check timeout. The endpoint and the
-//! public key come from the `plugins.updater` configuration, never from code.
+//! What this module does itself: it fetches `latest.json` under a size cap and hands it to the
+//! plugin (`Updater::restore_update`, which always requires a signed version), filters
+//! pre-releases and the skipped version (`decide::is_offered`; the plugin's comparator is a plain
+//! `>`), caps the download (the plugin buffers the whole body without limit) and adds a stall and
+//! a check timeout. The endpoint and the public key come from the `plugins.updater`
+//! configuration, never from code.
 
 use std::time::Duration;
 
+use reqwest::{StatusCode, header::ACCEPT};
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_updater::{Error as PluginError, Update, UpdaterExt};
 use tokio::sync::mpsc::unbounded_channel;
@@ -22,6 +25,11 @@ use super::decide;
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(15);
 /// A download that receives no chunk for this long is dropped.
 pub const STALL_TIMEOUT: Duration = Duration::from_secs(60);
+/// The largest `latest.json` that is parsed. The release's feed holds four signatures and at most
+/// 16 KiB of notes, a few tens of KiB in all; parsing costs many times the size of the body.
+pub const MAX_FEED_BYTES: usize = 256 * 1024;
+/// The user agent of the pinned plugin, which the check keeps sending.
+const USER_AGENT: &str = "tauri-plugin-updater/2.14.1";
 
 /// An update the feed announced and that passed `decide::is_offered`.
 pub struct FeedUpdate {
@@ -114,6 +122,59 @@ fn download_error(e: &PluginError) -> FeedError {
     }
 }
 
+/// The endpoint of the `plugins.updater` configuration (exactly one, without template variables;
+/// `updater_config_is_pinned`).
+fn configured_endpoint<R: Runtime>(app: &AppHandle<R>) -> Result<Url, FeedError> {
+    app.config()
+        .plugins
+        .0
+        .get("updater")
+        .and_then(|c| c.get("endpoints")?.get(0)?.as_str())
+        .and_then(|s| Url::parse(s).ok())
+        .ok_or(FeedError::BadFeed)
+}
+
+/// Fetches the manifest and stops at [`MAX_FEED_BYTES`]. The plugin's own `check` reads a body
+/// without limit into a `serde_json::Value`, which costs about 190 bytes of memory per byte and is
+/// kept while the update is on offer (M14 review #83). The request is the plugin's: user agent,
+/// `Accept`, redirects, system proxy and TLS stack. `None` is `204 No Content`.
+async fn fetch_manifest(endpoint: Url) -> Result<Option<Vec<u8>>, FeedError> {
+    // the TLS stack is built without a provider; this is the one the plugin installs
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+    let client = reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .build()
+        .map_err(|_| FeedError::Unreachable)?;
+    let mut response = client
+        .get(endpoint)
+        .header(ACCEPT, "application/json")
+        .send()
+        .await
+        .map_err(|_| FeedError::Unreachable)?;
+    if !response.status().is_success() {
+        return Err(FeedError::Unreachable);
+    }
+    if response.status() == StatusCode::NO_CONTENT {
+        return Ok(None);
+    }
+    if response
+        .content_length()
+        .is_some_and(|n| n > MAX_FEED_BYTES as u64)
+    {
+        return Err(FeedError::BadFeed);
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| FeedError::Unreachable)? {
+        if body.len() + chunk.len() > MAX_FEED_BYTES {
+            return Err(FeedError::BadFeed);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(Some(body))
+}
+
 /// Checks the pinned endpoint once. `Ok(None)` means nothing is offered (no newer release, a
 /// pre-release, or the skipped version): the plugin's answer and `decide::is_offered` must both
 /// agree before an update is returned.
@@ -132,21 +193,32 @@ pub async fn check<R: Runtime>(
     // before it starts the Windows setup; a start that fails (antivirus, application control) would
     // leave the app running unseen. After a successful start the process exits at once anyway.
     let builder = app.updater_builder().on_before_exit(|| {});
-    #[cfg(feature = "update-test-hooks")]
-    let builder = match endpoint_override {
-        Some(url) => builder
-            .endpoints(vec![url.clone()])
-            .map_err(|e| check_error(&e))?,
-        None => builder,
-    };
-    #[cfg(not(feature = "update-test-hooks"))]
-    let _ = endpoint_override;
     let updater = builder.build().map_err(|e| check_error(&e))?;
-    let found = tokio::time::timeout(CHECK_TIMEOUT, updater.check())
+    #[cfg(feature = "update-test-hooks")]
+    let overridden = endpoint_override.cloned();
+    #[cfg(not(feature = "update-test-hooks"))]
+    let overridden = {
+        let _ = endpoint_override;
+        None::<Url>
+    };
+    let endpoint = match overridden {
+        Some(url) => url,
+        None => configured_endpoint(app)?,
+    };
+    let body = tokio::time::timeout(CHECK_TIMEOUT, fetch_manifest(endpoint))
         .await
-        .map_err(|_| FeedError::Unreachable)?
-        .map_err(|e| check_error(&e))?;
-    let Some(update) = found else {
+        .map_err(|_| FeedError::Unreachable)??;
+    let Some(body) = body else {
+        return Ok(None);
+    };
+    // `restore_update` takes a `Value`, the one place the project builds one from foreign bytes;
+    // the cap above bounds what that costs
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&body).map_err(|_| FeedError::BadFeed)?;
+    let Some(update) = updater
+        .restore_update(manifest)
+        .map_err(|e| check_error(&e))?
+    else {
         return Ok(None);
     };
     if !decide::is_offered(current, &update.version, skipped) {

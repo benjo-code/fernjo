@@ -300,6 +300,67 @@ async fn platforms_without_this_target_is_feed_invalid() {
     assert_eq!(bad_feed(body).await, FeedError::BadFeed);
 }
 
+#[tokio::test]
+async fn an_oversized_feed_is_feed_invalid_and_offers_nothing() {
+    // a valid manifest padded past the cap: parsing it would cost many times its size
+    let mut body: Value = serde_json::from_str(&manifest(
+        "0.4.1",
+        "http://127.0.0.1:9/x",
+        &payload_signature(),
+        "",
+    ))
+    .unwrap();
+    body["pad"] = json!("x".repeat(feed::MAX_FEED_BYTES));
+    assert_eq!(bad_feed(body.to_string()).await, FeedError::BadFeed);
+}
+
+#[tokio::test]
+async fn an_endless_feed_is_cut_off_at_the_cap() {
+    // no Content-Length: only the received bytes can stop it
+    let total = 64 * 1024 * 1024;
+    let sent = Arc::new(AtomicUsize::new(0));
+    let done = Arc::new(AtomicBool::new(false));
+    let server = FakeFeed::start(vec![(
+        "/latest.json",
+        Route::Endless {
+            total,
+            sent: sent.clone(),
+            done: done.clone(),
+        },
+    )]);
+    let result = check_with_feed(&server, "0.4.0", None).await;
+    assert_eq!(result.err(), Some(FeedError::BadFeed));
+    let waited = Instant::now();
+    while !done.load(Ordering::SeqCst) && waited.elapsed() < Duration::from_secs(20) {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        sent.load(Ordering::SeqCst) < total / 2,
+        "the server kept sending: {} bytes",
+        sent.load(Ordering::SeqCst)
+    );
+}
+
+#[tokio::test]
+async fn a_feed_with_the_longest_release_notes_is_accepted() {
+    let notes = "\"".repeat(16 * 1024);
+    let server = serve("0.4.1", &payload_signature(), &notes, payload());
+    assert_eq!(offered(&server, "0.4.0").await.notes.len(), 16 * 1024);
+}
+
+/// An installed v0.4.0 can only ever be updated if the check works against GitHub itself: its TLS
+/// and the redirects to the asset host. The fake feed is plain HTTP, so this asks the real host
+/// for a release file that exists and is not a manifest.
+#[tokio::test]
+#[ignore = "talks to github.com: run with --ignored"]
+async fn the_real_release_host_is_reached_over_https() {
+    let app = app(&test_pubkey(), "0.4.0");
+    let endpoint = url("https://github.com/benjo-code/fernjo/releases/latest/download/SHA256SUMS");
+    let result = feed::check(app.handle(), "0.4.0", None, Some(&endpoint)).await;
+    // fetched and then refused as a manifest; a TLS or network failure would be `Unreachable`
+    assert_eq!(result.err(), Some(FeedError::BadFeed));
+}
+
 fn limits(cap: u64, stall_ms: u64) -> Limits {
     Limits {
         cap,
@@ -431,6 +492,12 @@ async fn check_sends_exactly_one_get_to_the_pinned_path() {
         .map(|(_, v)| v.as_str())
         .unwrap_or_default();
     assert!(agent.starts_with("tauri-plugin-updater/"), "{agent}");
+    let accept = request
+        .headers
+        .iter()
+        .find(|(n, _)| n == "accept")
+        .map(|(_, v)| v.as_str());
+    assert_eq!(accept, Some("application/json"));
 }
 
 #[tokio::test]

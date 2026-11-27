@@ -36,6 +36,9 @@ tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 # exact pin: installer code is security-relevant, read a new release before taking it (Docs/DECISIONS.md, "M13: update signing and the updater plugin")
 tauri-plugin-updater = "=2.14.1"
+# the size-capped feed fetch (M14 review #83): the plugin's own versions and TLS stack
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "system-proxy"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 url = "2"
 tokio.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
