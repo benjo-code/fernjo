@@ -39,9 +39,11 @@ const checkVersion = (version) => {
 // character boundary.
 export function sectionNotes(changelog, version) {
   const lines = changelog.split(/\r?\n/);
-  const escaped = version.replaceAll(".", "\\.");
-  const heading = new RegExp(`^##\\s+\\[${escaped}\\](\\s|$)`);
-  const start = lines.findIndex((line) => heading.test(line));
+  // Compared as text: a pattern built from the argument would let it match other headings.
+  const start = lines.findIndex((line) => {
+    const [marks, title] = line.split(/\s+/);
+    return marks === "##" && title === `[${version}]`;
+  });
   if (start < 0) fail(`CHANGELOG has no [${version}] section`);
   let end = lines.findIndex((line, i) => i > start && /^##\s/.test(line));
   if (end < 0) end = lines.length;
