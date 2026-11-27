@@ -225,6 +225,50 @@ async fn second_check_while_checking_is_dropped() {
 }
 
 #[tokio::test]
+async fn check_now_during_an_automatic_check_runs_after_it_and_reports() {
+    let (backend, host, _) = setup();
+    *backend.announce.lock().unwrap() = Err(FeedError::Unreachable);
+    let gate = Arc::new(Notify::new());
+    *backend.gate.lock().unwrap() = Some(Arc::clone(&gate));
+    let (automatic, clicked) = tokio::join!(run_check(&*backend, &host, false), async {
+        while status_of(&host).state != UpdateState::Checking {
+            tokio::task::yield_now().await;
+        }
+        let clicked = run_check(&*backend, &host, true).await;
+        *backend.gate.lock().unwrap() = None;
+        gate.notify_one();
+        clicked
+    });
+    assert_eq!(clicked.state, UpdateState::Checking);
+    // the automatic check stayed silent about its failure; the one the click asked for does not
+    assert_eq!(backend.checks.load(Ordering::SeqCst), 2);
+    assert_eq!(automatic.state, UpdateState::Failed);
+    let last = host.events().pop().expect("an event");
+    assert_eq!(last.state, UpdateState::Failed);
+    assert_eq!(last.error.as_deref(), Some("feed_unreachable"));
+}
+
+#[tokio::test]
+async fn a_status_read_during_an_automatic_check_hears_how_it_ended() {
+    let (backend, host, _) = setup();
+    *backend.announce.lock().unwrap() = Err(FeedError::Unreachable);
+    let gate = Arc::new(Notify::new());
+    *backend.gate.lock().unwrap() = Some(Arc::clone(&gate));
+    tokio::join!(run_check(&*backend, &host, false), async {
+        while status_of(&host).state != UpdateState::Checking {
+            tokio::task::yield_now().await;
+        }
+        gate.notify_one();
+    });
+    // whoever was told "checking" is told that it is over
+    assert_eq!(
+        host.events().pop().map(|e| e.state),
+        Some(UpdateState::Idle)
+    );
+    assert_eq!(backend.checks.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn automatic_check_failure_leaves_state_idle_and_no_error() {
     for failure in [
         FeedError::Unreachable,

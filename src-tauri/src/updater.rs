@@ -24,8 +24,8 @@
 //!   (Cmd+Q) is likely not held, see `Docs/DECISIONS.md` "M10 quit confirmation on
 //!   ExitRequested".
 //! - An automatic check (`manual == false`) swallows every failure: the state returns to what it
-//!   was, no error, no event. It also does not announce "checking" and only emits when the status
-//!   changed. A manual check reports its failure as `failed` with the error code and finding
+//!   was, no error. It does not announce "checking" and only emits when the status changed or a
+//!   status answer said `checking` meanwhile; a "Check now" during it is run after it. A manual check reports its failure as `failed` with the error code and finding
 //!   nothing as `upToDate`.
 //! - Skipping: `update_skip` stores the available version; automatic checks pass it to the feed
 //!   filter, so it is never offered again. A manual check ignores the skipped version (it is
@@ -132,6 +132,12 @@ pub struct UpdaterRuntime<H = FeedUpdate> {
     checking: bool,
     /// The user confirmed the install of the held download: a check that ends now leaves it.
     committed: bool,
+    /// The running check is an automatic one.
+    silent: bool,
+    /// "Check now" arrived while an automatic check ran: a manual check follows it.
+    asked: bool,
+    /// A status answer said `checking` while this check ran, so its end must be announced.
+    observed: bool,
 }
 
 impl<H> Default for UpdaterRuntime<H> {
@@ -145,6 +151,9 @@ impl<H> Default for UpdaterRuntime<H> {
             bytes: None,
             checking: false,
             committed: false,
+            silent: false,
+            asked: false,
+            observed: false,
         }
     }
 }
@@ -247,7 +256,11 @@ fn assemble<H>(rt: &UpdaterRuntime<H>, o: &Outside) -> UpdateStatus {
 
 fn snapshot<H>(state: &AppState, rt: &Mutex<UpdaterRuntime<H>>, current: &str) -> UpdateStatus {
     let o = outside(state, current);
-    assemble(&lock(rt), &o)
+    let mut g = lock(rt);
+    if g.state == UpdateState::Checking {
+        g.observed = true;
+    }
+    assemble(&g, &o)
 }
 
 /// Changes the runtime under its lock and returns the new status.
@@ -334,8 +347,25 @@ impl<Ho: Host> Drop for SlotGuard<'_, Ho> {
     }
 }
 
-/// One check. See the module comment for the manual and automatic rules.
+/// One check. See the module comment for the manual and automatic rules. A "Check now" that
+/// arrived while an automatic check ran is run after it (M14 review #88).
 pub async fn run_check<B, Ho>(backend: &B, host: &Ho, manual: bool) -> UpdateStatus
+where
+    B: UpdateBackend,
+    Ho: Host<Handle = B::Handle>,
+{
+    let mut manual = manual;
+    loop {
+        let (status, asked) = check_once(backend, host, manual).await;
+        if !asked {
+            return status;
+        }
+        manual = true;
+    }
+}
+
+/// The status after one check, and whether a manual check was asked for while it ran.
+async fn check_once<B, Ho>(backend: &B, host: &Ho, manual: bool) -> (UpdateStatus, bool)
 where
     B: UpdateBackend,
     Ho: Host<Handle = B::Handle>,
@@ -347,10 +377,16 @@ where
     {
         let mut g = lock(host.runtime());
         if is_busy(g.state) || g.checking || (!manual && !o.enabled) {
-            return assemble(&g, &o);
+            if manual && g.checking && g.silent {
+                g.asked = true;
+            }
+            return (assemble(&g, &o), false);
         }
         before = assemble(&g, &o);
         g.checking = true;
+        g.silent = !manual;
+        g.asked = false;
+        g.observed = false;
         if g.state == UpdateState::Ready {
             // the held download stays installable while the check is out (a confirmed dialog
             // must still install it), so the state is left alone
@@ -376,8 +412,12 @@ where
         _ => None,
     };
     guard.restore = None;
+    let mut asked = false;
+    let mut observed = false;
     let after = change(host, |g| {
         g.checking = false;
+        asked = std::mem::take(&mut g.asked);
+        observed = std::mem::take(&mut g.observed);
         let ready = prev.0 == UpdateState::Ready;
         if ready && (g.state != UpdateState::Ready || g.committed) {
             // an install was confirmed, began or failed while the check was out: its verdict
@@ -421,10 +461,10 @@ where
             }
         }
     });
-    if manual || after != before {
+    if manual || observed || after != before {
         host.emit(&after);
     }
-    after
+    (after, asked)
 }
 
 /// The first half of the install: download if needed, then decide. Returns the status after it;
