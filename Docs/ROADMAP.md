@@ -733,7 +733,7 @@ Goal: A user of the Linux AppImage is told that the start menu and dock icon may
 **Tasks**
 - [x] Find the cause on the owner’s KDE Plasma machine before changing code and record the Plasma version, the session type and the findings (design `superpowers/specs/2026-11-28-m14-1-appimage-icon-design.md`)
 - [x] The application menu dialog says that the icon may appear in the start menu and dock only after the next log-in and loses the wide gaps in its text; the message is a pure function with tests, and a test pins that an entry written by v0.4.0 is not asked about again
-- [ ] Record the cause and the decision in `Docs/DECISIONS.md` and the lasting facts in `CLAUDE.md`, add the note to `README.md`; `CHANGELOG.md` `[Unreleased]` gets a short user-readable entry
+- [x] Record the cause and the decision in `Docs/DECISIONS.md` and the lasting facts in `CLAUDE.md`, add the note to `README.md`; `CHANGELOG.md` `[Unreleased]` gets a short user-readable entry
 
 **Acceptance criteria**
 - [ ] Build, test and lint are green (`cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `pnpm test`, `pnpm lint`, `cargo deny check`, `dotnet run tools/roadmap.cs -- check`)

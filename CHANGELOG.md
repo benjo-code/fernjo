@@ -6,6 +6,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 
 ## [Unreleased]
 
+### Changed
+
+- Linux AppImage: the "Add fernjo to the application menu?" dialog now says that the icon may appear in the start menu and dock only after you log out and in again, and its text no longer has wide gaps.
+
 ## [0.4.0] - 2026-11-28
 
 Automatic updates (M13) and the security check of the update path (M14). Install this version by hand. Where fernjo can update itself (not a `.deb` install, nor a copy in a folder it cannot write to), it is the last manual update.
