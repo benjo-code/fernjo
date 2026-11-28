@@ -172,6 +172,8 @@ mod tests {
                 theme: None,
                 vault_auto_lock_minutes: None,
                 reopen_tabs: None,
+                check_for_updates: None,
+                skipped_update_version: None,
             },
         )
         .unwrap();
@@ -289,6 +291,8 @@ mod tests {
                 theme: None,
                 vault_auto_lock_minutes: None,
                 reopen_tabs: None,
+                check_for_updates: None,
+                skipped_update_version: None,
             },
         )
         .unwrap();

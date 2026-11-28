@@ -128,6 +128,42 @@ pub fn set_vault_auto_lock(
     Ok(auto_lock_info(state, minutes))
 }
 
+/// Turns the background update check on or off and saves it to `settings.json` (keeping the
+/// other fields) unless that file must not be written. Returns the new value; nothing changes
+/// on an error.
+///
+/// # Errors
+/// `settings_unusable` or `settings_write_failed` from the save.
+pub fn set_check_for_updates(state: &AppState, on: bool) -> Result<bool, CommandError> {
+    let mut slot = state
+        .check_for_updates
+        .lock()
+        .map_err(|_| CommandError::internal())?;
+    update_settings(state, |s| s.check_for_updates = Some(on))?;
+    *slot = on;
+    Ok(on)
+}
+
+/// Remembers the release version the user skipped (`None` clears it) and saves it like
+/// [`set_check_for_updates`].
+///
+/// # Errors
+/// `invalid_version` for a value that is not `MAJOR.MINOR.PATCH`, otherwise as
+/// [`set_check_for_updates`]; nothing changes on any error.
+pub(crate) fn set_skipped_version(state: &AppState, v: Option<String>) -> Result<(), CommandError> {
+    if let Some(v) = &v {
+        settings::validate_update_version(v)
+            .map_err(|code| error(code, "the update version must look like 1.2.3"))?;
+    }
+    let mut slot = state
+        .skipped_update_version
+        .lock()
+        .map_err(|_| CommandError::internal())?;
+    update_settings(state, |s| s.skipped_update_version = v.clone())?;
+    *slot = v;
+    Ok(())
+}
+
 /// The UI saw user input (a throttled heartbeat): restarts the idle clock, unless the idle
 /// limit had already run out, in which case the vault is locked first (see
 /// `idle_lock::note_activity_at`). Returns the new status when it locked.
@@ -377,6 +413,109 @@ mod tests {
         assert_eq!(get_vault_auto_lock(&st).unwrap().minutes, Some(20));
         let saved = settings::load(&settings_path(config.path())).unwrap();
         assert_eq!(saved.vault_auto_lock_minutes, Some(20));
+    }
+
+    #[test]
+    fn set_check_for_updates_saves_and_keeps_theme() {
+        let [data, config] = dirs();
+        let st = state(data.path(), config.path(), DataDirSource::Default);
+        assert!(*st.check_for_updates.lock().unwrap());
+        set_theme(&st, Theme::Dark).unwrap();
+        assert!(!set_check_for_updates(&st, false).unwrap());
+        assert!(!*st.check_for_updates.lock().unwrap());
+        let saved = settings::load(&settings_path(config.path())).unwrap();
+        assert_eq!(saved.check_for_updates, Some(false));
+        assert_eq!(saved.theme, Some(Theme::Dark));
+        set_skipped_version(&st, Some("1.2.3".into())).unwrap();
+        assert_eq!(
+            st.skipped_update_version.lock().unwrap().as_deref(),
+            Some("1.2.3")
+        );
+        set_theme(&st, Theme::Light).unwrap();
+        let saved = settings::load(&settings_path(config.path())).unwrap();
+        assert_eq!(saved.skipped_update_version.as_deref(), Some("1.2.3"));
+        assert_eq!(saved.check_for_updates, Some(false));
+        let err = set_skipped_version(&st, Some("1.2.3-rc.1".into())).unwrap_err();
+        assert_eq!(err.code, "invalid_version");
+        set_skipped_version(&st, None).unwrap();
+        let saved = settings::load(&settings_path(config.path())).unwrap();
+        assert_eq!(saved.skipped_update_version, None);
+    }
+
+    #[test]
+    fn set_check_for_updates_memory_only_under_env() {
+        let [data, config] = dirs();
+        let st = state(data.path(), config.path(), DataDirSource::Env);
+        assert!(!set_check_for_updates(&st, false).unwrap());
+        assert!(!*st.check_for_updates.lock().unwrap());
+        set_skipped_version(&st, Some("1.2.3".into())).unwrap();
+        assert_eq!(
+            st.skipped_update_version.lock().unwrap().as_deref(),
+            Some("1.2.3")
+        );
+        assert!(!settings_path(config.path()).exists());
+    }
+
+    fn open_for_app(data: &Path, config: &Path, source: DataDirSource) -> AppState {
+        AppState::open_for_app(Some(Location {
+            data_dir: data.to_path_buf(),
+            config_dir: config.to_path_buf(),
+            source,
+            settings_error: None,
+            device_dir: None,
+        }))
+    }
+
+    #[test]
+    fn the_saved_update_settings_are_read_at_startup() {
+        let [data, config] = dirs();
+        let save = |skipped: &str, check: bool| {
+            settings::save(
+                &settings_path(config.path()),
+                &AppSettings {
+                    check_for_updates: Some(check),
+                    skipped_update_version: Some(skipped.into()),
+                    ..AppSettings::default()
+                },
+            )
+            .unwrap();
+        };
+        // an invalid skipped value is dropped, the flag still loads
+        save("1.2", false);
+        let st = open_for_app(data.path(), config.path(), DataDirSource::Default);
+        assert!(!*st.check_for_updates.lock().unwrap());
+        assert_eq!(*st.skipped_update_version.lock().unwrap(), None);
+        // a valid one loads
+        save("1.2.3", true);
+        let st = open_for_app(data.path(), config.path(), DataDirSource::Default);
+        assert!(*st.check_for_updates.lock().unwrap());
+        assert_eq!(
+            st.skipped_update_version.lock().unwrap().as_deref(),
+            Some("1.2.3")
+        );
+        // the environment override reads nothing
+        save("1.2.3", false);
+        let st = open_for_app(data.path(), config.path(), DataDirSource::Env);
+        assert!(*st.check_for_updates.lock().unwrap());
+        assert_eq!(*st.skipped_update_version.lock().unwrap(), None);
+    }
+
+    #[test]
+    fn set_skipped_version_refused_when_settings_unusable() {
+        let [data, config] = dirs();
+        let text = r#"{"schemaVersion":9,"dataDir":"/x"}"#;
+        std::fs::write(settings_path(config.path()), text).unwrap();
+        let st = state(data.path(), config.path(), DataDirSource::Default);
+        let err = set_skipped_version(&st, Some("1.2.3".into())).unwrap_err();
+        assert_eq!(err.code, "settings_unusable");
+        assert_eq!(*st.skipped_update_version.lock().unwrap(), None);
+        let err = set_check_for_updates(&st, false).unwrap_err();
+        assert_eq!(err.code, "settings_unusable");
+        assert!(*st.check_for_updates.lock().unwrap());
+        assert_eq!(
+            std::fs::read_to_string(settings_path(config.path())).unwrap(),
+            text
+        );
     }
 
     #[test]

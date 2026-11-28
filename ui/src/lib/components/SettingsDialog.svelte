@@ -5,12 +5,14 @@
   import type { TerminalSettingsStore } from "../terminal-settings.svelte";
   import type { OpenTabsStore } from "../open-tabs.svelte";
   import type { SyncStore } from "../sync.svelte";
+  import type { UpdateStore } from "../update.svelte";
   import type { ThemeStore } from "../theme.svelte";
   import type { Api, AutoLockInfo, DataFolderInfo, Theme } from "../types";
   import { isMac, SHORTCUTS, shortcutKeys } from "../shortcuts";
   import { unsavedNote } from "../unsaved";
   import Icon from "./Icon.svelte";
   import SyncSettings from "./SyncSettings.svelte";
+  import UpdateSettings from "./UpdateSettings.svelte";
 
   let {
     api,
@@ -18,6 +20,8 @@
     theme,
     sync,
     openTabs,
+    update,
+    onshowupdate,
     onclose,
     onchange,
     onexport,
@@ -33,6 +37,10 @@
     sync: SyncStore;
     /** Holds the "Reopen tabs on start" setting. */
     openTabs: OpenTabsStore;
+    /** Holds the update status; the Updates section shows and drives it. */
+    update?: UpdateStore;
+    /** "Show update": the caller closes Settings and opens the update window. */
+    onshowupdate?: () => void;
     /** Opens the import, export & backup dialog (the join confirmation offers a backup first). */
     onexport?: () => void;
     /** Scroll the Sync section into view (the status line's "Details"). */
@@ -516,6 +524,10 @@
     </div>
 
     <SyncSettings {sync} {onexport} />
+
+    {#if update}
+      <UpdateSettings {update} onshow={onshowupdate} />
+    {/if}
 
     <h3 class="section">Keyboard and mouse</h3>
     <ul class="keys">

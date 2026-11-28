@@ -517,6 +517,451 @@ Not run here: the live SSH container tests (`cargo test -p fernjo-ssh`; they run
 
 Still unverified after the release: an installer started on a real machine (the smoke tests prove that it starts on the runner), sync on Linux and the Linux Secret Service keychain item, `fernjo-fs` on macOS, performance for 0.3.0, the M10 and earlier owner checks, and row 73 (the other known gaps are in the table above).
 
+## M13 automatic updates (evidence and open checks)
+
+Evidence recorded 2026-11-26 on branch `feature/m13-auto-update` (Windows 11 host). Windows blocks freshly built native binaries on this machine (application control), so the Rust commands ran in a Linux container (Ubuntu 22.04 with the WebKitGTK build dependencies, the repository mounted, `cargo` 1.100.0); `pnpm`, `node`, `bash tools/...` and `dotnet` ran natively. Windows-only code is compiled by CI only.
+
+### Commands
+
+| Command | Result |
+|---|---|
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo clippy -p fernjo-app --lib --bins -- -D warnings` (the shipped, feature-off configuration; now also a CI step) | exit 0 |
+| `cargo test --workspace` | exit 0; 1350 passed, 0 failed, 2 ignored over 76 result lines (fernjo-app lib 437, `tauri_conf` 15, `updater_feed` 21); the SSH integration tests skip without the throwaway container |
+| `pnpm test` | 64 files, 848 tests passed |
+| `pnpm lint` | 281 files, 0 errors, 0 warnings (eslint, prettier, svelte-check) |
+| `cargo deny check` (cargo-deny installed in a one-off container, not part of the dev image) | `advisories ok, bans ok, licenses ok, sources ok` |
+| `bash tools/check-workflows.sh` | exit 0 |
+| `bash tools/test-release-scripts.sh` | 152/152 passed |
+| `dotnet run tools/roadmap.cs -- check` | see the roadmap evidence of M13 |
+
+Re-run on 2026-11-27 after the final review fixes, same setup: `cargo fmt --all --check` and both clippy commands exit 0; `cargo test --workspace` 1359 passed, 0 failed, 2 ignored (fernjo-app lib 444, `tauri_conf` 17, `updater_feed` 21; the SSH integration tests skip without the throwaway container); `cargo test -p fernjo-core --example verify_update_signature` 9 passed (an example, so the workspace run does not include it); `pnpm test` 64 files, 855 tests passed; `pnpm lint` 0 errors and 0 warnings; `bash tools/check-workflows.sh` exit 0; `bash tools/test-release-scripts.sh` 157/157 passed (the `chmod 000` check is skipped on Windows); `gitleaks detect` over the history no leaks. `cargo deny check` was not repeated: no manifest, lock file or deny list changed since the run above.
+
+### What the tests pin
+
+- Fake feed (`src-tauri/tests/updater_feed.rs`, 21 tests): newer version offered, same, older, pre-release and skipped version not offered; missing, wrong-key and tampered signatures and a signed-version mismatch refused; unreachable feed changes nothing (`feed_unreachable`), 404 and broken body told apart; oversize declared length, a stream past the cap and a stalled download cut off; `check_sends_exactly_one_get_to_the_pinned_path` (one `GET /latest.json`, no query, no cookie, no authorization) and `redirect_hops_are_counted_and_followed`.
+- Configuration (`src-tauri/tests/tauri_conf.rs`): `updater_config_is_pinned`, `update_test_hooks_are_not_a_default_feature`, `capability_lists_exactly_the_pinned_permissions`, `capability_has_no_core_default_and_no_updater_permission`.
+- Guards: `command_table_covers_every_tauri_command` and `no_response_contains_a_secret` cover the six update commands; `a_returning_install_clears_sync_closing_so_the_window_closes_and_a_retry_runs` pins the install order fix.
+- UI: `ui_imports_only_the_tauri_modules_the_capability_covers` and `no_html_injection_in_ui` (`ui/src/lib/update.test.ts`).
+- Release scripts: `latest.json` shape, signatures, URLs and the file lists in `tools/test-release-scripts.sh`; the workflow pins (only `sign` names the secrets, only `environment: release-signing`, tag-only jobs) there too.
+
+### Open owner checks (not run, not shown as verified)
+
+1. GitHub: create the Environment `release-signing` with a required reviewer and the deployment tag policy `v*` **before the first tag**, then add the secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` to it (GitHub creates a missing environment without protection). Verify: `gh api repos/benjo-code/fernjo/environments/release-signing` shows the protection rule and the tag policy. **Done 2026-11-27:** that call shows a required reviewer (self-review allowed) and a deployment policy for the tag pattern `v*`; `gh secret list --env release-signing` names both secrets and the repository has none of its own. Administrators can still bypass the rules (`can_admins_bypass`).
+2. The pull request dry run of `release.yml` (build jobs green, `sign`, `verify-signatures` and `publish` skipped, the macOS `.app.tar.gz` step and the collect step succeed); the run id goes into the roadmap evidence. **Done 2026-11-27:** run 46006685505 on pull request 62.
+3. The first signed release run (v0.4.0): `sign` accepts key and password, `verify-signatures` passes, `latest.json` is attached to the draft (`gh release view vX.Y.Z --json assets`). Nothing proves signing before then.
+4. Real-app capability check in a `pnpm tauri build --no-bundle` binary with a scratch `FERNJO_DATA_DIR` and the DevTools-port recipe in `CLAUDE.md`: tree loads, an SSH session from `tools/ssh-test-server.sh` opens and terminal data arrives, `sync-status` and `update-status` events arrive, remote desktop full screen toggles. **Done 2026-11-27 (owner, Windows):** by hand with the installer of dry run 46013300816 and a scratch `FERNJO_DATA_DIR` instead of the DevTools-port recipe: tree, SSH session with `seq 1 200000`, `vault-status` after the idle auto-lock and remote desktop full screen worked as expected. `sync-status` and `update-status` were not observed themselves (same permission as `vault-status`); macOS and Linux not run.
+5. **Deferred (owner, 2026-11-27) to the release after v0.4.0, with the real feed; part of that release's acceptance in the roadmap.** An update through the window on Windows, macOS and a Linux AppImage (optional earlier check against a local test feed: steps in "Update check against a local test feed" below; the HTTP feed is accepted because the merge file `tools/update-test.conf.json` sets `dangerousInsecureTransportProtocol`, not because of the cargo feature `update-test-hooks`): the app closes, the new version starts, `connections.json`, the vault and `settings.json` are untouched, Windows asks for no administrator rights, no SmartScreen or Gatekeeper warning for the updated app.
+6. **Deferred like check 5.** A `.deb` install and a read-only AppImage location offer the release page and install nothing.
+7. **Deferred like check 5** (the window needs an offered version). Visual look of the update window, progress bar and sidebar marker in the real app (WebView2, WebKit) at 1280x800, light and dark.
+
+### Update check against a local test feed (optional, for owner check 5)
+
+`tools/update-test.conf.json` is merged into the configuration of two local debug builds. It points the updater at `http://127.0.0.1:8765/latest.json` (8765 is a placeholder port: change it in that file and in the steps below together), pins the published TEST key of `src-tauri/tests/fixtures/update-test-key/` and sets `dangerousInsecureTransportProtocol`; `requireSignedVersion` stays on. No release uses it (`update_test_config_is_never_used_by_a_release` in `src-tauri/tests/tauri_conf.rs`).
+
+Before you start:
+
+- Such a build accepts any update signed with a key whose private half is public. Never hand it to anyone, and remove it afterwards.
+- It has the identifier and the data folder of the real fernjo. Close the installed app, back up the data folder (`<OS config dir>/fernjo`, `%APPDATA%\fernjo` on Windows, or the folder chosen in Settings) and note the SHA-256 of `connections.json`, `vault.fernjo` and `settings.json`. On Windows the test build replaces the installed fernjo. Do not rely on `FERNJO_DATA_DIR` here: it switches the automatic check off, and the restarted app may not inherit it.
+
+Run the commands from the repository root (Git Bash on Windows). `<feed>` is an empty folder outside the repository, given as an absolute path; `<NEW>` is the version in the root `Cargo.toml`.
+
+| OS | `<bundle>` | Built below `target/debug/bundle/` | Platform key |
+|---|---|---|---|
+| Windows | `nsis` | `nsis/fernjo_<version>_x64-setup.exe` | `windows-x86_64` |
+| Linux | `appimage` | `appimage/fernjo_<version>_amd64.AppImage` | `linux-x86_64` |
+| macOS | `app` | `macos/fernjo.app` | `darwin-aarch64` or `darwin-x86_64` |
+
+1. **Old version.** Set `version` under `[workspace.package]` in the root `Cargo.toml` to `0.0.1`, run `pnpm tauri build --debug --config tools/update-test.conf.json --bundles <bundle>`, move the result to a third folder, outside the repository and not `<feed>` (the next build overwrites `fernjo.app`), then `git checkout -- Cargo.toml Cargo.lock`.
+2. **New version.** Run the same build command without the edit and put the update file into `<feed>`: the setup or the AppImage as it is; on macOS `COPYFILE_DISABLE=1 tar -C target/debug/bundle/macos -czf <feed>/fernjo_<NEW>_<aarch64 or x64>.app.tar.gz fernjo.app`.
+3. **Sign** it with the test key (empty password):
+
+       env -u TAURI_SIGNING_PRIVATE_KEY -u TAURI_SIGNING_PRIVATE_KEY_PASSWORD \
+         pnpm tauri signer sign -f src-tauri/tests/fixtures/update-test-key/test-only.privkey -p "" \
+         --app-version <NEW> <feed>/<file>
+
+4. **Feed.** Write `<feed>/latest.json` by hand (`tools/write-latest-json.mjs` is for releases only: it needs all four files and writes the release URLs, and it has no override on purpose):
+
+       {
+         "version": "<NEW>",
+         "notes": "Update test",
+         "platforms": {
+           "<platform key>": {
+             "signature": "<the whole content of <file>.sig>",
+             "url": "http://127.0.0.1:8765/<file>"
+           }
+         }
+       }
+
+5. **Serve** the folder, on this machine only (run inside `<feed>`, stop with Ctrl+C):
+
+       node -e 'const http=require("http"),fs=require("fs"),path=require("path");http.createServer((q,s)=>{console.log(q.method,q.url);fs.readFile(path.basename(q.url.split("?")[0]),(e,d)=>{if(e){s.writeHead(404);return s.end()}s.writeHead(200,{"Content-Length":d.length});s.end(d)})}).listen(8765,"127.0.0.1")'
+
+6. **Update.** Install or start the old build (Windows: run its setup; Linux: `chmod +x` and start the AppImage from a writable folder; macOS: start `fernjo.app` from a writable folder). Settings, "Updates" shows 0.0.1. Use "Check now" (or wait a minute), then "Update and restart". Expected: the server logs one request for `latest.json` per check and one for the update file; the app closes; the new version starts and Settings shows `<NEW>`; the three hashes are unchanged (change no setting during the run); Windows asks for no administrator rights; no SmartScreen or Gatekeeper warning for the updated app. To see the confirmation, repeat from the old build with a session connected: "Install update?" appears, and "Keep open" leaves the download ready.
+7. **Clean up.** Stop the server, uninstall or delete every test build, install the released version again, check that `git status` shows no change to `Cargo.toml` and `Cargo.lock`, and delete `<feed>`.
+
+### Known residual limits
+
+The feed body is read without a size cap by the plugin (bounded by the 15 s check timeout and the pinned HTTPS endpoint); the download cap overshoots by one read slice; `sign` trusts the output of `build` including its caches (existing pipeline behaviour); a macOS or Linux install that returns instead of exiting and a confirm that arrives after the state left Ready (for example because a check found a newer version while the dialog was open) are rare races; a quit on macOS through the menu (Cmd+Q) is likely held back by neither the close confirmation nor a running install (read in the dependency sources, roadmap backlog); all noted in `Docs/DECISIONS.md`.
+
+## v0.4.0 attack on the update path
+
+Run 2026-11-27 on `feature/m14-security-gate-v0.4.0`, headless: the real updater plugin in a Tauri mock app against a local fake feed signed with the published test key (`src-tauri/tests/updater_feed.rs`, 24 tests), the update state machine over a fake backend (`src-tauri/src/updater/tests.rs`, in the 49 tests of `--lib updater`) and the UI tests (`pnpm test`, 855 passed). Rust ran in the Linux build container; CI also runs them on Windows (job `rust (windows)`, run 46036986618: the four new tests passed there). No product code changed for this section.
+
+| Scenario | Test | Result | Proof that the test can fail |
+|---|---|---|---|
+| Feed announces the same or a lower version | `same_and_older_version_are_not_offered` | nothing offered | M13 test |
+| Signature made with another key | `wrong_key_signature_is_refused` | `signature_invalid` | M13 test |
+| Modified file behind a valid `latest.json` | `tampered_download_is_refused` | `signature_invalid` | failed with the plugin's verification switched off |
+| Feed and file redirected to another host | `redirect_to_another_host_accepts_only_signed_bytes` (new) | the genuine file is accepted from the other host, a modified one is refused | failed with the plugin's verification switched off |
+| Download cut short, the server calling it complete | `truncated_download_is_refused` (new) | `signature_invalid` | failed with the plugin's verification switched off |
+| Connection closed before the announced length | `truncated_download_is_refused` (new) | `download_refused` | the HTTP client's length check; there is no protection of our own to remove |
+| Older signed file announced as a newer version | `signed_version_must_match_the_announced_one` | `signature_invalid` | M13 test |
+| Genuine signature that names no version | `signature_without_a_version_is_refused` (new) | `signature_invalid` | failed with `requireSignedVersion` off |
+| Release notes with markup | `notes_keep_markup_as_literal_text`, `notes_with_markup_render_as_text`, `no_html_injection_in_ui` | shown as text | M13 tests |
+| A refused download (bad signature, too large, failed, stalled) with a session connected | `a_refused_download_leaves_nothing_to_install` (new) | state `failed`, no held bytes, no dialog, no ended session, no install | failed when the refused download was kept as `ready` with bytes |
+
+The three removals were temporary: a copy of `tauri-plugin-updater` 2.14.1 whose `verify_signature` returns early, patched in through `[patch.crates-io]`; `requireSignedVersion: false` in the test's app; and a changed error arm of `run_install`. All were undone, after which `updater_feed` (24) and `--lib updater` (49) passed again and `Cargo.toml` and `Cargo.lock` were byte-identical to before.
+
+Not covered: the platform's install handover (NSIS setup, bundle and AppImage replacement), GitHub's real redirects and release files, and the real window.
+
+## v0.4.0 security review
+
+### Checks (2026-11-27, at `ab43bb8`)
+
+| Check | Where | Result |
+|---|---|---|
+| `/security-review` over `v0.3.1..HEAD` (run by a fresh agent; `origin/HEAD` is `origin/main` = `v0.3.1`, and `git diff --name-only origin/HEAD...HEAD` lists the same 82 files as `v0.3.1..HEAD`) | dev machine | no High or Medium finding at the skill's reporting threshold (8 of 10); 16 candidates examined and rejected |
+| `cargo deny check` (cargo-deny 0.22.0) | dev machine, native | `advisories ok, bans ok, licenses ok, sources ok`; no new ignore |
+| `pnpm audit --prod` | dev machine | no known vulnerabilities |
+| `gh api "repos/benjo-code/fernjo/code-scanning/alerts?state=open"`, and for `ref=refs/pull/65/merge` | GitHub | 0 and 0 |
+| CodeQL on pull request 65 (`actions`, `javascript-typescript`, `rust`) | CI | passed, 0 results each |
+| `gh api "repos/benjo-code/fernjo/dependabot/alerts?state=open"` | GitHub | 1: `glib` GHSA-wrw7-89jp-8q8g (medium), accepted since M0 |
+| `bash tools/check-workflows.sh` | dev machine | exit 0 |
+| gitleaks 8.30.1 `detect` with `.gitleaks.toml` | container | 68 commits scanned, no leaks (finding R2-P3 of the pipeline review is about what this rule set cannot see) |
+| `command_table_covers_every_tauri_command`, `no_response_contains_a_secret` | container | both pass; `update_status`, `update_skip` and `set_check_for_updates` are in `table()`, `update_check`, `update_install` and `update_open_release_page` in `APP_HANDLE_EXEMPT` with a reason |
+| Secrets in update data, by reading `updater.rs`, `updater/`, `app_settings.rs` and searching them and the update UI for logging and web storage calls | dev machine | nothing secret reaches them: the status event carries versions, cleaned notes, progress and fixed error codes; `settings.json` gains `checkForUpdates` and `skippedUpdateVersion`; no log, `console` or web storage call |
+
+### Findings
+
+Four independent reviewers (fresh, read-only, each with only its own brief: the M14 threat model, its files and questions, the severity scale and the known items) read `v0.3.1..HEAD` at `ab43bb8`: **U** updater (0 High, 2 Medium, 4 Low), **R** release pipeline and key handling (1 High, 4 Low), **W** webview surface (5 Low), **P** settings and privacy (5 Low). `/security-review` reported nothing. **K** marks a known item that went to triage. Severity scale: High = secret disclosure, code execution, signature bypass or data loss reachable by an adversary of the threat model; Medium = denial of service or integrity loss needing an unusual position, or a missing defence layer; Low = hardening, or needs local write access or a user mistake. Each finding was checked against the source before the ruling; 81 was reproduced again with a dummy value. Decisions: `fix`, or `owner` (acceptance proposed with the remaining risk; nothing is accepted before the owner answers).
+
+| # | area | finding | severity (reviewer → ruling) | decision | fixed in |
+|---|------|---------|----------|----------|----------|
+| 81 | Release pipeline | **A direct npm dependency can capture the signing key** (R1). `sign` runs `pnpm tauri signer sign`; pnpm puts `node_modules/.bin` first on `PATH`, so a direct dependency that declares a `node` or `sh` program runs in the one step that holds the key, despite `--ignore-scripts` (and `pretauri`/`posttauri` scripts would run there too). No such program is in today's dependencies, and the job has never run. | High → High | fix | `2b81ca3`, `abddb30`; `release_signing_step_is_exactly_the_reviewed_one` (fails on six broken variants). Second read: holds; the first pin was too loose (tightened), key generation noted in `Docs/DECISIONS.md` |
+| 82 | Updater (Windows) | **A failed install leaves fernjo running, invisible** (U1, W1). The plugin's `on_before_exit` hook hides every window and drops the single-instance lock before the setup is started; if the start fails (antivirus, application control) the app stays up with no window, and the next start is a second instance on the same data. | Medium and Low → Medium | fix | `cec69d4`, `da81792`; `the_plugin_exit_hook_is_replaced_so_a_failed_setup_start_keeps_the_app_usable` (a source pin). Second read: holds; stale tabs are row 84, pin tightened. Behaviour on Windows: owner check |
+| 83 | Updater | **A large feed costs about 192 bytes of memory per byte** (U2, worse than K1): 32 MiB took 6 GB and stayed allocated while the update was on offer; the 15 s timeout cannot interrupt the parse. Needs control of the feed or a trusted TLS root. | Medium → Medium | fix | `01de9e9`, `a2af4c9`; `an_oversized_feed_is_feed_invalid_and_offers_nothing`, `an_endless_feed_is_cut_off_at_the_cap`, `the_configured_endpoint_is_what_a_release_build_asks`; against real GitHub over HTTPS: Linux (container) and Windows (CI run 46047410980); macOS: owner check. Second read: holds; untested endpoint and unchecked script limit fixed |
+| 84 | Updater, UI | **After an install that installs nothing the tabs still look connected** (U3, W2, K5): the sessions are ended silently before the outcome is known; typing is swallowed and Reconnect fails. A confirmation that arrives late ends the sessions for nothing. | Low → Low | fix | `115cfd4`; `a_confirmation_that_no_longer_applies_ends_nothing`, `a_check_that_ends_after_the_confirmation_keeps_the_committed_download`, `after_a_failed_install_the_tabs_come_back_disconnected_and_nothing_is_saved`, `a_failed_install_tells_the_app_that_its_sessions_ended`. In the real app: owner check |
+| 85 | Updater | **A signature switched to minisign's legacy mode is accepted** (U4): the 64-byte hash of a signed file then passes verification. The attacker does not choose those bytes, so the format checks fail the install. | Low → Low | fix | `8a467a2`; `a_signature_switched_to_legacy_mode_is_refused`, `rejects_a_signature_switched_to_legacy_mode` |
+| 86 | Updater | **The signature names no platform** (U5): a feed that lists the Apple Silicon bundle for Intel Macs installs an app that cannot start. Needs control of the feed. | Low → Low | owner: binding the file name would make the installer names part of the update contract, so a later rename would stop every installed copy from updating | accepted by the owner 2026-11-27 |
+| 87 | Updater | **"Install update?" opens by itself when the download ends, with "Install" as the default button** (U6, W3): an Enter meant for a shell ends all sessions. | Low → Low | fix | `e1a35f9`; `install_with_connected_sessions_waits_for_confirmation_then_closes_sessions_first`, `downloading_shows_progress_and_stage`. Changes the M13 flow: with sessions connected, a second click ("Restart to update") |
+| 88 | Updater, UI | **"Check now" during a silent automatic check leaves "Checking…" on screen** (W4): no event follows when the check changes nothing. | Low → Low | fix | `6796ecb`; `check_now_during_an_automatic_check_runs_after_it_and_reports`, `a_status_read_during_an_automatic_check_hears_how_it_ended`. The final review found the same gap on "Update and restart": `3c5d5fb`, `an_install_click_during_an_automatic_check_hears_how_it_ended` |
+| 89 | Updater | **"Every 24 hours" does not count sleep on macOS and Linux** (P2; recorded as a limit in M13): checks can be days apart on a laptop. | Low → Low | fix | `7703af5`; `a_day_asleep_counts_towards_the_next_check` |
+| 90 | Settings | **A failed second read of `settings.json` at start turns checks back on** (P3, third case). | Low → Low | fix | `00c7444`; `a_settings_file_that_fails_only_at_the_second_read_stops_automatic_checks` |
+| 91 | Settings | **The update opt-out can be lost** (P3, first two cases): a damaged `settings.json` falls back to its backup, which may still have checks on; going back to v0.3.1 and saving drops the setting. | Low → Low | owner: this is how every setting behaves; the switch can be set again | accepted by the owner 2026-11-27 |
+| 92 | Updater (Linux) | **A `.deb` or self-built binary that inherits `APPIMAGE` offers a self-update** (P5): it can fail every time, or replace another program's AppImage. | Low → Low | fix | `b4d2056`; `install_kind_table`. A real AppImage still updating itself: owner check |
+| 93 | Webview tests | **The capability guard tests miss TOML files, subfolders and inline capabilities** (W5). The shipped configuration is correct. | Low → Low | fix | `eb13690`; the tests of `tauri_conf.rs` fail on a TOML capability, a subfolder, an inline capability and a multi-line `default` feature |
+| 94 | Documentation | **The privacy statement says less than the app does** (P1): a check is a chain of requests to two GitHub hosts with the usual headers, the operating system may contact a certificate authority, the WebView2 measurement predates the updater, and "the same release" is not enforced. | Low → Low | fix | `238242a`, `3f9b53f`; checked against the redirect chain of a real release URL (github.com, then release-assets.githubusercontent.com) |
+| 95 | Documentation | **The release note does not say that checks are on by default** (P4). | Low → Low | fix | `c6d2c48`; read against the defaults |
+| 96 | Release pipeline | **Release builds restore build caches** (K3, with R's detail): code run by CI on `dev` can leave something in a cache that a later tag build compiles into the signed files. | known → Low | fix: no restored cache on tag builds | `7caa948`; `release_builds_restore_no_cache_on_a_tag`. A tag build without cache has not run yet |
+| 97 | Release pipeline | **`sign` signs whatever `build` produced** (K3, the rest): a hostile build dependency ends up signed. | known → Low | owner: inherent in signing after building; pinned lock files, `cargo deny` and reviewed updates stand in front | accepted by the owner 2026-11-27 |
+| 98 | Release pipeline | **`publish` does not check that it attaches what was signed, nor what else the draft holds** (R2): a swapped unsigned installer (`.dmg`, `.deb`) or a stray draft file would become immutable. Needs code running in the release run. | Low → Low | owner: new steps in jobs that have never run could cost the v0.4.0 version number; proposed for after v0.4.0 | accepted by the owner 2026-11-27 for v0.4.0; fix on the backlog |
+| 99 | Repository | **The secret scan does not see a committed update signing key** (R3; reproduced with the test key). | Low → Low | fix | `63a5006`; gitleaks 8.30.1: five forms of the test key missed before, all found after; history still clean |
+| 100 | Repository settings | **`rust (windows)` is not a required check** on `dev` or `main` (R4). | Low → Low | owner (GitHub setting) | required on `dev` since 2026-11-27 (set by the owner, read back); on `main` with the release |
+| 101 | Documentation | **The fork rule of M11 row 73 holds only for forks that leave the workflow alone** (R5, K8): what stands in the way is the approval setting for fork runs. | Low → Low | fix (record it) | `cc7a190`; recorded in `Docs/DECISIONS.md` |
+| 102 | Repository settings | **No creation rule for `v*` tags** (K11): anyone with write access (today one person) can push a release tag; the key stays behind the environment's reviewer. | known → Low | owner (GitHub setting) | accepted by the owner 2026-11-27 |
+| 103 | Updater | **The download cap overshoots by a read slice** (K2; confirmed not worse). | known → Low | owner: bounded; changing it means changing the plugin | accepted by the owner 2026-11-27 |
+| 104 | Updater (macOS, Linux) | **The install returns and the app restarts itself** (K4): rare races around that return; the review found no further defect. | known → Low | owner | accepted by the owner 2026-11-27 |
+| 105 | Updater (macOS) | **Cmd+Q and the menu's Quit are held back by neither the close confirmation nor a running install** (K6; confirmed by check B on v0.3.1). | known → Low | fix; the rest (Quit from the Dock, log out, shutdown) accepted by the owner 2026-11-27 | `be54b68`; `the_quit_item_asks_the_main_window_to_close`, `another_menu_item_closes_nothing`, `the_mac_menu_quits_through_fernjos_own_item` (seen failing first). Re-check on a Mac passed (owner, 2026-11-27) |
+| 106 | Updater | **A withheld or stale feed is not detected, and a trickling download has no overall time limit and no cancel** (threat model, U). A restart ends it. | Low → Low | owner | accepted by the owner 2026-11-27 |
+| 107 | Updater (Linux) | **The AppImage replacement is not atomic** (U, in the plugin): power loss in between leaves it missing, with the old one in a temporary folder. | Low → Low | owner: plugin behaviour; reinstall by hand | accepted by the owner 2026-11-27 |
+| 108 | Updater | **With nothing connected the install starts as soon as the download ends** (W, outside its area): an import, a sign-in prompt or an unsaved form is cut off. This is the one-click design of M13. | Low → Low | owner | accepted by the owner 2026-11-27 |
+
+Known items with an earlier disposition were not rated again: K7 (administrators can bypass the environment), K9 (unsigned installers), K10 (`glib` alert).
+
+Noted by the reviewers, not counted as findings: signed files are downloadable as run artifacts as soon as `sign` ends, so the version number of a rejected release must not be used again; the hub image is pushed without waiting for the signing approval; the update feed is whatever GitHub calls "latest" (a hotfix of an older line must be published with `--latest=false`); re-running `sign` may collide with its earlier artifact (dispatch on the tag instead); the hub's user unit does not retry after a failed start.
+
+### What the reviewers found sound
+
+- **Updater:** the plugin sources equal the locked crate; only a strictly newer stable version is offered and the signed version must match; one endpoint and one key, no test hook in release builds; the download cap holds; release notes are text; the Windows setup runs from a fresh temporary folder and leaves the data folder alone; the Linux installers carry the right bundle type; the macOS tarball has the expected layout.
+- **Release pipeline:** the environment, its tag policy and secret placement are as documented; secrets are named only in the signing step; pull requests skip signing and publishing; `sign` restores no cache; signing and verification work end to end with the test key and refuse the wrong key and version; the `latest.json` and file set checks refuse extra, missing and foreign files; gitleaks over the history is clean; the hub deploy changes weaken nothing.
+- **Webview:** the compiled permission list allows only event listen and unlisten among the plugin commands probed; remote origins get no command; the secret and command-count guards pass; no new command takes a URL, path or version; release notes are never rendered as HTML.
+- **Settings and privacy:** no way was found to make a switched-off, scratch or unusable-settings run check by itself; a check downloads nothing; the request carries no identifier.
+
+## v0.4.0 release pipeline rehearsal
+
+Run 2026-11-27 with the published test key; the real key was not involved. It shows that the commands of the `sign`, `verify-signatures` and `publish` jobs work on real build artifacts. It does not show the GitHub secrets, the job wiring, or the draft, attestation, upload and publish steps.
+
+**Dry run.** `gh workflow run release.yml --ref feature/m14-security-gate-v0.4.0`, run 46037126684 at `ab43bb8`: the four builds and both hub image builds passed; `sign`, `verify update signatures`, `publish` and the hub image push were skipped.
+
+**Commands, on the `installers-*` artifacts of that run** (Git Bash on the Windows dev machine; the jobs run bash on `ubuntu-latest`):
+
+| Step | Version 0.3.1, real names | The same files renamed to 0.4.0, with a changelog copy whose `[Unreleased]` became `[0.4.0]` |
+|---|---|---|
+| `verify-installers.sh --artifacts` | all 7 files present | not repeated (it takes the artifact folders) |
+| `pnpm tauri signer sign --app-version <v>` on the four update files | 4 signatures | 4 signatures |
+| `verify_update_signature` with the test configuration | 4 × `signature ok` | 4 × `signature ok` |
+| the same with `src-tauri/tauri.conf.json` (the shipped key) | exit 1, "created with a different key" | exit 1 |
+| `write-latest-json.mjs`, then `--check` | written, matches | written, matches; the four platforms, `notes` 359 bytes, equal to the whole changelog section |
+| `verify-installers.sh --release` | all 12 files present | all 12 files present |
+| `sha256sum -- *` | 12 lines | 12 lines |
+
+Differences from the jobs: the shell and operating system; `verify_update_signature` ran in the Linux build container with `cargo run` without `--locked`; the Git Bash `sha256sum` marks files as binary (`*`) where Linux writes two spaces.
+
+**No key material.** In the run's log (7279 lines) and in the seven installers as downloaded, plus the unpacked macOS tarballs and `.deb`, neither the first 40 characters of the test key file (the header every such key file starts with) nor the text `TAURI_SIGNING` occurs. The search does find the header in the key file itself. The compressed insides of the AppImage, the dmg files and the setup were not unpacked.
+
+**Repository settings, read back with `gh api` and `gh secret list` (read only):**
+
+| Setting | State |
+|---|---|
+| Environment `release-signing` | required reviewer (one user, self-review allowed); deployment policy: tag `v*` only; administrators can bypass (K7) |
+| Secrets | `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` in the environment; none in the repository, no organisation secret visible |
+| Ruleset `release tags` (`refs/tags/v*`) | active, no bypass actor; blocks deletion, update and non-fast-forward; **no creation rule** (K11) |
+| Immutable releases | enabled; `v0.3.1` and `v0.3.0` immutable |
+| Actions | default token read; SHA pinning required; fork pull request runs need approval for all external contributors |
+| Required checks on `dev` and `main` | `roadmap`, `rust`, `ui`, `tauri-build`, `cargo-deny`, `workflows`; `rust (windows)` is not among them |
+| Collaborators with write access | 1 |
+
+## v0.4.0 owner checks
+
+Asked at the start of M14 (2026-11-27). Results are recorded under each check.
+
+**Owner's answer (2026-11-27)** to the batch of open points, adopting the recommendations:
+
+| Check | What | Decision |
+|---|---|---|
+| A | Key copy check (below) | run now; **passed** (2026-11-27) |
+| B | Cmd+Q on the Mac (below) | run 2026-11-27: failed on v0.3.1 (row 105); fixed, **re-check passed**; the rest of the row accepted |
+| C | "Check now" right after the v0.4.0 release on Windows, macOS and Linux (fix check 4) | run at the release |
+| D | Fix checks 1 to 3 | deferred to the release after v0.4.0 |
+| E | M13 check 3: the first signed release run | run at the release (it cannot run earlier) |
+| F | M13 check 4 on macOS and Linux (capability in the real app) | deferred |
+| G | M13 checks 5 to 7 | stay deferred to the release after v0.4.0 |
+| H | Earlier open checks: M7, M8 and M10 (roadmap blocks "Open manual checks (owner)"), and what "v0.3.1 result" lists as still unverified | deferred |
+
+**GitHub setting (row 100):** the Windows job is required on `dev` since 2026-11-27 (set by the owner; the contexts read back include `rust (windows)`). The command was:
+
+```
+gh api -X POST repos/benjo-code/fernjo/branches/dev/protection/required_status_checks/contexts -f "contexts[]=rust (windows)"
+```
+
+The same command with `branches/main/` belongs to the release, once `main` holds the job; set earlier it would block a hotfix of v0.3.x.
+
+### Cmd+Q on the Mac (installed v0.3.x)
+
+1. Connect an SSH session and press Cmd+Q. Does "Close fernjo?" appear?
+2. Open fernjo again, connect, and use "Quit" in the app menu. Does the dialog appear?
+
+Report each of the two with yes or no.
+
+**Result (2026-11-27, owner, v0.3.1, SSH session connected): failed.** Cmd+Q and the menu's "Quit" both quit without asking (row 105).
+
+**Re-check of the fix (2026-11-27, owner): passed**, all four steps below behaved as expected. Instructions: on the Mac, run the app from the download `installers-macos-x64` (Intel) or `installers-macos-arm64` (Apple Silicon) of `release.yml` run 46074522164, kept until 2026-12-04 (close the installed fernjo first; the build is unsigned like a release and uses the same data).
+
+1. Connect an SSH session and press Cmd+Q: "Close fernjo?" appears. Choose "Keep open": the session still works.
+2. Menu "fernjo", "Quit fernjo": the same dialog. Choose "Close": fernjo quits.
+3. Open it again without connecting and press Cmd+Q: it quits at once.
+4. In a text field (the quick connect field), Cmd+C and Cmd+V still copy and paste, and the menu bar still has Edit and Window.
+
+### Checks for the fixes (not run)
+
+A newer release than v0.4.0 is needed for the install itself, so checks 1 to 3 run at the release after v0.4.0, or earlier with the local test feed ("Update check against a local test feed" below).
+
+1. **Failed install on Windows (rows 82, 84):** make the setup fail to start (for example block it with the virus scanner, or deny it with an application control policy) and install an update with a session connected. Expected: the window stays visible, shows "The update could not be installed.", the tabs come back disconnected with Reconnect, and starting fernjo again only brings that window to the front.
+2. **Sessions connected at the end of a download (row 87):** expected: no dialog opens by itself; "Restart to update" asks "Install update?".
+3. **Linux AppImage (row 92):** the AppImage offers "Update and restart", not the release page.
+4. **Right after the v0.4.0 release, on Windows, macOS and Linux (row 83):** in the installed v0.4.0, Settings, "Updates", "Check now". Expected: "up to date". "Could not reach the update server" on one platform means that platform cannot update itself and needs a fix before users rely on it.
+
+### Key copy check
+
+**Result (2026-11-27): passed.** The owner signed the copy and sent the `.sig` content (not recorded here). At `f7a8e85`, `cargo run -p fernjo-core --example verify_update_signature -- src-tauri/tauri.conf.json crates/fernjo-core/tests/fixtures/update-sig/payload.bin <sig> --app-version 0.0.0` in the Linux build container printed `signature ok` (exit 0). Both controls failed as they must (exit 1): `--app-version 0.0.1` ("the signature is for version 0.0.0, expected 0.0.1") and the test configuration `crates/fernjo-core/tests/fixtures/update-sig/tauri.conf.json` ("created with a different key"). This proves the owner's copy of key and password, not the values stored in the GitHub secrets; those are first used at the release.
+
+Shows that your copy of the update signing key and its password match the public key built into the app. It signs a copy of a committed test file as version `0.0.0`, which no installed app would accept. Run it on any machine with the repository, from its root. No key file is written, and the key and password do not reach the shell history.
+
+PowerShell 7:
+
+```powershell
+git switch dev; git pull; pnpm install --frozen-lockfile --ignore-scripts
+Get-FileHash crates/fernjo-core/tests/fixtures/update-sig/payload.bin
+# expected: 1953C943FBA181D485BBCCC8F3F41D0E660127B1F79548DE46530DB826E99A63
+$dir = Join-Path $env:TEMP fernjo-key-check; New-Item -ItemType Directory -Force $dir
+Copy-Item crates/fernjo-core/tests/fixtures/update-sig/payload.bin $dir
+$env:TAURI_SIGNING_PRIVATE_KEY = Read-Host -MaskInput 'private key'
+$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = Read-Host -MaskInput 'password'
+node node_modules/@tauri-apps/cli/tauri.js signer sign --app-version 0.0.0 "$dir\payload.bin"
+Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY, Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+Get-Content "$dir\payload.bin.sig"
+```
+
+bash (on macOS start `bash` first):
+
+```bash
+git switch dev && git pull && pnpm install --frozen-lockfile --ignore-scripts
+shasum -a 256 crates/fernjo-core/tests/fixtures/update-sig/payload.bin   # or sha256sum
+# expected: 1953c943fba181d485bbccc8f3f41d0e660127b1f79548de46530db826e99a63
+dir="$(mktemp -d)"
+cp crates/fernjo-core/tests/fixtures/update-sig/payload.bin "$dir/"
+read -rsp 'private key: ' TAURI_SIGNING_PRIVATE_KEY; echo
+read -rsp 'password: ' TAURI_SIGNING_PRIVATE_KEY_PASSWORD; echo
+export TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+node node_modules/@tauri-apps/cli/tauri.js signer sign --app-version 0.0.0 "$dir/payload.bin"
+unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+cat "$dir/payload.bin.sig"
+```
+
+- The "private key" is the content of the key file (one line); paste it at the prompt, never into a command.
+- Run the commands as written: the signing tool is started with `node` directly, not through `pnpm`, so no other package's program can run while the key is set. (Changed 2026-11-27; the first version of these steps used `pnpm tauri`.)
+- Send only the content of `payload.bin.sig`. If signing fails, send only the error line, never a screenshot of the session.
+- Afterwards clear the clipboard and the clipboard history, delete the folder with `payload.bin` and close the terminal.
+
+Optional, only after the check passed: set both secrets again from the verified copy, pasting each value at the prompt (never as an argument):
+
+```
+gh secret set TAURI_SIGNING_PRIVATE_KEY --env release-signing --repo benjo-code/fernjo
+gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --env release-signing --repo benjo-code/fernjo
+```
+
+## v0.4.0 readiness
+
+Date 2026-11-27. Branch `feature/m14-security-gate-v0.4.0`, pull request #65 to `dev`. Evidence taken at `c140113` (code at `be54b68`; the pipeline rehearsal at `5fd26dd`; `tools/` and `release.yml` are unchanged since); only documents change after it. This section prepares the release and does not perform it.
+
+### Reusable checklist
+
+- **Step 1, version and metadata:** not bumped here. The release branch changes `Cargo.toml` (`[workspace.package] version`, then commits the refreshed `Cargo.lock`), `package.json`, `CHANGELOG.md`, `crates/fernjo-hub/deploy/compose.yaml` and `fernjo-hub.container`; `bash tools/check-release-version.sh v0.4.0` runs there (all still say `0.3.1`). `cargo metadata --locked` and `pnpm install --frozen-lockfile` succeed; `LICENSE-MIT` and `LICENSE-APACHE` exist; the generated `THIRD-PARTY-NOTICES.md` (538,580 bytes) is in the `.deb` and both macOS tarballs of the dry run (the setup and the dmg files were not unpacked).
+- **Step 2, documentation:** `README.md` ("Updating", "Privacy") and `SECURITY.md` ("Updates") were corrected against review P (row 94) and describe the second click with sessions connected; the shortcut table's source (`ui/src/lib/shortcuts.ts`) and the issue templates are unchanged since `v0.3.1`; `[Unreleased]` names milestone 13; `CLAUDE.md` records the lasting facts of this gate; `dotnet run tools/roadmap.cs -- check` is valid.
+- **Step 3, build and test evidence:** the table below.
+- **Step 4, security review:** "v0.4.0 security review" above (four independent reviewers, `/security-review`, rows 81 to 108). 0 open code-scanning alerts on the pull request, gitleaks over the history clean.
+- **Step 8, no build paths:** "Check the binary for build paths" passed and the installer smoke tests passed in all four app builds of dry run 46074522164.
+- **Final review of the branch** (a fresh reviewer over `5c59800..c8bd599`): nothing Critical or Important; one of its five Minors, an "Update and restart" click during a silent automatic check leaving the update window stuck, was raised to a gap of row 88 and fixed (`3c5d5fb`, `an_install_click_during_an_automatic_check_hears_how_it_ended`, seen failing first). Not changed: the M13 "Known residual limits" paragraph still names the uncapped feed (superseded by row 83); the commit-before-close order of `AppHost::go` is not pinned by a test; `USER_AGENT` is only checked by prefix; the tabs come back only when the UI's event subscription worked.
+- **After the final review:** the fix for row 105 (`be54b68`, found by the owner's check B). Rated Low, so no second read; its tests and the gate below cover it, the menu itself only a Mac can show.
+
+### Commands (at `c140113`)
+
+| Command | Where | Result |
+|---|---|---|
+| `cargo build --workspace` | Linux build container | exit 0 |
+| `cargo test --workspace` | Linux build container | exit 0: 1393 passed, 0 failed, 3 ignored (46 result lines; `fernjo-app` lib 455, `mac_menu` 2, `updater_feed` 30, `tauri_conf` 19, `verify_update_signature` 10); the SSH container tests skip here and run in CI |
+| `cargo fmt --all --check` | Linux build container | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | Linux build container | exit 0 |
+| `cargo clippy -p fernjo-app --lib --bins -- -D warnings` | Linux build container | exit 0 |
+| `cargo deny check` | Windows dev machine | `advisories ok, bans ok, licenses ok, sources ok` |
+| `pnpm test` | Windows dev machine | 64 files, 857 tests passed |
+| `pnpm lint` | Windows dev machine | 281 files, 0 errors, 0 warnings |
+| `pnpm audit --prod` | Windows dev machine | no known vulnerabilities |
+| `bash tools/check-workflows.sh` | Windows dev machine | exit 0 |
+| `bash tools/test-release-scripts.sh` | Windows dev machine | 162/162 passed |
+| `dotnet run tools/roadmap.cs -- check` | Windows dev machine | valid and up to date |
+| gitleaks 8.30.1 `detect` | container | 103 commits scanned, no leaks |
+| CI run 46074522221 | GitHub | all jobs pass: `rust` (with the SSH container) 1393 passed, 3 ignored; `rust (windows)` 1365 passed, 3 ignored; `ui`, `tauri-build`, `cargo-deny`, `workflows` |
+| CodeQL on the pull request | GitHub | `actions`, `javascript-typescript`, `rust` pass, 0 open alerts |
+| `release.yml` dry run, 46074522164 (pull request) | GitHub | four app builds with smoke tests and both hub image builds pass; sign, verify, publish and image push skipped |
+| Pipeline rehearsal on the artifacts of 46049705785 | dev machine and container | as in "v0.4.0 release pipeline rehearsal", now signing with `node node_modules/@tauri-apps/cli/tauri.js` as the workflow does: 0.3.1 and 0.4.0, 4 × `signature ok`, shipped key refused, `latest.json` written and checked (3,058 bytes; notes 565 bytes, the whole section), 12 files and 12 checksum lines |
+| Key material and bundle type in the same run | dev machine and container | no test key header and no `TAURI_SIGNING` in the log or in the installers, the unpacked tarballs, `.deb` and AppImage; the AppImage binary is marked as AppImage and the `.deb` binary as deb (row 92 depends on it) |
+
+The real update check against GitHub over HTTPS (`the_real_release_host_is_reached_over_https`) passed on Linux and, in CI run 46047410980, on Windows; `updater/feed.rs` has not changed since that run.
+
+### Known gaps
+
+| Gap | Disposition |
+|---|---|
+| Quit from the Dock, log out and shutdown on macOS (rest of row 105) | Still without a question and able to cut an install off; accepted by the owner 2026-11-27, on the backlog |
+| The `release-signing` secrets on GitHub, the job wiring, and the draft, attestation, upload and publish steps | Never run; first at the release (check E). A failure leaves a draft; a workflow fix needs a new tag |
+| A tag build without cache (row 96) | Never run; the first is the release (job timeout 60 minutes; cached builds took 11 to 17) |
+| The install handover on Windows, macOS and Linux, the real window, and the failed-install and second-click behaviour (rows 82, 84, 87, 92) | Not run in a real app; checks D and G deferred to the release after v0.4.0 |
+| The update check on macOS against GitHub (row 83) | Check C, right after the release |
+| Tests on macOS | None: CI tests on Linux and Windows only; macOS code is compiled by the release builds |
+| M13 check 4 on macOS and Linux (webview capability) | Deferred (check F) |
+| Earlier open checks (M7, M8, M10, and "v0.3.1 result", still unverified) | Deferred (check H) |
+| The fork pull request check of M11 row 73 (see row 101) | Not run |
+| `rust (windows)` as a required check on `main` (row 100) | Set on `dev`; `main` with the release |
+| Accepted findings: rows 86, 91, 97, 98, 102, 103, 104, 106, 107, 108 | Accepted by the owner 2026-11-27 (`Docs/DECISIONS.md`) |
+| Earlier accepted items: administrators can bypass the signing environment, unsigned installers, `glib` Dependabot alert | Accepted |
+
+### For the release run
+
+- Do not use the version number of a rejected release again: its signed files are downloadable once `sign` has run.
+- A hotfix of an older line is published with `--latest=false` ("M13: final review fixes").
+- If re-running `sign` fails on its earlier artifact, dispatch the workflow on the tag instead.
+- Run check C as soon as the release is published; a platform that cannot reach the feed cannot be repaired by an update.
+- Once `main` holds the job, require `rust (windows)` there (row 100; command in "v0.4.0 owner checks" with `branches/main/`).
+
+### Verdict
+
+| Area | Verdict |
+|---|---|
+| Security review | Go: no High or Medium open (81, 82 and 83 fixed and read a second time); every Low fixed or accepted (the rest of row 105 on 2026-11-27); the `main` half of row 100 belongs to the release |
+| Signing and pipeline | Go: the rehearsal and the key copy check (A) passed; the GitHub secrets, the job wiring and publishing are first run at the release (known gaps) |
+| Installers | Go: dry run builds, smoke tests and build path check pass on all four platforms |
+| Documentation | Go |
+| Repository settings | Go: environment, tag policy, secrets and immutable releases read back as documented; the Windows check is required on `dev` |
+| Owner checks | A and the re-check of B passed. **Open, run at the release:** C ("Check now" on Windows, macOS and Linux) and E (the first signed release run). **Deferred by the owner:** D (fix checks 1 to 3), F (M13 check 4 on macOS and Linux), G (M13 checks 5 to 7) and H (the earlier open checks of M7, M8, M10 and "v0.3.1 result") |
+| **Overall** | **Go** for releasing v0.4.0, with the known gaps above, on the owner's instruction. Signing in GitHub, publishing and the update itself have never run |
+
+## v0.4.0 result
+
+Date 2026-11-27. Branch `release/v0.4.0` from `dev` (`dbde162`); plan `Docs/superpowers/plans/2026-11-27-release-v0.4.0.md`, design `Docs/superpowers/specs/2026-11-27-release-v0.4.0-design.md`. The commands ran on the planning commit `d01fec6` plus the release edits: version `0.4.0` in `Cargo.toml` (`Cargo.lock`: nine workspace crates, only their `version` lines changed), `package.json` and both hub deploy files, `CHANGELOG.md` `[0.4.0] - 2026-11-28` (the expected publishing day), README (status line and the file list under "Install"), `Docs/hub.md` (image tag in its commands; the "Verify the image" command held a literal `\n` instead of a line break since M12) and roadmap release `0.4.0` done. `tools/test-release-scripts.sh`, `tools/check-workflows.sh` and gitleaks ran again at `7902a85`.
+
+| Command | Where | Result |
+|---|---|---|
+| `bash tools/check-release-version.sh v0.4.0` | Windows dev machine | exit 0, "version 0.4.0 matches Cargo.toml, package.json, compose.yaml and fernjo-hub.container" |
+| `cargo fmt --all --check` | Linux build container | exit 0 |
+| `cargo clippy --workspace --all-targets --locked -- -D warnings` | Linux build container | exit 0 |
+| `cargo clippy -p fernjo-app --lib --bins --locked -- -D warnings` | Linux build container | exit 0 |
+| `cargo build --workspace --locked` | Linux build container | exit 0 |
+| `cargo test --workspace --locked` | Linux build container | exit 0: 1393 passed, 0 failed, 3 ignored (46 result lines) |
+| `pnpm install --frozen-lockfile` | Windows dev machine | exit 0 |
+| `pnpm test` | Windows dev machine | 64 files, 857 tests passed |
+| `pnpm lint` | Windows dev machine | 281 files, 0 errors, 0 warnings |
+| `pnpm audit --prod` | Windows dev machine | no known vulnerabilities |
+| `cargo deny check` | Windows dev machine | `advisories ok, bans ok, licenses ok, sources ok` |
+| `bash tools/check-workflows.sh` | Windows dev machine | exit 0 |
+| `bash tools/test-release-scripts.sh` | Windows dev machine | 162/162 passed (one Unix permission case skips under Git Bash) |
+| `dotnet run tools/roadmap.cs -- check` | Windows dev machine | valid and up to date |
+| gitleaks 8.30.1 `detect` | container | 64 commits scanned, no leaks |
+
+Not run here: the live SSH container tests (CI job `rust`), the RDP tests that need a host (skip without `FERNJO_TEST_RDP_ADDR`, also in CI) and the Windows-only Rust code (CI job `rust (windows)`).
+
+**Found by this gate.** The first run of `tools/test-release-scripts.sh` failed with 160/162: two hub deploy checks had the image tag `0.3.1` written into them, so the version bump failed them (this is the first bump since M12 added the checks). On the owner's decision (2026-11-27) they now accept any `X.Y.Z` tag that both deploy files share (`7902a85`); `check-release-version.sh` still compares that tag with the release version. Nine scratch variants of the two deploy files behaved as expected, three of them wrong before the change.
+
+**Branch review** (a fresh reviewer over `dbde162..7fe54ef`): nothing Critical. Fixed afterwards: the release was dated the day of the gate although it cannot be published before 2026-11-28, and "it is the last manual update" did not except the installs that cannot update themselves. Not changed: the hub deploy checks no longer catch both deploy files drifting to the same wrong version between releases (the release run still does), and the gate table's gitleaks run is on `7902a85`.
+
+**Delta since the M14 evidence** (`c140113`): documents, the version files and the two deploy files, plus `tools/test-release-scripts.sh` (the change above). No file under `crates/*/src`, `src-tauri/src` or `ui/src`; `release.yml` unchanged. The `security-review` skill, scoped to that change, found nothing.
+
+- `gh api "repos/benjo-code/fernjo/code-scanning/alerts?state=open" --jq length`: `0`. Open Dependabot alert: `glib` GHSA-wrw7-89jp-8q8g, accepted since M0. No open pull request.
+- CI on `dev` at `dbde162`: `CI`, `CodeQL` and `Roadmap` completed with success.
+
+**Known gaps** (carried over from "v0.4.0 readiness", brought up to date)
+
+| Gap | Disposition |
+|---|---|
+| The `release-signing` secrets on GitHub, the job wiring, and the draft, attestation, upload and publish steps | Not yet run; first on the release run (check E). A failure leaves a draft; a workflow fix needs a new tag |
+| A tag build without cache (row 96) | Not yet run; the first is the release (job timeout 60 minutes) |
+| "Check now" against GitHub from the installed v0.4.0, macOS included (row 83) | Not yet run: check C, right after the release |
+| Installing an update through the app on Windows, macOS and Linux, the real window, the failed-install and second-click behaviour (rows 82, 84, 87, 92) | Not run in a real app; checks D and G deferred to the release after v0.4.0 (CHANGELOG says the install is untried) |
+| Quit from the Dock, log out and shutdown on macOS (rest of row 105) | Without a question; accepted by the owner, on the backlog |
+| Tests on macOS | None: macOS code is compiled by the release builds only |
+| M13 check 4 on macOS and Linux (webview capability) | Deferred (check F) |
+| Earlier open checks (M7, M8, M10, and "v0.3.1 result", still unverified) | Deferred (check H) |
+| The fork pull request check of M11 row 73 (see row 101) | Not run |
+| Performance not re-measured since v0.1.1 | Not re-run; CHANGELOG and README claim no number for 0.4.0 |
+| `rust (windows)` as a required check on `main` (row 100) | Set on `dev`; `main` after the release |
+| Accepted findings: rows 86, 91, 97, 98, 102, 103, 104, 106, 107, 108 | Accepted by the owner 2026-11-27 (`Docs/DECISIONS.md`) |
+| Earlier accepted items: administrators can bypass the signing environment, unsigned installers, `glib` Dependabot alert | Accepted |
+
+**Verdict**
+
+| Area | Verdict | Reasoning |
+|---|---|---|
+| Security review | Go | No High or Medium open (see "v0.4.0 readiness"); the only code in the delta is a test script; 0 open code-scanning alerts, gitleaks clean |
+| Installers | Not yet run | Judged by the dry run of the release pull request |
+| Docs | Go | README, CHANGELOG, `Docs/hub.md`, `SECURITY.md` and the roadmap match the release; statements about the published files become true with the release |
+| Performance | Not re-run | No claim is made for v0.4.0 |
+| Repository settings | Go | As read back in "v0.4.0 release pipeline rehearsal"; checked again before the tag |
+| Signing, publishing, assets, check C | Not yet run | They need the tag |
+
+**Overall: no unfixed High or Medium finding and no blocker for v0.4.0 from the checks run here. The pull request to `main` and the tag wait for the owner's instruction.**
+
 ## v0.1.0 security review
 
 Review date: 2026-11-18 (Windows 11; CI dry-run installers of run `44205574554`, PR #10). The checks of Steps 1-4 ran on `target/release/fernjo.exe` built from commit `1bc2762` (built after the last commit that touched `src-tauri`, `crates` or `ui`). The fix commits of this review (`64aa818`, `6648cff`, `5791506`) and the later import fixes (`36c3be0`, `de2a615`, `c809677`) post-date that binary; the real-app checks were not repeated on a rebuild, so they say nothing about those changes (the code fixes have their own tests). Every check below records its command, its result and the date. Real-app checks ran with a scratch `FERNJO_DATA_DIR`; the owner's real data folder was not read, printed or modified, and "Unlock automatically on this device" was never ticked.
@@ -581,10 +1026,10 @@ Scope: three reviewers (opus, fresh, given the code and not these conclusions) r
 
 - `cargo tree -e normal --workspace --target all`: `reqwest` 0.13.5 (with `hyper` 1.12.0 and `hyper-util` 0.1.21) is pulled in only by the `tauri` crate (`cargo tree -i reqwest`); no fernjo crate depends on `reqwest`, `ureq`, `hyper` or an updater (`grep` over `Cargo.toml` files and sources: none). The only URL literal in fernjo's own sources (Rust, TypeScript, Svelte) is `http://x/` in a doc comment.
 - Release binary idle, started without the debugging variable, `Get-NetTCPConnection` over `fernjo.exe` and all descendants every 2 s for 150 s (and 20 s samples to 60 s in a first run): no connection other than loopback until about 60 s, then the single WebView2 connection of finding 5 (in all three runs, one of them with `--disable-background-networking`). Therefore the literal "loopback only for 60 s" condition does not hold for the WebView2 runtime; it holds for fernjo.exe.
-- No update check (no updater plugin, `tauri_conf.rs` guards `bundle` against one), no telemetry in fernjo's code.
+- At the time of this review: no update check and no telemetry in fernjo's code (the update check came with M13, see "M13 automatic updates" below; `tauri_conf.rs` now pins exactly the one update endpoint and key).
 - Proposed privacy statement (all three conditions do not hold literally, so the wording is limited to what was verified; for the controller or Task 10 to put into the README):
 
-  > fernjo's own code makes no network connections except the SSH sessions you open. It has no update check, no telemetry and no analytics. Your connections, settings and encrypted vault stay in your data folder on your computer. The window itself is drawn by your operating system's web view (WebView2 on Windows, WebKit on macOS and Linux), a separate component that makes background connections of its own: on Windows we saw one HTTPS connection from the WebView2 runtime about a minute after start, to an address registered to Microsoft, and have not found a way to disable it. macOS and Linux were not checked.
+  > fernjo's own code makes no network connections except the SSH sessions you open. It has no update check (at the time of v0.1.0; the update check is described in the README since M13), no telemetry and no analytics. Your connections, settings and encrypted vault stay in your data folder on your computer. The window itself is drawn by your operating system's web view (WebView2 on Windows, WebKit on macOS and Linux), a separate component that makes background connections of its own: on Windows we saw one HTTPS connection from the WebView2 runtime about a minute after start, to an address registered to Microsoft, and have not found a way to disable it. macOS and Linux were not checked.
 
 **Step 5 - Data at rest**
 

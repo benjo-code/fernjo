@@ -19,3 +19,10 @@ sha2.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+base64.workspace = true
+minisign-verify.workspace = true
+
+# The release job's signature check: `cargo test` runs an example's tests only when asked.
+[[example]]
+name = "verify_update_signature"
+test = true

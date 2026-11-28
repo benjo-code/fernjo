@@ -37,6 +37,9 @@ jobs:
 
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # The self dev-dependency of fernjo-app turns on update-test-hooks for every --all-targets run, so
+      # the line above never compiles the shipped configuration (feature off); this one does.
+      - run: cargo clippy -p fernjo-app --lib --bins -- -D warnings
       # Throwaway OpenSSH container for the fernjo-ssh integration tests. The script prints
       # `export NAME=value` lines; they become environment variables of the later steps.
       - name: Start the SSH test server
@@ -49,6 +52,31 @@ jobs:
       - name: Stop the SSH test server
         if: always()
         run: tools/ssh-test-server.sh stop
+
+  # The same tests on Windows, where the shipped Windows code paths compile. There is no OpenSSH
+  # container here: the tests against it stay in job `rust`, and FERNJO_TEST_NO_SSH_SERVER lets
+  # them skip. The test support honours that flag on Windows only.
+  rust-windows:
+    name: rust (windows)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      FERNJO_TEST_NO_SSH_SERVER: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Installs the channel and components pinned in rust-toolchain.toml (rustup 1.28+ does not do it implicitly).
+      - name: Install the pinned Rust toolchain
+        run: |
+          rustup toolchain install
+          rustc --version
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      # --no-fail-fast: one run names every failing test binary, not only the first.
+      - run: cargo test --workspace --no-fail-fast
 
   ui:
     name: ui

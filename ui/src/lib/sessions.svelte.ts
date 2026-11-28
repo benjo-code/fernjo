@@ -357,6 +357,23 @@ export class SessionStore {
     for (const t of [...this.tabs]) this.close(t.id);
   }
 
+  /**
+   * Rust ended every session without an event while the app stays up (an update that was about to
+   * install and then failed): each tab comes back the way a restored one does, disconnected and
+   * with Reconnect. Like `closeAll`, it is not the user's change to the tab list.
+   */
+  endedByRust(): void {
+    const front = this.tabs.findIndex((t) => t.id === this.activeId);
+    const tabs: RestorableTab[] = this.tabs.map((t) => ({
+      target: t.quick ? { quick: { ...t.quick } } : { node: t.nodeId! },
+      protocol: t.protocol,
+      title: t.title,
+      usesVault: t.usesVault,
+    }));
+    this.closeAll();
+    this.restore(tabs, front < 0 ? null : front);
+  }
+
   reconnect(id: string): void {
     const tab = this.tabs.find((t) => t.id === id);
     const rt = this.#runtime.get(id);

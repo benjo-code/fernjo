@@ -7,7 +7,7 @@ Description=fernjo sync hub
 After=network-online.target
 
 [Container]
-Image=ghcr.io/benjo-code/fernjo-hub:0.3.1
+Image=ghcr.io/benjo-code/fernjo-hub:0.4.0
 ContainerName=fernjo-hub
 # only loopback on the host: Caddy is the one that is reachable
 PublishPort=127.0.0.1:8787:8787

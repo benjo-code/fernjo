@@ -19,6 +19,8 @@
   import { tabToClose } from "./lib/tabs";
   import { TreeStore } from "./lib/store.svelte";
   import { SyncStore } from "./lib/sync.svelte";
+  import { UpdateStore } from "./lib/update.svelte";
+  import UpdateDialog from "./lib/components/UpdateDialog.svelte";
   import { syncErrorText } from "./lib/sync-errors";
   import { RESEED_CONFIRM } from "./lib/sync-line";
   import { TerminalSettingsStore } from "./lib/terminal-settings.svelte";
@@ -68,6 +70,10 @@
       void vault.init();
     },
   );
+
+  // svelte-ignore state_referenced_locally
+  const update = new UpdateStore(api, () => sessions.endedByRust());
+  let updateOpen = $state(false);
 
   const layout = new LayoutStore();
   // nothing stored: the grid keeps the stylesheet's token, so the default layout is unchanged
@@ -259,6 +265,7 @@
     void terminal.load();
     void theme.load();
     void sync.init();
+    void update.init();
   });
 
   // Rust owns the idle clock for the vault auto-lock; this only reports that the user is there.
@@ -273,6 +280,7 @@
   onDestroy(() => {
     openTabs.dispose();
     sync.dispose();
+    update.dispose();
     vault.dispose();
   });
 </script>
@@ -300,6 +308,8 @@
     {sync}
     onsyncdetails={() => openSettings(true)}
     onreseed={() => (reseedAsk = true)}
+    {update}
+    onupdate={() => (updateOpen = true)}
     {restartPending}
     onRestart={() => void restart()}
     {layout}
@@ -374,11 +384,20 @@
     {theme}
     {sync}
     {openTabs}
+    {update}
+    onshowupdate={() => {
+      folderOpen = false;
+      updateOpen = true;
+    }}
     scrollToSync={settingsAtSync}
     onexport={() => (importOpen = true)}
     onclose={() => (folderOpen = false)}
     onchange={(info) => (restartPending = info.restartRequired)}
   />
+{/if}
+
+{#if updateOpen}
+  <UpdateDialog {update} onclose={() => (updateOpen = false)} />
 {/if}
 
 {#if reseedAsk}

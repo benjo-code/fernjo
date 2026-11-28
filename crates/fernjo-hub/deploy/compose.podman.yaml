@@ -2,6 +2,12 @@
 #   podman compose -f compose.yaml -f compose.podman.yaml up -d
 # In a rootless user namespace the image's user 10001 is mapped onto the volume's owner by
 # keep-id. This is a Podman-only key, which is why it is not in compose.yaml (Docker rejects it).
+# podman-compose puts a project into one pod by default, and Podman refuses --userns together
+# with a pod ("--userns and --pod cannot be set together"); x-podman turns the pod off. Docker
+# Compose ignores x- keys.
+x-podman:
+  in_pod: false
+
 services:
   hub:
     userns_mode: "keep-id:uid=10001,gid=10001"

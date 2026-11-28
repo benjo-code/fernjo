@@ -2164,6 +2164,13 @@ mod tests {
             entry("sync_dismiss_findings", |w| {
                 j(crate::sync_commands::sync_dismiss_findings(&w.st))
             }),
+            entry("update_status", |w| {
+                j(Ok::<_, CommandError>(crate::updater::update_status(&w.st)))
+            }),
+            entry("update_skip", |w| j(crate::updater::update_skip(&w.st))),
+            entry("set_check_for_updates", |w| {
+                j(crate::updater::set_check_for_updates(&w.st, false))
+            }),
             // not IPC commands (see `NOT_A_COMMAND`), but called as plain functions
             entry("import_begin", |w| {
                 let p = import_begin(&w.st, ImportKind::Backup, w._dir.path().join("x.fjbk"));
@@ -2417,7 +2424,7 @@ mod tests {
     /// no `table()` entry. Each is exempt for the stated reason: no secret type appears in
     /// its signature (`choose_data_folder` returns `DataFolderInfo`, `restart_app` nothing; it
     /// takes the `Window`, which needs the running app just the same).
-    const APP_HANDLE_EXEMPT: [(&str, &str); 6] = [
+    const APP_HANDLE_EXEMPT: [(&str, &str); 9] = [
         (
             "choose_data_folder",
             "takes an AppHandle; returns only DataFolderInfo",
@@ -2435,6 +2442,18 @@ mod tests {
         (
             "export_backup",
             "native dialog needs an AppHandle; returns only ExportInfo",
+        ),
+        (
+            "update_check",
+            "takes an AppHandle; returns only UpdateStatus",
+        ),
+        (
+            "update_install",
+            "takes an AppHandle; returns only UpdateStatus",
+        ),
+        (
+            "update_open_release_page",
+            "takes an AppHandle; returns nothing",
         ),
     ];
 
@@ -2466,6 +2485,7 @@ mod tests {
             include_str!("sync_commands.rs"),
             include_str!("open_tabs.rs"),
             include_str!("clipboard.rs"),
+            include_str!("updater.rs"),
         ];
         // Only lines that start with the attribute count (not doc comments or strings), so
         // `#[tauri::command(async)]` and similar forms are counted too.

@@ -6,6 +6,7 @@ mod connect_plan;
 mod data_folder;
 mod idle_lock;
 mod import_commands;
+pub mod mac_menu;
 mod nav_guard;
 mod open_tabs;
 mod rdp_commands;
@@ -16,6 +17,7 @@ mod state;
 mod sync_commands;
 mod sync_port;
 mod sync_runner;
+pub mod updater;
 mod vault_commands;
 
 use std::sync::atomic::Ordering;
@@ -30,7 +32,7 @@ pub use state::AppState;
 ///
 /// Panics if the Tauri runtime fails to start.
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         // The single-instance plugin must stay the first plugin so a second launch is
         // intercepted before any other plugin initialises. (`AppState::open_for_app` below runs
         // while the builder is assembled, i.e. also in a second launch; it reads the data files and
@@ -44,6 +46,7 @@ pub fn run() {
             }
         }))
         .plugin(nav_guard::plugin())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             // terminal links open through `open_external_url` in Rust; the plugin's JS
@@ -53,6 +56,8 @@ pub fn run() {
                 .build(),
         )
         .manage(AppState::open_for_app(fernjo_core::locate()))
+        // acts only on the Quit item of the macOS menu (`mac_menu`)
+        .on_menu_event(mac_menu::on_event)
         // Linux AppImage: the compositor takes the title bar icon from an installed `.desktop`
         // entry, which an AppImage has none of; `app_menu` offers to write one (never without the
         // user's answer). `Window::set_icon` cannot do it under Wayland.
@@ -62,6 +67,7 @@ pub fn run() {
             // Background sync (a no-op while sync is off). `AppState` is built, and with it the
             // startup auto-unlock tried, before `setup` runs.
             sync_runner::spawn_triggers(app.handle());
+            updater::spawn(app.handle().clone());
             idle_lock::spawn(app.handle().clone());
             Ok(())
         })
@@ -90,6 +96,11 @@ pub fn run() {
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let state = window.state::<AppState>();
+                // the update's files are being replaced: closing now could cut the write
+                if updater::install_blocks_exit(updater::installing(&state.updater), None) {
+                    api.prevent_close();
+                    return;
+                }
                 let connected = state.sessions.connected_count();
                 if !sessions::needs_close_confirmation(connected) {
                     // No session to ask about: with sync set up the window waits (at most a
@@ -103,7 +114,11 @@ pub fn run() {
                 api.prevent_close();
                 ask_to_close(window, connected, sessions::CloseThen::Exit);
             }
-        })
+        });
+    // Tauri's default macOS menu quits without asking; ours closes the window instead
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(mac_menu::build);
+    builder
         .invoke_handler(tauri::generate_handler![
             commands::handlers::list_tree,
             commands::handlers::reload_tree,
@@ -172,14 +187,26 @@ pub fn run() {
             sync_commands::handlers::sync_edit_secret,
             sync_commands::handlers::sync_leave,
             sync_commands::handlers::sync_dismiss_findings,
+            updater::handlers::update_status,
+            updater::handlers::update_check,
+            updater::handlers::update_install,
+            updater::handlers::update_skip,
+            updater::handlers::set_check_for_updates,
+            updater::handlers::update_open_release_page,
         ])
         .build(tauri::generate_context!())
         .expect("error while building fernjo")
         .run(|app, event| {
-            // Cmd+Q on macOS (and any other quit that is not a window close) asks like the
-            // window close does. An explicit exit code is never intercepted.
+            // A quit that is not a window close asks like the window close does. An explicit
+            // exit code is never intercepted. (Cmd+Q on macOS closes the window, `mac_menu`.)
             if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
                 let state = app.state::<AppState>();
+                // an exit without a code waits for an install in progress; the restart that
+                // follows it carries a code and passes
+                if updater::install_blocks_exit(updater::installing(&state.updater), code) {
+                    api.prevent_exit();
+                    return;
+                }
                 let connected = state.sessions.connected_count();
                 let prompt_open = state.close_prompt_open.load(Ordering::SeqCst);
                 match sessions::exit_action(code, connected, prompt_open) {
@@ -202,8 +229,8 @@ pub fn run() {
 }
 
 /// Asks whether to end `connected` sessions by closing (or, for `restart_app`, restarting)
-/// fernjo; one dialog at a time (`close_prompt_open`, shared by the window close, Cmd+Q and the
-/// restart). The dialog is non-blocking; on "Close" or "Restart" its callback ends the sessions
+/// fernjo; one dialog at a time (`close_prompt_open`, shared by the window close (and with it
+/// Cmd+Q on macOS), an exit request and the restart). The dialog is non-blocking; on "Close" or "Restart" its callback ends the sessions
 /// and, after a last sync push, destroys the window (which raises no `CloseRequested`; with no
 /// session left the following `ExitRequested` is allowed) or requests the restart (whose
 /// `ExitRequested` carries an exit code and is always allowed).
@@ -230,7 +257,9 @@ pub(crate) fn ask_to_close(window: &tauri::Window, connected: usize, then: sessi
                     .state::<AppState>()
                     .close_prompt_open
                     .store(false, Ordering::SeqCst);
-                if confirmed {
+                // an install confirmed after the download was replaced ends nothing
+                if confirmed && updater::commit_confirmed(then, &window.state::<AppState>().updater)
+                {
                     window.state::<AppState>().sessions.close_all();
                     sync_runner::finish_after_push(window.clone(), then);
                 }

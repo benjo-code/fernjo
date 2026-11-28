@@ -2,6 +2,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use fernjo_hub::{HubStore, config, router, serve};
 use tempfile::TempDir;
@@ -253,12 +254,29 @@ async fn put_over_the_limit_is_413_without_buffering_it_all() {
     let r = read_reply(&mut s).await;
     assert_eq!(r.status, 413);
 
-    // 2. chunked, no length: the hub stops reading once the cap is passed.
-    let mut s = TcpStream::connect(hub.addr).await.unwrap();
-    let head = format!(
+    let chunked_head = format!(
         "PUT /v1/head HTTP/1.1\r\nHost: hub\r\nConnection: close\r\nAuthorization: Bearer {SECRET}\r\nIf-None-Match: *\r\nTransfer-Encoding: chunked\r\n\r\n"
     );
-    s.write_all(head.as_bytes()).await.unwrap();
+
+    // 2. chunked, no length: one byte more than the hub takes (the limit plus its framing room,
+    // `BODY_SLACK` in `server.rs`), and the body never ends. The hub has to answer from what it
+    // read; one that waited for the end would never answer. Nothing is left unread, so the
+    // connection closes cleanly and the reply arrives on every platform.
+    let mut s = TcpStream::connect(hub.addr).await.unwrap();
+    s.write_all(chunked_head.as_bytes()).await.unwrap();
+    let over = LIMIT + 4096 + 1;
+    s.write_all(format!("{over:x}\r\n").as_bytes())
+        .await
+        .unwrap();
+    s.write_all(&vec![0u8; over]).await.unwrap();
+    let r = tokio::time::timeout(Duration::from_secs(60), read_reply(&mut s))
+        .await
+        .expect("the hub waited for the end of the body");
+    assert_eq!(r.status, 413);
+
+    // 3. chunked and far too large: the hub does not take the rest.
+    let mut s = TcpStream::connect(hub.addr).await.unwrap();
+    s.write_all(chunked_head.as_bytes()).await.unwrap();
     let chunk = vec![0u8; 1024 * 1024];
     let total_chunks = 200usize; // 200 MiB offered
     let mut sent = 0usize;
@@ -281,11 +299,15 @@ async fn put_over_the_limit_is_413_without_buffering_it_all() {
     let _ = wr.shutdown().await;
     let buf = reader.await.unwrap();
     let text = String::from_utf8_lossy(&buf);
-    assert!(
-        text.starts_with("HTTP/1.1 413"),
-        "{}",
-        &text[..text.len().min(80)]
-    );
+    // Closing with unread data resets the connection, and Windows then drops the reply the client
+    // has not read yet (step 2 covers the status there).
+    if cfg!(not(windows)) {
+        assert!(
+            text.starts_with("HTTP/1.1 413"),
+            "{}",
+            &text[..text.len().min(80)]
+        );
+    }
     assert!(
         sent < total_chunks * chunk.len(),
         "the hub took the whole body"

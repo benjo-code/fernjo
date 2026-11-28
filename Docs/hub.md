@@ -37,7 +37,24 @@ podman compose -f compose.yaml -f compose.podman.yaml run --rm hub init --data /
 podman compose -f compose.yaml -f compose.podman.yaml up -d
 ```
 
+The override also sets `x-podman: { in_pod: false }`: `podman-compose` otherwise puts the project into one pod, and Podman refuses `--userns` together with a pod ("--userns and --pod cannot be set together"). With the v0.3.1 copy of the file, which lacks that key, call `podman-compose --in-pod=false -f compose.yaml -f compose.podman.yaml ...` instead.
+
 `compose run` does not publish the port, so the one-time `init` never collides with a running hub. Check with `curl -H "Authorization: Bearer <secret>" http://127.0.0.1:8787/v1/info`, which answers `{"protocol":1,"maxBytes":67108864}`. `compose down` stops it and keeps the volume.
+
+### Compose as a systemd user service (rootless Podman)
+
+To start the hub at boot and stop it with `systemctl --user`, run the Compose files from a user unit (`crates/fernjo-hub/deploy/fernjo-hub-compose.service`; it uses `podman-compose` directly, which the `podman compose` command calls anyway):
+
+```sh
+mkdir -p ~/.config/systemd/user
+cp fernjo-hub-compose.service ~/.config/systemd/user/fernjo-hub.service
+# set WorkingDirectory in it to the folder that holds compose.yaml and compose.podman.yaml
+systemctl --user daemon-reload
+systemctl --user enable --now fernjo-hub
+loginctl enable-linger "$USER"      # start at boot without a login
+```
+
+Check it with `systemctl --user status fernjo-hub` and `journalctl --user -u fernjo-hub`; stop it with `systemctl --user stop fernjo-hub` (it runs `down`, the volume stays). Do not also enable `podman-restart.service`, and use this unit or the Quadlet unit below, never both.
 
 ### Rootless Podman as a service (Quadlet)
 
@@ -46,7 +63,7 @@ podman compose -f compose.yaml -f compose.podman.yaml up -d
    ```sh
    podman volume create fernjo-hub-data
    podman run --rm --user 10001:10001 --userns=keep-id:uid=10001,gid=10001 \
-     -v fernjo-hub-data:/data:Z ghcr.io/benjo-code/fernjo-hub:0.3.1 init --data /data
+     -v fernjo-hub-data:/data:Z ghcr.io/benjo-code/fernjo-hub:0.4.0 init --data /data
    ```
 
 2. Copy `crates/fernjo-hub/deploy/fernjo-hub.container` to `~/.config/containers/systemd/`, then:
@@ -67,10 +84,10 @@ podman compose -f compose.yaml -f compose.podman.yaml up -d
 
 ```sh
 docker volume create fernjo-hub-data
-docker run --rm --user 10001:10001 -v fernjo-hub-data:/data ghcr.io/benjo-code/fernjo-hub:0.3.1 init --data /data
+docker run --rm --user 10001:10001 -v fernjo-hub-data:/data ghcr.io/benjo-code/fernjo-hub:0.4.0 init --data /data
 docker run -d --name fernjo-hub --restart unless-stopped --user 10001:10001 --read-only --cap-drop ALL \
   --security-opt no-new-privileges --init -p 127.0.0.1:8787:8787 -v fernjo-hub-data:/data \
-  ghcr.io/benjo-code/fernjo-hub:0.3.1
+  ghcr.io/benjo-code/fernjo-hub:0.4.0
 ```
 
 (`podman run` takes the same arguments; add `--userns=keep-id:uid=10001,gid=10001` when rootless.)
@@ -83,7 +100,7 @@ Stopping the container (`podman stop`, `docker stop`, `compose down`, `systemctl
 
 ## Update to a new hub version
 
-The deploy files pin the exact version (`0.3.1` above), so nothing changes until you decide. To update, change the tag in the file you use (`compose.yaml`, `fernjo-hub.container` or your `run` command) to the new release, pull and restart; the data volume and the secret stay as they are:
+The deploy files pin the exact version (`0.4.0` above), so nothing changes until you decide. To update, change the tag in the file you use (`compose.yaml`, `fernjo-hub.container` or your `run` command) to the new release, pull and restart; the data volume and the secret stay as they are:
 
 ```sh
 docker compose -f compose.yaml pull && docker compose -f compose.yaml up -d      # Compose
@@ -97,14 +114,15 @@ Every release also bumps the tag in both deploy files to its own version, so the
 The release workflow attests the build provenance of the image. Check that the image you pulled was built by this repository's release workflow:
 
 ```sh
-gh attestation verify oci://ghcr.io/benjo-code/fernjo-hub:0.3.1 --repo benjo-code/fernjo \n  --signer-workflow benjo-code/fernjo/.github/workflows/release.yml --source-ref refs/tags/v0.3.1
+gh attestation verify oci://ghcr.io/benjo-code/fernjo-hub:0.4.0 --repo benjo-code/fernjo \
+  --signer-workflow benjo-code/fernjo/.github/workflows/release.yml --source-ref refs/tags/v0.4.0
 ```
 
-The two extra flags matter: without them any workflow of this repository on any branch would pass. Use the tag of the version you pulled (replace `0.3.1` in this command and in the examples above when you use another version).
+The two extra flags matter: without them any workflow of this repository on any branch would pass. Use the tag of the version you pulled (replace `0.4.0` in this command and in the examples above when you use another version).
 
 ## Make the package public (once, owner)
 
-GitHub creates the package `fernjo-hub` private on the first push. So that everybody can pull it without logging in, the repository owner changes its visibility once: on GitHub open the package (github.com/benjo-code, Packages, `fernjo-hub`), Package settings, Change visibility, Public. Check it from a machine that is not logged in to GHCR: `docker pull ghcr.io/benjo-code/fernjo-hub:0.3.1`. Also check once that the package is connected to the repository (the package page shows `benjo-code/fernjo`, and Package settings, Manage Actions access, lists it with Write): the workflow annotates the image index with its source for that, but older Podman versions cannot (the run then prints a warning), and an unconnected package can refuse the next release's push. Connect it there if it is missing.
+GitHub creates the package `fernjo-hub` private on the first push. So that everybody can pull it without logging in, the repository owner changes its visibility once: on GitHub open the package (github.com/benjo-code, Packages, `fernjo-hub`), Package settings, Change visibility, Public. Check it from a machine that is not logged in to GHCR: `docker pull ghcr.io/benjo-code/fernjo-hub:0.4.0`. Also check once that the package is connected to the repository (the package page shows `benjo-code/fernjo`, and Package settings, Manage Actions access, lists it with Write): the workflow annotates the image index with its source for that, but older Podman versions cannot (the run then prints a warning), and an unconnected package can refuse the next release's push. Connect it there if it is missing.
 
 ## Build the image yourself
 
@@ -183,13 +201,14 @@ Wire formats, the envelope layout and the merge rules are in `Docs/sync-format.m
 - **Run by the owner on 2026-11-23** (reported by the owner, without per-step detail): the image built with `podman build` and the rootless Quadlet unit ran on a VM (Podman 5.7.0, `UserNS=keep-id:uid=10001,gid=10001`, `RunInit=true`, the `:Z` volume, the read-only root file system). Caddy with `tls internal` ran on a separate VM in front of it, with the hub published on the hub VM's LAN address (`PublishPort=<LAN address>:8787:8787`) and the CA pasted into fernjo. A Windows 11 PC and a macOS laptop synced through it: create, edit, delete versus edit, conflict copy, vault entry, offline then online, a restart of the hub container and Caddy, a hub restored from an older snapshot and re-seeded, and `rotate-secret`. The OS keychain items worked on Windows and macOS. Two defects came out of it and were fixed: the unit used the key `Init=`, which Quadlet rejects (the key is `RunInit=`), and the notice for a deleted-versus-edited item said "changed here" also on the device that had deleted it.
 - **M12 (published image), pull request dry run of 2026-11-25** (pull request 57, run 45712770086): the release workflow built the image on a native amd64 runner and a native arm64 runner with rootless Podman, and the smoke test printed `smoke: ok` on both (`init` on a fresh volume as 10001, `serve`, `/v1/info` with the secret, 401 without it, stop in under 5 s with exit status 0); the push job was skipped, so nothing was published.
 - **M12, Docker Compose on Docker Desktop (Docker 29.9.3)**, with the locally built image tagged as the pinned reference: `docker compose -f compose.yaml config` is valid (also merged with `compose.podman.yaml`), `compose run --rm hub init --data /data` printed the secret, `up -d` started the hub with the read-only root file system, and `/v1/info` without a secret answered 401.
+- **M12, the published image** (v0.3.1, release run 45720295139, checked 2026-11-26): the package is public (anonymous token and manifest request answer 200); `docker buildx imagetools inspect ghcr.io/benjo-code/fernjo-hub:0.3.1` lists linux/amd64 and linux/arm64 under the index digest `sha256:62c7ac5a32f679ea488eb43daa0769b46ada05440fcc7edccbbf83482d8fe023`; `gh attestation verify oci://ghcr.io/benjo-code/fernjo-hub:0.3.1 --repo benjo-code/fernjo --signer-workflow benjo-code/fernjo/.github/workflows/release.yml --source-ref refs/tags/v0.3.1` exits 0; after `docker logout ghcr.io` an anonymous `docker pull` worked; `docker compose` with the pulled image (`init`, `up -d`, 401 without a secret, `stop` in 2.5 s including Compose overhead, exit status 0).
+- **M12, Podman Compose on the owner's hub VM** (Podman 5.7.0, podman-compose 1.5.0, reported by the owner 2026-11-26): `podman compose` with `compose.yaml` and `compose.podman.yaml` failed with "--userns and --pod cannot be set together"; with `podman-compose --in-pod=false` the `init`, `up -d`, `/v1/info` (`{"protocol":1,"maxBytes":67108864}`) on the published LAN address and `down` (0.5 s) worked. With the override from this fix (`x-podman: { in_pod: false }`) `podman compose up -d` and `down` (0.7 s) worked without the switch; the published port was the VM's LAN address. The owner also reported that `podman pull` works there without a login and that one fernjo device synced through Caddy against this hub.
+- **M12, Compose as a systemd user service** (owner's hub VM, 2026-11-26, reported by the owner without detail): the unit above with `enable --now` and `enable-linger` ran the hub after a reboot, without a login. The time `systemctl --user stop fernjo-hub` takes was not reported.
 - **M12, the push step rehearsed** against a local registry, with the two OCI archives from the dry run and Podman 4.9.3 (the version on the runners) and 6.2.0: the same commands as the workflow joined them into one manifest list, pushed it as `X.Y.Z`, `X.Y` and `latest` with one shared digest, and `skopeo inspect --raw` showed amd64 and arm64. This is not a run against GHCR.
 
 ## Not verified yet (owner checks)
 
-- The published image itself: it exists only after the v0.3.1 tag. Then: `docker buildx imagetools inspect ghcr.io/benjo-code/fernjo-hub:0.3.1` lists both architectures, `X.Y` and `latest` show the same digest, and the `gh attestation verify oci://... --signer-workflow ... --source-ref refs/tags/v0.3.1` command above passes. The login to GHCR and the attestation with `push-to-registry` have only run on a real tag push, never before.
-- That the package can be pulled without a login once the owner has made it public ("Make the package public" above).
-- The Compose files and the Quadlet unit with the published image on the owner's Podman machines, and `podman compose -f compose.yaml -f compose.podman.yaml` (Podman's Compose was not run here, only Docker's).
+- The Quadlet unit with the published image on the owner's Podman machines.
 - Linux: the Secret Service keychain item (set up, restart, leave sync, item gone) and a sync run from a Linux device (the CachyOS laptop).
 - That `systemctl --user stop fernjo-hub` ends the Podman unit within about a second (not reported).
 - Caddy running in a container: the `host.containers.internal` address and a shared Podman network, and a LAN `PublishPort` for a Caddy container (named under "Caddy" as untried advice). The tested set-up has Caddy on another VM.

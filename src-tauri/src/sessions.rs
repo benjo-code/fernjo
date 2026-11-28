@@ -1075,7 +1075,7 @@ pub(crate) fn needs_close_confirmation(connected: usize) -> bool {
     connected > 0
 }
 
-/// What an app exit request (`RunEvent::ExitRequested`, e.g. Cmd+Q on macOS) should do.
+/// What an app exit request (`RunEvent::ExitRequested`, e.g. the last window going) should do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExitAction {
     /// Let the exit proceed.
@@ -1104,6 +1104,9 @@ pub(crate) fn exit_action(code: Option<i32>, connected: usize, prompt_open: bool
 pub(crate) enum CloseThen {
     Exit,
     Restart,
+    /// Install a downloaded update (`updater.rs`): the sessions end, the last sync push runs,
+    /// then the plugin installs.
+    Install,
 }
 
 /// The texts of the "sessions still connected" dialog.
@@ -1121,13 +1124,18 @@ pub(crate) fn close_prompt(connected: usize, then: CloseThen) -> ClosePrompt {
     } else {
         "sessions are"
     };
-    let (title, verb, confirm) = match then {
-        CloseThen::Exit => ("Close fernjo?", "Closing", "Close"),
-        CloseThen::Restart => ("Restart fernjo?", "Restarting", "Restart"),
+    let (title, ending, confirm) = match then {
+        CloseThen::Exit => ("Close fernjo?", "Closing fernjo ends them.", "Close"),
+        CloseThen::Restart => ("Restart fernjo?", "Restarting fernjo ends them.", "Restart"),
+        CloseThen::Install => (
+            "Install update?",
+            "Installing the update ends them.",
+            "Install",
+        ),
     };
     ClosePrompt {
         title,
-        message: format!("{connected} {noun} still connected. {verb} fernjo ends them."),
+        message: format!("{connected} {noun} still connected. {ending}"),
         confirm,
     }
 }

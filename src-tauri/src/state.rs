@@ -151,6 +151,14 @@ pub struct AppState {
     /// Whether the open tabs are saved and reopened (default on): loaded from `settings.json`
     /// at startup (same rule as `terminal`). The lock also serialises writes of `open-tabs.json`.
     pub reopen_tabs: Mutex<bool>,
+    /// Whether the app checks for updates in the background (default on): loaded from
+    /// `settings.json` at startup, in memory only while `FERNJO_DATA_DIR` is set.
+    pub check_for_updates: Mutex<bool>,
+    /// The release version the user skipped (`None` = none): same rule as `check_for_updates`.
+    pub skipped_update_version: Mutex<Option<String>>,
+    /// The update state machine's data (`updater.rs`). A leaf lock: nothing else is taken while
+    /// it is held, and it is never held across network I/O or a dialog.
+    pub updater: Mutex<crate::updater::UpdaterRuntime>,
     /// When the user last did something (fed by `note_activity`); see `idle_lock`.
     pub idle: IdleTracker,
     /// The open terminal sessions.
@@ -240,14 +248,24 @@ impl AppState {
             Some(l) => {
                 // `settings.json` is neither read nor written while the variable is set, and
                 // an unusable file yields the defaults.
-                let loaded = if l.source == DataDirSource::Env || l.settings_error.is_some() {
-                    None
-                } else {
-                    settings::load(&l.config_dir.join(settings::FILE_NAME)).ok()
+                let (loaded, settings_error) = match l.settings_error {
+                    Some(e) => (None, Some(e)),
+                    None if l.source == DataDirSource::Env => (None, None),
+                    // the second read of this start: a failure only now makes the file unusable
+                    // too, or the defaults (update checks on) would stand in for the stored choices
+                    None => match settings::load(&l.config_dir.join(settings::FILE_NAME)) {
+                        Ok(s) => (Some(s), None),
+                        Err(e) => (None, Some(e)),
+                    },
                 };
                 let terminal = loaded.as_ref().and_then(|s| s.terminal.clone());
                 let auto_lock = loaded.as_ref().and_then(|s| s.vault_auto_lock_minutes);
                 let reopen_tabs = loaded.as_ref().and_then(|s| s.reopen_tabs);
+                let check_for_updates = loaded.as_ref().and_then(|s| s.check_for_updates);
+                let skipped_update_version = loaded
+                    .as_ref()
+                    .and_then(|s| s.skipped_update_version.clone())
+                    .filter(|v| settings::validate_update_version(v).is_ok());
                 let theme = loaded.and_then(|s| s.theme);
                 let mut state = Self::build(
                     Some(l.data_dir),
@@ -256,8 +274,8 @@ impl AppState {
                         device_dir: l.device_dir,
                         source: l.source,
                     },
-                    l.settings_error.is_some(),
-                    l.settings_error.map(|e| Notice::SettingsUnreadable {
+                    settings_error.is_some(),
+                    settings_error.map(|e| Notice::SettingsUnreadable {
                         message: e.to_string(),
                     }),
                     keystore,
@@ -276,6 +294,14 @@ impl AppState {
                 }
                 if let (Some(on), Ok(mut slot)) = (reopen_tabs, state.reopen_tabs.lock()) {
                     *slot = on;
+                }
+                if let (Some(on), Ok(mut slot)) =
+                    (check_for_updates, state.check_for_updates.lock())
+                {
+                    *slot = on;
+                }
+                if let Ok(mut slot) = state.skipped_update_version.lock() {
+                    *slot = skipped_update_version;
                 }
                 state
             }
@@ -412,6 +438,9 @@ impl AppState {
             theme: Mutex::new(Theme::default()),
             vault_auto_lock_minutes: Mutex::new(None),
             reopen_tabs: Mutex::new(true),
+            check_for_updates: Mutex::new(settings::DEFAULT_CHECK_FOR_UPDATES),
+            skipped_update_version: Mutex::new(None),
+            updater: Mutex::new(crate::updater::UpdaterRuntime::default()),
             idle: IdleTracker::new(std::time::Instant::now(), std::time::SystemTime::now()),
             sessions: SessionManager::default(),
             pending: Mutex::new(None),
@@ -491,6 +520,33 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
+    /// `open_for_app` reads `settings.json` a second time; a read that fails only then must not turn
+    /// a switched-off update check back on (M14 review #90).
+    #[test]
+    fn a_settings_file_that_fails_only_at_the_second_read_stops_automatic_checks() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = |name: &str| {
+            let path = root.path().join(name);
+            std::fs::create_dir_all(&path).unwrap();
+            path
+        };
+        let config_dir = folder("config");
+        std::fs::write(
+            config_dir.join(fernjo_core::settings::FILE_NAME),
+            r#"{"schemaVersion":99}"#,
+        )
+        .unwrap();
+        let state = super::AppState::open_for_app(Some(fernjo_core::Location {
+            data_dir: folder("data"),
+            config_dir,
+            source: fernjo_core::DataDirSource::Default,
+            settings_error: None,
+            device_dir: Some(folder("device")),
+        }));
+        assert!(state.settings_unusable);
+        assert!(!crate::updater::schedule::automatic_checks_allowed(&state));
+    }
+
     use super::*;
     use fernjo_core::{DataDirSource, Notice};
 

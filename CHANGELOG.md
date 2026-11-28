@@ -6,6 +6,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-28
+
+Automatic updates (M13) and the security check of the update path (M14). Install this version by hand. Where fernjo can update itself (not a `.deb` install, nor a copy in a folder it cannot write to), it is the last manual update.
+
+### Added
+
+- The app can now check for a newer version and update itself with one click (Settings, "Updates"; milestone 13). It asks GitHub shortly after start and then once a day unless you switch that off there; nothing is downloaded or installed without your click, and while sessions are connected it asks before it ends them.
+- Not yet tried on a real machine: installing an update through the app. That happens first with the release after this one.
+
+### Fixed
+
+- On macOS, Cmd+Q and “Quit fernjo” now ask before they end connected sessions; until now fernjo quit at once. Quitting from the Dock, logging out and shutting down still do not ask.
+- The hub's Compose override for rootless Podman now also works with `podman-compose`, which failed with "--userns and --pod cannot be set together" (it puts the project into a pod by default; the override turns that off).
+
 ## [0.3.1] - 2026-11-26
 
 The sync hub as a ready-made image (M12).

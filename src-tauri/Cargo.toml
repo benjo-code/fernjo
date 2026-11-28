@@ -20,6 +20,7 @@ tauri-build = { version = "2.7", features = [] }
 
 [dependencies]
 tauri = { version = "2.12", features = [] }
+semver = "1"
 fernjo-core = { path = "../crates/fernjo-core" }
 fernjo-vault = { path = "../crates/fernjo-vault" }
 fernjo-ssh = { path = "../crates/fernjo-ssh" }
@@ -33,6 +34,14 @@ secrecy.workspace = true
 tauri-plugin-single-instance = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
+# exact pin: installer code is security-relevant, read a new release before taking it (Docs/DECISIONS.md, "M13: update signing and the updater plugin")
+tauri-plugin-updater = "=2.14.1"
+# reads the signature's kind before a download (M14 review #85)
+base64.workspace = true
+# the size-capped feed fetch (M14 review #83): the plugin's own versions and TLS stack
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "system-proxy"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+url = "2"
 tokio.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 uuid.workspace = true
@@ -41,6 +50,15 @@ arboard = { version = "3.7", default-features = false, features = ["wayland-data
 [dev-dependencies]
 tempfile.workspace = true
 fernjo-hub = { path = "../crates/fernjo-hub" }
-base64.workspace = true
 # a paused clock for the timing tests of the RDP forwarder
 tokio = { workspace = true, features = ["test-util"] }
+# the mock runtime hosts the updater plugin in the feed tests
+tauri = { version = "2.12", features = ["test"] }
+# Enables `update-test-hooks` for this package's own tests, so plain `cargo test --workspace` runs
+# `tests/updater_feed.rs`. Dev-dependencies are never part of a release build.
+fernjo-app = { path = ".", features = ["update-test-hooks"] }
+
+[features]
+# The endpoint override of `updater::feed::check`. Off by default; the release build never enables
+# it (`src-tauri/tests/tauri_conf.rs`, `updater_config_is_pinned`, asserts it is not in `default`).
+update-test-hooks = []
