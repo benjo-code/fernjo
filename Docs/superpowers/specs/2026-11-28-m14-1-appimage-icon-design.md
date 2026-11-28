@@ -1,6 +1,6 @@
 # M14.1: Linux AppImage icon in the dock and start menu
 
-**Date:** 2026-11-28 · **Status:** awaiting the owner's approval · **Size:** small change
+**Date:** 2026-11-28 · **Status:** approved by the owner on 2026-11-28 · **Size:** small change
 
 ## Intent
 

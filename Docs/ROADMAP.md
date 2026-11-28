@@ -44,7 +44,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 | 13 | Automatic updates | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-26-milestone-13-auto-update.md) | 2026-11-27 |
 | 14 | Security check and release readiness for v0.4.0 | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-27-milestone-14-security-gate.md) | 2026-11-27 |
 | – | **Release `v0.4.0`** – Automatic updates (M13 to M14) | – | ✅ done | – | 2026-11-28 |
-| 14.1 | Linux AppImage: icon in the dock and start menu | 1 – fernjo app | ⬜ open | – | – |
+| 14.1 | Linux AppImage: icon in the dock and start menu | 1 – fernjo app | 🟡 planned | [Plan](superpowers/plans/2026-11-28-milestone-14.1-appimage-icon.md) | – |
 | 15 | Export to mRemoteNG format | 1 – fernjo app | ⬜ open | – | – |
 | 16 | SFTP file browser | 1 – fernjo app | ⬜ open | – | – |
 | 17 | Security check and release readiness for v0.5.0 | 1 – fernjo app | ⬜ open | – | – |
@@ -81,6 +81,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 - **2026-11-27 (M13 capability check):** The capability criterion was reworded when it was checked: "Check now" cannot show that `update-status` arrives, because the screen also follows the command's reply, so the event proof is the `vault-status` event after the idle auto-lock (same permission). The check was run by hand with the installer of a release dry run instead of the DevTools-port recipe on a `--no-bundle` binary.
 - **2026-11-27 (M14 planning):** Decisions while planning M14 (design `superpowers/specs/2026-11-27-m14-security-gate-v0.4.0-design.md`, plan `superpowers/plans/2026-11-27-milestone-14-security-gate.md`): added are a Windows test job in CI (no test of the M13 updater had run on Windows), the owner's key copy check and a local rehearsal of the signing and publishing commands with the test key (signing, signature verification and `latest.json` have never run on GitHub; a rehearsal on GitHub was rejected because it needs the tag-only rule of the `release-signing` environment loosened). The release gate takes its dry run on the milestone's final head, and the version bump and version check stay with the release branch. Known mismatch left for the planning of M17: its task and criterion say an installed v0.4.0 updates to a v0.5.0 candidate through a test feed, but a released v0.4.0 only reads the real GitHub feed (no runtime override), so that run needs the published release, as the v0.5.0 release criterion already says.
 - **2026-11-28 (After the v0.4.0 release):** On the owner's instruction, the blank AppImage icon in the dock and start menu on KDE Plasma (owner report after v0.4.0) gets a milestone of its own, 14.1. It is part of v0.5.0 and a prerequisite of the release gate M17. The owner's other point, an online indicator for hosts, is on the backlog.
+- **2026-11-28 (M14.1 planning):** The owner's check showed that the start menu and dock icon appear after logging out and in again with the files v0.4.0 wrote unchanged. The owner chose to say so instead of changing what is written (design `superpowers/specs/2026-11-28-m14-1-appimage-icon-design.md`, plan `superpowers/plans/2026-11-28-milestone-14.1-appimage-icon.md`). Dropped: the code fix and bringing older installations up to date. Added: a note in the application menu dialog and the README, and removal of the wide gaps in the dialog text. The goal, the acceptance criteria and the v0.5.0 release text follow. Not done: the comparison with an AppImage integrated by another tool, which the log-in test made unnecessary.
 
 ## Open manual checks (owner)
 
@@ -725,24 +726,26 @@ The app checks for new versions, shows when one is ready and updates itself with
 - [x] The go verdict for v0.4.0 in `Docs/release-checklist.md` names every gap and every owner check that was deferred – `release-checklist.md` "v0.4.0 readiness": the verdict (Go) names the deferred owner checks D, F, G and H and the checks C and E that were run at the release (both passed on 2026-11-28); its "Known gaps" table and the one in "v0.4.0 result" list the gaps.
 
 ## Milestone 14.1 – Linux AppImage: icon in the dock and start menu
-**Status:** ⬜ open · **Plan:** – · **Prerequisites:** M14
+**Status:** 🟡 planned · **Plan:** [2026-11-28-milestone-14.1-appimage-icon.md](superpowers/plans/2026-11-28-milestone-14.1-appimage-icon.md) · **Prerequisites:** M14
 
-Goal: An AppImage added to the application menu through fernjo’s dialog shows the fernjo icon in the start menu and the dock on KDE Plasma, as it already does in the top bar.
+Goal: A user of the Linux AppImage is told that the start menu and dock icon may appear only after the next log-in, so a blank icon right after "Add" is not taken for a fault.
 
 **Tasks**
-- [ ] Find the cause on the owner’s KDE Plasma machine before changing code: check that `fernjo.desktop` and the icon exist below `$XDG_DATA_HOME` and what they contain, how the desktop looks the icon up (icon theme, caches), whether the icon appears after a new log-in, and compare with the same AppImage integrated by another tool such as Gear Lever; record the Plasma version, the session type and the findings
-- [ ] Fix it in `src-tauri/src/app_menu.rs` with tests for the pure parts, keeping its rules: nothing is written without "Add", only for an AppImage, never under `FERNJO_DATA_DIR`, files written with `fernjo_fs::write_atomic`, and an entry that is a symbolic link is left alone
-- [ ] An installation that already chose "Add" with v0.4.0 or earlier gets the fix too: today an entry whose text is unchanged is not offered again, so the entry and icon written earlier are brought up to date or offered again
-- [ ] Record the cause and the decision in `Docs/DECISIONS.md` and the lasting facts in `CLAUDE.md`, correct `README.md` if what it says about the menu entry changes; `CHANGELOG.md` `[Unreleased]` gets a short user-readable entry
+- [x] Find the cause on the owner’s KDE Plasma machine before changing code and record the Plasma version, the session type and the findings (design `superpowers/specs/2026-11-28-m14-1-appimage-icon-design.md`)
+- [ ] The application menu dialog says that the icon may appear in the start menu and dock only after the next log-in and loses the wide gaps in its text; the message is a pure function with tests, and a test pins that an entry written by v0.4.0 is not asked about again
+- [ ] Record the cause and the decision in `Docs/DECISIONS.md` and the lasting facts in `CLAUDE.md`, add the note to `README.md`; `CHANGELOG.md` `[Unreleased]` gets a short user-readable entry
 
 **Acceptance criteria**
 - [ ] Build, test and lint are green (`cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `pnpm test`, `pnpm lint`, `cargo deny check`, `dotnet run tools/roadmap.cs -- check`)
-- [ ] Tests pin the fix, including an installation that already has the earlier entry, and fail without it (test names as evidence)
-- [ ] Manual, owner: on KDE Plasma with an AppImage built from the milestone branch, the start menu entry, the dock and the top bar show the fernjo icon, both after a first "Add" and over the entry that v0.4.0 wrote
+- [ ] Tests pin the dialog text and that an entry written by v0.4.0 is not asked about again; both are seen failing without their protection (test names as evidence)
+- [ ] Manual, owner: an AppImage built from the milestone branch, started with `XDG_CONFIG_HOME` and `XDG_DATA_HOME` on scratch folders on KDE Plasma, shows the dialog with the note and without gaps, answered "Not now"
 - [ ] GNOME is checked the same way, or recorded as not checked
 
 **Source: owner report**
-Owner report of 2026-11-28 with v0.4.0 on KDE Plasma, after choosing "Add" in fernjo’s application menu dialog: the icon is right in the top bar while the app runs, but the dock (task bar) and the start menu entry show a blank icon. `src-tauri/src/app_menu.rs` writes `fernjo.desktop` with `Icon=fernjo`, and the 128x128 icon to `icons/hicolor/128x128/apps/fernjo.png` below `$XDG_DATA_HOME`. The cause is not known.
+Owner report of 2026-11-28 with v0.4.0 on KDE Plasma, after choosing "Add" in fernjo’s application menu dialog: the icon is right in the top bar while the app runs, but the dock (task bar) and the start menu entry show a blank icon. `src-tauri/src/app_menu.rs` writes `fernjo.desktop` with `Icon=fernjo`, and the 128x128 icon to `icons/hicolor/128x128/apps/fernjo.png` below `$XDG_DATA_HOME`.
+
+**Diagnosis**
+Owner’s check of 2026-11-28 (KDE Plasma 6.8.3, Wayland, `XDG_DATA_HOME` unset): after logging out and in again the start menu and the dock show the icon, with the files unchanged. The icon folder existed before fernjo wrote into it. Why the running session did not pick the icon up is not established.
 
 ## Milestone 15 – Export to mRemoteNG format
 **Status:** ⬜ open · **Plan:** – · **Prerequisites:** M12
@@ -815,7 +818,7 @@ Goal: v0.5.0 is only released after an independent security check of what change
 
 ## Release `v0.5.0` – Acceptance
 
-Export to the mRemoteNG format (M15), an SFTP file browser (M16) and the fix for the missing AppImage icon in the Linux dock and start menu (M14.1), after a security check of everything new (M17). The first release that v0.4.0 can offer as an update.
+Export to the mRemoteNG format (M15), an SFTP file browser (M16) and a note in the Linux AppImage's menu dialog about when its icon appears (M14.1), after a security check of everything new (M17). The first release that v0.4.0 can offer as an update.
 
 - [ ] Manual, owner (moved from M13; done with whichever release follows v0.4.0 first): an installed v0.4.0 offers it and updates through the update window, the first real run of the update path. On Windows, macOS and a Linux AppImage the window shows the release notes, the app closes, the new version starts, `connections.json`, the vault and `settings.json` are untouched and Windows asks for no administrator rights; a `.deb` install and a read-only AppImage location offer the release page and install nothing; the marker and the window look right in light and dark. Platforms not at hand are named as open
 - [ ] The go verdict for v0.5.0 in `Docs/release-checklist.md` names every gap and every owner check that was deferred
