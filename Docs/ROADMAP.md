@@ -719,8 +719,8 @@ Goal: v0.4.0 is only released after an independent security check of what change
 
 The app checks for new versions, shows when one is ready and updates itself with one click in an app-themed window (M13), after an independent security check of the update path (M14). Installing this version by hand is the last manual update, except for a `.deb` install and a copy in a folder fernjo cannot write to.
 
-- [ ] The release has the five installers, `latest.json` with its signatures and `SHA256SUMS`; `gh attestation verify` passes for each installer and `latest.json` carries a valid signature for the pinned public key
-- [ ] The go verdict for v0.4.0 in `Docs/release-checklist.md` names every gap and every owner check that was deferred
+- [x] The release has the five installers, `latest.json` with its signatures and `SHA256SUMS`; `gh attestation verify` passes for each installer and `latest.json` carries a valid signature for the pinned public key – 2026-11-28, release run 46126735152 and the published v0.4.0: 13 assets (five installers, two macOS `.app.tar.gz`, four `.sig`, `latest.json`, `SHA256SUMS`); `sha256sum -c` 12 times OK; `verify-installers.sh 0.4.0 --release` and `write-latest-json.mjs --check` pass; `verify_update_signature` with the shipped key: `signature ok` for all four signed files, `--app-version 0.3.1` refused; `gh attestation verify --source-ref refs/tags/v0.4.0` exit 0 for all 12 files other than `SHA256SUMS`, the five installers and `latest.json` included, `refs/tags/v9.9.9` exit 1. Details in `release-checklist.md` "v0.4.0 result", "Release".
+- [x] The go verdict for v0.4.0 in `Docs/release-checklist.md` names every gap and every owner check that was deferred – `release-checklist.md` "v0.4.0 readiness": the verdict (Go) names the deferred owner checks D, F, G and H and the checks C and E that were run at the release (both passed on 2026-11-28); its "Known gaps" table and the one in "v0.4.0 result" list the gaps.
 
 ## Milestone 15 – Export to mRemoteNG format
 **Status:** ⬜ open · **Plan:** – · **Prerequisites:** M12
