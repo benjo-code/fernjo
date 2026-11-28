@@ -43,7 +43,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 | – | **Release `v0.3.1`** – Hub image on GitHub (M12) | – | ✅ done | – | 2026-11-26 |
 | 13 | Automatic updates | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-26-milestone-13-auto-update.md) | 2026-11-27 |
 | 14 | Security check and release readiness for v0.4.0 | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-27-milestone-14-security-gate.md) | 2026-11-27 |
-| – | **Release `v0.4.0`** – Automatic updates (M13 to M14) | – | ⬜ open | – | – |
+| – | **Release `v0.4.0`** – Automatic updates (M13 to M14) | – | ✅ done | – | 2026-11-28 |
 | 15 | Export to mRemoteNG format | 1 – fernjo app | ⬜ open | – | – |
 | 16 | SFTP file browser | 1 – fernjo app | ⬜ open | – | – |
 | 17 | Security check and release readiness for v0.5.0 | 1 – fernjo app | ⬜ open | – | – |
@@ -717,7 +717,7 @@ Goal: v0.4.0 is only released after an independent security check of what change
 
 ## Release `v0.4.0` – Acceptance
 
-The app checks for new versions, shows when one is ready and updates itself with one click in an app-themed window (M13), after an independent security check of the update path (M14). Installing this version by hand is the last manual update.
+The app checks for new versions, shows when one is ready and updates itself with one click in an app-themed window (M13), after an independent security check of the update path (M14). Installing this version by hand is the last manual update, except for a `.deb` install and a copy in a folder fernjo cannot write to.
 
 - [ ] The release has the five installers, `latest.json` with its signatures and `SHA256SUMS`; `gh attestation verify` passes for each installer and `latest.json` carries a valid signature for the pinned public key
 - [ ] The go verdict for v0.4.0 in `Docs/release-checklist.md` names every gap and every owner check that was deferred

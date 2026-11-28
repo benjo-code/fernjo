@@ -880,10 +880,12 @@ assert_true smoke_hub_image_cleans_up_after_a_hang smoke_cleans_up_after_a_hang
 
 # --- hub deploy files ---
 deploy="$root/crates/fernjo-hub/deploy"
-hub_ref='ghcr.io/benjo-code/fernjo-hub:0.3.1'
+# Both files pin the same exact release image (X.Y.Z). The version is not written here, because every
+# release moves it; check-release-version.sh compares it with the release version.
+hub_ref="$(sed -n 's/^    image: \(ghcr\.io\/benjo-code\/fernjo-hub:[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p' "$deploy/compose.yaml")"
 compose_pins_the_image_and_hardens_it() {
   local f="$deploy/compose.yaml"
-  grep -Eq "^    image: $hub_ref\$" "$f" &&
+  [ -n "$hub_ref" ] && grep -Fxq "    image: $hub_ref" "$f" &&
     grep -Eq '^    user: "10001:10001"$' "$f" &&
     grep -Eq '^    init: true$' "$f" &&
     grep -Eq '^    read_only: true$' "$f" &&
@@ -919,6 +921,7 @@ assert_true hub_compose_service_runs_both_compose_files_and_stops_with_down comp
 quadlet_uses_the_ghcr_image_and_keeps_its_hardening() {
   local f="$deploy/fernjo-hub.container" line
   ! grep -Fq 'localhost/fernjo-hub' "$f" || return 1
+  [ -n "$hub_ref" ] || return 1
   for line in "Image=$hub_ref" 'UserNS=keep-id:uid=10001,gid=10001' 'RunInit=true' 'ReadOnly=true' \
     'DropCapability=ALL' 'NoNewPrivileges=true' 'PublishPort=127.0.0.1:8787:8787'; do
     grep -Fxq "$line" "$f" || return 1

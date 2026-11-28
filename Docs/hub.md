@@ -63,7 +63,7 @@ Check it with `systemctl --user status fernjo-hub` and `journalctl --user -u fer
    ```sh
    podman volume create fernjo-hub-data
    podman run --rm --user 10001:10001 --userns=keep-id:uid=10001,gid=10001 \
-     -v fernjo-hub-data:/data:Z ghcr.io/benjo-code/fernjo-hub:0.3.1 init --data /data
+     -v fernjo-hub-data:/data:Z ghcr.io/benjo-code/fernjo-hub:0.4.0 init --data /data
    ```
 
 2. Copy `crates/fernjo-hub/deploy/fernjo-hub.container` to `~/.config/containers/systemd/`, then:
@@ -84,10 +84,10 @@ Check it with `systemctl --user status fernjo-hub` and `journalctl --user -u fer
 
 ```sh
 docker volume create fernjo-hub-data
-docker run --rm --user 10001:10001 -v fernjo-hub-data:/data ghcr.io/benjo-code/fernjo-hub:0.3.1 init --data /data
+docker run --rm --user 10001:10001 -v fernjo-hub-data:/data ghcr.io/benjo-code/fernjo-hub:0.4.0 init --data /data
 docker run -d --name fernjo-hub --restart unless-stopped --user 10001:10001 --read-only --cap-drop ALL \
   --security-opt no-new-privileges --init -p 127.0.0.1:8787:8787 -v fernjo-hub-data:/data \
-  ghcr.io/benjo-code/fernjo-hub:0.3.1
+  ghcr.io/benjo-code/fernjo-hub:0.4.0
 ```
 
 (`podman run` takes the same arguments; add `--userns=keep-id:uid=10001,gid=10001` when rootless.)
@@ -100,7 +100,7 @@ Stopping the container (`podman stop`, `docker stop`, `compose down`, `systemctl
 
 ## Update to a new hub version
 
-The deploy files pin the exact version (`0.3.1` above), so nothing changes until you decide. To update, change the tag in the file you use (`compose.yaml`, `fernjo-hub.container` or your `run` command) to the new release, pull and restart; the data volume and the secret stay as they are:
+The deploy files pin the exact version (`0.4.0` above), so nothing changes until you decide. To update, change the tag in the file you use (`compose.yaml`, `fernjo-hub.container` or your `run` command) to the new release, pull and restart; the data volume and the secret stay as they are:
 
 ```sh
 docker compose -f compose.yaml pull && docker compose -f compose.yaml up -d      # Compose
@@ -114,14 +114,15 @@ Every release also bumps the tag in both deploy files to its own version, so the
 The release workflow attests the build provenance of the image. Check that the image you pulled was built by this repository's release workflow:
 
 ```sh
-gh attestation verify oci://ghcr.io/benjo-code/fernjo-hub:0.3.1 --repo benjo-code/fernjo \n  --signer-workflow benjo-code/fernjo/.github/workflows/release.yml --source-ref refs/tags/v0.3.1
+gh attestation verify oci://ghcr.io/benjo-code/fernjo-hub:0.4.0 --repo benjo-code/fernjo \
+  --signer-workflow benjo-code/fernjo/.github/workflows/release.yml --source-ref refs/tags/v0.4.0
 ```
 
-The two extra flags matter: without them any workflow of this repository on any branch would pass. Use the tag of the version you pulled (replace `0.3.1` in this command and in the examples above when you use another version).
+The two extra flags matter: without them any workflow of this repository on any branch would pass. Use the tag of the version you pulled (replace `0.4.0` in this command and in the examples above when you use another version).
 
 ## Make the package public (once, owner)
 
-GitHub creates the package `fernjo-hub` private on the first push. So that everybody can pull it without logging in, the repository owner changes its visibility once: on GitHub open the package (github.com/benjo-code, Packages, `fernjo-hub`), Package settings, Change visibility, Public. Check it from a machine that is not logged in to GHCR: `docker pull ghcr.io/benjo-code/fernjo-hub:0.3.1`. Also check once that the package is connected to the repository (the package page shows `benjo-code/fernjo`, and Package settings, Manage Actions access, lists it with Write): the workflow annotates the image index with its source for that, but older Podman versions cannot (the run then prints a warning), and an unconnected package can refuse the next release's push. Connect it there if it is missing.
+GitHub creates the package `fernjo-hub` private on the first push. So that everybody can pull it without logging in, the repository owner changes its visibility once: on GitHub open the package (github.com/benjo-code, Packages, `fernjo-hub`), Package settings, Change visibility, Public. Check it from a machine that is not logged in to GHCR: `docker pull ghcr.io/benjo-code/fernjo-hub:0.4.0`. Also check once that the package is connected to the repository (the package page shows `benjo-code/fernjo`, and Package settings, Manage Actions access, lists it with Write): the workflow annotates the image index with its source for that, but older Podman versions cannot (the run then prints a warning), and an unconnected package can refuse the next release's push. Connect it there if it is missing.
 
 ## Build the image yourself
 

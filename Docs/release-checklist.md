@@ -898,6 +898,70 @@ The real update check against GitHub over HTTPS (`the_real_release_host_is_reach
 | Owner checks | A and the re-check of B passed. **Open, run at the release:** C ("Check now" on Windows, macOS and Linux) and E (the first signed release run). **Deferred by the owner:** D (fix checks 1 to 3), F (M13 check 4 on macOS and Linux), G (M13 checks 5 to 7) and H (the earlier open checks of M7, M8, M10 and "v0.3.1 result") |
 | **Overall** | **Go** for releasing v0.4.0, with the known gaps above, on the owner's instruction. Signing in GitHub, publishing and the update itself have never run |
 
+## v0.4.0 result
+
+Date 2026-11-27. Branch `release/v0.4.0` from `dev` (`dbde162`); plan `Docs/superpowers/plans/2026-11-27-release-v0.4.0.md`, design `Docs/superpowers/specs/2026-11-27-release-v0.4.0-design.md`. The commands ran on the planning commit `d01fec6` plus the release edits: version `0.4.0` in `Cargo.toml` (`Cargo.lock`: nine workspace crates, only their `version` lines changed), `package.json` and both hub deploy files, `CHANGELOG.md` `[0.4.0] - 2026-11-28` (the expected publishing day), README (status line and the file list under "Install"), `Docs/hub.md` (image tag in its commands; the "Verify the image" command held a literal `\n` instead of a line break since M12) and roadmap release `0.4.0` done. `tools/test-release-scripts.sh`, `tools/check-workflows.sh` and gitleaks ran again at `7902a85`.
+
+| Command | Where | Result |
+|---|---|---|
+| `bash tools/check-release-version.sh v0.4.0` | Windows dev machine | exit 0, "version 0.4.0 matches Cargo.toml, package.json, compose.yaml and fernjo-hub.container" |
+| `cargo fmt --all --check` | Linux build container | exit 0 |
+| `cargo clippy --workspace --all-targets --locked -- -D warnings` | Linux build container | exit 0 |
+| `cargo clippy -p fernjo-app --lib --bins --locked -- -D warnings` | Linux build container | exit 0 |
+| `cargo build --workspace --locked` | Linux build container | exit 0 |
+| `cargo test --workspace --locked` | Linux build container | exit 0: 1393 passed, 0 failed, 3 ignored (46 result lines) |
+| `pnpm install --frozen-lockfile` | Windows dev machine | exit 0 |
+| `pnpm test` | Windows dev machine | 64 files, 857 tests passed |
+| `pnpm lint` | Windows dev machine | 281 files, 0 errors, 0 warnings |
+| `pnpm audit --prod` | Windows dev machine | no known vulnerabilities |
+| `cargo deny check` | Windows dev machine | `advisories ok, bans ok, licenses ok, sources ok` |
+| `bash tools/check-workflows.sh` | Windows dev machine | exit 0 |
+| `bash tools/test-release-scripts.sh` | Windows dev machine | 162/162 passed (one Unix permission case skips under Git Bash) |
+| `dotnet run tools/roadmap.cs -- check` | Windows dev machine | valid and up to date |
+| gitleaks 8.30.1 `detect` | container | 64 commits scanned, no leaks |
+
+Not run here: the live SSH container tests (CI job `rust`), the RDP tests that need a host (skip without `FERNJO_TEST_RDP_ADDR`, also in CI) and the Windows-only Rust code (CI job `rust (windows)`).
+
+**Found by this gate.** The first run of `tools/test-release-scripts.sh` failed with 160/162: two hub deploy checks had the image tag `0.3.1` written into them, so the version bump failed them (this is the first bump since M12 added the checks). On the owner's decision (2026-11-27) they now accept any `X.Y.Z` tag that both deploy files share (`7902a85`); `check-release-version.sh` still compares that tag with the release version. Nine scratch variants of the two deploy files behaved as expected, three of them wrong before the change.
+
+**Branch review** (a fresh reviewer over `dbde162..7fe54ef`): nothing Critical. Fixed afterwards: the release was dated the day of the gate although it cannot be published before 2026-11-28, and "it is the last manual update" did not except the installs that cannot update themselves. Not changed: the hub deploy checks no longer catch both deploy files drifting to the same wrong version between releases (the release run still does), and the gate table's gitleaks run is on `7902a85`.
+
+**Delta since the M14 evidence** (`c140113`): documents, the version files and the two deploy files, plus `tools/test-release-scripts.sh` (the change above). No file under `crates/*/src`, `src-tauri/src` or `ui/src`; `release.yml` unchanged. The `security-review` skill, scoped to that change, found nothing.
+
+- `gh api "repos/benjo-code/fernjo/code-scanning/alerts?state=open" --jq length`: `0`. Open Dependabot alert: `glib` GHSA-wrw7-89jp-8q8g, accepted since M0. No open pull request.
+- CI on `dev` at `dbde162`: `CI`, `CodeQL` and `Roadmap` completed with success.
+
+**Known gaps** (carried over from "v0.4.0 readiness", brought up to date)
+
+| Gap | Disposition |
+|---|---|
+| The `release-signing` secrets on GitHub, the job wiring, and the draft, attestation, upload and publish steps | Not yet run; first on the release run (check E). A failure leaves a draft; a workflow fix needs a new tag |
+| A tag build without cache (row 96) | Not yet run; the first is the release (job timeout 60 minutes) |
+| "Check now" against GitHub from the installed v0.4.0, macOS included (row 83) | Not yet run: check C, right after the release |
+| Installing an update through the app on Windows, macOS and Linux, the real window, the failed-install and second-click behaviour (rows 82, 84, 87, 92) | Not run in a real app; checks D and G deferred to the release after v0.4.0 (CHANGELOG says the install is untried) |
+| Quit from the Dock, log out and shutdown on macOS (rest of row 105) | Without a question; accepted by the owner, on the backlog |
+| Tests on macOS | None: macOS code is compiled by the release builds only |
+| M13 check 4 on macOS and Linux (webview capability) | Deferred (check F) |
+| Earlier open checks (M7, M8, M10, and "v0.3.1 result", still unverified) | Deferred (check H) |
+| The fork pull request check of M11 row 73 (see row 101) | Not run |
+| Performance not re-measured since v0.1.1 | Not re-run; CHANGELOG and README claim no number for 0.4.0 |
+| `rust (windows)` as a required check on `main` (row 100) | Set on `dev`; `main` after the release |
+| Accepted findings: rows 86, 91, 97, 98, 102, 103, 104, 106, 107, 108 | Accepted by the owner 2026-11-27 (`Docs/DECISIONS.md`) |
+| Earlier accepted items: administrators can bypass the signing environment, unsigned installers, `glib` Dependabot alert | Accepted |
+
+**Verdict**
+
+| Area | Verdict | Reasoning |
+|---|---|---|
+| Security review | Go | No High or Medium open (see "v0.4.0 readiness"); the only code in the delta is a test script; 0 open code-scanning alerts, gitleaks clean |
+| Installers | Not yet run | Judged by the dry run of the release pull request |
+| Docs | Go | README, CHANGELOG, `Docs/hub.md`, `SECURITY.md` and the roadmap match the release; statements about the published files become true with the release |
+| Performance | Not re-run | No claim is made for v0.4.0 |
+| Repository settings | Go | As read back in "v0.4.0 release pipeline rehearsal"; checked again before the tag |
+| Signing, publishing, assets, check C | Not yet run | They need the tag |
+
+**Overall: no unfixed High or Medium finding and no blocker for v0.4.0 from the checks run here. The pull request to `main` and the tag wait for the owner's instruction.**
+
 ## v0.1.0 security review
 
 Review date: 2026-11-18 (Windows 11; CI dry-run installers of run `44205574554`, PR #10). The checks of Steps 1-4 ran on `target/release/fernjo.exe` built from commit `1bc2762` (built after the last commit that touched `src-tauri`, `crates` or `ui`). The fix commits of this review (`64aa818`, `6648cff`, `5791506`) and the later import fixes (`36c3be0`, `de2a615`, `c809677`) post-date that binary; the real-app checks were not repeated on a rebuild, so they say nothing about those changes (the code fixes have their own tests). Every check below records its command, its result and the date. Real-app checks ran with a scratch `FERNJO_DATA_DIR`; the owner's real data folder was not read, printed or modified, and "Unlock automatically on this device" was never ticked.
