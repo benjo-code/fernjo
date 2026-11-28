@@ -975,7 +975,7 @@ Not run here: the live SSH container tests (CI job `rust`), the RDP tests that n
 - Provenance: `gh attestation verify <file> --repo benjo-code/fernjo --signer-workflow benjo-code/fernjo/.github/workflows/release.yml --source-ref refs/tags/v0.4.0` exit 0 on all 12 files other than `SHA256SUMS`, `latest.json` included; with `refs/tags/v9.9.9` exit 1 (setup and `latest.json`).
 - Hub image: `ghcr.io/benjo-code/fernjo-hub` `0.4.0`, `0.4` and `latest` have one digest, `sha256:efc900b69cb838ba4ccbdb5b7a310ff9b9bbeca405c9eb1a0c4d9074f81cc6b1`, with `linux/amd64` and `linux/arm64`; the same attestation check on `oci://…:0.4.0` exits 0 (control exit 1); `ENGINE=docker bash tools/smoke-hub-image.sh` on that image: `smoke: ok`.
 - Back-merge PR [#67](https://github.com/benjo-code/fernjo/pull/67) (`main` into `dev`) merged with a merge commit, `02950d2`; all its checks passed, `origin/main` is an ancestor of `origin/dev` and both held the same content.
-- Owner check C passed and `rust (windows)` is required on `main` ("v0.4.0 owner checks"). The owner also reported a blank icon in the dock and start menu on KDE Plasma and asked for an online indicator for hosts; both are on the roadmap backlog.
+- Owner check C passed and `rust (windows)` is required on `main` ("v0.4.0 owner checks"). The owner also reported a blank icon in the dock and start menu on KDE Plasma (roadmap milestone 14.1) and asked for an online indicator for hosts (roadmap backlog).
 
 Still unverified after the release: installing an update through the app on any platform (it runs with the release after v0.4.0, checks D and G), M13 check 4 on macOS and Linux (F), the earlier owner checks (H), tests on macOS, the fork pull request check of M11 row 73 and performance for 0.4.0.
 
