@@ -44,7 +44,7 @@ Overall roadmap for the project. Every milestone is sized so that it can be comp
 | 13 | Automatic updates | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-26-milestone-13-auto-update.md) | 2026-11-27 |
 | 14 | Security check and release readiness for v0.4.0 | 1 – fernjo app | ✅ done | [Plan](superpowers/plans/2026-11-27-milestone-14-security-gate.md) | 2026-11-27 |
 | – | **Release `v0.4.0`** – Automatic updates (M13 to M14) | – | ✅ done | – | 2026-11-28 |
-| 14.1 | Linux AppImage: icon in the dock and start menu | 1 – fernjo app | 🟡 planned | [Plan](superpowers/plans/2026-11-28-milestone-14.1-appimage-icon.md) | – |
+| 14.1 | Linux AppImage: icon in the dock and start menu | 1 – fernjo app | 🔵 in progress | [Plan](superpowers/plans/2026-11-28-milestone-14.1-appimage-icon.md) | – |
 | 15 | Export to mRemoteNG format | 1 – fernjo app | ⬜ open | – | – |
 | 16 | SFTP file browser | 1 – fernjo app | ⬜ open | – | – |
 | 17 | Security check and release readiness for v0.5.0 | 1 – fernjo app | ⬜ open | – | – |
@@ -726,13 +726,13 @@ The app checks for new versions, shows when one is ready and updates itself with
 - [x] The go verdict for v0.4.0 in `Docs/release-checklist.md` names every gap and every owner check that was deferred – `release-checklist.md` "v0.4.0 readiness": the verdict (Go) names the deferred owner checks D, F, G and H and the checks C and E that were run at the release (both passed on 2026-11-28); its "Known gaps" table and the one in "v0.4.0 result" list the gaps.
 
 ## Milestone 14.1 – Linux AppImage: icon in the dock and start menu
-**Status:** 🟡 planned · **Plan:** [2026-11-28-milestone-14.1-appimage-icon.md](superpowers/plans/2026-11-28-milestone-14.1-appimage-icon.md) · **Prerequisites:** M14
+**Status:** 🔵 in progress · **Plan:** [2026-11-28-milestone-14.1-appimage-icon.md](superpowers/plans/2026-11-28-milestone-14.1-appimage-icon.md) · **Prerequisites:** M14
 
 Goal: A user of the Linux AppImage is told that the start menu and dock icon may appear only after the next log-in, so a blank icon right after "Add" is not taken for a fault.
 
 **Tasks**
 - [x] Find the cause on the owner’s KDE Plasma machine before changing code and record the Plasma version, the session type and the findings (design `superpowers/specs/2026-11-28-m14-1-appimage-icon-design.md`)
-- [ ] The application menu dialog says that the icon may appear in the start menu and dock only after the next log-in and loses the wide gaps in its text; the message is a pure function with tests, and a test pins that an entry written by v0.4.0 is not asked about again
+- [x] The application menu dialog says that the icon may appear in the start menu and dock only after the next log-in and loses the wide gaps in its text; the message is a pure function with tests, and a test pins that an entry written by v0.4.0 is not asked about again
 - [ ] Record the cause and the decision in `Docs/DECISIONS.md` and the lasting facts in `CLAUDE.md`, add the note to `README.md`; `CHANGELOG.md` `[Unreleased]` gets a short user-readable entry
 
 **Acceptance criteria**

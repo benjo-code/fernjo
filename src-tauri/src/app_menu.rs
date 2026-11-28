@@ -150,6 +150,20 @@ pub fn is_never(device_dir: Option<&Path>) -> bool {
     device_dir.is_some_and(|d| d.join(NEVER_FILE).exists())
 }
 
+/// The text of the dialog that asks to add fernjo to the application menu.
+pub fn offer_message(data_home: &Path, appimage: &str) -> String {
+    format!(
+        "fernjo runs as an AppImage, so your desktop has no application menu entry for it \
+         and shows a placeholder icon in the title bar.\n\n\
+         Add fernjo to your application menu? This writes two small files below {} and points \
+         the entry at\n{appimage}\n\n\
+         The icon may appear in the start menu and dock only after you log out and in again.\n\n\
+         If you want to move the AppImage first, choose \"Not now\"; the question comes back \
+         at the next start.",
+        data_home.display()
+    )
+}
+
 /// Shows the dialog when it is due (Linux AppImage, not a scratch run). Never blocks: the answer is
 /// handled in the dialog callback, and a failed write is ignored (the entry is a convenience).
 #[cfg(target_os = "linux")]
@@ -177,17 +191,8 @@ pub fn offer(app: &tauri::AppHandle) {
         return;
     }
     let Some(appimage) = appimage else { return };
-    let message = format!(
-        "fernjo runs as an AppImage, so your desktop has no application menu entry for it and shows          a placeholder icon in the title bar.
-
-Add fernjo to your application menu? This writes          two small files below {} and points the entry at
-{appimage}
-
-If you want to move the          AppImage first, choose \"Not now\"; the question comes back at the next start.",
-        data_home.display()
-    );
     app.dialog()
-        .message(message)
+        .message(offer_message(&data_home, &appimage))
         .title("Add fernjo to the application menu?")
         .kind(MessageDialogKind::Info)
         .buttons(MessageDialogButtons::YesNoCancelCustom(
@@ -405,6 +410,48 @@ mod tests {
         assert!(install("/a\nb", dir.path()).is_err());
         assert!(!entry_paths(dir.path()).0.exists());
         assert!(!entry_paths(dir.path()).1.exists());
+    }
+
+    #[test]
+    fn the_dialog_says_when_the_icon_may_appear_and_has_no_gaps() {
+        let text = offer_message(Path::new("/home/u/.local/share"), APP);
+        assert_eq!(
+            text,
+            format!(
+                "fernjo runs as an AppImage, so your desktop has no application menu entry for it \
+                 and shows a placeholder icon in the title bar.\n\n\
+                 Add fernjo to your application menu? This writes two small files below \
+                 /home/u/.local/share and points the entry at\n{APP}\n\n\
+                 The icon may appear in the start menu and dock only after you log out and in \
+                 again.\n\n\
+                 If you want to move the AppImage first, choose \"Not now\"; the question comes \
+                 back at the next start."
+            )
+        );
+        assert!(!text.contains("  "), "{text:?}");
+    }
+
+    #[test]
+    fn the_dialog_names_the_folder_and_the_appimage_as_they_are() {
+        let app = "/h/a b/100% \"{x}\".AppImage";
+        let text = offer_message(Path::new("/h/a b/share"), app);
+        assert!(text.contains(" below /h/a b/share and "), "{text:?}");
+        assert!(text.contains(&format!("\n{app}\n")), "{text:?}");
+    }
+
+    #[test]
+    fn an_entry_written_by_v0_4_0_is_not_asked_about_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let (entry, _) = entry_paths(dir.path());
+        std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
+        // a literal on purpose, not `desktop_entry`: this is the text v0.4.0 put on disk
+        let written = format!(
+            "[Desktop Entry]\nType=Application\nName=fernjo\nComment=SSH connection manager with a \
+             connection tree and tabbed sessions.\nExec=\"{APP}\"\nIcon=fernjo\nStartupWMClass=fernjo\n\
+             Categories=Development;\nTerminal=false\n"
+        );
+        std::fs::write(&entry, written).unwrap();
+        assert!(!should_offer(Some(APP), dir.path(), false));
     }
 
     #[test]
